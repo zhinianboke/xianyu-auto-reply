@@ -1261,6 +1261,69 @@
           font-size: 12px;
         }
       }
+
+      /* 分页控件样式 */
+      #itemsPaginationContainer {
+        padding: 15px 0;
+        border-top: 1px solid var(--border-color);
+        background: #fff;
+        margin-top: 0 !important;
+      }
+
+      .pagination-info {
+        font-size: 14px;
+        color: var(--secondary-color);
+      }
+
+      .page-size-selector {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .page-size-selector label {
+        font-size: 14px;
+        color: var(--secondary-color);
+        margin: 0;
+      }
+
+      .page-size-selector select {
+        min-width: 80px;
+      }
+
+      /* 响应式分页控件 */
+      @media (max-width: 768px) {
+        #itemsPaginationContainer {
+          flex-direction: column;
+          gap: 10px;
+          align-items: stretch !important;
+        }
+
+        .pagination-info,
+        .page-size-selector {
+          text-align: center;
+          justify-content: center;
+        }
+
+        .pagination {
+          justify-content: center;
+        }
+      }
+
+      @media (max-width: 576px) {
+        .pagination-info {
+          font-size: 12px;
+        }
+
+        .page-size-selector label {
+          font-size: 12px;
+        }
+
+        .pagination .page-link {
+          padding: 0.25rem 0.5rem;
+          font-size: 12px;
+        }
+      }
     </style>
   </head>
   <body>
@@ -1746,6 +1809,48 @@
                     </tr>
                   </tbody>
                 </table>
+              </div>
+
+              <!-- 分页控件 -->
+              <div
+                class="d-flex justify-content-between align-items-center mt-3"
+                id="itemsPaginationContainer"
+                style="display: none"
+              >
+                <!-- 左侧：显示信息 -->
+                <div class="pagination-info">
+                  <span class="text-muted">
+                    显示第 <span id="itemsStartIndex">1</span> -
+                    <span id="itemsEndIndex">20</span> 条， 共
+                    <span id="itemsTotalCount">0</span> 条记录
+                  </span>
+                </div>
+
+                <!-- 中间：每页显示数量选择 -->
+                <div class="page-size-selector">
+                  <label class="form-label me-2 mb-0">每页显示：</label>
+                  <select
+                    class="form-select form-select-sm"
+                    id="itemsPageSize"
+                    style="width: auto"
+                    onchange="changeItemsPageSize(this.value)"
+                  >
+                    <option value="10">10条</option>
+                    <option value="20" selected>20条</option>
+                    <option value="50">50条</option>
+                    <option value="100">100条</option>
+                  </select>
+                </div>
+
+                <!-- 右侧：页码导航 -->
+                <nav aria-label="商品列表分页">
+                  <ul
+                    class="pagination pagination-sm mb-0"
+                    id="itemsPagination"
+                  >
+                    <!-- 页码按钮将通过JavaScript动态生成 -->
+                  </ul>
+                </nav>
               </div>
             </div>
           </div>
@@ -8171,9 +8276,18 @@
       let currentSearchKeyword = "";
       let searchDebounceTimer = null;
 
+      // 分页相关全局变量
+      let currentItemsPage = 1; // 当前页码
+      let itemsPageSize = 20; // 每页显示数量
+      let totalItemsCount = 0; // 总记录数
+      let filteredItemsData = []; // 当前过滤后的数据
+
       // 搜索商品函数
       function searchItems(keyword) {
         currentSearchKeyword = keyword.trim();
+
+        // 搜索时重置到第一页
+        currentItemsPage = 1;
 
         if (!currentSearchKeyword) {
           // 如果搜索关键词为空，显示所有商品
@@ -8217,6 +8331,8 @@
         }
 
         currentSearchKeyword = "";
+        // 清除搜索时重置到第一页
+        currentItemsPage = 1;
         displayItems(allItemsData);
         updateSearchResults(allItemsData.length, false);
       }
@@ -8256,6 +8372,280 @@
         searchDebounceTimer = setTimeout(() => {
           searchItems(keyword);
         }, 300);
+      }
+
+      // ==================== 分页功能 ====================
+
+      // 更新分页控件显示
+      function updateItemsPagination() {
+        const paginationContainer = document.getElementById(
+          "itemsPaginationContainer"
+        );
+        const pagination = document.getElementById("itemsPagination");
+        const startIndex = document.getElementById("itemsStartIndex");
+        const endIndex = document.getElementById("itemsEndIndex");
+        const totalCount = document.getElementById("itemsTotalCount");
+
+        if (!paginationContainer || !pagination) return;
+
+        const totalPages = Math.ceil(totalItemsCount / itemsPageSize);
+
+        // 更新显示信息
+        const start =
+          totalItemsCount === 0
+            ? 0
+            : (currentItemsPage - 1) * itemsPageSize + 1;
+        const end = Math.min(currentItemsPage * itemsPageSize, totalItemsCount);
+
+        if (startIndex) startIndex.textContent = start;
+        if (endIndex) endIndex.textContent = end;
+        if (totalCount) totalCount.textContent = totalItemsCount;
+
+        // 如果没有数据，隐藏分页控件
+        if (totalItemsCount === 0) {
+          paginationContainer.style.display = "none";
+          return;
+        }
+
+        // 显示分页控件（即使只有一页也显示，提供一致的用户体验）
+        paginationContainer.style.display = "flex";
+
+        // 生成页码按钮
+        let paginationHtml = "";
+
+        // 上一页按钮
+        if (currentItemsPage > 1) {
+          paginationHtml += `<li class="page-item">
+            <a class="page-link" href="#" onclick="goToItemsPage(${
+              currentItemsPage - 1
+            }); return false;">
+              <i class="bi bi-chevron-left"></i>
+            </a>
+          </li>`;
+        } else {
+          paginationHtml += `<li class="page-item disabled">
+            <span class="page-link"><i class="bi bi-chevron-left"></i></span>
+          </li>`;
+        }
+
+        // 页码显示逻辑
+        if (totalPages <= 7) {
+          // 总页数不超过7页，显示所有页码
+          for (let i = 1; i <= totalPages; i++) {
+            const active = i === currentItemsPage ? "active" : "";
+            paginationHtml += `<li class="page-item ${active}">
+              <a class="page-link" href="#" onclick="goToItemsPage(${i}); return false;">${i}</a>
+            </li>`;
+          }
+        } else {
+          // 总页数超过7页，使用省略号显示
+          if (currentItemsPage <= 4) {
+            // 当前页在前面，显示 1 2 3 4 5 ... 最后页
+            for (let i = 1; i <= 5; i++) {
+              const active = i === currentItemsPage ? "active" : "";
+              paginationHtml += `<li class="page-item ${active}">
+                <a class="page-link" href="#" onclick="goToItemsPage(${i}); return false;">${i}</a>
+              </li>`;
+            }
+            paginationHtml += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+            paginationHtml += `<li class="page-item">
+              <a class="page-link" href="#" onclick="goToItemsPage(${totalPages}); return false;">${totalPages}</a>
+            </li>`;
+          } else if (currentItemsPage >= totalPages - 3) {
+            // 当前页在后面，显示 1 ... 倒数第5页 倒数第4页 倒数第3页 倒数第2页 最后页
+            paginationHtml += `<li class="page-item">
+              <a class="page-link" href="#" onclick="goToItemsPage(1); return false;">1</a>
+            </li>`;
+            paginationHtml += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+            for (let i = totalPages - 4; i <= totalPages; i++) {
+              const active = i === currentItemsPage ? "active" : "";
+              paginationHtml += `<li class="page-item ${active}">
+                <a class="page-link" href="#" onclick="goToItemsPage(${i}); return false;">${i}</a>
+              </li>`;
+            }
+          } else {
+            // 当前页在中间，显示 1 ... 当前页-2 当前页-1 当前页 当前页+1 当前页+2 ... 最后页
+            paginationHtml += `<li class="page-item">
+              <a class="page-link" href="#" onclick="goToItemsPage(1); return false;">1</a>
+            </li>`;
+            paginationHtml += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+            for (let i = currentItemsPage - 2; i <= currentItemsPage + 2; i++) {
+              const active = i === currentItemsPage ? "active" : "";
+              paginationHtml += `<li class="page-item ${active}">
+                <a class="page-link" href="#" onclick="goToItemsPage(${i}); return false;">${i}</a>
+              </li>`;
+            }
+            paginationHtml += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+            paginationHtml += `<li class="page-item">
+              <a class="page-link" href="#" onclick="goToItemsPage(${totalPages}); return false;">${totalPages}</a>
+            </li>`;
+          }
+        }
+
+        // 下一页按钮
+        if (currentItemsPage < totalPages) {
+          paginationHtml += `<li class="page-item">
+            <a class="page-link" href="#" onclick="goToItemsPage(${
+              currentItemsPage + 1
+            }); return false;">
+              <i class="bi bi-chevron-right"></i>
+            </a>
+          </li>`;
+        } else {
+          paginationHtml += `<li class="page-item disabled">
+            <span class="page-link"><i class="bi bi-chevron-right"></i></span>
+          </li>`;
+        }
+
+        pagination.innerHTML = paginationHtml;
+      }
+
+      // 显示指定页面的商品数据
+      function displayItemsPage(pageNumber) {
+        if (pageNumber < 1) pageNumber = 1;
+
+        const totalPages = Math.ceil(totalItemsCount / itemsPageSize);
+        if (pageNumber > totalPages && totalPages > 0) pageNumber = totalPages;
+
+        currentItemsPage = pageNumber;
+
+        // 计算当前页的数据范围
+        const startIndex = (currentItemsPage - 1) * itemsPageSize;
+        const endIndex = startIndex + itemsPageSize;
+        const currentPageItems = filteredItemsData.slice(startIndex, endIndex);
+
+        // 渲染当前页的商品数据
+        renderItemsTable(currentPageItems);
+
+        // 更新分页控件
+        updateItemsPagination();
+      }
+
+      // 渲染商品表格（仅渲染传入的商品数据）
+      function renderItemsTable(items) {
+        const tbody = document.getElementById("itemsTableBody");
+        if (!tbody) return;
+
+        if (!items || items.length === 0) {
+          tbody.innerHTML = `
+            <tr>
+              <td colspan="8" class="text-center text-muted">
+                ${totalItemsCount === 0 ? "暂无商品数据" : "当前页无数据"}
+              </td>
+            </tr>
+          `;
+          return;
+        }
+
+        let itemsHtml = "";
+        items.forEach((item) => {
+          const itemDetailText =
+            item.item_detail_parsed?.desc || item.item_detail || "无详情";
+          const truncatedDetail =
+            itemDetailText.length > 50
+              ? itemDetailText.substring(0, 50) + "..."
+              : itemDetailText;
+          const hasMultiSpecs = item.item_detail_parsed?.multiSpecs
+            ? "是"
+            : "否";
+          const updateTime = item.updated_at
+            ? new Date(item.updated_at).toLocaleString("zh-CN")
+            : "未知";
+
+          itemsHtml += `
+            <tr>
+              <td>
+                <input type="checkbox" name="itemCheckbox"
+                       data-cookie-id="${escapeHtml(item.cookie_id)}"
+                       data-item-id="${escapeHtml(item.item_id)}"
+                       onchange="updateSelectAllState()">
+              </td>
+              <td class="text-truncate" style="max-width: 120px;" title="${
+                item.cookie_id
+              }">${item.cookie_id}</td>
+              <td class="text-truncate" style="max-width: 120px;" title="${
+                item.item_id
+              }">${item.item_id}</td>
+              <td class="text-truncate" style="max-width: 200px;" title="${escapeHtml(
+                item.item_title || "未知商品"
+              )}">${escapeHtml(item.item_title || "未知商品")}</td>
+              <td class="text-truncate" style="max-width: 250px;" title="${escapeHtml(
+                itemDetailText
+              )}">${escapeHtml(truncatedDetail)}</td>
+              <td>${hasMultiSpecs}</td>
+              <td>${updateTime}</td>
+              <td>
+                <button class="btn btn-sm btn-outline-primary me-1" onclick="viewItemDetail('${
+                  item.cookie_id
+                }', '${item.item_id}')" title="查看详情">
+                  <i class="bi bi-eye"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteItem('${
+                  item.cookie_id
+                }', '${item.item_id}')" title="删除">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </td>
+            </tr>
+          `;
+        });
+
+        tbody.innerHTML = itemsHtml;
+
+        // 重置选择状态
+        const selectAllCheckbox = document.getElementById("selectAllItems");
+        if (selectAllCheckbox) {
+          selectAllCheckbox.checked = false;
+          selectAllCheckbox.indeterminate = false;
+        }
+        updateBatchDeleteButton();
+      }
+
+      // 跳转到指定页面
+      function goToItemsPage(pageNumber) {
+        if (pageNumber < 1) return;
+
+        const totalPages = Math.ceil(totalItemsCount / itemsPageSize);
+        if (pageNumber > totalPages && totalPages > 0) return;
+
+        displayItemsPage(pageNumber);
+      }
+
+      // 改变每页显示数量
+      function changeItemsPageSize(newSize) {
+        const newPageSize = parseInt(newSize);
+        if (newPageSize < 1) return;
+
+        // 计算当前数据在新分页下应该在第几页（使用旧的pageSize）
+        const currentFirstItemIndex = (currentItemsPage - 1) * itemsPageSize;
+        const newPage = Math.floor(currentFirstItemIndex / newPageSize) + 1;
+
+        // 更新页面大小
+        itemsPageSize = newPageSize;
+
+        // 更新当前页码到计算出的新页码
+        currentItemsPage = newPage;
+
+        // 重新计算分页（这会确保正确的显示/隐藏逻辑）
+        calculateItemsPagination(filteredItemsData);
+      }
+
+      // 计算分页信息并初始化分页显示
+      function calculateItemsPagination(items) {
+        // 更新过滤后的数据和总数
+        filteredItemsData = items || [];
+        totalItemsCount = filteredItemsData.length;
+
+        // 如果当前页超出范围，重置到第一页
+        const totalPages = Math.ceil(totalItemsCount / itemsPageSize);
+        if (currentItemsPage > totalPages && totalPages > 0) {
+          currentItemsPage = 1;
+        } else if (totalItemsCount === 0) {
+          currentItemsPage = 1;
+        }
+
+        // 显示当前页
+        displayItemsPage(currentItemsPage);
       }
 
       // 初始化搜索功能
@@ -8437,10 +8827,8 @@
         }
       }
 
-      // 显示商品列表（支持搜索功能）
+      // 显示商品列表（支持搜索功能和分页）
       function displayItems(items, saveAsOriginal = false) {
-        const tbody = document.getElementById("itemsTableBody");
-
         // 如果需要保存为原始数据（从API加载的完整数据）
         if (saveAsOriginal) {
           allItemsData = items || [];
@@ -8450,141 +8838,24 @@
               allItemsData,
               currentSearchKeyword
             );
-            displayItems(filteredItems, false); // 递归调用，但不再保存为原始数据
+            // 使用分页显示过滤后的数据
+            calculateItemsPagination(filteredItems);
             updateSearchResults(
               filteredItems.length,
               true,
               currentSearchKeyword
             );
             return;
+          } else {
+            // 没有搜索关键词，直接使用分页显示所有数据
+            calculateItemsPagination(allItemsData);
+            updateSearchResults(allItemsData.length, false, "");
+            return;
           }
         }
 
-        if (!items || items.length === 0) {
-          const isSearching = currentSearchKeyword.length > 0;
-          const emptyMessage = isSearching
-            ? `未找到包含 "${escapeHtml(currentSearchKeyword)}" 的商品`
-            : "暂无商品数据";
-          tbody.innerHTML = `<tr><td colspan="8" class="text-center text-muted">${emptyMessage}</td></tr>`;
-          // 重置选择状态
-          const selectAllCheckbox = document.getElementById("selectAllItems");
-          if (selectAllCheckbox) {
-            selectAllCheckbox.checked = false;
-            selectAllCheckbox.indeterminate = false;
-          }
-          updateBatchDeleteButton();
-
-          // 更新搜索结果统计
-          if (saveAsOriginal) {
-            updateSearchResults(0, isSearching, currentSearchKeyword);
-          }
-          return;
-        }
-
-        const itemsHtml = items
-          .map((item) => {
-            // 处理商品标题显示
-            let itemTitleDisplay = item.item_title || "未设置";
-            if (itemTitleDisplay.length > 30) {
-              itemTitleDisplay = itemTitleDisplay.substring(0, 30) + "...";
-            }
-
-            // 处理商品详情显示
-            let itemDetailDisplay = "未设置";
-            if (item.item_detail) {
-              try {
-                // 尝试解析JSON并提取有用信息
-                const detail = JSON.parse(item.item_detail);
-                if (detail.content) {
-                  itemDetailDisplay =
-                    detail.content.substring(0, 50) +
-                    (detail.content.length > 50 ? "..." : "");
-                } else {
-                  // 如果是纯文本或其他格式，直接显示前50个字符
-                  itemDetailDisplay =
-                    item.item_detail.substring(0, 50) +
-                    (item.item_detail.length > 50 ? "..." : "");
-                }
-              } catch (e) {
-                // 如果不是JSON格式，直接显示前50个字符
-                itemDetailDisplay =
-                  item.item_detail.substring(0, 50) +
-                  (item.item_detail.length > 50 ? "..." : "");
-              }
-            }
-
-            // 多规格状态显示
-            const isMultiSpec = item.is_multi_spec;
-            const multiSpecDisplay = isMultiSpec
-              ? '<span class="badge bg-success">多规格</span>'
-              : '<span class="badge bg-secondary">普通</span>';
-
-            return `
-          <tr>
-            <td>
-              <input type="checkbox" name="itemCheckbox"
-                     data-cookie-id="${escapeHtml(item.cookie_id)}"
-                     data-item-id="${escapeHtml(item.item_id)}"
-                     onchange="updateSelectAllState()">
-            </td>
-            <td>${escapeHtml(item.cookie_id)}</td>
-            <td>${escapeHtml(item.item_id)}</td>
-            <td title="${escapeHtml(item.item_title || "未设置")}">${escapeHtml(
-              itemTitleDisplay
-            )}</td>
-            <td title="${escapeHtml(
-              item.item_detail || "未设置"
-            )}">${escapeHtml(itemDetailDisplay)}</td>
-            <td>${multiSpecDisplay}</td>
-            <td>${formatDateTime(item.updated_at)}</td>
-            <td>
-              <div class="btn-group" role="group">
-                <button class="btn btn-sm btn-outline-primary" onclick="editItem('${escapeHtml(
-                  item.cookie_id
-                )}', '${escapeHtml(item.item_id)}')" title="编辑详情">
-                  <i class="bi bi-pencil"></i>
-                </button>
-                <button class="btn btn-sm btn-outline-danger" onclick="deleteItem('${escapeHtml(
-                  item.cookie_id
-                )}', '${escapeHtml(item.item_id)}', '${escapeHtml(
-              item.item_title || item.item_id
-            )}')" title="删除">
-                  <i class="bi bi-trash"></i>
-                </button>
-                <button class="btn btn-sm ${
-                  isMultiSpec ? "btn-warning" : "btn-success"
-                }" onclick="toggleItemMultiSpec('${escapeHtml(
-              item.cookie_id
-            )}', '${escapeHtml(item.item_id)}', ${!isMultiSpec})" title="${
-              isMultiSpec ? "关闭多规格" : "开启多规格"
-            }">
-                  <i class="bi ${
-                    isMultiSpec ? "bi-toggle-on" : "bi-toggle-off"
-                  }"></i>
-                </button>
-              </div>
-            </td>
-          </tr>
-        `;
-          })
-          .join("");
-
-        // 更新表格内容
-        tbody.innerHTML = itemsHtml;
-
-        // 重置选择状态
-        const selectAllCheckbox = document.getElementById("selectAllItems");
-        if (selectAllCheckbox) {
-          selectAllCheckbox.checked = false;
-          selectAllCheckbox.indeterminate = false;
-        }
-        updateBatchDeleteButton();
-
-        // 更新搜索结果统计（仅在保存原始数据时更新）
-        if (saveAsOriginal) {
-          const isSearching = currentSearchKeyword.length > 0;
-          updateSearchResults(items.length, isSearching, currentSearchKeyword);
-        }
+        // 如果不是保存原始数据，则直接使用分页显示（用于搜索结果显示）
+        calculateItemsPagination(items || []);
       }
 
       // 刷新商品列表
