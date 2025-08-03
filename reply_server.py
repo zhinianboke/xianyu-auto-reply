@@ -866,6 +866,13 @@ class MessageNotificationIn(BaseModel):
     enabled: bool = True
 
 
+class WebhookTestRequest(BaseModel):
+    webhook_url: str
+    http_method: str = "POST"
+    headers: str = ""
+    message_template: str = ""
+
+
 class SystemSettingIn(BaseModel):
     key: str
     value: str
@@ -3205,6 +3212,121 @@ def update_item_multi_spec(cookie_id: str, item_id: str, spec_data: dict, _: Non
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post('/test-webhook')
+async def test_webhook(webhook_data: WebhookTestRequest):
+    """测试Webhook配置"""
+    import aiohttp
+    import json
+    import time
+
+    try:
+        # 构建测试消息
+        test_message = f"""🧪 Webhook配置测试
+
+测试时间: {time.strftime('%Y-%m-%d %H:%M:%S')}
+测试来源: 闲鱼自动回复系统
+
+这是一条测试消息，用于验证您的Webhook配置是否正确。
+如果您收到这条消息，说明您的Webhook配置工作正常！
+
+配置信息:
+- URL: {webhook_data.webhook_url}
+- 方法: {webhook_data.http_method}
+- 模板: {'自定义模板' if webhook_data.message_template else '默认格式'}"""
+
+        # 解析自定义请求头
+        try:
+            custom_headers = json.loads(webhook_data.headers) if webhook_data.headers else {}
+        except json.JSONDecodeError:
+            custom_headers = {}
+
+        # 设置默认请求头
+        headers = {'Content-Type': 'application/json'}
+        headers.update(custom_headers)
+
+        # 构建消息数据（使用与实际发送相同的逻辑）
+        data = _build_test_webhook_message(webhook_data.message_template, test_message)
+
+        # 发送测试请求
+        async with aiohttp.ClientSession() as session:
+            if webhook_data.http_method.upper() == 'POST':
+                async with session.post(webhook_data.webhook_url, json=data, headers=headers, timeout=10) as response:
+                    response_text = await response.text()
+                    status_code = response.status
+            elif webhook_data.http_method.upper() == 'PUT':
+                async with session.put(webhook_data.webhook_url, json=data, headers=headers, timeout=10) as response:
+                    response_text = await response.text()
+                    status_code = response.status
+            else:
+                return {
+                    "success": False,
+                    "error": f"不支持的HTTP方法: {webhook_data.http_method}"
+                }
+
+        # 返回测试结果
+        return {
+            "success": status_code == 200,
+            "details": {
+                "sent_data": data,
+                "status_code": status_code,
+                "response_text": response_text
+            }
+        }
+
+    except aiohttp.ClientError as e:
+        return {
+            "success": False,
+            "error": f"网络请求失败: {str(e)}"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"测试失败: {str(e)}"
+        }
+
+
+def _build_test_webhook_message(message_template: str, message: str) -> dict:
+    """构建测试Webhook消息数据"""
+    import json
+    import time
+
+    # 变量替换数据
+    variables = {
+        'message': message,
+        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'source': 'xianyu-auto-reply'
+    }
+
+    # 如果没有自定义模板，使用默认格式
+    if not message_template or not message_template.strip():
+        return {
+            'message': message,
+            'timestamp': variables['timestamp'],
+            'source': variables['source']
+        }
+
+    try:
+        # 解析自定义模板
+        template = json.loads(message_template)
+
+        # 变量替换
+        template_str = json.dumps(template)
+        for key, value in variables.items():
+            # 对值进行JSON转义，确保特殊字符被正确处理
+            escaped_value = json.dumps(str(value))[1:-1]  # 去掉外层引号
+            template_str = template_str.replace(f'{{{{{key}}}}}', escaped_value)
+
+        return json.loads(template_str)
+
+    except json.JSONDecodeError as e:
+        logger.warning(f"测试消息模板JSON格式错误: {e}，使用默认格式")
+        return {
+            'message': message,
+            'timestamp': variables['timestamp'],
+            'source': variables['source']
+        }
 
 
 if __name__ == "__main__":

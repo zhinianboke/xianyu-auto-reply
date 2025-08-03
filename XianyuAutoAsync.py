@@ -1212,6 +1212,7 @@ class XianyuLive:
             webhook_url = config_data.get('webhook_url', '')
             http_method = config_data.get('http_method', 'POST').upper()
             headers_str = config_data.get('headers', '{}')
+            message_template = config_data.get('message_template', '')
 
             if not webhook_url:
                 logger.warning("Webhook通知配置为空")
@@ -1227,31 +1228,72 @@ class XianyuLive:
             headers = {'Content-Type': 'application/json'}
             headers.update(custom_headers)
 
-            # 构建请求数据
-            data = {
-                'message': message,
-                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'source': 'xianyu-auto-reply'
-            }
+            # 构建消息数据
+            data = self._build_webhook_message(message_template, message)
 
             async with aiohttp.ClientSession() as session:
                 if http_method == 'POST':
                     async with session.post(webhook_url, json=data, headers=headers, timeout=10) as response:
+                        response_text = await response.text()
                         if response.status == 200:
                             logger.info(f"Webhook通知发送成功")
+                            logger.debug(f"响应内容: {response_text}")
                         else:
-                            logger.warning(f"Webhook通知发送失败: {response.status}")
+                            logger.warning(f"Webhook通知发送失败: {response.status}, 响应: {response_text}")
                 elif http_method == 'PUT':
                     async with session.put(webhook_url, json=data, headers=headers, timeout=10) as response:
+                        response_text = await response.text()
                         if response.status == 200:
                             logger.info(f"Webhook通知发送成功")
+                            logger.debug(f"响应内容: {response_text}")
                         else:
-                            logger.warning(f"Webhook通知发送失败: {response.status}")
+                            logger.warning(f"Webhook通知发送失败: {response.status}, 响应: {response_text}")
                 else:
                     logger.warning(f"不支持的HTTP方法: {http_method}")
 
         except Exception as e:
             logger.error(f"发送Webhook通知异常: {self._safe_str(e)}")
+
+    def _build_webhook_message(self, message_template: str, message: str) -> dict:
+        """构建Webhook消息数据"""
+        import json
+        import time
+
+        # 变量替换数据
+        variables = {
+            'message': message,
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'source': 'xianyu-auto-reply'
+        }
+
+        # 如果没有自定义模板，使用默认格式
+        if not message_template or not message_template.strip():
+            return {
+                'message': message,
+                'timestamp': variables['timestamp'],
+                'source': variables['source']
+            }
+
+        try:
+            # 解析自定义模板
+            template = json.loads(message_template)
+
+            # 变量替换
+            template_str = json.dumps(template)
+            for key, value in variables.items():
+                # 对值进行JSON转义，确保特殊字符被正确处理
+                escaped_value = json.dumps(str(value))[1:-1]  # 去掉外层引号
+                template_str = template_str.replace(f'{{{{{key}}}}}', escaped_value)
+
+            return json.loads(template_str)
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"消息模板JSON格式错误: {e}，使用默认格式")
+            return {
+                'message': message,
+                'timestamp': variables['timestamp'],
+                'source': variables['source']
+            }
 
     async def _send_wechat_notification(self, config_data: dict, message: str):
         """发送微信通知"""

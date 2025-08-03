@@ -1285,6 +1285,18 @@
         min-height: 200px; /* 大屏幕稍微增加高度 */
       }
     }
+
+    /* 消息模板编辑器样式 */
+    .font-monospace {
+      font-family: 'Consolas', 'Monaco', 'Menlo', 'Courier New', monospace !important;
+    }
+
+    /* 模板卡片悬停效果 */
+    .template-card:hover {
+      border-color: #0d6efd !important;
+      box-shadow: 0 2px 8px rgba(13, 110, 253, 0.15) !important;
+      transform: translateY(-1px) !important;
+    }
   </style>
 </head>
 <body>
@@ -5209,7 +5221,7 @@
       },
       webhook: {
         title: 'Webhook通知',
-        description: '通过HTTP POST请求发送通知到自定义的Webhook地址',
+        description: '通过HTTP请求发送通知到自定义的Webhook地址，支持自定义消息格式',
         icon: 'bi-link-45deg',
         color: 'warning',
         fields: [
@@ -5236,9 +5248,18 @@
             id: 'headers',
             label: '自定义请求头（可选）',
             type: 'textarea',
-            placeholder: '{"Authorization": "Bearer token", "Content-Type": "application/json"}',
+            placeholder: '{"Authorization": "Bearer token"}',
             required: false,
             help: 'JSON格式的自定义请求头'
+          },
+          {
+            id: 'message_template',
+            label: '消息模板',
+            type: 'textarea',
+            placeholder: '{\n  "msg_type": "text",\n  "content": {\n    "text": "{{message}}"\n  }\n}',
+            required: false,
+            help: '自定义JSON消息模板。可用变量：{{message}}, {{timestamp}}, {{source}}。留空则使用默认格式',
+            rows: 8
           }
         ]
       },
@@ -5327,19 +5348,40 @@
           inputHtml += '</select>';
           break;
         case 'textarea':
-          inputHtml = `<textarea class="form-control" id="${fieldId}" placeholder="${field.placeholder}" rows="3" ${field.required ? 'required' : ''}></textarea>`;
+          const rows = field.rows || 3;
+          const isTemplate = field.id === 'message_template';
+          inputHtml = `<textarea class="form-control ${isTemplate ? 'font-monospace' : ''}"
+                       id="${fieldId}" placeholder="${field.placeholder}" rows="${rows}"
+                       ${field.required ? 'required' : ''}
+                       style="${isTemplate ? 'font-family: Consolas, Monaco, monospace; font-size: 13px; line-height: 1.4;' : ''}"></textarea>`;
           break;
         default:
           inputHtml = `<input type="${field.type}" class="form-control" id="${fieldId}" placeholder="${field.placeholder}" ${field.required ? 'required' : ''}>`;
       }
 
       return `
-        <div class="mb-3">
+        <div class="mb-3" id="${fieldId}_wrapper">
           <label for="${fieldId}" class="form-label">
             ${field.label} ${field.required ? '<span class="text-danger">*</span>' : ''}
           </label>
           ${inputHtml}
           ${field.help ? `<small class="form-text text-muted">${field.help}</small>` : ''}
+          ${field.id === 'message_template' ? `
+            <div class="mt-2">
+              <button type="button" class="btn btn-sm btn-outline-secondary" onclick="formatJSON('${fieldId}')">
+                <i class="bi bi-code-square me-1"></i>格式化JSON
+              </button>
+              <button type="button" class="btn btn-sm btn-outline-info" onclick="previewTemplate('${fieldId}')">
+                <i class="bi bi-eye me-1"></i>预览效果
+              </button>
+              <button type="button" class="btn btn-sm btn-outline-success" onclick="insertTemplate('${fieldId}')">
+                <i class="bi bi-plus-circle me-1"></i>插入示例
+              </button>
+              <button type="button" class="btn btn-sm btn-outline-warning" onclick="testWebhook('${prefix}')">
+                <i class="bi bi-send me-1"></i>测试发送
+              </button>
+            </div>
+          ` : ''}
         </div>
       `;
     }
@@ -8906,6 +8948,357 @@
       </div>
     </div>
   </div>
+
+  <script>
+    // JSON格式化
+    function formatJSON(textareaId) {
+      const textarea = document.getElementById(textareaId);
+      if (!textarea.value.trim()) {
+        showToast('请先输入JSON内容', 'warning');
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(textarea.value);
+        textarea.value = JSON.stringify(parsed, null, 2);
+        showToast('JSON格式化成功', 'success');
+      } catch (e) {
+        showToast('JSON格式错误：' + e.message, 'danger');
+      }
+    }
+
+    // 模板预览
+    function previewTemplate(textareaId) {
+      const textarea = document.getElementById(textareaId);
+
+      if (!textarea.value.trim()) {
+        showToast('请先输入消息模板', 'warning');
+        return;
+      }
+
+      try {
+        const template = JSON.parse(textarea.value);
+
+        // 模拟数据
+        const sampleData = {
+          message: "🔴 闲鱼账号Token刷新异常\\n\\n账号ID: 001\\n异常时间: 2025-08-03 16:40:43\\n异常信息: 测试消息 - 验证Webhook是否正常工作\\n\\n请检查账号Cookie是否过期，如有需要请及时更新Cookie配置。",
+          timestamp: new Date().toLocaleString(),
+          source: "xianyu-auto-reply"
+        };
+
+        // 替换变量
+        let preview = JSON.stringify(template, null, 2);
+        Object.keys(sampleData).forEach(key => {
+          preview = preview.replace(new RegExp(`{{${key}}}`, 'g'), sampleData[key]);
+        });
+
+        // 显示预览
+        showTemplatePreview(preview);
+
+      } catch (e) {
+        showToast('模板格式错误：' + e.message, 'danger');
+      }
+    }
+
+    // 插入示例模板
+    function insertTemplate(textareaId) {
+      const textarea = document.getElementById(textareaId);
+
+      // 常用模板示例
+      const templates = [
+        {
+          name: '飞书格式',
+          template: {
+            "msg_type": "text",
+            "content": {
+              "text": "{{message}}"
+            }
+          }
+        },
+        {
+          name: '钉钉格式',
+          template: {
+            "msgtype": "markdown",
+            "markdown": {
+              "title": "闲鱼自动回复通知",
+              "text": "{{message}}"
+            }
+          }
+        },
+        {
+          name: '企业微信格式',
+          template: {
+            "msgtype": "text",
+            "text": {
+              "content": "{{message}}"
+            }
+          }
+        },
+        {
+          name: 'Slack格式',
+          template: {
+            "text": "{{message}}",
+            "username": "闲鱼机器人"
+          }
+        },
+        {
+          name: 'Discord格式',
+          template: {
+            "content": "{{message}}",
+            "username": "闲鱼机器人"
+          }
+        },
+        {
+          name: '通用格式',
+          template: {
+            "message": "{{message}}",
+            "timestamp": "{{timestamp}}",
+            "source": "{{source}}"
+          }
+        }
+      ];
+
+      // 显示模板选择模态框
+      showTemplateSelector(textareaId, templates);
+    }
+
+    // 测试Webhook发送
+    function testWebhook(prefix) {
+      // 获取表单数据
+      const webhookUrl = document.getElementById(prefix + 'webhook_url').value;
+      const httpMethod = document.getElementById(prefix + 'http_method').value;
+      const headers = document.getElementById(prefix + 'headers').value;
+      const messageTemplate = document.getElementById(prefix + 'message_template').value;
+
+      // 验证必填字段
+      if (!webhookUrl) {
+        showToast('请先填写Webhook URL', 'warning');
+        return;
+      }
+
+      // 构建测试数据
+      const testData = {
+        webhook_url: webhookUrl,
+        http_method: httpMethod,
+        headers: headers,
+        message_template: messageTemplate
+      };
+
+      // 显示加载状态
+      const testButton = event.target;
+      const originalText = testButton.innerHTML;
+      testButton.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>发送中...';
+      testButton.disabled = true;
+
+      // 发送测试请求
+      fetch('/test-webhook', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(testData)
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          showToast('✅ 测试消息发送成功！', 'success');
+          showTestResult(data.details);
+        } else {
+          showToast('❌ 测试消息发送失败：' + data.error, 'danger');
+          if (data.details) {
+            showTestResult(data.details);
+          }
+        }
+      })
+      .catch(error => {
+        showToast('❌ 测试请求失败：' + error.message, 'danger');
+      })
+      .finally(() => {
+        // 恢复按钮状态
+        testButton.innerHTML = originalText;
+        testButton.disabled = false;
+      });
+    }
+
+    // 显示模板选择器
+    function showTemplateSelector(textareaId, templates) {
+      const modalHtml = `
+        <div class="modal fade" id="templateSelectorModal" tabindex="-1">
+          <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title">
+                  <i class="bi bi-plus-circle me-2"></i>选择模板示例
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+              </div>
+              <div class="modal-body">
+                <div class="alert alert-info">
+                  <i class="bi bi-info-circle me-2"></i>
+                  选择一个模板示例插入到编辑器中，您可以基于示例进行修改
+                </div>
+                <div class="row">
+                  ${templates.map((template, index) => `
+                    <div class="col-md-6 mb-3">
+                      <div class="card template-card" onclick="selectTemplate('${textareaId}', ${index})" style="cursor: pointer; transition: all 0.2s ease; border: 1px solid #dee2e6;">
+                        <div class="card-body">
+                          <h6 class="card-title">
+                            <i class="bi bi-file-code me-2"></i>${template.name}
+                          </h6>
+                          <pre class="small text-muted mb-0" style="max-height: 120px; overflow-y: auto; font-size: 11px; background: #f8f9fa; padding: 8px; border-radius: 4px; margin: 0;"><code>${JSON.stringify(template.template, null, 2)}</code></pre>
+                        </div>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      // 移除已存在的模态框
+      const existingModal = document.getElementById('templateSelectorModal');
+      if (existingModal) {
+        existingModal.remove();
+      }
+
+      // 添加新的模态框
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+      // 存储模板数据到全局变量
+      window.templateData = templates;
+
+      // 显示模态框
+      const modal = new bootstrap.Modal(document.getElementById('templateSelectorModal'));
+      modal.show();
+    }
+
+    // 选择模板
+    function selectTemplate(textareaId, templateIndex) {
+      const textarea = document.getElementById(textareaId);
+      const template = window.templateData[templateIndex];
+
+      textarea.value = JSON.stringify(template.template, null, 2);
+
+      // 关闭模态框
+      const modal = bootstrap.Modal.getInstance(document.getElementById('templateSelectorModal'));
+      modal.hide();
+
+      showToast(`已插入${template.name}模板`, 'success');
+    }
+
+    // 显示模板预览模态框
+    function showTemplatePreview(preview) {
+      const modalHtml = `
+        <div class="modal fade" id="templatePreviewModal" tabindex="-1">
+          <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title">
+                  <i class="bi bi-eye me-2"></i>消息模板预览
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+              </div>
+              <div class="modal-body">
+                <div class="alert alert-info">
+                  <i class="bi bi-info-circle me-2"></i>
+                  以下是使用示例数据渲染后的消息格式预览
+                </div>
+                <div class="bg-light p-3 rounded border">
+                  <h6 class="text-muted mb-2">发送的JSON数据：</h6>
+                  <pre class="mb-0" style="max-height: 400px; overflow-y: auto; font-size: 13px; line-height: 1.4;"><code>${preview}</code></pre>
+                </div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      // 移除已存在的预览模态框
+      const existingModal = document.getElementById('templatePreviewModal');
+      if (existingModal) {
+        existingModal.remove();
+      }
+
+      // 添加新的预览模态框
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+      // 显示模态框
+      const modal = new bootstrap.Modal(document.getElementById('templatePreviewModal'));
+      modal.show();
+    }
+
+    // 显示测试结果
+    function showTestResult(details) {
+      const modalHtml = `
+        <div class="modal fade" id="testResultModal" tabindex="-1">
+          <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title">
+                  <i class="bi bi-send-check me-2"></i>Webhook测试结果
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+              </div>
+              <div class="modal-body">
+                <div class="row">
+                  <div class="col-md-6">
+                    <h6 class="text-muted mb-2">📤 发送的数据：</h6>
+                    <div class="bg-light p-3 rounded border">
+                      <pre class="mb-0" style="font-size: 12px; max-height: 300px; overflow-y: auto;"><code>${JSON.stringify(details.sent_data, null, 2)}</code></pre>
+                    </div>
+                  </div>
+                  <div class="col-md-6">
+                    <h6 class="text-muted mb-2">📥 服务器响应：</h6>
+                    <div class="bg-light p-3 rounded border">
+                      <div class="mb-2">
+                        <span class="badge ${details.status_code === 200 ? 'bg-success' : 'bg-danger'}">
+                          状态码: ${details.status_code}
+                        </span>
+                      </div>
+                      <pre class="mb-0" style="font-size: 12px; max-height: 250px; overflow-y: auto;"><code>${details.response_text || '(无响应内容)'}</code></pre>
+                    </div>
+                  </div>
+                </div>
+                <div class="mt-3">
+                  <div class="alert ${details.status_code === 200 ? 'alert-success' : 'alert-warning'}">
+                    <i class="bi ${details.status_code === 200 ? 'bi-check-circle' : 'bi-exclamation-triangle'} me-2"></i>
+                    ${details.status_code === 200 ?
+                      '测试成功！您的Webhook配置正确，消息已成功发送到目标地址。' :
+                      '测试完成，但服务器返回了非200状态码。请检查Webhook地址和配置是否正确。'
+                    }
+                  </div>
+                </div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      // 移除已存在的测试结果模态框
+      const existingModal = document.getElementById('testResultModal');
+      if (existingModal) {
+        existingModal.remove();
+      }
+
+      // 添加新的测试结果模态框
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+      // 显示模态框
+      const modal = new bootstrap.Modal(document.getElementById('testResultModal'));
+      modal.show();
+    }
+  </script>
 
 </body>
 </html>

@@ -3,31 +3,31 @@ API_ENDPOINTS:
   message_headinfo: https://h5api.m.goofish.com/h5/mtop.idle.trade.pc.message.headinfo/1.0/
   token: https://h5api.m.goofish.com/h5/mtop.taobao.idlemessage.pc.login.token/1.0/
 APP_CONFIG:
-  api_version: '1.0'
+  api_version: "1.0"
   app_key: 444e9908a51d1cb236a27862abc769c9
-  app_version: '1.0'
+  app_version: "1.0"
   platform: web
 AUTO_REPLY:
   api:
-    enabled: false  # 禁用API回复，使用AI回复或关键词回复
-    host: 0.0.0.0  # 绑定所有网络接口，支持IP访问
-    port: 8080     # Web服务端口
+    enabled: false # 禁用API回复，使用AI回复或关键词回复
+    host: 0.0.0.0 # 绑定所有网络接口，支持IP访问
+    port: 8080 # Web服务端口
     timeout: 10
-    url: http://localhost:8080/xianyu/reply  # 修复URL地址
+    url: http://localhost:8080/xianyu/reply # 修复URL地址
   default_message: 亲爱的"{send_user_name}" 老板你好！所有宝贝都可以拍，秒发货的哈~不满意的话可以直接申请退款哈~
   enabled: true
   max_retry: 3
   retry_interval: 5
 ITEM_DETAIL:
   auto_fetch:
-    enabled: true  # 是否启用自动获取商品详情
-    api_url: https://selfapi.zhinianboke.com/api/getItemDetail  # 外部API地址
-    timeout: 30  # 请求超时时间（秒）
-    max_concurrent: 3  # 最大并发请求数
-    retry_delay: 0.5  # 请求间隔（秒）
+    enabled: false # 是否启用自动获取商品详情
+    api_url: https://selfapi.zhinianboke.com/api/getItemDetail # 外部API地址
+    timeout: 30 # 请求超时时间（秒）
+    max_concurrent: 3 # 最大并发请求数
+    retry_delay: 0.5 # 请求间隔（秒）
 COOKIES:
-  last_update_time: ''
-  value: ''
+  last_update_time: ""
+  value: ""
 DEFAULT_HEADERS:
   accept: application/json
   accept-language: zh-CN,zh;q=0.9
@@ -42,14 +42,16 @@ DEFAULT_HEADERS:
   sec-fetch-dest: empty
   sec-fetch-mode: cors
   sec-fetch-site: same-site
-  user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
+  user-agent:
+    Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
     like Gecko) Chrome/133.0.0.0 Safari/537.36
 HEARTBEAT_INTERVAL: 15
 HEARTBEAT_TIMEOUT: 5
 LOG_CONFIG:
   compression: zip
-  format: '<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level>
-    | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>'
+  format:
+    "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level>
+    | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
   level: INFO
   retention: 7 days
   rotation: 1 day
@@ -68,6 +70,7 @@ WEBSOCKET_HEADERS:
   Host: wss-goofish.dingtalk.com
   Origin: https://www.goofish.com
   Pragma: no-cache
-  User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
+  User-Agent:
+    Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
     like Gecko) Chrome/133.0.0.0 Safari/537.36
 WEBSOCKET_URL: wss://wss-goofish.dingtalk.com/
