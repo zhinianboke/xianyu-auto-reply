@@ -396,7 +396,14 @@ class DBManager:
             cursor.execute('''
             INSERT OR IGNORE INTO system_settings (key, value, description) VALUES
             ('theme_color', 'blue', '主题颜色'),
-            ('registration_enabled', 'true', '是否开启用户注册')
+            ('registration_enabled', 'true', '是否开启用户注册'),
+            ('smtp_server', '', 'SMTP服务器地址'),
+            ('smtp_port', '587', 'SMTP端口'),
+            ('smtp_user', '', 'SMTP登录用户名（发件邮箱）'),
+            ('smtp_password', '', 'SMTP登录密码/授权码'),
+            ('smtp_from', '', '发件人显示名（留空则使用用户名）'),
+            ('smtp_use_tls', 'true', '是否启用TLS'),
+            ('smtp_use_ssl', 'false', '是否启用SSL')
             ''')
 
             # 检查并升级数据库
@@ -2470,7 +2477,7 @@ class DBManager:
                 return False
 
     async def send_verification_email(self, email: str, code: str) -> bool:
-        """发送验证码邮件"""
+        """发送验证码邮件（仅SMTP）"""
         try:
             subject = "闲鱼自动回复系统 - 邮箱验证码"
             # 使用简单的纯文本邮件内容
@@ -2495,30 +2502,56 @@ class DBManager:
 此邮件由系统自动发送，请勿直接回复
 © 2025 闲鱼自动回复系统"""
 
-            # 使用GET请求发送邮件
-            api_url = "https://dy.zhinianboke.com/api/emailSend"
-            params = {
-                'subject': subject,
-                'receiveUser': email,
-                'sendHtml': text_content
-            }
+            # 从系统设置读取SMTP配置
+            try:
+                smtp_server = self.get_system_setting('smtp_server') or ''
+                smtp_port = int(self.get_system_setting('smtp_port') or 0)
+                smtp_user = self.get_system_setting('smtp_user') or ''
+                smtp_password = self.get_system_setting('smtp_password') or ''
+                smtp_from = (self.get_system_setting('smtp_from') or '').strip() or smtp_user
+                smtp_use_tls = (self.get_system_setting('smtp_use_tls') or 'true').lower() == 'true'
+                smtp_use_ssl = (self.get_system_setting('smtp_use_ssl') or 'false').lower() == 'true'
+            except Exception as e:
+                logger.error(f"读取SMTP系统设置失败: {e}")
+                return False
 
-            async with aiohttp.ClientSession() as session:
-                try:
-                    logger.info(f"发送验证码邮件: {email}")
-                    async with session.get(api_url, params=params, timeout=15) as response:
-                        response_text = await response.text()
-                        logger.info(f"邮件API响应: {response.status}")
+            # 校验配置完整性
+            if not (smtp_server and smtp_port and smtp_user and smtp_password):
+                logger.error("SMTP配置不完整，无法发送验证码邮件")
+                return False
 
-                        if response.status == 200:
-                            logger.info(f"验证码邮件发送成功: {email}")
-                            return True
-                        else:
-                            logger.error(f"验证码邮件发送失败: {email}, 状态码: {response.status}, 响应: {response_text[:200]}")
-                            return False
-                except Exception as e:
-                    logger.error(f"邮件发送异常: {email}, 错误: {e}")
-                    return False
+            # 使用SMTP方式发送
+            try:
+                import smtplib
+                from email.mime.text import MIMEText
+                from email.mime.multipart import MIMEMultipart
+
+                msg = MIMEMultipart()
+                msg['Subject'] = subject
+                msg['From'] = smtp_from
+                msg['To'] = email
+
+                msg.attach(MIMEText(text_content, 'plain', 'utf-8'))
+
+                if smtp_use_ssl:
+                    server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+                else:
+                    server = smtplib.SMTP(smtp_server, smtp_port)
+
+                server.ehlo()
+                if smtp_use_tls and not smtp_use_ssl:
+                    server.starttls()
+                    server.ehlo()
+
+                server.login(smtp_user, smtp_password)
+                server.sendmail(smtp_user, [email], msg.as_string())
+                server.quit()
+
+                logger.info(f"验证码邮件发送成功(SMTP): {email}")
+                return True
+            except Exception as e:
+                logger.error(f"SMTP发送验证码邮件失败: {e}")
+                return False
 
         except Exception as e:
             logger.error(f"发送验证码邮件异常: {e}")
