@@ -318,12 +318,12 @@ class DBManager:
             # 创建指定商品回复表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS item_replay (
-                    item_id TEXT NOT NULL PRIMARY KEY,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_id TEXT NOT NULL,
                     cookie_id TEXT NOT NULL,
                     reply_content TEXT NOT NULL ,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (item_id) REFERENCES cookies(id) ON DELETE CASCADE
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
 

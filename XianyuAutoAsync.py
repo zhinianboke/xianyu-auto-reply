@@ -1060,11 +1060,17 @@ class XianyuLive:
 
             # 进行变量替换
             try:
+                # 获取当前商品是否有设置自动回复
+                item_replay = db_manager.get_item_replay(item_id)
+
                 formatted_reply = reply_content.format(
                     send_user_name=send_user_name,
                     send_user_id=send_user_id,
                     send_message=send_message
                 )
+
+                if item_replay:
+                    formatted_reply = item_replay.get('reply_content', '')
 
                 # 如果开启了"只回复一次"功能，记录这次回复
                 if default_reply_settings.get('reply_once', False) and chat_id:
