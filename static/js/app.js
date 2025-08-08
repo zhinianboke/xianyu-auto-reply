@@ -2315,6 +2315,84 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // ================================
+// 【外发配置菜单】相关功能
+// ================================
+
+// 外发配置类型配置
+const outgoingConfigs = {
+    smtp: {
+        title: 'SMTP邮件配置',
+        description: '配置SMTP服务器用于发送注册验证码等邮件通知',
+        icon: 'bi-envelope-fill',
+        color: 'primary',
+        fields: [
+            {
+                id: 'smtp_server',
+                label: 'SMTP服务器',
+                type: 'text',
+                placeholder: 'smtp.qq.com',
+                required: true,
+                help: '邮箱服务商的SMTP服务器地址，如：smtp.qq.com、smtp.gmail.com'
+            },
+            {
+                id: 'smtp_port',
+                label: 'SMTP端口',
+                type: 'number',
+                placeholder: '587',
+                required: true,
+                help: '通常为587（TLS）或465（SSL）'
+            },
+            {
+                id: 'smtp_user',
+                label: '发件邮箱',
+                type: 'email',
+                placeholder: 'your-email@qq.com',
+                required: true,
+                help: '用于发送邮件的邮箱地址'
+            },
+            {
+                id: 'smtp_password',
+                label: '邮箱密码/授权码',
+                type: 'password',
+                placeholder: '输入密码或授权码',
+                required: true,
+                help: '邮箱密码或应用专用密码（QQ邮箱需要授权码）'
+            },
+            {
+                id: 'smtp_from',
+                label: '发件人显示名（可选）',
+                type: 'text',
+                placeholder: '闲鱼自动回复系统',
+                required: false,
+                help: '邮件发件人显示的名称，留空则使用邮箱地址'
+            },
+            {
+                id: 'smtp_use_tls',
+                label: '启用TLS',
+                type: 'select',
+                options: [
+                    { value: 'true', text: '是' },
+                    { value: 'false', text: '否' }
+                ],
+                required: true,
+                help: '是否启用TLS加密（推荐开启）'
+            },
+            {
+                id: 'smtp_use_ssl',
+                label: '启用SSL',
+                type: 'select',
+                options: [
+                    { value: 'true', text: '是' },
+                    { value: 'false', text: '否' }
+                ],
+                required: true,
+                help: '是否启用SSL加密（与TLS二选一）'
+            }
+        ]
+    }
+};
+
+// ================================
 // 【通知渠道菜单】相关功能
 // ================================
 
@@ -7393,15 +7471,20 @@ async function loadSystemSettings() {
 
             console.log('用户信息:', result, '是否管理员:', isAdmin);
 
-            // 显示/隐藏注册设置（仅管理员可见）
+            // 显示/隐藏注册设置和外发配置（仅管理员可见）
             const registrationSettings = document.getElementById('registration-settings');
+            const outgoingConfigs = document.getElementById('outgoing-configs');
             if (registrationSettings) {
                 registrationSettings.style.display = isAdmin ? 'block' : 'none';
             }
+            if (outgoingConfigs) {
+                outgoingConfigs.style.display = isAdmin ? 'block' : 'none';
+            }
 
-            // 如果是管理员，加载注册设置
+            // 如果是管理员，加载注册设置和外发配置
             if (isAdmin) {
                 await loadRegistrationSettings();
+                await loadOutgoingConfigs();
             }
         }
     } catch (error) {
@@ -7411,6 +7494,152 @@ async function loadSystemSettings() {
         if (registrationSettings) {
             registrationSettings.style.display = 'none';
         }
+    }
+}
+
+// 加载外发配置
+async function loadOutgoingConfigs() {
+    try {
+        const response = await fetch('/system-settings', {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        
+        if (response.ok) {
+            const settings = await response.json();
+            
+            // 渲染外发配置界面
+            renderOutgoingConfigs(settings);
+        }
+    } catch (error) {
+        console.error('加载外发配置失败:', error);
+        showToast('加载外发配置失败', 'danger');
+    }
+}
+
+// 渲染外发配置界面
+function renderOutgoingConfigs(settings) {
+    const container = document.getElementById('outgoing-configs');
+    if (!container) return;
+    
+    let html = '<div class="row">';
+    
+    // 渲染SMTP配置
+    const smtpConfig = outgoingConfigs.smtp;
+    html += `
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">
+                        <i class="bi ${smtpConfig.icon} text-${smtpConfig.color} me-2"></i>
+                        ${smtpConfig.title}
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">${smtpConfig.description}</p>
+                    <form id="smtp-config-form">
+                        <div class="row">`;
+    
+    smtpConfig.fields.forEach(field => {
+        const value = settings[field.id] || '';
+        html += `
+            <div class="col-md-6 mb-3">
+                <label for="${field.id}" class="form-label">${field.label}</label>
+                ${generateOutgoingFieldHtml(field, value)}
+                <div class="form-text">${field.help}</div>
+            </div>`;
+    });
+    
+    html += `
+                        </div>
+                        <div class="text-end">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-save me-1"></i>保存SMTP配置
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>`;
+    
+    html += '</div>';
+    container.innerHTML = html;
+    
+    // 绑定表单提交事件
+    const form = document.getElementById('smtp-config-form');
+    if (form) {
+        form.addEventListener('submit', saveOutgoingConfigs);
+    }
+}
+
+// 生成外发配置字段HTML
+function generateOutgoingFieldHtml(field, value) {
+    switch (field.type) {
+        case 'select':
+            let options = '';
+            field.options.forEach(option => {
+                const selected = value === option.value ? 'selected' : '';
+                options += `<option value="${option.value}" ${selected}>${option.text}</option>`;
+            });
+            return `<select class="form-select" id="${field.id}" name="${field.id}" ${field.required ? 'required' : ''}>${options}</select>`;
+        
+        case 'password':
+            return `<input type="password" class="form-control" id="${field.id}" name="${field.id}" value="${value}" placeholder="${field.placeholder}" ${field.required ? 'required' : ''}>`;
+        
+        case 'number':
+            return `<input type="number" class="form-control" id="${field.id}" name="${field.id}" value="${value}" placeholder="${field.placeholder}" ${field.required ? 'required' : ''}>`;
+        
+        case 'email':
+            return `<input type="email" class="form-control" id="${field.id}" name="${field.id}" value="${value}" placeholder="${field.placeholder}" ${field.required ? 'required' : ''}>`;
+        
+        default:
+            return `<input type="text" class="form-control" id="${field.id}" name="${field.id}" value="${value}" placeholder="${field.placeholder}" ${field.required ? 'required' : ''}>`;
+    }
+}
+
+// 保存外发配置
+async function saveOutgoingConfigs(event) {
+    event.preventDefault();
+    
+    const form = event.target;
+    const formData = new FormData(form);
+    const configs = {};
+    
+    // 收集表单数据
+    for (let [key, value] of formData.entries()) {
+        configs[key] = value;
+    }
+    
+    try {
+        // 逐个保存配置项
+        for (const [key, value] of Object.entries(configs)) {
+            const response = await fetch(`/system-settings/${key}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${authToken}`
+                },
+                body: JSON.stringify({
+                    key: key,
+                    value: value,
+                    description: `SMTP配置 - ${key}`
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`保存${key}失败`);
+            }
+        }
+        
+        showToast('外发配置保存成功', 'success');
+        
+        // 重新加载配置
+        await loadOutgoingConfigs();
+        
+    } catch (error) {
+        console.error('保存外发配置失败:', error);
+        showToast('保存外发配置失败: ' + error.message, 'danger');
     }
 }
 
