@@ -6,6 +6,8 @@ import base64
 import os
 from loguru import logger
 import websockets
+
+from db_manager import db_manager
 from utils.xianyu_utils import (
     decrypt, generate_mid, generate_uuid, trans_cookies,
     generate_device_id, generate_sign
@@ -165,7 +167,7 @@ class XianyuLive:
         # Token刷新相关配置
         self.token_refresh_interval = TOKEN_REFRESH_INTERVAL
         self.token_retry_interval = TOKEN_RETRY_INTERVAL
-        self.last_token_refresh_time = 0
+        self.last_token_refresh_time = self.get_last_token_refresh_time_by_id()
         self.current_token = None
         self.token_refresh_task = None
         self.connection_restart_flag = False  # 连接重启标志
@@ -190,6 +192,14 @@ class XianyuLive:
 
         # 启动定期清理过期暂停记录的任务
         self.cleanup_task = None
+
+    def get_last_token_refresh_time_by_id(self) -> float:
+        """获取token更新时间"""
+        try:
+            return db_manager.get_cookie_by_id(self.cookie_id).get('last_token_refresh_time', 0)
+        except Exception as e:
+            logger.error(f"【{self.cookie_id}】获取最后token更新时间失败: {self._safe_str(e)}")
+            return 0  # 出错时默认启用
 
     def is_auto_confirm_enabled(self) -> bool:
         """检查当前账号是否启用自动确认发货"""
@@ -722,6 +732,7 @@ class XianyuLive:
                                 new_token = res_json['data']['accessToken']
                                 self.current_token = new_token
                                 self.last_token_refresh_time = time.time()
+                                db_manager.update_cookie_last_token_refresh_time_by_id(self.cookie_id, self.last_token_refresh_time)
                                 logger.info(f"【{self.cookie_id}】Token刷新成功")
                                 return new_token
 
@@ -1763,6 +1774,36 @@ class XianyuLive:
         except Exception as e:
             logger.error(f"发送钉钉通知异常: {self._safe_str(e)}")
 
+    async def _send_webhook_notification(self, config_data: dict, message: str):
+        """发送飞书通知"""
+        try:
+            import aiohttp
+            import json
+            import hmac
+            import hashlib
+            import base64
+            import time
+
+            # 解析配置
+            webhook_url = config_data.get('webhook_url') or config_data.get('config', '')
+
+            webhook_url = webhook_url.strip() if webhook_url else ''
+            if not webhook_url:
+                logger.warning("飞书通知配置为空")
+                return
+
+            data = {"msg_type": "text", "content": {"text": f"闲鱼\n\n{message}"}}
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(webhook_url, data=json.dumps(data), timeout=10) as response:
+                    if response.status == 200:
+                        logger.info(f"飞书通知发送成功")
+                    else:
+                        logger.warning(f"飞书通知发送失败: {response.status}")
+
+        except Exception as e:
+            logger.error(f"飞书通知异常: {self._safe_str(e)}")
+
     async def _send_email_notification(self, config_data: dict, message: str):
         """发送邮件通知"""
         try:
@@ -1802,56 +1843,56 @@ class XianyuLive:
         except Exception as e:
             logger.error(f"发送邮件通知异常: {self._safe_str(e)}")
 
-    async def _send_webhook_notification(self, config_data: dict, message: str):
-        """发送Webhook通知"""
-        try:
-            import aiohttp
-            import json
-
-            # 解析配置
-            webhook_url = config_data.get('webhook_url', '')
-            http_method = config_data.get('http_method', 'POST').upper()
-            headers_str = config_data.get('headers', '{}')
-
-            if not webhook_url:
-                logger.warning("Webhook通知配置为空")
-                return
-
-            # 解析自定义请求头
-            try:
-                custom_headers = json.loads(headers_str) if headers_str else {}
-            except json.JSONDecodeError:
-                custom_headers = {}
-
-            # 设置默认请求头
-            headers = {'Content-Type': 'application/json'}
-            headers.update(custom_headers)
-
-            # 构建请求数据
-            data = {
-                'message': message,
-                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'source': 'xianyu-auto-reply'
-            }
-
-            async with aiohttp.ClientSession() as session:
-                if http_method == 'POST':
-                    async with session.post(webhook_url, json=data, headers=headers, timeout=10) as response:
-                        if response.status == 200:
-                            logger.info(f"Webhook通知发送成功")
-                        else:
-                            logger.warning(f"Webhook通知发送失败: {response.status}")
-                elif http_method == 'PUT':
-                    async with session.put(webhook_url, json=data, headers=headers, timeout=10) as response:
-                        if response.status == 200:
-                            logger.info(f"Webhook通知发送成功")
-                        else:
-                            logger.warning(f"Webhook通知发送失败: {response.status}")
-                else:
-                    logger.warning(f"不支持的HTTP方法: {http_method}")
-
-        except Exception as e:
-            logger.error(f"发送Webhook通知异常: {self._safe_str(e)}")
+    # async def _send_webhook_notification(self, config_data: dict, message: str):
+    #     """发送Webhook通知"""
+    #     try:
+    #         import aiohttp
+    #         import json
+    #
+    #         # 解析配置
+    #         webhook_url = config_data.get('webhook_url', '')
+    #         http_method = config_data.get('http_method', 'POST').upper()
+    #         headers_str = config_data.get('headers', '{}')
+    #
+    #         if not webhook_url:
+    #             logger.warning("Webhook通知配置为空")
+    #             return
+    #
+    #         # 解析自定义请求头
+    #         try:
+    #             custom_headers = json.loads(headers_str) if headers_str else {}
+    #         except json.JSONDecodeError:
+    #             custom_headers = {}
+    #
+    #         # 设置默认请求头
+    #         headers = {'Content-Type': 'application/json'}
+    #         headers.update(custom_headers)
+    #
+    #         # 构建请求数据
+    #         data = {
+    #             'message': message,
+    #             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+    #             'source': 'xianyu-auto-reply'
+    #         }
+    #
+    #         async with aiohttp.ClientSession() as session:
+    #             if http_method == 'POST':
+    #                 async with session.post(webhook_url, json=data, headers=headers, timeout=10) as response:
+    #                     if response.status == 200:
+    #                         logger.info(f"Webhook通知发送成功")
+    #                     else:
+    #                         logger.warning(f"Webhook通知发送失败: {response.status}")
+    #             elif http_method == 'PUT':
+    #                 async with session.put(webhook_url, json=data, headers=headers, timeout=10) as response:
+    #                     if response.status == 200:
+    #                         logger.info(f"Webhook通知发送成功")
+    #                     else:
+    #                         logger.warning(f"Webhook通知发送失败: {response.status}")
+    #             else:
+    #                 logger.warning(f"不支持的HTTP方法: {http_method}")
+    #
+    #     except Exception as e:
+    #         logger.error(f"发送Webhook通知异常: {self._safe_str(e)}")
 
     async def _send_wechat_notification(self, config_data: dict, message: str):
         """发送微信通知"""

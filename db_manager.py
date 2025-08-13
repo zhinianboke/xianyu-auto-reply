@@ -258,6 +258,15 @@ class DBManager:
                 self._execute_sql(cursor, "ALTER TABLE keywords ADD COLUMN item_id TEXT")
                 logger.info("keywords 表 item_id 列添加完成")
 
+            # 检查并添加 item_id 列（用于自动回复商品ID功能）
+            try:
+                self._execute_sql(cursor, "SELECT last_token_refresh_time FROM cookies LIMIT 1")
+            except sqlite3.OperationalError:
+                # item_id 列不存在，需要添加
+                logger.info("正在为 cookies 表添加 last_token_refresh_time 列...")
+                self._execute_sql(cursor, "ALTER TABLE cookies ADD COLUMN last_token_refresh_time REAL")
+                logger.info("cookies 表 last_token_refresh_time 列添加完成")
+
             # 创建商品信息表
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS item_info (
@@ -1158,18 +1167,30 @@ class DBManager:
         with self.lock:
             try:
                 cursor = self.conn.cursor()
-                self._execute_sql(cursor, "SELECT id, value, created_at FROM cookies WHERE id = ?", (cookie_id,))
+                self._execute_sql(cursor, "SELECT id, value, created_at, last_token_refresh_time FROM cookies WHERE id = ?", (cookie_id,))
                 result = cursor.fetchone()
                 if result:
                     return {
                         'id': result[0],
                         'cookies_str': result[1],  # 使用cookies_str字段名以匹配调用方期望
                         'value': result[1],        # 保持向后兼容
-                        'created_at': result[2]
+                        'created_at': result[2],
+                        'last_token_refresh_time':result[3],
                     }
                 return None
             except Exception as e:
                 logger.error(f"根据ID获取Cookie失败: {e}")
+                return None
+
+    def update_cookie_last_token_refresh_time_by_id(self, cookie_id: str, last_token_refresh_time: float) -> None:
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    "UPDATE cookies SET last_token_refresh_time = ? WHERE id = ?", (last_token_refresh_time, cookie_id))
+                self.conn.commit()
+            except Exception as e:
+                logger.error(f"更新last_token_refresh_time失败: {e}")
                 return None
 
     def get_cookie_details(self, cookie_id: str) -> Optional[Dict[str, any]]:

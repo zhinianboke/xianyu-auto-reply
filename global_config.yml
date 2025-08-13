@@ -58,7 +58,7 @@ MANUAL_MODE:
   timeout: 3600
   toggle_keywords: []
 MESSAGE_EXPIRE_TIME: 300000
-TOKEN_REFRESH_INTERVAL: 18000  # 从3600秒(1小时)增加到18000秒(5小时)
+TOKEN_REFRESH_INTERVAL: 43200  # 从3600秒(1小时)增加到18000秒(5小时)
 TOKEN_RETRY_INTERVAL: 1800    # 从300秒(5分钟)增加到1800秒(30分钟)
 WEBSOCKET_HEADERS:
   Accept-Encoding: gzip, deflate, br, zstd
