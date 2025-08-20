@@ -320,6 +320,40 @@ class OrderDetailFetcher:
                     logger.warning(f"获取页面标题失败: {e}")
                     title = f"订单详情 - {order_id}"
 
+                # 新增：抓取买家信息
+                buyer_nickName = ""
+                buyer_name = ""
+                buyer_phone = ""
+                buyer_address = ""
+                
+                try:
+                    nickName_elem = await self.page.query_selector('.name--AjvRd0SI')
+                    if nickName_elem:
+                        buyer_nickName = (await nickName_elem.text_content()).strip()
+                except Exception as e:
+                    logger.warning(f"获取买家昵称失败: {e}")
+
+                try:
+                    name_elem = await self.page.query_selector('.name--RzoAFeh5')
+                    if name_elem:
+                        buyer_name = (await name_elem.text_content()).strip()
+                except Exception as e:
+                    logger.warning(f"获取买家姓名失败: {e}")
+
+                try:
+                    phone_elem = await self.page.query_selector('.phone--dyPRUNhW')
+                    if phone_elem:
+                        buyer_phone = (await phone_elem.text_content()).strip()
+                except Exception as e:
+                    logger.warning(f"获取买家电话失败: {e}")
+
+                try:
+                    address_elem = await self.page.query_selector('.address--Z1JbxYDZ')
+                    if address_elem:
+                        buyer_address = (await address_elem.text_content()).strip()
+                except Exception as e:
+                    logger.warning(f"获取买家地址失败: {e}")
+
                 result = {
                     'order_id': order_id,
                     'url': url,
@@ -329,6 +363,10 @@ class OrderDetailFetcher:
                     'spec_value': sku_info.get('spec_value', '') if sku_info else '',
                     'quantity': sku_info.get('quantity', '') if sku_info else '',  # 数量
                     'amount': sku_info.get('amount', '') if sku_info else '',      # 金额
+                    'buyer_nickName': buyer_nickName,
+                    'buyer_name': buyer_name,
+                    'buyer_phone': buyer_phone,
+                    'buyer_address': buyer_address,
                     'timestamp': time.time(),
                     'from_cache': False  # 标记数据来源
                 }

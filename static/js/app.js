@@ -8388,6 +8388,10 @@ async function showOrderDetail(orderId) {
                                         <tr><td>订单ID</td><td>${order.order_id}</td></tr>
                                         <tr><td>商品ID</td><td>${order.item_id || '未知'}</td></tr>
                                         <tr><td>买家ID</td><td>${order.buyer_id || '未知'}</td></tr>
+                                        <tr><td>买家昵称</td><td>${order.buyer_nickName || '未知'}</td></tr>
+                                        <tr><td>买家姓名</td><td>${order.buyer_name || '未知'}</td></tr>
+                                        <tr><td>买家电话</td><td>${order.buyer_phone || '未知'}</td></tr>
+                                        <tr><td>买家地址</td><td>${order.buyer_address || '未知'}</td></tr>
                                         <tr><td>Cookie账号</td><td>${order.cookie_id || '未知'}</td></tr>
                                         <tr><td>订单状态</td><td><span class="badge ${getOrderStatusClass(order.order_status)}">${getOrderStatusText(order.order_status)}</span></td></tr>
                                     </table>
@@ -9230,8 +9234,8 @@ function deleteRecord(record, index) {
     initDeleteRecordModal();
 
     // 尝试多种方式获取记录ID
-    currentDeleteId = record.id || record.user_id || record.cookie_id || record.keyword_id ||
-                     record.card_id || record.item_id || record.order_id || index;
+    currentDeleteId = record.id || record.order_id || record.keyword || record.key || record.user_id || record.cookie_id ||
+                     record.card_id || record.item_id  || index;
 
     console.log('设置currentDeleteId为:', currentDeleteId);
     console.log('record的所有字段:', Object.keys(record));

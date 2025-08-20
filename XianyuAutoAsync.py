@@ -2439,6 +2439,10 @@ class XianyuLive:
                     spec_value = result.get('spec_value', '')
                     quantity = result.get('quantity', '')
                     amount = result.get('amount', '')
+                    buyer_nickName = result.get('buyer_nickName', '')
+                    buyer_name = result.get('buyer_name', '')
+                    buyer_phone = result.get('buyer_phone', '')
+                    buyer_address = result.get('buyer_address', '')
 
                     if spec_name and spec_value:
                         logger.info(f"【{self.cookie_id}】📋 规格名称: {spec_name}")
@@ -2464,7 +2468,11 @@ class XianyuLive:
                                 quantity=quantity,
                                 amount=amount,
                                 order_status='processed',  # 已处理状态
-                                cookie_id=self.cookie_id
+                                cookie_id=self.cookie_id,
+                                buyer_nickName=buyer_nickName,
+                                buyer_name=buyer_name,
+                                buyer_phone=buyer_phone,
+                                buyer_address=buyer_address
                             )
 
                             if success:

@@ -219,6 +219,10 @@ class DBManager:
                 order_id TEXT PRIMARY KEY,
                 item_id TEXT,
                 buyer_id TEXT,
+                buyer_nickname TEXT,
+                buyer_name TEXT,
+                buyer_phone TEXT,
+                buyer_address TEXT,
                 spec_name TEXT,
                 spec_value TEXT,
                 quantity TEXT,
@@ -230,6 +234,25 @@ class DBManager:
                 FOREIGN KEY (cookie_id) REFERENCES cookies(id) ON DELETE CASCADE
             )
             ''')
+
+            # 检查并添加新字段（兼容老库）
+            try:
+                cursor.execute("SELECT buyer_nickName FROM orders LIMIT 1")
+            except sqlite3.OperationalError:
+                cursor.execute("ALTER TABLE orders ADD COLUMN buyer_nickName TEXT")
+            try:
+                cursor.execute("SELECT buyer_name FROM orders LIMIT 1")
+            except sqlite3.OperationalError:
+                cursor.execute("ALTER TABLE orders ADD COLUMN buyer_name TEXT")
+            try:
+                cursor.execute("SELECT buyer_phone FROM orders LIMIT 1")
+            except sqlite3.OperationalError:
+                cursor.execute("ALTER TABLE orders ADD COLUMN buyer_phone TEXT")
+            try:
+                cursor.execute("SELECT buyer_address FROM orders LIMIT 1")
+            except sqlite3.OperationalError:
+                cursor.execute("ALTER TABLE orders ADD COLUMN buyer_address TEXT")
+    
 
             # 检查并添加 user_id 列（用于数据库迁移）
             try:
@@ -4193,8 +4216,9 @@ class DBManager:
                 return [], []
 
     def insert_or_update_order(self, order_id: str, item_id: str = None, buyer_id: str = None,
-                              spec_name: str = None, spec_value: str = None, quantity: str = None,
-                              amount: str = None, order_status: str = None, cookie_id: str = None):
+                          spec_name: str = None, spec_value: str = None, quantity: str = None,
+                          amount: str = None, order_status: str = None, cookie_id: str = None,
+                          buyer_nickName: str = None, buyer_name: str = None, buyer_phone: str = None, buyer_address: str = None):
         """插入或更新订单信息"""
         with self.lock:
             try:
@@ -4223,6 +4247,18 @@ class DBManager:
                     if buyer_id is not None:
                         update_fields.append("buyer_id = ?")
                         update_values.append(buyer_id)
+                    if buyer_nickName is not None and buyer_nickName != "":
+                        update_fields.append("buyer_nickName = ?")
+                        update_values.append(buyer_nickName)
+                    if buyer_name is not None and buyer_name != "":
+                        update_fields.append("buyer_name = ?")
+                        update_values.append(buyer_name)
+                    if buyer_phone is not None and buyer_name != "":
+                        update_fields.append("buyer_phone = ?")
+                        update_values.append(buyer_phone)
+                    if buyer_address is not None and buyer_name != "":
+                        update_fields.append("buyer_address = ?")
+                        update_values.append(buyer_address)
                     if spec_name is not None:
                         update_fields.append("spec_name = ?")
                         update_values.append(spec_name)
@@ -4253,10 +4289,12 @@ class DBManager:
                     # 插入新订单
                     cursor.execute('''
                     INSERT INTO orders (order_id, item_id, buyer_id, spec_name, spec_value,
-                                      quantity, amount, order_status, cookie_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    quantity, amount, order_status, cookie_id,
+                                    buyer_nickName, buyer_name, buyer_phone, buyer_address)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (order_id, item_id, buyer_id, spec_name, spec_value,
-                          quantity, amount, order_status or 'unknown', cookie_id))
+                        quantity, amount, order_status or 'unknown', cookie_id,
+                        buyer_nickName, buyer_name, buyer_phone, buyer_address))
                     logger.info(f"插入新订单: {order_id}")
 
                 self.conn.commit()
@@ -4274,7 +4312,8 @@ class DBManager:
                 cursor = self.conn.cursor()
                 cursor.execute('''
                 SELECT order_id, item_id, buyer_id, spec_name, spec_value,
-                       quantity, amount, order_status, cookie_id, created_at, updated_at
+                   quantity, amount, order_status, cookie_id, created_at, updated_at,
+                   buyer_nickName, buyer_name, buyer_phone, buyer_address
                 FROM orders WHERE order_id = ?
                 ''', (order_id,))
 
@@ -4291,7 +4330,11 @@ class DBManager:
                         'order_status': row[7],
                         'cookie_id': row[8],
                         'created_at': row[9],
-                        'updated_at': row[10]
+                        'updated_at': row[10],
+                        'buyer_nickName': row[11],
+                        'buyer_name': row[12],
+                        'buyer_phone': row[13],
+                        'buyer_address': row[14]
                     }
                 return None
 
@@ -4342,21 +4385,21 @@ class DBManager:
                 primary_key_map = {
                     'users': 'id',
                     'cookies': 'id',
-                    'cookie_status': 'id',
-                    'keywords': 'id',
-                    'default_replies': 'id',
+                    'cookie_status': 'cookie_id',
+                    'keywords': 'keyword',
+                    'default_replies': 'cookie_id',
                     'default_reply_records': 'id',
-                    'item_replay': 'item_id',
-                    'ai_reply_settings': 'id',
+                    'item_replay': 'id',
+                    'ai_reply_settings': 'cookie_id',
                     'ai_conversations': 'id',
-                    'ai_item_cache': 'id',
+                    'ai_item_cache': 'item_id',
                     'item_info': 'id',
                     'message_notifications': 'id',
                     'cards': 'id',
                     'delivery_rules': 'id',
                     'notification_channels': 'id',
                     'user_settings': 'id',
-                    'system_settings': 'id',
+                    'system_settings': 'key',
                     'email_verifications': 'id',
                     'captcha_codes': 'id',
                     'orders': 'order_id'
