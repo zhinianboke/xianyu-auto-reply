@@ -8071,8 +8071,8 @@ async function loadAllOrders() {
             // 应用当前筛选条件
             filterOrders();
         } else {
-            console.error('加载订单失败:', data.message);
-            showToast('加载订单数据失败: ' + data.message, 'danger');
+            console.error('加载订单失败:', data.detail);
+            showToast('加载订单数据失败: ' + data.detail, 'danger');
         }
     } catch (error) {
         console.error('加载订单失败:', error);
