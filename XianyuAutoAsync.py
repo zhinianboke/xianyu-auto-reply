@@ -1791,7 +1791,6 @@ class XianyuLive:
                              f"账号: {self.cookie_id}\n" \
                              f"买家: {send_user_name} (ID: {send_user_id})\n" \
                              f"商品ID: {item_id or '未知'}\n" \
-                             f"scheme: {scheme or 'fleamarket://'}\n" \
                              f"消息内容: {send_message}\n" \
                              f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
 
@@ -1831,7 +1830,7 @@ class XianyuLive:
                             await self._send_wechat_notification(config_data, notification_msg)
                         case 'bark':
                             logger.info(f"📱 开始发送Bark通知...")
-                            await self._send_bark_notification(config_data, notification_msg)
+                            await self._send_bark_notification(config_data, notification_msg, scheme)
                         case 'telegram':
                             logger.info(f"📱 开始发送Telegram通知...")
                             await self._send_telegram_notification(config_data, notification_msg)
@@ -2069,7 +2068,7 @@ class XianyuLive:
         except Exception as e:
             logger.error(f"发送微信通知异常: {self._safe_str(e)}")
 
-    async def _send_bark_notification(self, config_data: dict, message: str):
+    async def _send_bark_notification(self, config_data: dict, message: str, scheme: str):
         """发送Bark通知"""
         try:
             import aiohttp
@@ -2092,7 +2091,7 @@ class XianyuLive:
                 '时间': '',
                 '异常信息': '',
                 '结果': '',
-                'scheme': '',
+                'scheme': f"{scheme or 'fleamarket://'}"
             }
             
             # 提取账号
@@ -2130,11 +2129,6 @@ class XianyuLive:
             result_match = re.search(r'结果:\s*(.+)', message)
             if result_match:
                 result['结果'] = result_match.group(1)
-            
-            # 提取scheme
-            scheme_match = re.search(r'scheme:\s*([^\n]+)', message)
-            if scheme_match:
-                result['scheme'] = scheme_match.group(1)
             
             # 检查是否是空消息或系统消息
             if ((result['异常信息'] == '' and result['消息内容'] == '') or
