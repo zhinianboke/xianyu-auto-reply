@@ -1793,59 +1793,95 @@ class XianyuLive:
                              f"商品ID: {item_id or '未知'}\n" \
                              f"消息内容: {send_message}\n" \
                              f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            
+            notification_msg_json = {
+                "account": self.cookie_id,
+                "buyer": {
+                    "name": send_user_name,
+                    "id": send_user_id
+                },
+                "item_id": item_id,
+                "message": send_message,
+                "time": time.strftime('%Y-%m-%d %H:%M:%S'),
+                "scheme": scheme or "fleamarket://"
+            }
 
             # 发送通知到各个渠道
-            for i, notification in enumerate(notifications, 1):
-                logger.info(f"📱 处理第 {i} 个通知渠道: {notification.get('channel_name', 'Unknown')}")
-
-                if not notification.get('enabled', True):
-                    logger.warning(f"📱 通知渠道 {notification.get('channel_name')} 已禁用，跳过")
-                    continue
-
-                channel_type = notification.get('channel_type')
-                channel_config = notification.get('channel_config')
-
-                logger.info(f"📱 渠道类型: {channel_type}, 配置: {channel_config}")
-
-                try:
-                    # 解析配置数据
-                    config_data = self._parse_notification_config(channel_config)
-                    logger.info(f"📱 解析后的配置数据: {config_data}")
-
-                    match channel_type:
-                        case 'qq':
-                            logger.info(f"📱 开始发送QQ通知...")
-                            await self._send_qq_notification(config_data, notification_msg)
-                        case 'ding_talk' | 'dingtalk':
-                            logger.info(f"📱 开始发送钉钉通知...")
-                            await self._send_dingtalk_notification(config_data, notification_msg)
-                        case 'email':
-                            logger.info(f"📱 开始发送邮件通知...")
-                            await self._send_email_notification(config_data, notification_msg)
-                        case 'webhook':
-                            logger.info(f"📱 开始发送Webhook通知...")
-                            await self._send_webhook_notification(config_data, notification_msg)
-                        case 'wechat':
-                            logger.info(f"📱 开始发送微信通知...")
-                            await self._send_wechat_notification(config_data, notification_msg)
-                        case 'bark':
-                            logger.info(f"📱 开始发送Bark通知...")
-                            await self._send_bark_notification(config_data, notification_msg, scheme)
-                        case 'telegram':
-                            logger.info(f"📱 开始发送Telegram通知...")
-                            await self._send_telegram_notification(config_data, notification_msg)
-                        case _:
-                            logger.warning(f"📱 不支持的通知渠道类型: {channel_type}")
-
-                except Exception as notify_error:
-                    logger.error(f"📱 发送通知失败 ({notification.get('channel_name', 'Unknown')}): {self._safe_str(notify_error)}")
-                    import traceback
-                    logger.error(f"📱 详细错误信息: {traceback.format_exc()}")
+            await self.send_notifications(notifications, notification_msg, notification_msg_json)
 
         except Exception as e:
             logger.error(f"📱 处理消息通知失败: {self._safe_str(e)}")
             import traceback
             logger.error(f"📱 详细错误信息: {traceback.format_exc()}")
+
+    async def send_notifications(self, notifications, notification_msg, notification_msg_json):
+        """发送通知到各个渠道
+        
+        Args:
+            notifications: 要发送的通知渠道列表
+            notification_msg: 普通文本格式的通知内容
+            notification_msg_json: JSON格式的通知内容(用于部分通知渠道)
+        
+        Returns:
+            int: 成功发送的通知数量
+        """
+        success_count = 0
+        
+        for i, notification in enumerate(notifications, 1):
+            logger.info(f"📱 处理第 {i} 个通知渠道: {notification.get('channel_name', 'Unknown')}")
+
+            if not notification.get('enabled', True):
+                logger.warning(f"📱 通知渠道 {notification.get('channel_name')} 已禁用，跳过")
+                continue
+
+            channel_type = notification.get('channel_type')
+            channel_config = notification.get('channel_config')
+
+            logger.info(f"📱 渠道类型: {channel_type}, 配置: {channel_config}")
+
+            try:
+                # 解析配置数据
+                config_data = self._parse_notification_config(channel_config)
+                logger.info(f"📱 解析后的配置数据: {config_data}")
+
+                match channel_type:
+                    case 'qq':
+                        logger.info(f"📱 开始发送QQ通知...")
+                        await self._send_qq_notification(config_data, notification_msg)
+                        success_count += 1
+                    case 'ding_talk' | 'dingtalk':
+                        logger.info(f"📱 开始发送钉钉通知...")
+                        await self._send_dingtalk_notification(config_data, notification_msg)
+                        success_count += 1
+                    case 'email':
+                        logger.info(f"📱 开始发送邮件通知...")
+                        await self._send_email_notification(config_data, notification_msg)
+                        success_count += 1
+                    case 'webhook':
+                        logger.info(f"📱 开始发送Webhook通知...")
+                        await self._send_webhook_notification(config_data, notification_msg)
+                        success_count += 1
+                    case 'wechat':
+                        logger.info(f"📱 开始发送微信通知...")
+                        await self._send_wechat_notification(config_data, notification_msg)
+                        success_count += 1
+                    case 'bark':
+                        logger.info(f"📱 开始发送Bark通知...")
+                        await self._send_bark_notification(config_data, notification_msg_json)
+                        success_count += 1
+                    case 'telegram':
+                        logger.info(f"📱 开始发送Telegram通知...")
+                        await self._send_telegram_notification(config_data, notification_msg)
+                        success_count += 1
+                    case _:
+                        logger.warning(f"📱 不支持的通知渠道类型: {channel_type}")
+
+            except Exception as notify_error:
+                logger.error(f"📱 发送通知失败 ({notification.get('channel_name', 'Unknown')}): {self._safe_str(notify_error)}")
+                import traceback
+                logger.error(f"📱 详细错误信息: {traceback.format_exc()}")
+        
+        return success_count
 
     def _parse_notification_config(self, config: str) -> dict:
         """解析通知配置数据"""
@@ -2068,7 +2104,7 @@ class XianyuLive:
         except Exception as e:
             logger.error(f"发送微信通知异常: {self._safe_str(e)}")
 
-    async def _send_bark_notification(self, config_data: dict, message: str, scheme: str):
+    async def _send_bark_notification(self, config_data: dict, message_json: dict):
         """发送Bark通知"""
         try:
             import aiohttp
@@ -2081,72 +2117,34 @@ class XianyuLive:
                 logger.warning("Bark通知配置为空")
                 return
 
+            account = message_json.get('account', '')
+            buyer = message_json.get('buyer', {})
+            buyer_name = buyer.get('name', '')
+            buyer_id = buyer.get('id', '')
+            item_id = message_json.get('item_id', '')
+            message = message_json.get('message', '')
+            result = message_json.get('result', '')
+            error = message_json.get('error', '')
+            time = message_json.get('time', '')
+            scheme = message_json.get('scheme', '')
 
-            result = {
-                '账号': '',
-                '买家': '',
-                '买家ID': '',
-                '商品ID': '',
-                '消息内容': '',
-                '时间': '',
-                '异常信息': '',
-                '结果': '',
-                'scheme': f"{scheme or 'fleamarket://'}"
-            }
-            
-            # 提取账号
-            account_match = re.search(r'账号:\s*([^\n]+)', message)
-            if account_match:
-                result['账号'] = account_match.group(1)
-            
-            # 提取买家信息
-            buyer_match = re.search(r'买家:\s*([^\(]+)\s*\(ID:\s*(\d+)\)', message)
-            if buyer_match:
-                result['买家'] = buyer_match.group(1).strip()
-                result['买家ID'] = buyer_match.group(2)
-            
-            # 提取商品ID
-            item_id_match = re.search(r'商品ID:\s*(\d+)', message)
-            if item_id_match:
-                result['商品ID'] = item_id_match.group(1)
-            
-            # 提取消息内容
-            content_match = re.search(r'消息内容:\s*(.+)', message)
-            if content_match:
-                result['消息内容'] = content_match.group(1)
-            
-            # 提取时间
-            time_match = re.search(r'时间:\s*([^\n]+)', message)
-            if time_match:
-                result['时间'] = time_match.group(1)
-            
-            # 提取异常信息
-            error_match = re.search(r'异常信息:\s*(.+)', message)
-            if error_match:
-                result['异常信息'] = error_match.group(1)
-            
-            # 提取结果
-            result_match = re.search(r'结果:\s*(.+)', message)
-            if result_match:
-                result['结果'] = result_match.group(1)
-            
             # 检查是否是空消息或系统消息
-            if ((result['异常信息'] == '' and result['消息内容'] == '') or
-                    result['消息内容'] == '发来一条新消息'):
+            if ((error == '' and message == '') or
+                    message == '发来一条新消息'):
                 return {'status': 'empty', 'message': '空消息'}
             
-            if re.search(r'快给ta一个评价吧', result['买家']):
+            if re.search(r'快给ta一个评价吧', buyer_name):
                 return {'status': 'system', 'message': '系统消息'}
             
             # 构造 bark API 所需的格式
             data = {
-                'body': f"💬{result['买家'] or '程序消息'}：{result['消息内容'] or result['结果'] or result['异常信息']}\n📆时间：{result['时间']}",
-                'title': f"闲鱼推送 账号：{result['账号']}",
+                'body': f"💬{buyer_name or '程序消息'}：{message or result or error}\n📆时间：{time}",
+                'title': f"闲鱼推送 账号：{account}",
                 'badge': 1,
                 'sound': 'shake',
                 'group': '闲鱼',
                 'icon': 'https://img.alicdn.com/tfs/TB19WObTNv1gK0jSZFFXXb0sXXa-144-144.png',
-                'url': result['scheme'] or 'fleamarket://',
+                'url': scheme,
             }
 
             async with aiohttp.ClientSession() as session:
@@ -2245,49 +2243,19 @@ class XianyuLive:
 异常信息: {error_message}
 
 请检查账号Cookie是否过期，如有需要请及时更新Cookie配置。"""
+            
+            notification_msg_json = {
+                "account": self.cookie_id,
+                "time": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()),
+                "error": error_message
+            }
 
             logger.info(f"准备发送Token刷新异常通知: {self.cookie_id}")
 
             # 发送通知到各个渠道
             notification_sent = False
-            for notification in notifications:
-                if not notification.get('enabled', True):
-                    continue
-
-                channel_type = notification.get('channel_type')
-                channel_config = notification.get('channel_config')
-
-                try:
-                    # 解析配置数据
-                    config_data = self._parse_notification_config(channel_config)
-
-                    match channel_type:
-                        case 'qq':
-                            await self._send_qq_notification(config_data, notification_msg)
-                            notification_sent = True
-                        case 'ding_talk' | 'dingtalk':
-                            await self._send_dingtalk_notification(config_data, notification_msg)
-                            notification_sent = True
-                        case 'email':
-                            await self._send_email_notification(config_data, notification_msg)
-                            notification_sent = True
-                        case 'webhook':
-                            await self._send_webhook_notification(config_data, notification_msg)
-                            notification_sent = True
-                        case 'wechat':
-                            await self._send_wechat_notification(config_data, notification_msg)
-                            notification_sent = True
-                        case 'bark':
-                            await self._send_bark_notification(config_data, notification_msg)
-                            notification_sent = True
-                        case 'telegram':
-                            await self._send_telegram_notification(config_data, notification_msg)
-                            notification_sent = True
-                        case _:
-                            logger.warning(f"不支持的通知渠道类型: {channel_type}")
-
-                except Exception as notify_error:
-                    logger.error(f"发送Token刷新通知失败 ({notification.get('channel_name', 'Unknown')}): {self._safe_str(notify_error)}")
+            notification_success_count = await self.send_notifications(notifications, notification_msg, notification_msg_json)
+            notification_sent = notification_success_count > 0
 
             # 如果成功发送了通知，更新最后发送时间
             if notification_sent:
@@ -2392,7 +2360,7 @@ class XianyuLive:
                 return
 
             # 构造通知消息
-            notification_message = f"🚨 自动发货通知\n\n" \
+            notification_msg = f"🚨 自动发货通知\n\n" \
                                  f"账号: {self.cookie_id}\n" \
                                  f"买家: {send_user_name} (ID: {send_user_id})\n" \
                                  f"商品ID: {item_id}\n" \
@@ -2400,43 +2368,19 @@ class XianyuLive:
                                  f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n" \
                                  f"请及时处理！"
 
+            notification_msg_json = {
+                "account": self.cookie_id,
+                "buyer": {
+                    "name": send_user_name,
+                    "id": send_user_id
+                },
+                "item_id": item_id,
+                "result": error_message,
+                "time": time.strftime('%Y-%m-%d %H:%M:%S')
+            }
+
             # 发送通知到所有已启用的通知渠道
-            for notification in notifications:
-                if notification.get('enabled', False):
-                    channel_type = notification.get('channel_type', 'qq')
-                    channel_config = notification.get('channel_config', '')
-
-                    try:
-                        # 解析配置数据
-                        config_data = self._parse_notification_config(channel_config)
-
-                        match channel_type:
-                            case 'qq':
-                                await self._send_qq_notification(config_data, notification_message)
-                                logger.info(f"已发送自动发货通知到QQ")
-                            case 'ding_talk' | 'dingtalk':
-                                await self._send_dingtalk_notification(config_data, notification_message)
-                                logger.info(f"已发送自动发货通知到钉钉")
-                            case 'email':
-                                await self._send_email_notification(config_data, notification_message)
-                                logger.info(f"已发送自动发货通知到邮箱")
-                            case 'webhook':
-                                await self._send_webhook_notification(config_data, notification_message)
-                                logger.info(f"已发送自动发货通知到Webhook")
-                            case 'wechat':
-                                await self._send_wechat_notification(config_data, notification_message)
-                                logger.info(f"已发送自动发货通知到微信")
-                            case 'bark':
-                                await self._send_bark_notification(config_data, notification_message)
-                                logger.info(f"已发送自动发货通知到Bark")
-                            case 'telegram':
-                                await self._send_telegram_notification(config_data, notification_message)
-                                logger.info(f"已发送自动发货通知到Telegram")
-                            case _:
-                                logger.warning(f"不支持的通知渠道类型: {channel_type}")
-
-                    except Exception as notify_error:
-                        logger.error(f"发送自动发货通知失败: {self._safe_str(notify_error)}")
+            await self.send_notifications(notifications, notification_msg, notification_msg_json)
 
         except Exception as e:
             logger.error(f"发送自动发货通知异常: {self._safe_str(e)}")
