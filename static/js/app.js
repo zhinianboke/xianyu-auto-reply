@@ -5899,7 +5899,12 @@ function updateBatchDeleteButton() {
 // 格式化日期时间
 function formatDateTime(dateString) {
     if (!dateString) return '未知';
-    const date = new Date(dateString);
+    // 如果是ISO格式，直接new Date
+    if (dateString.includes('T') && dateString.endsWith('Z')) {
+        return new Date(dateString).toLocaleString('zh-CN');
+    }
+    // 否则按原有逻辑（可选：补偿8小时）
+    const date = new Date(dateString.replace(' ', 'T') + 'Z');
     return date.toLocaleString('zh-CN');
 }
 
@@ -8642,24 +8647,6 @@ function updateBatchDeleteOrdersButton() {
 
     if (batchDeleteBtn) {
         batchDeleteBtn.disabled = checkboxes.length === 0;
-    }
-}
-
-// 格式化日期时间
-function formatDateTime(dateString) {
-    if (!dateString) return '未知时间';
-
-    try {
-        const date = new Date(dateString);
-        return date.toLocaleString('zh-CN', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
-    } catch (error) {
-        return dateString;
     }
 }
 
