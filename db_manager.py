@@ -768,7 +768,8 @@ class DBManager:
                         'email': 'qq',  # 暂时映射为qq，后续版本会支持
                         'webhook': 'qq',  # 暂时映射为qq，后续版本会支持
                         'wechat': 'qq',  # 暂时映射为qq，后续版本会支持
-                        'telegram': 'qq'  # 暂时映射为qq，后续版本会支持
+                        'telegram': 'qq',  # 暂时映射为qq，后续版本会支持
+                        'bark': 'qq'  # 暂时映射为qq，后续版本会支持
                     }
 
                     new_type = type_mapping.get(old_type, 'qq')  # 默认转换为qq类型
@@ -832,7 +833,7 @@ class DBManager:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 user_id INTEGER NOT NULL,
-                type TEXT NOT NULL CHECK (type IN ('qq','ding_talk','dingtalk','email','webhook','wechat','telegram')),
+                type TEXT NOT NULL CHECK (type IN ('qq','ding_talk','dingtalk','email','webhook','wechat','telegram', 'bark')),
                 config TEXT NOT NULL,
                 enabled BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -855,7 +856,8 @@ class DBManager:
                         'email': 'email',  # 现在支持email
                         'webhook': 'webhook',  # 现在支持webhook
                         'wechat': 'wechat',  # 现在支持wechat
-                        'telegram': 'telegram'  # 现在支持telegram
+                        'telegram': 'telegram',  # 现在支持telegram
+                        'bark': 'bark'  # 现在支持bark
                     }
 
                     new_type = type_mapping.get(old_type, 'qq')  # 默认为qq
@@ -964,7 +966,8 @@ class DBManager:
             # 处理一些可能的变体
             'dingding': 'dingtalk',
             'weixin': 'wechat',
-            'tg': 'telegram'
+            'tg': 'telegram',
+            'bark': 'bark'
         }
         return type_mapping.get(old_type.lower(), 'qq')
     
@@ -4661,7 +4664,6 @@ class DBManager:
             return {"success_count": 0, "failed_count": len(items)}
 
         return {"success_count": success_count, "failed_count": failed_count}
-
 
 
 # 全局单例

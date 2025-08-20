@@ -2549,6 +2549,22 @@ const channelTypeConfigs = {
         }
     ]
     },
+    bark: {
+    title: 'Bark通知',
+    description: '通过Bark推送服务发送通知消息',
+    icon: 'bi-bootstrap',
+    color: 'success',
+    fields: [
+        {
+        id: 'webhook_url',
+        label: 'Bark服务器地址',
+        type: 'url',
+        placeholder: 'https://api.day.app/your_key/',
+        required: true,
+        help: 'Bark服务器的地址'
+        }
+    ]
+    },
     telegram: {
     title: 'Telegram通知',
     description: '通过Telegram机器人发送通知消息',

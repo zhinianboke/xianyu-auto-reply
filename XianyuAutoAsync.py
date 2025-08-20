@@ -1769,7 +1769,7 @@ class XianyuLive:
         except:
             return 0.0
 
-    async def send_notification(self, send_user_name: str, send_user_id: str, send_message: str, item_id: str = None):
+    async def send_notification(self, send_user_name: str, send_user_id: str, send_message: str, item_id: str = None, scheme: str = None):
         """发送消息通知"""
         try:
             from db_manager import db_manager
@@ -1791,6 +1791,7 @@ class XianyuLive:
                              f"账号: {self.cookie_id}\n" \
                              f"买家: {send_user_name} (ID: {send_user_id})\n" \
                              f"商品ID: {item_id or '未知'}\n" \
+                             f"scheme: {scheme or 'fleamarket://'}\n" \
                              f"消息内容: {send_message}\n" \
                              f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
 
@@ -1828,6 +1829,9 @@ class XianyuLive:
                         case 'wechat':
                             logger.info(f"📱 开始发送微信通知...")
                             await self._send_wechat_notification(config_data, notification_msg)
+                        case 'bark':
+                            logger.info(f"📱 开始发送Bark通知...")
+                            await self._send_bark_notification(config_data, notification_msg)
                         case 'telegram':
                             logger.info(f"📱 开始发送Telegram通知...")
                             await self._send_telegram_notification(config_data, notification_msg)
@@ -2065,6 +2069,102 @@ class XianyuLive:
         except Exception as e:
             logger.error(f"发送微信通知异常: {self._safe_str(e)}")
 
+    async def _send_bark_notification(self, config_data: dict, message: str):
+        """发送Bark通知"""
+        try:
+            import aiohttp
+            import json
+
+            # 解析配置
+            webhook_url = config_data.get('webhook_url', '')
+
+            if not webhook_url:
+                logger.warning("Bark通知配置为空")
+                return
+
+
+            result = {
+                '账号': '',
+                '买家': '',
+                '买家ID': '',
+                '商品ID': '',
+                '消息内容': '',
+                '时间': '',
+                '异常信息': '',
+                '结果': '',
+                'scheme': '',
+            }
+            
+            # 提取账号
+            account_match = re.search(r'账号:\s*([^\n]+)', message)
+            if account_match:
+                result['账号'] = account_match.group(1)
+            
+            # 提取买家信息
+            buyer_match = re.search(r'买家:\s*([^\(]+)\s*\(ID:\s*(\d+)\)', message)
+            if buyer_match:
+                result['买家'] = buyer_match.group(1).strip()
+                result['买家ID'] = buyer_match.group(2)
+            
+            # 提取商品ID
+            item_id_match = re.search(r'商品ID:\s*(\d+)', message)
+            if item_id_match:
+                result['商品ID'] = item_id_match.group(1)
+            
+            # 提取消息内容
+            content_match = re.search(r'消息内容:\s*(.+)', message)
+            if content_match:
+                result['消息内容'] = content_match.group(1)
+            
+            # 提取时间
+            time_match = re.search(r'时间:\s*([^\n]+)', message)
+            if time_match:
+                result['时间'] = time_match.group(1)
+            
+            # 提取异常信息
+            error_match = re.search(r'异常信息:\s*(.+)', message)
+            if error_match:
+                result['异常信息'] = error_match.group(1)
+            
+            # 提取结果
+            result_match = re.search(r'结果:\s*(.+)', message)
+            if result_match:
+                result['结果'] = result_match.group(1)
+            
+            # 提取scheme
+            scheme_match = re.search(r'scheme:\s*([^\n]+)', message)
+            if scheme_match:
+                result['scheme'] = scheme_match.group(1)
+            
+            # 检查是否是空消息或系统消息
+            if ((result['异常信息'] == '' and result['消息内容'] == '') or
+                    result['消息内容'] == '发来一条新消息'):
+                return {'status': 'empty', 'message': '空消息'}
+            
+            if re.search(r'快给ta一个评价吧', result['买家']):
+                return {'status': 'system', 'message': '系统消息'}
+            
+            # 构造 bark API 所需的格式
+            data = {
+                'body': f"💬{result['买家'] or '程序消息'}：{result['消息内容'] or result['结果'] or result['异常信息']}\n📆时间：{result['时间']}",
+                'title': f"闲鱼推送 账号：{result['账号']}",
+                'badge': 1,
+                'sound': 'shake',
+                'group': '闲鱼',
+                'icon': 'https://img.alicdn.com/tfs/TB19WObTNv1gK0jSZFFXXb0sXXa-144-144.png',
+                'url': result['scheme'] or 'fleamarket://',
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(webhook_url, json=data, timeout=10) as response:
+                    if response.status == 200:
+                        logger.info(f"Bark通知发送成功")
+                    else:
+                        logger.warning(f"Bark通知发送失败: {response.status}")
+
+        except Exception as e:
+            logger.error(f"发送Bark通知异常: {self._safe_str(e)}")
+
     async def _send_telegram_notification(self, config_data: dict, message: str):
         """发送Telegram通知"""
         try:
@@ -2182,6 +2282,9 @@ class XianyuLive:
                             notification_sent = True
                         case 'wechat':
                             await self._send_wechat_notification(config_data, notification_msg)
+                            notification_sent = True
+                        case 'bark':
+                            await self._send_bark_notification(config_data, notification_msg)
                             notification_sent = True
                         case 'telegram':
                             await self._send_telegram_notification(config_data, notification_msg)
@@ -2329,6 +2432,9 @@ class XianyuLive:
                             case 'wechat':
                                 await self._send_wechat_notification(config_data, notification_message)
                                 logger.info(f"已发送自动发货通知到微信")
+                            case 'bark':
+                                await self._send_bark_notification(config_data, notification_message)
+                                logger.info(f"已发送自动发货通知到Bark")
                             case 'telegram':
                                 await self._send_telegram_notification(config_data, notification_message)
                                 logger.info(f"已发送自动发货通知到Telegram")
@@ -3661,6 +3767,7 @@ class XianyuLive:
                 send_user_name = message_10.get("senderNick", message_10.get("reminderTitle", "未知用户"))
                 send_user_id = message_10.get("senderUserId", "unknown")
                 send_message = message_10.get("reminderContent", "")
+                scheme = message_10.get("reminderUrl", "")
 
                 chat_id_raw = message_1.get("2", "")
                 chat_id = chat_id_raw.split('@')[0] if '@' in str(chat_id_raw) else str(chat_id_raw)
@@ -3687,7 +3794,7 @@ class XianyuLive:
 
                 # 🔔 立即发送消息通知（独立于自动回复功能）
                 try:
-                    await self.send_notification(send_user_name, send_user_id, send_message, item_id)
+                    await self.send_notification(send_user_name, send_user_id, send_message, item_id, scheme)
                 except Exception as notify_error:
                     logger.error(f"📱 发送消息通知失败: {self._safe_str(notify_error)}")
 
