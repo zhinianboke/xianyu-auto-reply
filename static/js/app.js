@@ -3340,7 +3340,7 @@ function renderCardsList(cards) {
         <td>${delayDisplay}</td>
         <td>${statusBadge}</td>
         <td>
-        <small class="text-muted">${new Date(card.created_at).toLocaleString('zh-CN')}</small>
+        <small class="text-muted">${formatDateTime(card.created_at)}</small>
         </td>
         <td>
         <div class="btn-group" role="group">
