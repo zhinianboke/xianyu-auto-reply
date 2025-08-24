@@ -4524,8 +4524,46 @@ async def detect_category(
 # ================================
 
 @app.get("/browser-embed")
-async def get_browser_embed_page(current_user: Dict[str, Any] = Depends(get_current_user)):
+async def get_browser_embed_page():
     """获取浏览器嵌入界面"""
+    if not BROWSER_EMBED_AVAILABLE:
+        raise HTTPException(status_code=503, detail="浏览器嵌入功能不可用")
+
+@app.get("/browser-embed-simple")
+async def get_browser_embed_simple():
+    """获取简化版浏览器嵌入界面（无需认证）"""
+    if not BROWSER_EMBED_AVAILABLE:
+        raise HTTPException(status_code=503, detail="浏览器嵌入功能不可用")
+
+    try:
+        with open("browser_test_page.html", "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="测试页面文件未找到")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"加载测试页面失败: {str(e)}")
+
+
+@app.get("/browser-direct")
+async def get_browser_direct():
+    """获取直接访问版浏览器嵌入界面"""
+    if not BROWSER_EMBED_AVAILABLE:
+        raise HTTPException(status_code=503, detail="浏览器嵌入功能不可用")
+
+    try:
+        with open("browser_direct.html", "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="直接访问页面文件未找到")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"加载直接访问页面失败: {str(e)}")
+
+
+@app.get("/browser-embed-original")
+async def get_browser_embed_original():
+    """获取原始版浏览器嵌入界面"""
     if not BROWSER_EMBED_AVAILABLE:
         raise HTTPException(status_code=503, detail="浏览器嵌入功能不可用")
 
@@ -4972,17 +5010,144 @@ async def get_browser_embed_page(current_user: Dict[str, Any] = Depends(get_curr
 
             // 页面加载完成后初始化
             window.onload = function() {
-                // 从localStorage获取authToken
-                const authToken = localStorage.getItem('authToken');
+                // 检查认证状态
+                checkAuthAndInit();
+            };
+
+            // 检查认证并初始化
+            async function checkAuthAndInit() {
+                // 尝试从URL参数获取token
+                const urlParams = new URLSearchParams(window.location.search);
+                let authToken = urlParams.get('token');
+
+                // 如果URL中没有token，尝试从localStorage获取
                 if (!authToken) {
-                    alert('请先登录系统');
-                    window.location.href = '/';
+                    authToken = localStorage.getItem('authToken');
+                }
+
+                // 如果还是没有token，尝试从父窗口获取
+                if (!authToken && window.opener) {
+                    try {
+                        authToken = window.opener.localStorage.getItem('authToken');
+                        if (authToken) {
+                            localStorage.setItem('authToken', authToken);
+                        }
+                    } catch (e) {
+                        console.log('无法从父窗口获取token:', e);
+                    }
+                }
+
+                if (!authToken) {
+                    showTokenInputDialog();
                     return;
                 }
 
+                // 验证token有效性
+                try {
+                    const response = await fetch('/cookies/list', {
+                        headers: { 'Authorization': \`Bearer \${authToken}\` }
+                    });
+
+                    if (response.status === 401) {
+                        localStorage.removeItem('authToken');
+                        window.location.href = '/';
+                        return;
+                    }
+                } catch (error) {
+                    console.error('验证token失败:', error);
+                }
+
+                // 保存token到localStorage
+                localStorage.setItem('authToken', authToken);
+
+                // 初始化界面
                 connectWebSocket();
                 refreshPage(); // 初始截图
-            };
+            }
+
+            // 显示token输入对话框
+            function showTokenInputDialog() {
+                document.body.innerHTML = `
+                    <div class="container mt-5">
+                        <div class="row justify-content-center">
+                            <div class="col-md-8">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h5 class="card-title mb-0">
+                                            <i class="bi bi-key me-2"></i>需要认证Token
+                                        </h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="alert alert-info">
+                                            <i class="bi bi-info-circle me-2"></i>
+                                            请先在主系统中登录，然后将认证Token粘贴到下方输入框中。
+                                        </div>
+
+                                        <div class="mb-3">
+                                            <label for="tokenInput" class="form-label">认证Token:</label>
+                                            <textarea class="form-control" id="tokenInput" rows="3"
+                                                      placeholder="请粘贴从主系统获取的认证Token..."></textarea>
+                                        </div>
+
+                                        <div class="mb-3">
+                                            <small class="text-muted">
+                                                <strong>如何获取Token:</strong><br>
+                                                1. 在主系统中登录 (<a href="/" target="_blank">点击打开</a>)<br>
+                                                2. 按F12打开开发者工具<br>
+                                                3. 在控制台输入: <code>localStorage.getItem('authToken')</code><br>
+                                                4. 复制返回的Token值（不包括引号）
+                                            </small>
+                                        </div>
+
+                                        <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                                            <button type="button" class="btn btn-secondary" onclick="window.close()">
+                                                取消
+                                            </button>
+                                            <button type="button" class="btn btn-primary" onclick="submitToken()">
+                                                <i class="bi bi-check-circle me-1"></i>确认
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // 提交token
+            async function submitToken() {
+                const tokenInput = document.getElementById('tokenInput');
+                const token = tokenInput.value.trim();
+
+                if (!token) {
+                    alert('请输入认证Token');
+                    return;
+                }
+
+                // 保存token到localStorage
+                localStorage.setItem('authToken', token);
+
+                // 验证token有效性
+                try {
+                    const response = await fetch('/cookies/list', {
+                        headers: { 'Authorization': \`Bearer \${token}\` }
+                    });
+
+                    if (response.status === 401) {
+                        alert('Token无效，请检查后重新输入');
+                        localStorage.removeItem('authToken');
+                        return;
+                    }
+
+                    // Token有效，重新加载页面
+                    window.location.reload();
+
+                } catch (error) {
+                    console.error('验证token失败:', error);
+                    alert('验证Token时发生错误，请检查网络连接');
+                }
+            }
         </script>
     </body>
     </html>

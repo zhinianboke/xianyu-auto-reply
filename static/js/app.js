@@ -10417,13 +10417,140 @@ async function loadPublishCookieOptions() {
 
 // 打开浏览器嵌入页面
 function openBrowserEmbed() {
-    // 在新窗口中打开浏览器嵌入界面
-    const browserWindow = window.open(`${apiBase}/browser-embed`, '_blank', 'width=1400,height=900,scrollbars=yes,resizable=yes');
+    // 检查是否已登录
+    const authToken = localStorage.getItem('authToken');
+    if (!authToken) {
+        showToast('请先登录系统', 'warning');
+        return;
+    }
+
+    console.log('准备打开浏览器嵌入页面，Token:', authToken.substring(0, 20) + '...');
+
+    // 显示选择对话框
+    const modal = document.createElement('div');
+    modal.innerHTML = `
+        <div class="modal fade" id="browserEmbedModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">
+                            <i class="bi bi-browser-chrome me-2"></i>选择浏览器嵌入版本
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p>请选择要使用的浏览器嵌入版本：</p>
+                        <div class="d-grid gap-2">
+                            <button type="button" class="btn btn-success" onclick="openBrowserVersion('direct')">
+                                <i class="bi bi-rocket me-2"></i>
+                                <strong>直接访问版（推荐）</strong>
+                                <br><small class="text-light">最简单易用，自动获取Token</small>
+                            </button>
+                            <button type="button" class="btn btn-primary" onclick="openBrowserVersion('simple')">
+                                <i class="bi bi-lightning me-2"></i>
+                                <strong>简化测试版</strong>
+                                <br><small class="text-light">稳定版本，手动输入Token</small>
+                            </button>
+                            <button type="button" class="btn btn-outline-primary" onclick="openBrowserVersion('auto')">
+                                <i class="bi bi-magic me-2"></i>
+                                <strong>自动传递版</strong>
+                                <br><small>尝试自动传递Token</small>
+                            </button>
+                        </div>
+
+                        <div class="mt-3 p-2 bg-light rounded">
+                            <small class="text-muted">
+                                <strong>当前Token:</strong> ${authToken.substring(0, 30)}...
+                                <button class="btn btn-sm btn-outline-secondary ms-2" onclick="copyTokenToClipboard()">
+                                    <i class="bi bi-clipboard"></i> 复制
+                                </button>
+                            </small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+    const bootstrapModal = new bootstrap.Modal(document.getElementById('browserEmbedModal'));
+    bootstrapModal.show();
+
+    // 模态框关闭时清理DOM
+    document.getElementById('browserEmbedModal').addEventListener('hidden.bs.modal', function() {
+        document.body.removeChild(modal);
+    });
+}
+
+// 打开指定版本的浏览器嵌入
+function openBrowserVersion(version) {
+    const authToken = localStorage.getItem('authToken');
+    let url;
+
+    switch(version) {
+        case 'direct':
+            url = `${apiBase}/browser-direct`;
+            break;
+        case 'simple':
+            url = `${apiBase}/browser-embed-simple`;
+            break;
+        case 'auto':
+            url = `${apiBase}/browser-embed?token=${encodeURIComponent(authToken)}`;
+            break;
+        case 'original':
+            url = `${apiBase}/browser-embed-original`;
+            break;
+        default:
+            url = `${apiBase}/browser-direct`;
+    }
+
+    console.log('打开浏览器嵌入页面:', url);
+
+    // 关闭模态框
+    const modal = bootstrap.Modal.getInstance(document.getElementById('browserEmbedModal'));
+    modal.hide();
+
+    // 在新窗口中打开
+    const browserWindow = window.open(url, '_blank', 'width=1400,height=900,scrollbars=yes,resizable=yes');
 
     if (!browserWindow) {
         showToast('无法打开浏览器嵌入窗口，请检查浏览器弹窗设置', 'warning');
     } else {
-        showToast('浏览器嵌入界面已在新窗口中打开', 'success');
+        showToast(`浏览器嵌入界面已在新窗口中打开 (${version}版本)`, 'success');
+
+        // 根据版本显示不同的使用提示
+        if (version === 'direct') {
+            setTimeout(() => {
+                showToast('提示：直接访问版会自动尝试获取Token，如失败请手动输入', 'info');
+            }, 1000);
+        } else if (version === 'simple') {
+            setTimeout(() => {
+                showToast('提示：在新窗口中点击"自动获取"按钮或手动粘贴Token', 'info');
+            }, 1000);
+        } else if (version === 'auto') {
+            setTimeout(() => {
+                showToast('提示：如果自动传递失败，页面会提示手动输入Token', 'info');
+            }, 1000);
+        }
+    }
+}
+
+// 复制Token到剪贴板
+function copyTokenToClipboard() {
+    const authToken = localStorage.getItem('authToken');
+    if (authToken) {
+        navigator.clipboard.writeText(authToken).then(() => {
+            showToast('Token已复制到剪贴板', 'success');
+        }).catch(() => {
+            // 降级方案
+            const textArea = document.createElement('textarea');
+            textArea.value = authToken;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+            showToast('Token已复制到剪贴板', 'success');
+        });
     }
 }
 
