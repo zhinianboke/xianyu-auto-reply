@@ -1,0 +1,312 @@
+/* ================================
+   商品发布页面样式
+   ================================ */
+
+/* 商品发布表单样式 */
+#item-publish-section .content-body {
+    padding: 2rem 0;
+}
+
+#item-publish-section .card {
+    border: none;
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+    border-radius: 0.5rem;
+}
+
+#item-publish-section .card-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 0.5rem 0.5rem 0 0 !important;
+    padding: 1rem 1.5rem;
+    font-weight: 600;
+}
+
+#item-publish-section .card-body {
+    padding: 2rem;
+}
+
+/* 表单元素样式 */
+#item-publish-section .form-label {
+    font-weight: 600;
+    color: var(--bs-gray-800);
+    margin-bottom: 0.75rem;
+}
+
+#item-publish-section .form-control {
+    border-radius: 0.375rem;
+    border: 1px solid #dee2e6;
+    padding: 0.75rem 1rem;
+    transition: all 0.15s ease-in-out;
+}
+
+#item-publish-section .form-control:focus {
+    border-color: #667eea;
+    box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+}
+
+#item-publish-section textarea.form-control {
+    resize: vertical;
+    min-height: 120px;
+}
+
+/* 文件上传样式 */
+#item-publish-section .input-group .form-control[type="file"] {
+    border-radius: 0.375rem 0 0 0.375rem;
+}
+
+#item-publish-section .input-group .btn {
+    border-radius: 0 0.375rem 0.375rem 0;
+}
+
+/* 图片预览样式 */
+#imagePreviewContainer {
+    margin-top: 1rem;
+    padding: 1rem;
+    background-color: #f8f9fa;
+    border-radius: 0.5rem;
+    border: 2px dashed #dee2e6;
+}
+
+#imagePreviewContainer .card {
+    transition: transform 0.2s ease-in-out;
+    border: 1px solid #dee2e6;
+}
+
+#imagePreviewContainer .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0.25rem 0.5rem rgba(0, 0, 0, 0.1);
+}
+
+#imagePreviewContainer .card-img-top {
+    border-radius: 0.375rem 0.375rem 0 0;
+}
+
+#imagePreviewContainer .btn-outline-danger {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+}
+
+/* 字符计数器样式 */
+#descriptionCounter {
+    font-weight: 500;
+    font-size: 0.875rem;
+}
+
+/* 检测分类按钮样式 */
+#item-publish-section .btn-lg {
+    padding: 0.75rem 2rem;
+    font-size: 1.1rem;
+    font-weight: 600;
+    border-radius: 0.5rem;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    transition: all 0.3s ease;
+}
+
+#item-publish-section .btn-lg:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0.5rem 1rem rgba(102, 126, 234, 0.3);
+}
+
+/* 分类检测状态样式 */
+#categoryDetectionStatus {
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+#categoryDetectionStatus .spinner-border {
+    width: 1.5rem;
+    height: 1.5rem;
+}
+
+/* 分类结果样式 */
+#categoryResultContainer {
+    animation: slideInUp 0.5s ease-out;
+}
+
+#categoryResultContainer .card {
+    transition: all 0.2s ease-in-out;
+}
+
+#categoryResultContainer .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0.25rem 0.5rem rgba(0, 0, 0, 0.1);
+}
+
+#categoryResultContainer .badge {
+    font-size: 0.75rem;
+    padding: 0.375rem 0.75rem;
+}
+
+#categoryResultContainer .bg-success {
+    background-color: #198754 !important;
+}
+
+#categoryResultContainer .bg-warning {
+    background-color: #ffc107 !important;
+    color: #000 !important;
+}
+
+#categoryResultContainer .bg-secondary {
+    background-color: #6c757d !important;
+}
+
+/* 检测信息样式 */
+#categoryResultContainer .bg-light {
+    background-color: #f8f9fa !important;
+    border: 1px solid #e9ecef;
+}
+
+/* 错误提示样式 */
+#categoryErrorContainer {
+    animation: shake 0.5s ease-in-out;
+}
+
+/* 动画效果 */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes shake {
+    0%, 100% {
+        transform: translateX(0);
+    }
+    10%, 30%, 50%, 70%, 90% {
+        transform: translateX(-5px);
+    }
+    20%, 40%, 60%, 80% {
+        transform: translateX(5px);
+    }
+}
+
+/* 旋转动画 */
+.spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+    #item-publish-section .content-body {
+        padding: 1rem 0;
+    }
+    
+    #item-publish-section .card-body {
+        padding: 1.5rem;
+    }
+    
+    #item-publish-section .btn-lg {
+        padding: 0.625rem 1.5rem;
+        font-size: 1rem;
+    }
+    
+    #imagePreviewContainer {
+        padding: 0.75rem;
+    }
+    
+    #imagePreviewContainer .col-6 {
+        margin-bottom: 1rem;
+    }
+}
+
+@media (max-width: 576px) {
+    #item-publish-section .card-body {
+        padding: 1rem;
+    }
+    
+    #item-publish-section .btn-lg {
+        width: 100%;
+        padding: 0.75rem;
+    }
+    
+    #categoryResultContainer .col-md-6 {
+        margin-bottom: 1rem;
+    }
+}
+
+/* 表单验证样式 */
+#item-publish-section .is-invalid {
+    border-color: #dc3545;
+}
+
+#item-publish-section .is-valid {
+    border-color: #198754;
+}
+
+#item-publish-section .invalid-feedback {
+    display: block;
+    color: #dc3545;
+    font-size: 0.875rem;
+    margin-top: 0.25rem;
+}
+
+#item-publish-section .valid-feedback {
+    display: block;
+    color: #198754;
+    font-size: 0.875rem;
+    margin-top: 0.25rem;
+}
+
+/* 提示文本样式 */
+#item-publish-section .form-text {
+    color: #6c757d;
+    font-size: 0.875rem;
+    margin-top: 0.5rem;
+}
+
+#item-publish-section .form-text i {
+    color: #0d6efd;
+}
+
+/* 卡片标题样式 */
+#categoryResultContainer h6.text-success {
+    color: #198754 !important;
+    font-weight: 600;
+}
+
+#categoryResultContainer .card-title {
+    color: var(--bs-gray-800);
+    font-weight: 600;
+    font-size: 1rem;
+}
+
+#categoryResultContainer .card-text {
+    font-size: 0.875rem;
+    line-height: 1.4;
+}
+
+/* 加载状态优化 */
+#categoryDetectionStatus .alert {
+    border: none;
+    background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%);
+    color: #1976d2;
+}
+
+#categoryDetectionStatus .spinner-border {
+    color: #1976d2;
+}

@@ -91,6 +91,18 @@
         </a>
       </div>
       <div class="nav-item">
+        <a href="#" class="nav-link" onclick="showSection('item-publish')">
+          <i class="bi bi-plus-circle"></i>
+          商品发布
+        </a>
+      </div>
+      <div class="nav-item">
+        <a href="#" class="nav-link" onclick="openBrowserEmbed()">
+          <i class="bi bi-browser-chrome"></i>
+          浏览器嵌入
+        </a>
+      </div>
+      <div class="nav-item">
         <a href="#" class="nav-link" onclick="showSection('system-settings')">
           <i class="bi bi-gear"></i>
           系统设置
@@ -1508,6 +1520,159 @@
             <i class="bi bi-search" style="font-size: 3rem; color: #ccc;"></i>
             <h5 class="mt-3 text-muted">未找到相关商品</h5>
             <p class="text-muted">请尝试使用其他关键词或调整搜索条件</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 商品发布内容 -->
+    <div id="item-publish-section" class="content-section">
+      <div class="content-header">
+        <h2 class="mb-0">
+          <i class="bi bi-plus-circle me-2"></i>
+          商品发布
+        </h2>
+        <p class="text-muted mb-0">发布商品到闲鱼平台，支持闲鱼知识图谱智能分类推荐</p>
+      </div>
+      <div class="content-body">
+        <div class="row justify-content-center">
+          <div class="col-lg-8">
+            <!-- 商品发布表单 -->
+            <div class="card">
+              <div class="card-header">
+                <i class="bi bi-pencil-square me-2"></i>商品信息
+              </div>
+              <div class="card-body">
+                <form id="itemPublishForm">
+                  <!-- 账号选择 -->
+                  <div class="mb-4">
+                    <label for="publishCookieSelect" class="form-label">
+                      <i class="bi bi-person-circle me-1"></i>选择发布账号
+                    </label>
+                    <select class="form-select" id="publishCookieSelect">
+                      <option value="">选择账号（可选，用于更精准的分类推荐）</option>
+                    </select>
+                    <div class="form-text">
+                      <i class="bi bi-info-circle me-1"></i>
+                      选择账号可以获得更精准的智能分类推荐
+                    </div>
+                  </div>
+
+                  <!-- 商品标题 -->
+                  <div class="mb-4">
+                    <label for="itemTitle" class="form-label">
+                      <i class="bi bi-type me-1"></i>商品标题
+                    </label>
+                    <input
+                      type="text"
+                      class="form-control"
+                      id="itemTitle"
+                      placeholder="请输入商品标题，有助于更精准的分类推荐..."
+                      maxlength="60"
+                    >
+                    <div class="form-text d-flex justify-content-between">
+                      <span>
+                        <i class="bi bi-info-circle me-1"></i>
+                        简洁明了的标题有助于智能分类推荐
+                      </span>
+                      <span id="titleCounter" class="text-muted">0/60</span>
+                    </div>
+                  </div>
+
+                  <!-- 商品图片 -->
+                  <div class="mb-4">
+                    <label for="itemImages" class="form-label">
+                      <i class="bi bi-image me-1"></i>商品图片
+                    </label>
+                    <div class="input-group">
+                      <input type="file" class="form-control" id="itemImages" accept="image/*" multiple>
+                      <button class="btn btn-outline-secondary" type="button" onclick="previewImages()">
+                        <i class="bi bi-eye me-1"></i>预览
+                      </button>
+                    </div>
+                    <div class="form-text">
+                      <i class="bi bi-info-circle me-1"></i>
+                      支持上传多张图片，建议尺寸：800x800像素，格式：JPG、PNG
+                    </div>
+                    <!-- 图片预览区域 -->
+                    <div id="imagePreviewContainer" class="mt-3" style="display: none;">
+                      <div class="row" id="imagePreviewGrid">
+                        <!-- 预览图片将在这里显示 -->
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 商品描述 -->
+                  <div class="mb-4">
+                    <label for="itemDescription" class="form-label">
+                      <i class="bi bi-text-paragraph me-1"></i>商品描述
+                    </label>
+                    <textarea
+                      class="form-control"
+                      id="itemDescription"
+                      rows="8"
+                      placeholder="请详细描述您的商品，包括品牌、型号、成色、购买时间、使用情况等信息..."
+                      maxlength="2000"
+                    ></textarea>
+                    <div class="form-text d-flex justify-content-between">
+                      <span>
+                        <i class="bi bi-info-circle me-1"></i>
+                        详细的商品描述有助于买家了解商品，提高成交率
+                      </span>
+                      <span id="descriptionCounter" class="text-muted">0/2000</span>
+                    </div>
+                  </div>
+
+                  <!-- 检测分类按钮 -->
+                  <div class="mb-4 text-center">
+                    <button type="button" class="btn btn-primary btn-lg" onclick="detectCategory()">
+                      <i class="bi bi-robot me-2"></i>智能检测分类
+                    </button>
+                    <div class="form-text mt-2">
+                      <i class="bi bi-cpu me-1"></i>
+                      使用闲鱼知识图谱智能推荐最适合的商品分类
+                    </div>
+                  </div>
+
+                  <!-- 分类检测结果 -->
+                  <div id="categoryResultContainer" class="mb-4" style="display: none;">
+                    <div class="card border-success">
+                      <div class="card-header bg-success text-white">
+                        <i class="bi bi-check-circle me-2"></i>分类检测结果
+                      </div>
+                      <div class="card-body">
+                        <div id="categoryResult">
+                          <!-- 分类结果将在这里显示 -->
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 检测状态 -->
+                  <div id="categoryDetectionStatus" class="mb-4" style="display: none;">
+                    <div class="alert alert-info">
+                      <div class="d-flex align-items-center">
+                        <div class="spinner-border spinner-border-sm me-3" role="status">
+                          <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <div>
+                          <strong>正在检测分类...</strong>
+                          <div class="small text-muted">请稍候，系统正在分析您的商品描述</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 错误提示 -->
+                  <div id="categoryErrorContainer" class="mb-4" style="display: none;">
+                    <div class="alert alert-danger">
+                      <i class="bi bi-exclamation-triangle me-2"></i>
+                      <span id="categoryErrorMessage"></span>
+                    </div>
+                  </div>
+                </form>
+              </div>
+            </div>
           </div>
         </div>
       </div>

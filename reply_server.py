@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -25,6 +25,16 @@ from utils.qr_login import qr_login_manager
 from utils.xianyu_utils import trans_cookies
 from utils.image_utils import image_manager
 from loguru import logger
+
+# 导入浏览器嵌入模块
+try:
+    from xianyu_browser_embed import xianyu_browser
+    BROWSER_EMBED_AVAILABLE = True
+    logger.info("浏览器嵌入模块加载成功")
+except ImportError as e:
+    BROWSER_EMBED_AVAILABLE = False
+    logger.warning(f"浏览器嵌入模块不可用: {e}")
+    xianyu_browser = None
 
 # 关键字文件路径
 KEYWORDS_FILE = Path(__file__).parent / "回复关键字.txt"
@@ -4275,6 +4285,894 @@ def update_item_multi_quantity_delivery(cookie_id: str, item_id: str, delivery_d
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ================================
+# 商品分类检测接口
+# ================================
+
+class CategoryDetectionRequest(BaseModel):
+    title: str = ""
+    description: str
+    cookie_id: str = ""
+
+@app.post("/api/detect-category")
+async def detect_category(
+    request: CategoryDetectionRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """使用闲鱼智能推荐接口检测商品分类"""
+    try:
+        import time
+        import json
+        import urllib.parse
+        import aiohttp
+        import asyncio
+
+        start_time = time.time()
+        description = request.description.strip()
+        title = request.title.strip() or description[:50]  # 如果没有标题，使用描述前50字符
+
+        if not description:
+            raise HTTPException(status_code=400, detail="商品描述不能为空")
+
+        log_with_user('info', f"开始调用闲鱼智能分类推荐接口，标题: {title[:30]}..., 描述长度: {len(description)}", current_user)
+
+        # 使用固定的Cookie进行测试
+        cookie_header = "cna=2x0VIEthuBgCAQFBy07P5aax; t=92064eac9aab68795e909c84b6666cd4; tracknick=xy771982658888; _hvn_lgc_=77; isg=BFNThiggP-HZDPMg_KngAC0L4td9COfK5wirBAVwrnKphHEmjdtsHpLXuvrqJD_C; cookie2=1d8f3898faa1abb58159790a3802e3a3; _samesite_flag_=true; sdkSilent=1756085421522; _tb_token_=83b7e178e4b5; xlly_s=1; sgcookie=E100JrXTnL7eFQiRIJStkPX%2FZJxZtFmn8IWMEQUTVeR%2BK4TC8vd3U6WNxRg36qan9rnlIl8HcDt7nJmiIbwnTBUSFSAvafcrZKU56HA20aPhfD%2FloEoiEGK%2Bis3ViFXhA5Q6; csg=d2659320; unb=2219383264998; havana_lgc2_77=eyJoaWQiOjIyMTkzODMyNjQ5OTgsInNnIjoiZjM3ZDNjZTQ0ZDBhYzliOTc3NDAyNTEzMGI3ODk1YTgiLCJzaXRlIjo3NywidG9rZW4iOiIxVEFJZlFvS0wzZklKeVlUdnM5OVdndyJ9; havana_lgc_exp=1758591062196; mtop_partitioned_detect=1; _m_h5_tk=b7a971b855a1a4b5df2008fa7dd0b6ba_1756047727777; _m_h5_tk_enc=055ae035033f90c527f9bd15ff3e07a1; x5sectag=660623; x5sec=7b22733b32223a2232623632333134613064613736346437222c22617365727665723b33223a22307c434a6974724d5547454d506c7661372f2f2f2f2f2f774561447a49794d546b7a4f444d794e6a51354f5467374d6a443271636d4c41773d3d227d; tfstk=gxLmQn_HknSfYzabmfbjcuW_cAn-lZ_1DdUOBNBZ4TW7H-Uv_RvMUpdYkFdNIdvRFIIvSCaG_CJsGOhj2IOf5NkKpF0pGIwgyOOwoO7yaQ1OgOoR0swuuikKp23-077invp9U1DHa16Pg1z47bbP_1QaQiJNUg5F9-7N7dluzsC43sWN08SPF17NQd7ZZaW5sNWwQNlkabZz79YwPUkg-BWonsTvrsjcLQm77PA_JiWegT4ZqU1059RVEPzGHX1LgQAxnyORlevh9K3zopAwOhSkS8khCUAyuhR7nb7HZ3Kdm3D4STLAFMLV-5u2ZZXcYUjUsypeZC-dqUhERZbV3hQX6WDvZEvvGUAT_u7ck3jHowuQ3OKJtFfM5AgkKCRBbgYgngS04kro3P1r6Ur_fi55Z9dIfXT7r2P66bcuAmsVNsHKZbq_fi55Z9hoZkw10_1xp"
+
+        log_with_user('info', f"使用固定Cookie进行测试", current_user)
+
+        # 注释掉原来的动态Cookie获取逻辑，以便后续恢复
+        # if request.cookie_id:
+        #     try:
+        #         from db_manager import db_manager
+        #         user_id = current_user['user_id']
+        #         user_cookies = db_manager.get_all_cookies(user_id)
+        #
+        #         if request.cookie_id in user_cookies:
+        #             cookie_data = user_cookies[request.cookie_id]
+        #             cookie_header = cookie_data.get('cookie', '')
+        #             log_with_user('info', f"使用账号Cookie: {request.cookie_id}", current_user)
+        #     except Exception as e:
+        #         log_with_user('warning', f"获取Cookie失败，将使用默认请求: {str(e)}", current_user)
+
+        # 构建请求参数
+        unique_code = str(int(time.time() * 1000))
+        request_data = {
+            "title": title,
+            "lockCpv": False,
+            "multiSKU": False,
+            "publishScene": "mainPublish",
+            "scene": "newPublishChoice",
+            "description": description,
+            "uniqueCode": unique_code
+        }
+
+        # 注意：这里先不编码，等生成签名后再编码
+        # encoded_data 将在生成签名后创建
+
+        # 构建完整的请求URL
+        base_url = "https://h5api.m.goofish.com/h5/mtop.taobao.idle.kgraph.property.recommend/2.0/"
+        timestamp = str(int(time.time() * 1000))
+
+        # 从Cookie中提取token
+        from utils.xianyu_utils import trans_cookies, generate_sign
+        token = ""
+        try:
+            cookies_dict = trans_cookies(cookie_header)
+            m_h5_tk = cookies_dict.get('_m_h5_tk', '')
+            if m_h5_tk and '_' in m_h5_tk:
+                token = m_h5_tk.split('_')[0]
+                log_with_user('info', f"从Cookie中提取到token: {token[:10]}...", current_user)
+            else:
+                log_with_user('warning', "Cookie中未找到有效的_m_h5_tk token", current_user)
+        except Exception as e:
+            log_with_user('warning', f"解析Cookie失败: {str(e)}", current_user)
+
+        # 生成签名
+        data_json = json.dumps(request_data, ensure_ascii=False, separators=(',', ':'))
+        sign = generate_sign(timestamp, token, data_json)
+
+        # 基础URL参数
+        url_params = {
+            "jsv": "2.7.2",
+            "appKey": "34839810",
+            "t": timestamp,
+            "sign": sign,
+            "v": "2.0",
+            "type": "originaljson",
+            "accountSite": "xianyu",
+            "dataType": "json",
+            "timeout": "20000",
+            "api": "mtop.taobao.idle.kgraph.property.recommend",
+            "sessionOption": "AutoLoginOnly"
+        }
+
+        url_with_params = base_url + "?" + urllib.parse.urlencode(url_params)
+
+        log_with_user('info', f"生成签名: {sign}, 时间戳: {timestamp}", current_user)
+        log_with_user('info', f"请求URL: {url_with_params}", current_user)
+        log_with_user('info', f"请求数据JSON: {data_json}", current_user)
+
+        # 现在生成URL编码的请求数据
+        encoded_data = urllib.parse.urlencode({"data": data_json})
+
+        # 构建请求头
+        headers = {
+            "accept": "application/json",
+            "accept-language": "zh-CN,zh;q=0.9",
+            "cache-control": "no-cache",
+            "content-type": "application/x-www-form-urlencoded",
+            "pragma": "no-cache",
+            "priority": "u=1, i",
+            "sec-ch-ua": '"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-site",
+            "Referer": "https://www.goofish.com/"
+        }
+
+        # 如果有Cookie，添加到请求头
+        if cookie_header:
+            headers["cookie"] = cookie_header
+
+        # 发送请求到闲鱼接口
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.post(
+                    url_with_params,
+                    headers=headers,
+                    data=encoded_data,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
+
+                    if response.status == 200:
+                        response_data = await response.json()
+                        log_with_user('info', f"闲鱼接口调用成功，状态码: {response.status}", current_user)
+
+                        # 打印完整的响应数据用于调试
+                        log_with_user('info', f"闲鱼接口返回数据: {json.dumps(response_data, ensure_ascii=False, indent=2)}", current_user)
+
+                        # 解析闲鱼接口返回的数据
+                        categories = []
+                        if response_data.get('ret') == ['SUCCESS::调用成功'] and response_data.get('data'):
+                            api_data = response_data['data']
+
+                            # 解析分类推荐结果
+                            if 'cpvList' in api_data:
+                                cpv_list = json.loads(api_data['cpvList']) if isinstance(api_data['cpvList'], str) else api_data['cpvList']
+
+                                for cpv_item in cpv_list:
+                                    if cpv_item.get('cardData', {}).get('propertyName') == '分类':
+                                        values_list = cpv_item['cardData'].get('valuesList', [])
+
+                                        for category_item in values_list:
+                                            # 提取分类信息
+                                            cat_id = category_item.get('catId') or category_item.get('channelCatId', '')
+                                            cat_name = category_item.get('catName') or category_item.get('channelCatName', '')
+                                            tb_cat_id = category_item.get('tbCatId', '')
+                                            confidence = category_item.get('score', 0.0)
+                                            is_clicked = category_item.get('isUserClick') == '1'
+
+                                            if cat_name and cat_id:
+                                                categories.append({
+                                                    "id": cat_id,
+                                                    "name": cat_name,
+                                                    "description": f"闲鱼分类: {cat_name}",
+                                                    "path": f"闲鱼分类 > {cat_name}",
+                                                    "confidence": confidence,
+                                                    "tb_cat_id": tb_cat_id,
+                                                    "is_recommended": is_clicked,
+                                                    "predict_from": category_item.get('predictFrom', 'unknown'),
+                                                    "predict_algo": category_item.get('predictAlgoSourceFrom', 'unknown')
+                                                })
+
+                                        # 按置信度排序
+                                        categories.sort(key=lambda x: (x.get('is_recommended', False), x.get('confidence', 0)), reverse=True)
+                                        break
+
+
+                        processing_time = int((time.time() - start_time) * 1000)
+
+                        # 构建返回结果
+                        result = {
+                            "categories": categories[:10],  # 最多返回10个分类
+                            "detection_info": {
+                                "model": "xianyu_kgraph_v2.0",
+                                "processing_time": processing_time,
+                                "description_length": len(description),
+                                "title_length": len(title),
+                                "api_status": "success",
+                                "total_categories": len(categories)
+                            }
+                        }
+
+                        log_with_user('info', f"闲鱼智能分类检测完成，找到 {len(categories)} 个推荐分类，耗时 {processing_time}ms", current_user)
+
+                        return {
+                            "success": True,
+                            "data": result,
+                            "message": f"智能检测完成，找到 {len(categories)} 个推荐分类"
+                        }
+
+                    else:
+                        # 接口调用失败，返回错误信息
+                        error_text = await response.text()
+                        log_with_user('error', f"闲鱼接口调用失败，状态码: {response.status}", current_user)
+                        log_with_user('error', f"错误响应内容: {error_text}", current_user)
+                        raise HTTPException(status_code=500, detail=f"闲鱼接口调用失败: HTTP {response.status}")
+
+            except asyncio.TimeoutError:
+                log_with_user('error', "闲鱼接口调用超时", current_user)
+                raise HTTPException(status_code=500, detail="接口调用超时，请稍后重试")
+            except aiohttp.ClientError as e:
+                log_with_user('error', f"网络请求异常: {str(e)}", current_user)
+                raise HTTPException(status_code=500, detail=f"网络请求失败: {str(e)}")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_with_user('error', f"分类检测异常: {str(e)}", current_user)
+        raise HTTPException(status_code=500, detail=f"分类检测失败: {str(e)}")
+
+
+# ================================
+# 浏览器嵌入相关接口
+# ================================
+
+@app.get("/browser-embed")
+async def get_browser_embed_page(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """获取浏览器嵌入界面"""
+    if not BROWSER_EMBED_AVAILABLE:
+        raise HTTPException(status_code=503, detail="浏览器嵌入功能不可用")
+
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>闲鱼浏览器嵌入界面</title>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css" rel="stylesheet">
+        <style>
+            .browser-container {
+                border: 2px solid #dee2e6;
+                border-radius: 8px;
+                overflow: hidden;
+                background: white;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            }
+            .browser-screen {
+                width: 100%;
+                height: 600px;
+                object-fit: contain;
+                display: block;
+                background: #f8f9fa;
+            }
+            .control-panel {
+                background: #f8f9fa;
+                border-bottom: 1px solid #dee2e6;
+                padding: 15px;
+            }
+            .status-bar {
+                background: #e9ecef;
+                padding: 8px 15px;
+                font-size: 0.9em;
+                border-top: 1px solid #dee2e6;
+            }
+            .btn-group .btn {
+                margin-right: 5px;
+            }
+            .form-control, .form-select {
+                margin-right: 10px;
+            }
+            .live-indicator {
+                display: inline-block;
+                width: 8px;
+                height: 8px;
+                background: #dc3545;
+                border-radius: 50%;
+                margin-right: 5px;
+            }
+            .live-indicator.active {
+                background: #28a745;
+                animation: pulse 1.5s infinite;
+            }
+            @keyframes pulse {
+                0% { opacity: 1; }
+                50% { opacity: 0.5; }
+                100% { opacity: 1; }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container-fluid py-3">
+            <div class="row">
+                <div class="col-12">
+                    <h2 class="mb-3">
+                        <i class="bi bi-browser-chrome me-2"></i>
+                        闲鱼浏览器嵌入界面
+                    </h2>
+
+                    <div class="browser-container">
+                        <!-- 控制面板 -->
+                        <div class="control-panel">
+                            <div class="row g-2">
+                                <div class="col-md-8">
+                                    <div class="input-group">
+                                        <select class="form-select" id="pageSelect" style="max-width: 200px;">
+                                            <option value="home">闲鱼首页</option>
+                                            <option value="publish">发布商品</option>
+                                            <option value="messages">消息中心</option>
+                                            <option value="my_items">我的商品</option>
+                                            <option value="orders">订单管理</option>
+                                        </select>
+                                        <button class="btn btn-primary" onclick="navigateToPage()">
+                                            <i class="bi bi-arrow-right"></i> 访问
+                                        </button>
+                                        <button class="btn btn-secondary" onclick="refreshPage()">
+                                            <i class="bi bi-arrow-clockwise"></i> 刷新
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="col-md-4 text-end">
+                                    <div class="btn-group">
+                                        <button class="btn btn-outline-success" onclick="loginWithCookies()">
+                                            <i class="bi bi-key"></i> Cookie登录
+                                        </button>
+                                        <button class="btn btn-outline-info" onclick="toggleLiveStream()">
+                                            <span class="live-indicator" id="liveIndicator"></span>
+                                            实时流
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="row g-2 mt-2">
+                                <div class="col-md-6">
+                                    <div class="input-group input-group-sm">
+                                        <input type="text" class="form-control" id="selectorInput"
+                                               placeholder="CSS选择器 (如: .btn-primary)">
+                                        <button class="btn btn-outline-primary" onclick="clickElement()">
+                                            <i class="bi bi-cursor"></i> 点击
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="input-group input-group-sm">
+                                        <input type="text" class="form-control" id="textInput"
+                                               placeholder="输入文本内容">
+                                        <button class="btn btn-outline-success" onclick="typeText()">
+                                            <i class="bi bi-keyboard"></i> 输入
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 浏览器显示区域 -->
+                        <div class="browser-display">
+                            <img id="browserScreen" class="browser-screen"
+                                 src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIwMCIgaGVpZ2h0PSI2MDAiIHZpZXdCb3g9IjAgMCAxMjAwIDYwMCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjEyMDAiIGhlaWdodD0iNjAwIiBmaWxsPSIjRjhGOUZBIi8+Cjx0ZXh0IHg9IjYwMCIgeT0iMzAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjNkM3NTdEIiBmb250LXNpemU9IjI0Ij7lvoXliqDovb3kuK3vvIzor7fngrnlh7vkuIDkuKrpobXpnaI8L3RleHQ+Cjwvc3ZnPgo="
+                                 alt="浏览器界面将在这里显示">
+                        </div>
+
+                        <!-- 状态栏 -->
+                        <div class="status-bar">
+                            <div class="row">
+                                <div class="col-md-8">
+                                    <span id="statusText">
+                                        <i class="bi bi-info-circle me-1"></i>
+                                        准备就绪 - 请选择页面并点击访问
+                                    </span>
+                                </div>
+                                <div class="col-md-4 text-end">
+                                    <small class="text-muted">
+                                        登录状态: <span id="loginStatus" class="badge bg-secondary">未登录</span>
+                                    </small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cookie登录模态框 -->
+        <div class="modal fade" id="cookieModal" tabindex="-1">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">
+                            <i class="bi bi-key me-2"></i>Cookie登录
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">选择已保存的Cookie:</label>
+                            <select class="form-select" id="cookieSelect">
+                                <option value="">选择Cookie账号...</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">或手动输入Cookie:</label>
+                            <textarea class="form-control" id="cookieInput" rows="4"
+                                      placeholder="粘贴完整的Cookie字符串..."></textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-primary" onclick="performCookieLogin()">登录</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+        <script>
+            let ws = null;
+            let liveStreamEnabled = false;
+            const apiBase = window.location.origin;
+
+            // WebSocket连接
+            function connectWebSocket() {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                ws = new WebSocket(`${protocol}//${window.location.host}/browser-ws`);
+
+                ws.onopen = function(event) {
+                    updateStatus('WebSocket连接已建立', 'success');
+                };
+
+                ws.onmessage = function(event) {
+                    const message = JSON.parse(event.data);
+                    if (message.type === 'screenshot') {
+                        document.getElementById('browserScreen').src = message.data;
+                        updateLoginStatus(message.logged_in);
+                    }
+                };
+
+                ws.onclose = function(event) {
+                    updateStatus('WebSocket连接已断开', 'warning');
+                    setTimeout(connectWebSocket, 3000); // 3秒后重连
+                };
+
+                ws.onerror = function(error) {
+                    updateStatus('WebSocket连接错误', 'danger');
+                };
+            }
+
+            // 导航到页面
+            async function navigateToPage() {
+                const pageType = document.getElementById('pageSelect').value;
+                updateStatus(`正在访问: ${pageType}`, 'info');
+
+                try {
+                    const response = await fetch(`${apiBase}/browser-navigate`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+                        },
+                        body: JSON.stringify({ page_type: pageType })
+                    });
+
+                    const result = await response.json();
+                    if (result.success && result.screenshot) {
+                        document.getElementById('browserScreen').src = result.screenshot;
+                        updateStatus('页面加载完成', 'success');
+                    } else {
+                        updateStatus(result.message || '页面加载失败', 'danger');
+                    }
+                } catch (error) {
+                    updateStatus(`访问失败: ${error.message}`, 'danger');
+                }
+            }
+
+            // 刷新页面
+            async function refreshPage() {
+                updateStatus('正在刷新页面...', 'info');
+
+                try {
+                    const response = await fetch(`${apiBase}/browser-screenshot`, {
+                        headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
+                    });
+
+                    const result = await response.json();
+                    if (result.screenshot) {
+                        document.getElementById('browserScreen').src = result.screenshot;
+                        updateStatus('页面刷新完成', 'success');
+                    }
+                } catch (error) {
+                    updateStatus(`刷新失败: ${error.message}`, 'danger');
+                }
+            }
+
+            // Cookie登录
+            function loginWithCookies() {
+                loadCookieOptions();
+                new bootstrap.Modal(document.getElementById('cookieModal')).show();
+            }
+
+            // 加载Cookie选项
+            async function loadCookieOptions() {
+                try {
+                    const response = await fetch(`${apiBase}/cookies/details`, {
+                        headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
+                    });
+
+                    if (response.ok) {
+                        const cookies = await response.json();
+                        const select = document.getElementById('cookieSelect');
+                        select.innerHTML = '<option value="">选择Cookie账号...</option>';
+
+                        Object.entries(cookies).forEach(([cookieId, cookieData]) => {
+                            const option = document.createElement('option');
+                            option.value = cookieData.cookie;
+                            option.textContent = `${cookieData.nickname || cookieId} (${cookieId})`;
+                            select.appendChild(option);
+                        });
+                    }
+                } catch (error) {
+                    console.error('加载Cookie选项失败:', error);
+                }
+            }
+
+            // 执行Cookie登录
+            async function performCookieLogin() {
+                const cookieSelect = document.getElementById('cookieSelect');
+                const cookieInput = document.getElementById('cookieInput');
+                const cookieStr = cookieSelect.value || cookieInput.value.trim();
+
+                if (!cookieStr) {
+                    alert('请选择或输入Cookie');
+                    return;
+                }
+
+                updateStatus('正在使用Cookie登录...', 'info');
+
+                try {
+                    const response = await fetch(`${apiBase}/browser-login`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+                        },
+                        body: JSON.stringify({ cookies: cookieStr })
+                    });
+
+                    const result = await response.json();
+                    if (result.success) {
+                        updateStatus('Cookie登录成功', 'success');
+                        updateLoginStatus(true);
+                        bootstrap.Modal.getInstance(document.getElementById('cookieModal')).hide();
+
+                        if (result.screenshot) {
+                            document.getElementById('browserScreen').src = result.screenshot;
+                        }
+                    } else {
+                        updateStatus(result.message || 'Cookie登录失败', 'danger');
+                    }
+                } catch (error) {
+                    updateStatus(`登录失败: ${error.message}`, 'danger');
+                }
+            }
+
+            // 点击元素
+            async function clickElement() {
+                const selector = document.getElementById('selectorInput').value.trim();
+                if (!selector) {
+                    alert('请输入CSS选择器');
+                    return;
+                }
+
+                updateStatus(`正在点击元素: ${selector}`, 'info');
+
+                try {
+                    const response = await fetch(`${apiBase}/browser-click`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+                        },
+                        body: JSON.stringify({ selector: selector })
+                    });
+
+                    const result = await response.json();
+                    updateStatus(result.success ? '点击成功' : '点击失败', result.success ? 'success' : 'danger');
+
+                    // 点击后自动截图
+                    if (result.success) {
+                        setTimeout(refreshPage, 500);
+                    }
+                } catch (error) {
+                    updateStatus(`点击失败: ${error.message}`, 'danger');
+                }
+            }
+
+            // 输入文本
+            async function typeText() {
+                const selector = document.getElementById('selectorInput').value.trim();
+                const text = document.getElementById('textInput').value.trim();
+
+                if (!selector || !text) {
+                    alert('请输入CSS选择器和文本内容');
+                    return;
+                }
+
+                updateStatus(`正在输入文本到 ${selector}`, 'info');
+
+                try {
+                    const response = await fetch(`${apiBase}/browser-type`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+                        },
+                        body: JSON.stringify({ selector: selector, text: text })
+                    });
+
+                    const result = await response.json();
+                    updateStatus(result.success ? '输入成功' : '输入失败', result.success ? 'success' : 'danger');
+
+                    // 输入后自动截图
+                    if (result.success) {
+                        setTimeout(refreshPage, 500);
+                    }
+                } catch (error) {
+                    updateStatus(`输入失败: ${error.message}`, 'danger');
+                }
+            }
+
+            // 切换实时流
+            function toggleLiveStream() {
+                liveStreamEnabled = !liveStreamEnabled;
+                const indicator = document.getElementById('liveIndicator');
+
+                if (liveStreamEnabled) {
+                    indicator.classList.add('active');
+                    updateStatus('实时流已开启', 'success');
+                } else {
+                    indicator.classList.remove('active');
+                    updateStatus('实时流已关闭', 'info');
+                }
+            }
+
+            // 更新状态
+            function updateStatus(message, type = 'info') {
+                const statusText = document.getElementById('statusText');
+                const icons = {
+                    'success': 'bi-check-circle',
+                    'danger': 'bi-exclamation-triangle',
+                    'warning': 'bi-exclamation-circle',
+                    'info': 'bi-info-circle'
+                };
+
+                statusText.innerHTML = `
+                    <i class="${icons[type] || icons.info} me-1"></i>
+                    ${new Date().toLocaleTimeString()} - ${message}
+                `;
+            }
+
+            // 更新登录状态
+            function updateLoginStatus(isLoggedIn) {
+                const loginStatus = document.getElementById('loginStatus');
+                if (isLoggedIn) {
+                    loginStatus.textContent = '已登录';
+                    loginStatus.className = 'badge bg-success';
+                } else {
+                    loginStatus.textContent = '未登录';
+                    loginStatus.className = 'badge bg-secondary';
+                }
+            }
+
+            // 页面加载完成后初始化
+            window.onload = function() {
+                // 从localStorage获取authToken
+                const authToken = localStorage.getItem('authToken');
+                if (!authToken) {
+                    alert('请先登录系统');
+                    window.location.href = '/';
+                    return;
+                }
+
+                connectWebSocket();
+                refreshPage(); // 初始截图
+            };
+        </script>
+    </body>
+    </html>
+    """
+
+    return HTMLResponse(content=html_content)
+
+
+@app.websocket("/browser-ws")
+async def browser_websocket_endpoint(websocket: WebSocket):
+    """浏览器嵌入WebSocket连接"""
+    if not BROWSER_EMBED_AVAILABLE:
+        await websocket.close(code=1000, reason="浏览器嵌入功能不可用")
+        return
+
+    await websocket.accept()
+    xianyu_browser.websocket_connections.add(websocket)
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        xianyu_browser.websocket_connections.discard(websocket)
+
+
+class BrowserNavigateRequest(BaseModel):
+    page_type: str
+
+@app.post("/browser-navigate")
+async def browser_navigate(
+    request: BrowserNavigateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """浏览器导航到指定页面"""
+    if not BROWSER_EMBED_AVAILABLE:
+        raise HTTPException(status_code=503, detail="浏览器嵌入功能不可用")
+
+    try:
+        log_with_user('info', f"浏览器导航到页面: {request.page_type}", current_user)
+
+        screenshot = await xianyu_browser.navigate_to_xianyu_page(request.page_type)
+
+        return {
+            "success": True,
+            "screenshot": screenshot,
+            "message": f"成功导航到 {request.page_type} 页面"
+        }
+
+    except Exception as e:
+        log_with_user('error', f"浏览器导航失败: {str(e)}", current_user)
+        raise HTTPException(status_code=500, detail=f"导航失败: {str(e)}")
+
+
+@app.get("/browser-screenshot")
+async def browser_screenshot(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """获取浏览器截图"""
+    if not BROWSER_EMBED_AVAILABLE:
+        raise HTTPException(status_code=503, detail="浏览器嵌入功能不可用")
+
+    try:
+        screenshot = await xianyu_browser.capture_screenshot()
+        return {"screenshot": screenshot}
+
+    except Exception as e:
+        log_with_user('error', f"获取浏览器截图失败: {str(e)}", current_user)
+        raise HTTPException(status_code=500, detail=f"截图失败: {str(e)}")
+
+
+class BrowserLoginRequest(BaseModel):
+    cookies: str
+
+@app.post("/browser-login")
+async def browser_login(
+    request: BrowserLoginRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """使用Cookie登录浏览器"""
+    if not BROWSER_EMBED_AVAILABLE:
+        raise HTTPException(status_code=503, detail="浏览器嵌入功能不可用")
+
+    try:
+        log_with_user('info', "开始使用Cookie登录浏览器", current_user)
+
+        success = await xianyu_browser.login_with_cookies(request.cookies)
+
+        if success:
+            screenshot = await xianyu_browser.capture_screenshot()
+            log_with_user('info', "浏览器Cookie登录成功", current_user)
+
+            return {
+                "success": True,
+                "screenshot": screenshot,
+                "message": "Cookie登录成功"
+            }
+        else:
+            return {
+                "success": False,
+                "message": "Cookie登录失败，请检查Cookie是否有效"
+            }
+
+    except Exception as e:
+        log_with_user('error', f"浏览器Cookie登录异常: {str(e)}", current_user)
+        raise HTTPException(status_code=500, detail=f"登录失败: {str(e)}")
+
+
+class BrowserClickRequest(BaseModel):
+    selector: str
+
+@app.post("/browser-click")
+async def browser_click(
+    request: BrowserClickRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """点击浏览器元素"""
+    if not BROWSER_EMBED_AVAILABLE:
+        raise HTTPException(status_code=503, detail="浏览器嵌入功能不可用")
+
+    try:
+        success = await xianyu_browser.page.click(request.selector)
+
+        log_with_user('info', f"点击元素 {request.selector}: {'成功' if success else '失败'}", current_user)
+
+        return {"success": True}
+
+    except Exception as e:
+        log_with_user('error', f"点击元素失败: {str(e)}", current_user)
+        return {"success": False, "message": str(e)}
+
+
+class BrowserTypeRequest(BaseModel):
+    selector: str
+    text: str
+
+@app.post("/browser-type")
+async def browser_type(
+    request: BrowserTypeRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """在浏览器元素中输入文本"""
+    if not BROWSER_EMBED_AVAILABLE:
+        raise HTTPException(status_code=503, detail="浏览器嵌入功能不可用")
+
+    try:
+        await xianyu_browser.page.fill(request.selector, request.text)
+
+        log_with_user('info', f"在元素 {request.selector} 中输入文本: {request.text[:50]}...", current_user)
+
+        return {"success": True}
+
+    except Exception as e:
+        log_with_user('error', f"输入文本失败: {str(e)}", current_user)
+        return {"success": False, "message": str(e)}
+
+
+# ================================
+# 应用启动和关闭事件
+# ================================
+
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时的初始化"""
+    logger.info("应用启动中...")
+
+    # 初始化浏览器嵌入功能
+    if BROWSER_EMBED_AVAILABLE:
+        try:
+            await xianyu_browser.start_browser(headless=True)  # 无头模式启动
+            # 启动实时截图流
+            asyncio.create_task(xianyu_browser.start_live_stream(interval=2.0))
+            logger.info("浏览器嵌入功能初始化成功")
+        except Exception as e:
+            logger.error(f"浏览器嵌入功能初始化失败: {e}")
+
+    logger.info("应用启动完成")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭时的清理"""
+    logger.info("应用关闭中...")
+
+    # 关闭浏览器
+    if BROWSER_EMBED_AVAILABLE and xianyu_browser:
+        try:
+            await xianyu_browser.close()
+            logger.info("浏览器已关闭")
+        except Exception as e:
+            logger.error(f"关闭浏览器异常: {e}")
+
+    logger.info("应用关闭完成")
 
 
 # 移除自动启动，由Start.py或手动启动

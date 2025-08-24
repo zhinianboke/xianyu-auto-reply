@@ -10094,4 +10094,393 @@ async function showUpdateInfo(newVersion) {
     modal.show();
 }
 
+// ================================
+// 商品发布功能
+// ================================
+
+// 图片预览功能
+function previewImages() {
+    const fileInput = document.getElementById('itemImages');
+    const previewContainer = document.getElementById('imagePreviewContainer');
+    const previewGrid = document.getElementById('imagePreviewGrid');
+
+    if (!fileInput.files || fileInput.files.length === 0) {
+        showToast('请先选择图片文件', 'warning');
+        return;
+    }
+
+    // 清空之前的预览
+    previewGrid.innerHTML = '';
+
+    // 显示预览容器
+    previewContainer.style.display = 'block';
+
+    // 遍历所有选中的文件
+    Array.from(fileInput.files).forEach((file, index) => {
+        if (file.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const colDiv = document.createElement('div');
+                colDiv.className = 'col-md-3 col-sm-4 col-6 mb-3';
+
+                colDiv.innerHTML = `
+                    <div class="card">
+                        <img src="${e.target.result}" class="card-img-top" style="height: 150px; object-fit: cover;" alt="预览图片 ${index + 1}">
+                        <div class="card-body p-2">
+                            <small class="text-muted">图片 ${index + 1}</small>
+                            <button type="button" class="btn btn-sm btn-outline-danger float-end" onclick="removePreviewImage(${index})">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+
+                previewGrid.appendChild(colDiv);
+            };
+            reader.readAsDataURL(file);
+        }
+    });
+}
+
+// 移除预览图片
+function removePreviewImage(index) {
+    const fileInput = document.getElementById('itemImages');
+    const dt = new DataTransfer();
+
+    // 重新构建文件列表，排除指定索引的文件
+    Array.from(fileInput.files).forEach((file, i) => {
+        if (i !== index) {
+            dt.items.add(file);
+        }
+    });
+
+    fileInput.files = dt.files;
+
+    // 重新预览
+    previewImages();
+}
+
+// 商品描述字符计数
+function updateDescriptionCounter() {
+    const textarea = document.getElementById('itemDescription');
+    const counter = document.getElementById('descriptionCounter');
+    const currentLength = textarea.value.length;
+    const maxLength = 2000;
+
+    counter.textContent = `${currentLength}/${maxLength}`;
+
+    // 根据字符数量改变颜色
+    if (currentLength > maxLength * 0.9) {
+        counter.className = 'text-danger';
+    } else if (currentLength > maxLength * 0.7) {
+        counter.className = 'text-warning';
+    } else {
+        counter.className = 'text-muted';
+    }
+}
+
+// 检测商品分类
+async function detectCategory() {
+    const description = document.getElementById('itemDescription').value.trim();
+    const title = document.getElementById('itemTitle')?.value.trim() || '';
+
+    if (!description) {
+        showToast('请先输入商品描述', 'warning');
+        document.getElementById('itemDescription').focus();
+        return;
+    }
+
+    // 隐藏之前的结果和错误信息
+    document.getElementById('categoryResultContainer').style.display = 'none';
+    document.getElementById('categoryErrorContainer').style.display = 'none';
+
+    // 显示检测状态
+    document.getElementById('categoryDetectionStatus').style.display = 'block';
+
+    try {
+        // 使用固定Cookie进行测试（暂时不从界面获取）
+        const cookieId = 'test_cookie';
+
+        // 调用闲鱼智能分类检测接口
+        const response = await fetch(`${apiBase}/api/detect-category`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                title: title,
+                description: description,
+                cookie_id: cookieId
+            })
+        });
+
+        const result = await response.json();
+
+        // 隐藏检测状态
+        document.getElementById('categoryDetectionStatus').style.display = 'none';
+
+        if (result.success) {
+            displayCategoryResult(result.data);
+        } else {
+            showCategoryError(result.message || '智能分类检测失败');
+        }
+
+    } catch (error) {
+        console.error('分类检测异常:', error);
+        document.getElementById('categoryDetectionStatus').style.display = 'none';
+        showCategoryError(`检测失败: ${error.message || '网络错误'}`);
+    }
+}
+
+// 显示分类检测结果
+function displayCategoryResult(data) {
+    const resultContainer = document.getElementById('categoryResult');
+
+    if (!data || !data.categories || data.categories.length === 0) {
+        showCategoryError('未检测到合适的分类');
+        return;
+    }
+
+    let resultHtml = '';
+
+    // 显示推荐分类
+    if (data.categories.length > 0) {
+        resultHtml += `
+            <div class="mb-4">
+                <h6 class="text-success mb-3">
+                    <i class="bi bi-robot me-1"></i>闲鱼智能推荐分类
+                </h6>
+                <div class="row">
+        `;
+
+        data.categories.forEach((category, index) => {
+            const confidencePercent = Math.round((category.confidence || 0) * 100);
+            const badgeClass = category.is_recommended ? 'bg-success' :
+                             confidencePercent >= 60 ? 'bg-warning' : 'bg-secondary';
+            const badgeText = category.is_recommended ? '推荐' : `${confidencePercent}%`;
+
+            resultHtml += `
+                <div class="col-md-6 mb-3">
+                    <div class="card h-100 category-card ${category.is_recommended ? 'border-success' : ''}" data-category-id="${category.id}">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start mb-2">
+                                <h6 class="card-title mb-0">${category.name}</h6>
+                                <span class="badge ${badgeClass}">${badgeText}</span>
+                            </div>
+                            <p class="card-text text-muted small mb-2">${category.description || '暂无描述'}</p>
+                            <div class="small text-muted">
+                                <i class="bi bi-tag me-1"></i><strong>分类ID:</strong> ${category.id}
+                                ${category.tb_cat_id ? ` | <strong>淘宝分类:</strong> ${category.tb_cat_id}` : ''}
+                            </div>
+                            ${category.path ? `<div class="small text-muted"><i class="bi bi-diagram-3 me-1"></i><strong>分类路径:</strong> ${category.path}</div>` : ''}
+                            ${category.predict_from && category.predict_from !== 'unknown' ? `
+                                <div class="small text-info mt-1">
+                                    <i class="bi bi-cpu me-1"></i>预测来源: ${category.predict_from}
+                                    ${category.predict_algo && category.predict_algo !== 'unknown' ? ` (${category.predict_algo})` : ''}
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+
+        resultHtml += `
+                </div>
+            </div>
+        `;
+    }
+
+    // 显示检测信息
+    if (data.detection_info) {
+        const info = data.detection_info;
+        resultHtml += `
+            <div class="alert alert-info">
+                <h6 class="alert-heading">
+                    <i class="bi bi-robot me-1"></i>智能检测信息
+                </h6>
+                <div class="row">
+                    <div class="col-md-6">
+                        <small>
+                            <strong>检测模型:</strong> ${info.model}<br>
+                            <strong>处理时间:</strong> ${info.processing_time}ms<br>
+                            <strong>描述长度:</strong> ${info.description_length}字符
+                            ${info.title_length ? `<br><strong>标题长度:</strong> ${info.title_length}字符` : ''}
+                        </small>
+                    </div>
+                    <div class="col-md-6">
+                        <small>
+                            <strong>API状态:</strong> ${info.api_status}<br>
+                            <strong>推荐分类数:</strong> ${info.total_categories}个<br>
+                            <strong>数据来源:</strong> 闲鱼知识图谱
+                        </small>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    resultContainer.innerHTML = resultHtml;
+    document.getElementById('categoryResultContainer').style.display = 'block';
+
+    // 添加分类卡片点击事件
+    document.querySelectorAll('.category-card').forEach(card => {
+        card.addEventListener('click', function() {
+            const categoryId = this.dataset.categoryId;
+            const categoryName = this.querySelector('.card-title').textContent;
+
+            // 这里可以添加选择分类的逻辑
+            showToast(`已选择分类: ${categoryName} (ID: ${categoryId})`, 'success');
+
+            // 高亮选中的卡片
+            document.querySelectorAll('.category-card').forEach(c => c.classList.remove('border-primary'));
+            this.classList.add('border-primary');
+        });
+    });
+
+    // 滚动到结果区域
+    document.getElementById('categoryResultContainer').scrollIntoView({
+        behavior: 'smooth',
+        block: 'start'
+    });
+}
+
+// 显示分类检测错误
+function showCategoryError(message) {
+    document.getElementById('categoryErrorMessage').textContent = message;
+    document.getElementById('categoryErrorContainer').style.display = 'block';
+
+    // 滚动到错误区域
+    document.getElementById('categoryErrorContainer').scrollIntoView({
+        behavior: 'smooth',
+        block: 'start'
+    });
+}
+
+// 商品标题字符计数
+function updateTitleCounter() {
+    const titleInput = document.getElementById('itemTitle');
+    const counter = document.getElementById('titleCounter');
+
+    if (titleInput && counter) {
+        const currentLength = titleInput.value.length;
+        const maxLength = 60;
+
+        counter.textContent = `${currentLength}/${maxLength}`;
+
+        // 根据字符数量改变颜色
+        if (currentLength > maxLength * 0.9) {
+            counter.className = 'text-danger';
+        } else if (currentLength > maxLength * 0.7) {
+            counter.className = 'text-warning';
+        } else {
+            counter.className = 'text-muted';
+        }
+    }
+}
+
+// 加载发布账号选择器
+async function loadPublishCookieOptions() {
+    try {
+        const response = await fetch(`${apiBase}/cookies/details`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+
+        if (response.ok) {
+            const cookies = await response.json();
+            const selectElement = document.getElementById('publishCookieSelect');
+
+            if (selectElement) {
+                // 清空现有选项（保留默认选项）
+                selectElement.innerHTML = '<option value="">选择账号（可选，用于更精准的分类推荐）</option>';
+
+                // 添加账号选项
+                Object.entries(cookies).forEach(([cookieId, cookieData]) => {
+                    const option = document.createElement('option');
+                    option.value = cookieId;
+                    option.textContent = `${cookieData.nickname || cookieId} (${cookieId})`;
+                    selectElement.appendChild(option);
+                });
+
+                console.log(`加载了 ${Object.keys(cookies).length} 个账号到发布选择器`);
+            }
+        } else {
+            console.warn('加载账号列表失败:', response.status);
+        }
+    } catch (error) {
+        console.error('加载账号列表时发生错误:', error);
+    }
+}
+
+// 打开浏览器嵌入页面
+function openBrowserEmbed() {
+    // 在新窗口中打开浏览器嵌入界面
+    const browserWindow = window.open(`${apiBase}/browser-embed`, '_blank', 'width=1400,height=900,scrollbars=yes,resizable=yes');
+
+    if (!browserWindow) {
+        showToast('无法打开浏览器嵌入窗口，请检查浏览器弹窗设置', 'warning');
+    } else {
+        showToast('浏览器嵌入界面已在新窗口中打开', 'success');
+    }
+}
+
+// 初始化商品发布页面
+function initItemPublishPage() {
+    // 绑定商品标题字符计数事件
+    const titleInput = document.getElementById('itemTitle');
+    if (titleInput) {
+        titleInput.addEventListener('input', updateTitleCounter);
+        titleInput.addEventListener('paste', () => {
+            setTimeout(updateTitleCounter, 10);
+        });
+
+        // 初始化计数器
+        updateTitleCounter();
+    }
+
+    // 绑定商品描述字符计数事件
+    const descriptionTextarea = document.getElementById('itemDescription');
+    if (descriptionTextarea) {
+        descriptionTextarea.addEventListener('input', updateDescriptionCounter);
+        descriptionTextarea.addEventListener('paste', () => {
+            setTimeout(updateDescriptionCounter, 10);
+        });
+
+        // 初始化计数器
+        updateDescriptionCounter();
+    }
+
+    // 绑定文件选择事件
+    const fileInput = document.getElementById('itemImages');
+    if (fileInput) {
+        fileInput.addEventListener('change', function() {
+            if (this.files && this.files.length > 0) {
+                previewImages();
+            } else {
+                document.getElementById('imagePreviewContainer').style.display = 'none';
+            }
+        });
+    }
+
+    // 加载发布账号选择器
+    loadPublishCookieOptions();
+}
+
+// 页面切换时的初始化
+document.addEventListener('DOMContentLoaded', function() {
+    // 监听页面切换事件
+    const originalShowSection = window.showSection;
+    window.showSection = function(sectionName) {
+        originalShowSection(sectionName);
+
+        // 如果切换到商品发布页面，初始化相关功能
+        if (sectionName === 'item-publish') {
+            setTimeout(initItemPublishPage, 100);
+        }
+    };
+});
+
 
