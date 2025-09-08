@@ -199,7 +199,7 @@ docker run -d \
   -p 8080:8080 \
   -v $PWD/xianyu-auto-reply/:/app/data/ \
   --name xianyu-auto-reply \
-  registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-auto-reply:1.0
+  registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-auto-reply:1.0.2
 
 # 3. 访问系统
 # http://localhost:8080
