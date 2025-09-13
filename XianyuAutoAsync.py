@@ -211,6 +211,9 @@ class XianyuLive:
         self.cookie_refresh_running = False  # 防止重复执行Cookie刷新
         self.cookie_refresh_enabled = True  # 是否启用Cookie刷新功能
 
+        # WebSocket保护机制
+        self.refresh_with_reconnect = False  # 是否在刷新时重连WebSocket
+
         # 扫码登录Cookie刷新标志
         self.last_qr_cookie_refresh_time = 0  # 记录上次扫码登录Cookie刷新时间
         self.qr_cookie_refresh_cooldown = 600  # 扫码登录Cookie刷新后的冷却时间：10分钟
@@ -3570,30 +3573,21 @@ class XianyuLive:
     async def _execute_cookie_refresh(self, current_time):
         """独立执行Cookie刷新任务，避免阻塞主循环"""
 
-
         # 设置运行状态，防止重复执行
         self.cookie_refresh_running = True
 
+        # 保存当前WebSocket状态，用于恢复
+        original_ws = self.ws
+        heartbeat_was_running = False
+
         try:
-            logger.info(f"【{self.cookie_id}】开始Cookie刷新任务，暂时暂停心跳以避免连接冲突...")
-
-            # 暂时暂停心跳任务，避免与浏览器操作冲突
-            heartbeat_was_running = False
-            if self.heartbeat_task and not self.heartbeat_task.done():
-                heartbeat_was_running = True
-                self.heartbeat_task.cancel()
-                logger.debug(f"【{self.cookie_id}】已暂停心跳任务")
-
-            # 为整个Cookie刷新任务添加超时保护（3分钟，缩短时间减少影响）
-            success = await asyncio.wait_for(
-                self._refresh_cookies_via_browser(),
-                timeout=180.0  # 3分钟超时，减少对WebSocket的影响
-            )
-
-            # 重新启动心跳任务
-            if heartbeat_was_running and self.ws and not self.ws.closed:
-                logger.debug(f"【{self.cookie_id}】重新启动心跳任务")
-                self.heartbeat_task = asyncio.create_task(self.heartbeat_loop(self.ws))
+            # 根据配置选择刷新策略
+            if self.refresh_with_reconnect:
+                logger.info(f"【{self.cookie_id}】采用重连策略进行Cookie刷新...")
+                success = await self._refresh_cookies_with_reconnect()
+            else:
+                logger.info(f"【{self.cookie_id}】采用保持连接策略进行Cookie刷新...")
+                success = await self._refresh_cookies_keep_connection(original_ws, heartbeat_was_running)
 
             if success:
                 self.last_cookie_refresh_time = current_time
@@ -3619,6 +3613,122 @@ class XianyuLive:
 
             # 清除运行状态
             self.cookie_refresh_running = False
+
+    async def _refresh_cookies_keep_connection(self, original_ws, heartbeat_was_running):
+        """保持WebSocket连接的Cookie刷新策略"""
+        lightweight_heartbeat_task = None
+
+        try:
+            # 检查WebSocket连接状态
+            if self.ws and not self.ws.closed:
+                logger.info(f"【{self.cookie_id}】WebSocket连接正常，将保持连接进行Cookie刷新")
+
+                # 暂时暂停心跳任务，但保持WebSocket连接
+                if self.heartbeat_task and not self.heartbeat_task.done():
+                    self.heartbeat_task.cancel()
+                    logger.debug(f"【{self.cookie_id}】已暂停心跳任务，但保持WebSocket连接")
+
+                # 启动轻量级心跳，防止连接超时
+                lightweight_heartbeat_task = asyncio.create_task(
+                    self._lightweight_heartbeat_during_refresh(self.ws)
+                )
+            else:
+                logger.warning(f"【{self.cookie_id}】WebSocket连接异常，将在刷新后重新连接")
+
+            # 执行Cookie刷新（缩短超时时间）
+            success = await asyncio.wait_for(
+                self._refresh_cookies_via_browser(),
+                timeout=120.0  # 2分钟超时
+            )
+
+            # 停止轻量级心跳
+            if lightweight_heartbeat_task:
+                lightweight_heartbeat_task.cancel()
+                try:
+                    await lightweight_heartbeat_task
+                except asyncio.CancelledError:
+                    pass
+
+            # 检查WebSocket连接是否仍然有效
+            if original_ws and not original_ws.closed:
+                logger.info(f"【{self.cookie_id}】WebSocket连接保持正常，恢复正常心跳")
+                # 重新启动正常心跳任务
+                if heartbeat_was_running:
+                    logger.debug(f"【{self.cookie_id}】重新启动正常心跳任务")
+                    self.heartbeat_task = asyncio.create_task(self.heartbeat_loop(self.ws))
+            else:
+                logger.warning(f"【{self.cookie_id}】WebSocket连接已断开，将触发重连")
+                # 设置重连标志，让主循环处理重连
+                self.connection_restart_flag = True
+
+            return success
+
+        except Exception as e:
+            logger.error(f"【{self.cookie_id}】保持连接刷新策略失败: {self._safe_str(e)}")
+            # 清理轻量级心跳任务
+            if lightweight_heartbeat_task:
+                lightweight_heartbeat_task.cancel()
+            return False
+
+    async def _refresh_cookies_with_reconnect(self):
+        """主动断开重连的Cookie刷新策略"""
+        try:
+            logger.info(f"【{self.cookie_id}】主动断开WebSocket连接进行Cookie刷新")
+
+            # 主动关闭WebSocket连接
+            if self.ws and not self.ws.closed:
+                await self.ws.close()
+                logger.debug(f"【{self.cookie_id}】已主动关闭WebSocket连接")
+
+            # 停止心跳任务
+            if self.heartbeat_task and not self.heartbeat_task.done():
+                self.heartbeat_task.cancel()
+                logger.debug(f"【{self.cookie_id}】已停止心跳任务")
+
+            # 执行Cookie刷新（可以使用更长的超时时间）
+            success = await asyncio.wait_for(
+                self._refresh_cookies_via_browser(),
+                timeout=180.0  # 3分钟超时
+            )
+
+            # 设置重连标志，让主循环重新建立连接
+            self.connection_restart_flag = True
+            logger.info(f"【{self.cookie_id}】Cookie刷新完成，将重新建立WebSocket连接")
+
+            return success
+
+        except Exception as e:
+            logger.error(f"【{self.cookie_id}】重连刷新策略失败: {self._safe_str(e)}")
+            # 确保设置重连标志
+            self.connection_restart_flag = True
+            return False
+
+    async def _lightweight_heartbeat_during_refresh(self, ws):
+        """在Cookie刷新期间保持WebSocket连接的轻量级心跳"""
+        try:
+            while True:
+                # 检查WebSocket是否仍然连接
+                if ws.closed:
+                    logger.warning(f"【{self.cookie_id}】轻量级心跳检测到WebSocket已关闭")
+                    break
+
+                # 发送轻量级心跳（间隔更长，减少干扰）
+                try:
+                    await ws.send('{"action":"heartbeat","data":{"type":"refresh_mode"}}')
+                    logger.debug(f"【{self.cookie_id}】发送轻量级心跳成功")
+                except Exception as e:
+                    logger.warning(f"【{self.cookie_id}】轻量级心跳发送失败: {self._safe_str(e)}")
+                    break
+
+                # 等待30秒再发送下一次心跳（比正常心跳间隔更长）
+                await asyncio.sleep(30)
+
+        except asyncio.CancelledError:
+            logger.debug(f"【{self.cookie_id}】轻量级心跳任务被取消")
+        except Exception as e:
+            logger.error(f"【{self.cookie_id}】轻量级心跳任务异常: {self._safe_str(e)}")
+
+
 
 
 
@@ -5034,8 +5144,6 @@ class XianyuLive:
                 self.cookie_refresh_task.cancel()
             await self.close_session()  # 确保关闭session
 
-            # 从全局实例字典中注销当前实例
-            self._unregister_instance()
             logger.info(f"【{self.cookie_id}】XianyuLive主程序已完全退出")
 
     async def get_item_list_info(self, page_number=1, page_size=20, retry_count=0):
