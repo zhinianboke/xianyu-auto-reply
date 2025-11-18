@@ -89,15 +89,69 @@ class QRLoginManager:
         self.api_h5_tk = "https://h5api.m.goofish.com/h5/mtop.gaia.nodejs.gaia.idle.data.gw.v2.index.get/1.0/"
         
         # 配置代理（如果需要的话，取消注释并修改代理地址）
-        # self.proxy = "http://127.0.0.1:7890"
-        self.proxy = None
+        # self._proxy = "http://127.0.0.1:7890"
+        self._proxy = None
         
         # 配置超时时间
         self.timeout = httpx.Timeout(connect=30.0, read=60.0, write=30.0, pool=60.0)
 
+    def _normalize_proxy(self, proxy: Optional[str]) -> Optional[str]:
+        """
+        Normalize proxy strings so httpx can understand them.
+        Currently fixes inputs like 'socks://127.0.0.1:20170' to 'socks5://...'.
+        """
+        if not proxy:
+            return None
+
+        proxy = proxy.strip()
+        if proxy.startswith("socks://"):
+            fixed = proxy.replace("socks://", "socks5://", 1)
+            logger.info(f"检测到不兼容的SOCKS代理方案，已自动修正为: {fixed}")
+            return fixed
+
+        return proxy
+
+    @property
+    def proxy(self):
+        """Get proxy value"""
+        return self._proxy
+    
+    @proxy.setter
+    def proxy(self, value):
+        """Set proxy value with validation"""
+        value = self._normalize_proxy(value)
+        # For SOCKS proxies, we'll validate the scheme and set to None if unsupported
+        if value and value.startswith('socks'):
+            # Instead of trying to create a client (which would fail), just log the issue
+            logger.warning(f"SOCKS proxy detected: {value}. If httpx SOCKS support is not available, proxy will be disabled.")
+        self._proxy = value
+
     def _cookie_marshal(self, cookies: dict) -> str:
         """将Cookie字典转换为字符串"""
         return "; ".join([f"{k}={v}" for k, v in cookies.items()])
+
+    def _create_client(self, proxy=None):
+        """创建HTTP客户端，支持HTTP和SOCKS代理"""
+        proxy = self._normalize_proxy(proxy)
+        # `trust_env=False` to avoid picking up incompatible system proxy envs (e.g. socks://)
+        common_kwargs = dict(timeout=self.timeout, follow_redirects=True, trust_env=False)
+        # Check if proxy is a SOCKS proxy
+        if proxy and proxy.startswith('socks'):
+            # Check if the proxy URL is valid for httpx
+            # If httpx doesn't support SOCKS, fall back to no proxy
+            try:
+                # Try to create a client with the proxy to see if httpx supports it
+                return httpx.AsyncClient(proxy=proxy, **common_kwargs)
+            except ValueError as e:
+                if "Unknown scheme for proxy URL" in str(e):
+                    logger.warning(f"SOCKS proxy not supported by httpx: {proxy}. Creating client without proxy.")
+                    logger.info("建议在requirements.txt中添加 'httpx[socks]>=0.25.0' 和 'pysocks>=1.7.1' 来支持SOCKS代理")
+                    return httpx.AsyncClient(**common_kwargs)
+                else:
+                    raise
+        else:
+            # 使用标准代理或无代理
+            return httpx.AsyncClient(proxy=proxy, **common_kwargs)
 
     async def _get_mh5tk(self, session: QRLoginSession) -> dict:
         """获取m_h5_tk和m_h5_tk_enc"""
@@ -107,7 +161,7 @@ class QRLoginManager:
         app_key = "34839810"
 
         # 先发一次 GET 请求，获取 cookie 中的 m_h5_tk
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True, proxy=self.proxy) as client:
+        async with self._create_client(proxy=self._proxy) as client:
             try:
                 resp = await client.get(self.api_h5_tk, headers=self.headers)
                 cookies = {k: v for k, v in resp.cookies.items()}
@@ -164,7 +218,7 @@ class QRLoginManager:
             "rnd": random(),
         }
 
-        async with httpx.AsyncClient(follow_redirects=True, timeout=self.timeout, proxy=self.proxy) as client:
+        async with self._create_client(proxy=self._proxy) as client:
             try:
                 resp = await client.get(
                     self.api_mini_login,
@@ -214,7 +268,7 @@ class QRLoginManager:
             logger.info(f"获取登录参数成功: {session_id}")
 
             # 3. 生成二维码
-            async with httpx.AsyncClient(follow_redirects=True, timeout=self.timeout, proxy=self.proxy) as client:
+            async with self._create_client(proxy=self._proxy) as client:
                 resp = await client.get(
                     self.api_generate_qr,
                     params=login_params,
@@ -293,7 +347,7 @@ class QRLoginManager:
     
     async def _poll_qrcode_status(self, session: QRLoginSession) -> httpx.Response:
         """获取二维码扫描状态"""
-        async with httpx.AsyncClient(follow_redirects=True, timeout=self.timeout, proxy=self.proxy) as client:
+        async with self._create_client(proxy=self._proxy) as client:
             resp = await client.post(
                 self.api_scan_status,
                 data=session.params,
