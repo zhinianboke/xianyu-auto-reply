@@ -90,13 +90,14 @@ docker-compose.override.yml
 config.*.yml
 !global_config.yml
 
-# 前端相关
-node_modules/
+# 前端相关（保留源码用于构建，排除依赖和构建产物）
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-package-lock.json
-yarn.lock
 
 # 数据目录（运行时挂载）
 data/

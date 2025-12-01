@@ -5369,7 +5369,8 @@ def get_table_data(table_name: str, admin_user: Dict[str, Any] = Depends(require
             'users', 'cookies', 'cookie_status', 'keywords', 'default_replies', 'default_reply_records',
             'ai_reply_settings', 'ai_conversations', 'ai_item_cache', 'item_info',
             'message_notifications', 'cards', 'delivery_rules', 'notification_channels',
-            'user_settings', 'system_settings', 'email_verifications', 'captcha_codes', 'orders', "item_replay"
+            'user_settings', 'system_settings', 'email_verifications', 'captcha_codes', 'orders', "item_replay",
+            'risk_control_logs'
         ]
 
         if table_name not in allowed_tables:

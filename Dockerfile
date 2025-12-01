@@ -11,10 +11,23 @@ ENV PYTHONUNBUFFERED=1 \
 # 设置工作目录
 WORKDIR /app
 
-# Builder stage: install Python dependencies
-FROM base AS builder
+# ==================== Frontend Builder Stage ====================
+FROM node:20-alpine AS frontend-builder
 
-# 项目已完全开源，简化构建流程
+WORKDIR /frontend
+
+# 复制前端依赖文件
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
+
+# 安装 pnpm 并安装依赖
+RUN npm install -g pnpm && pnpm install --frozen-lockfile
+
+# 复制前端源码并构建
+COPY frontend/ ./
+RUN pnpm build
+
+# ==================== Python Builder Stage ====================
+FROM base AS builder
 
 # 安装基础依赖
 RUN apt-get update && \
@@ -32,8 +45,11 @@ ENV PATH="$VIRTUAL_ENV/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bi
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制项目文件
+# 复制项目文件（排除 frontend 目录）
 COPY . .
+
+# 复制前端构建产物到 static 目录
+COPY --from=frontend-builder /frontend/dist ./static
 
 # 项目已完全开源，无需编译二进制模块
 

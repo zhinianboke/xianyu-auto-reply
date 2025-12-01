@@ -793,3 +793,9 @@ docker-compose.override.yml
 .docker/**
 docker-data/**
 container_logs/**
+
+# 前端 React 构建产物
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
