@@ -1,11 +1,21 @@
+version: '3.8'
+
 services:
   xianyu-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: xianyu-auto-reply:latest
+    # 使用多架构镜像（自动选择对应架构）
+    image: ${IMAGE_NAME:-registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-auto-reply:latest}
+    # 或者从源码构建（支持多架构）
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    #   args:
+    #     - TARGETARCH=${TARGETARCH:-amd64}  # 支持amd64, arm64
     container_name: xianyu-auto-reply
     restart: unless-stopped
+    
+    # 设置平台（可选，Docker会自动选择）
+    # platform: ${TARGET_PLATFORM:-linux/amd64}
+    
     # 使用root用户避免权限问题
     user: "0:0"
     ports:
@@ -15,6 +25,8 @@ services:
       - ./data:/app/data:rw
       - ./logs:/app/logs:rw
       - ./global_config.yml:/app/global_config.yml:ro
+      # ARM64优化配置（可选）
+      - ./arm64-optimization.yml:/app/config/arm64-optimization.yml:ro
       # 可选：如果需要自定义配置
       # - ./custom_config.yml:/app/global_config.yml:ro
       # 可选：备份目录
@@ -27,36 +39,63 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DEBUG=${DEBUG:-false}
       - RELOAD=${RELOAD:-false}
+      
+      # ARM64架构优化配置
+      - ARM64_OPTIMIZED=${ARM64_OPTIMIZED:-auto}  # auto, true, false
+      - ENABLE_NEON_ACCELERATION=${ENABLE_NEON_ACCELERATION:-true}
+      - ENABLE_CRC32_ACCELERATION=${ENABLE_CRC32_ACCELERATION:-true}
+      - ENABLE_CRYPTO_ACCELERATION=${ENABLE_CRYPTO_ACCELERATION:-true}
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-auto}
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-auto}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-auto}
+      - PYTHONOPTIMIZE=${PYTHONOPTIMIZE:-2}
+      - PYTHONMALLOC=${PYTHONMALLOC:-malloc}
+      - ENABLE_ARM64_MONITOR=${ENABLE_ARM64_MONITOR:-false}
+      
       # SQL日志配置（默认启用，可通过环境变量覆盖）
       - SQL_LOG_ENABLED=${SQL_LOG_ENABLED:-true}
       - SQL_LOG_LEVEL=${SQL_LOG_LEVEL:-INFO}
+      
+      # 管理员配置
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-default-secret-key}
       - SESSION_TIMEOUT=${SESSION_TIMEOUT:-3600}
+      
       # 多用户系统配置
       - MULTIUSER_ENABLED=${MULTIUSER_ENABLED:-true}
       - USER_REGISTRATION_ENABLED=${USER_REGISTRATION_ENABLED:-true}
       - EMAIL_VERIFICATION_ENABLED=${EMAIL_VERIFICATION_ENABLED:-true}
       - CAPTCHA_ENABLED=${CAPTCHA_ENABLED:-true}
       - TOKEN_EXPIRE_TIME=${TOKEN_EXPIRE_TIME:-86400}
+      
+      # 自动回复和发货配置
       - AUTO_REPLY_ENABLED=${AUTO_REPLY_ENABLED:-true}
       - AUTO_DELIVERY_ENABLED=${AUTO_DELIVERY_ENABLED:-true}
       - AUTO_DELIVERY_TIMEOUT=${AUTO_DELIVERY_TIMEOUT:-30}
       - API_CARD_TIMEOUT=${API_CARD_TIMEOUT:-10}
       - BATCH_DATA_LOCK_TIMEOUT=${BATCH_DATA_LOCK_TIMEOUT:-5}
+      
       # AI回复相关配置
       - AI_REPLY_ENABLED=${AI_REPLY_ENABLED:-false}
       - DEFAULT_AI_MODEL=${DEFAULT_AI_MODEL:-qwen-plus}
       - DEFAULT_AI_BASE_URL=${DEFAULT_AI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       - AI_REQUEST_TIMEOUT=${AI_REQUEST_TIMEOUT:-30}
       - AI_MAX_TOKENS=${AI_MAX_TOKENS:-100}
+      
+      # WebSocket配置
       - WEBSOCKET_URL=${WEBSOCKET_URL:-wss://wss-goofish.dingtalk.com/}
       - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-15}
       - HEARTBEAT_TIMEOUT=${HEARTBEAT_TIMEOUT:-5}
       - TOKEN_REFRESH_INTERVAL=${TOKEN_REFRESH_INTERVAL:-3600}
       - TOKEN_RETRY_INTERVAL=${TOKEN_RETRY_INTERVAL:-300}
       - MESSAGE_EXPIRE_TIME=${MESSAGE_EXPIRE_TIME:-300000}
+      
+      # Playwright优化
+      - PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:-/ms-playwright}
+      - PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=${PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS:-true}
+      - PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=${PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:-false}
+      - CHROMIUM_FLAGS=${CHROMIUM_FLAGS:---disable-dev-shm-usage --disable-gpu --no-sandbox}
 
     networks:
       - xianyu-network
@@ -75,6 +114,11 @@ services:
         reservations:
           memory: ${MEMORY_RESERVATION:-512}M
           cpus: '${CPU_RESERVATION:-0.5}'
+    # ARM64特定优化标签
+    labels:
+      - "com.zhinian.architecture=auto"
+      - "com.zhinian.version=${APP_VERSION:-latest}"
+      - "com.zhinian.optimized=true"
 
   # 可选：添加Nginx反向代理
   nginx:
