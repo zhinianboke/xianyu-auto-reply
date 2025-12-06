@@ -345,11 +345,11 @@ export function Items() {
                 </tr>
               ) : (
                 filteredItems.map((item) => (
-                  <tr key={item.id} className={selectedIds.has(item.id) ? 'bg-blue-50' : ''}>
+                  <tr key={item.id} className={selectedIds.has(item.id) ? 'bg-blue-50 dark:bg-blue-900/30' : ''}>
                     <td>
                       <button
                         onClick={() => toggleSelect(item.id)}
-                        className="p-1 hover:bg-gray-100 rounded"
+                        className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
                       >
                         {selectedIds.has(item.id) ? (
                           <CheckSquare className="w-4 h-4 text-blue-600 dark:text-blue-400" />

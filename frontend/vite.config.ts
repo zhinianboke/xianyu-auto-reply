@@ -92,6 +92,12 @@ export default defineConfig(({ command }) => ({
       '/register': {
         target: 'http://localhost:8080',
         changeOrigin: true,
+        bypass: (req) => {
+          // 浏览器直接访问时返回前端页面，只有 POST 请求才代理到后端
+          if (req.method === 'GET' && req.headers.accept?.includes('text/html')) {
+            return '/index.html'
+          }
+        },
       },
       '/itemReplays': {
         target: 'http://localhost:8080',
@@ -149,6 +155,18 @@ export default defineConfig(({ command }) => ({
         target: 'http://localhost:8080',
         changeOrigin: true,
       },
+      '/change-admin-password': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      '/logout': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      '/user-settings': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
       '/search': {
         target: 'http://localhost:8080',
         changeOrigin: true,
@@ -158,8 +176,12 @@ export default defineConfig(({ command }) => ({
         target: 'http://localhost:8080',
         changeOrigin: true,
         bypass: (req) => {
-          // 浏览器直接访问（Accept 包含 text/html）时，让前端路由处理
-          if (req.headers.accept?.includes('text/html')) {
+          // 只有浏览器直接访问 /items 路径时才返回前端页面
+          // API 请求通常是 /items/xxx 或带有 application/json
+          const isApiRequest = req.url !== '/items' ||
+            req.headers.accept?.includes('application/json') ||
+            req.headers['content-type']?.includes('application/json')
+          if (!isApiRequest && req.headers.accept?.includes('text/html')) {
             return '/index.html'
           }
         },

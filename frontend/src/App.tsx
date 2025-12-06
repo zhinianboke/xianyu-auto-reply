@@ -22,6 +22,7 @@ import { Logs } from '@/pages/admin/Logs'
 import { RiskLogs } from '@/pages/admin/RiskLogs'
 import { DataManagement } from '@/pages/admin/DataManagement'
 import { verifyToken } from '@/api/auth'
+import { Toast } from '@/components/common/Toast'
 
 // Protected route wrapper
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -96,6 +97,8 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 function App() {
   return (
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      {/* 全局 Toast 组件 */}
+      <Toast />
       <Routes>
         {/* Public routes */}
         <Route path="/login" element={<Login />} />

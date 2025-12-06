@@ -83,9 +83,9 @@ export const testEmailSend = async (_email: string): Promise<ApiResponse> => {
   return { success: false, message: '邮件测试功能暂未实现，请检查 SMTP 配置后直接保存' }
 }
 
-// 修改密码
+// 修改密码（管理员）
 export const changePassword = async (data: { current_password: string; new_password: string }): Promise<ApiResponse> => {
-  return post('/change-password', data)
+  return post('/change-admin-password', data)
 }
 
 // 获取备份文件列表（管理员）

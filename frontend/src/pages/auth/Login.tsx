@@ -36,6 +36,7 @@ export function Login() {
   const [sessionId] = useState(() => `session_${Math.random().toString(36).substr(2, 9)}_${Date.now()}`)
   const [captchaVerified, setCaptchaVerified] = useState(false)
   const [countdown, setCountdown] = useState(0)
+  const [emailError, setEmailError] = useState('')
 
   // 初始化主题
   useEffect(() => {
@@ -113,11 +114,12 @@ export function Login() {
     }
   }
 
-  const handleVerifyCaptcha = async () => {
-    if (captchaCode.length !== 4) return
+  const handleVerifyCaptcha = async (code?: string) => {
+    const codeToVerify = code || captchaCode
+    if (codeToVerify.length !== 4) return
 
     try {
-      const result = await verifyCaptcha(sessionId, captchaCode)
+      const result = await verifyCaptcha(sessionId, codeToVerify)
       if (result.success) {
         setCaptchaVerified(true)
         addToast({ type: 'success', message: '验证码验证成功' })
@@ -131,8 +133,33 @@ export function Login() {
     }
   }
 
+  // 邮箱格式校验
+  const isValidEmail = (emailStr: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailStr)
+
+  // 邮箱输入处理
+  const handleEmailChange = (value: string) => {
+    setEmailForCode(value)
+    if (value && !isValidEmail(value)) {
+      setEmailError('请输入正确的邮箱格式')
+    } else {
+      setEmailError('')
+    }
+  }
+
   const handleSendCode = async () => {
-    if (!captchaVerified || !emailForCode || countdown > 0) return
+    if (!emailForCode) {
+      setEmailError('请输入邮箱地址')
+      return
+    }
+    if (!isValidEmail(emailForCode)) {
+      setEmailError('请输入正确的邮箱格式')
+      return
+    }
+    if (!captchaVerified) {
+      addToast({ type: 'warning', message: '请先完成图形验证码验证' })
+      return
+    }
+    if (countdown > 0) return
 
     try {
       const result = await sendVerificationCode(emailForCode, 'login', sessionId)
@@ -395,11 +422,12 @@ export function Login() {
                       <input
                         type="email"
                         value={emailForCode}
-                        onChange={(e) => setEmailForCode(e.target.value)}
+                        onChange={(e) => handleEmailChange(e.target.value)}
                         placeholder="name@example.com"
-                        className="input-ios pl-9"
+                        className={cn('input-ios pl-9', emailError && 'border-red-500 focus:border-red-500')}
                       />
                     </div>
+                    {emailError && <p className="text-xs text-red-500 mt-1">{emailError}</p>}
                   </div>
 
                   {/* Captcha */}
@@ -410,14 +438,20 @@ export function Login() {
                         type="text"
                         value={captchaCode}
                         onChange={(e) => {
-                          setCaptchaCode(e.target.value)
-                          if (e.target.value.length === 4) {
-                            setTimeout(handleVerifyCaptcha, 100)
+                          const val = e.target.value.toUpperCase()
+                          setCaptchaCode(val)
+                          // 输入4位后自动验证
+                          if (val.length === 4 && !captchaVerified) {
+                            handleVerifyCaptcha(val)
                           }
                         }}
                         placeholder="输入验证码"
                         maxLength={4}
-                        className="input-ios flex-1"
+                        className={cn(
+                          'input-ios flex-1',
+                          captchaVerified && 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                        )}
+                        disabled={captchaVerified}
                       />
                       <img
                         src={captchaImage}
@@ -430,7 +464,7 @@ export function Login() {
                       'text-xs',
                       captchaVerified ? 'text-green-600' : 'text-gray-400'
                     )}>
-                      {captchaVerified ? '✓ 验证成功' : '点击图片更换验证码'}
+                      {captchaVerified ? '✓ 验证成功，可以发送邮箱验证码' : '输入4位验证码后自动验证'}
                     </p>
                   </div>
 
@@ -452,7 +486,7 @@ export function Login() {
                       <button
                         type="button"
                         onClick={handleSendCode}
-                        disabled={!captchaVerified || !emailForCode || countdown > 0}
+                        disabled={countdown > 0}
                         className="btn-ios-secondary whitespace-nowrap"
                       >
                         {countdown > 0 ? `${countdown}s` : '发送'}

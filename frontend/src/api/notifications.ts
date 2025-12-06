@@ -1,5 +1,5 @@
-import { get, post, put, del } from '@/utils/request'
-import type { ApiResponse, NotificationChannel, MessageNotification } from '@/types'
+import { del, get, post, put } from '@/utils/request'
+import type { ApiResponse, MessageNotification, NotificationChannel } from '@/types'
 
 // ========== 通知渠道 ==========
 
@@ -90,9 +90,10 @@ export const deleteNotificationChannel = (channelId: string): Promise<ApiRespons
   return del(`/notification-channels/${channelId}`)
 }
 
-// 测试通知渠道
-export const testNotificationChannel = (channelId: string): Promise<ApiResponse> => {
-  return post(`/notification-channels/${channelId}/test`)
+// 测试通知渠道 - 后端暂未实现此接口
+export const testNotificationChannel = async (_channelId: string): Promise<ApiResponse> => {
+  // TODO: 后端暂未实现 POST /notification-channels/{id}/test 接口
+  return { success: false, message: '通知渠道测试功能暂未实现' }
 }
 
 // ========== 消息通知 ==========
