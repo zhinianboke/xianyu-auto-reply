@@ -221,13 +221,22 @@ class AIReplyEngine:
 
     def _call_openai_api(self, client: OpenAI, settings: dict, messages: list, max_tokens: int = 100, temperature: float = 0.7) -> str:
         """调用OpenAI兼容API"""
-        response = client.chat.completions.create(
-            model=settings['model_name'],
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature
-        )
-        return response.choices[0].message.content.strip()
+        try:
+            logger.info(f"调用OpenAI API: model={settings['model_name']}, base_url={settings.get('base_url', 'default')}")
+            response = client.chat.completions.create(
+                model=settings['model_name'],
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"OpenAI API调用失败: {e}")
+            # 如果有详细的错误信息，打印出来
+            if hasattr(e, 'response'):
+                logger.error(f"响应状态码: {getattr(e.response, 'status_code', 'unknown')}")
+                logger.error(f"响应内容: {getattr(e.response, 'text', 'unknown')}")
+            raise
 
     def is_ai_enabled(self, cookie_id: str) -> bool:
         """检查指定账号是否启用AI回复"""

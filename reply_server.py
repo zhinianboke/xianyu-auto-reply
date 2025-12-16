@@ -2410,6 +2410,33 @@ def clear_default_reply_records(cid: str, current_user: Dict[str, Any] = Depends
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ------------------------- 默认回复管理接口（单数形式兼容路由） -------------------------
+# 兼容前端使用 /default-reply/ 单数形式的请求
+
+@app.get('/default-reply/{cid}')
+def get_default_reply_compat(cid: str, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """获取指定账号的默认回复设置（兼容路由）"""
+    return get_default_reply(cid, current_user)
+
+
+@app.put('/default-reply/{cid}')
+def update_default_reply_compat(cid: str, reply_data: DefaultReplyIn, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """更新指定账号的默认回复设置（兼容路由）"""
+    return update_default_reply(cid, reply_data, current_user)
+
+
+@app.delete('/default-reply/{cid}')
+def delete_default_reply_compat(cid: str, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """删除指定账号的默认回复设置（兼容路由）"""
+    return delete_default_reply(cid, current_user)
+
+
+@app.post('/default-reply/{cid}/clear-records')
+def clear_default_reply_records_compat(cid: str, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """清空指定账号的默认回复记录（兼容路由）"""
+    return clear_default_reply_records(cid, current_user)
+
+
 # ------------------------- 通知渠道管理接口 -------------------------
 
 @app.get('/notification-channels')
@@ -4321,6 +4348,13 @@ def test_ai_reply(cookie_id: str, test_data: dict, _: None = Depends(require_aut
         if not ai_reply_engine.is_ai_enabled(cookie_id):
             raise HTTPException(status_code=400, detail='该账号未启用AI回复')
 
+        # 检查AI设置是否完整
+        settings = db_manager.get_ai_reply_settings(cookie_id)
+        if not settings.get('api_key'):
+            raise HTTPException(status_code=400, detail='未配置API Key，请先在AI设置中配置API Key')
+        if not settings.get('base_url'):
+            raise HTTPException(status_code=400, detail='未配置API地址，请先在AI设置中配置API地址')
+
         # 构造测试数据
         test_message = test_data.get('message', '你好')
         test_item_info = {
@@ -4329,25 +4363,28 @@ def test_ai_reply(cookie_id: str, test_data: dict, _: None = Depends(require_aut
             'desc': test_data.get('item_desc', '这是一个测试商品')
         }
 
-        # 生成测试回复
+        # 生成测试回复（跳过等待时间）
         reply = ai_reply_engine.generate_reply(
             message=test_message,
             item_info=test_item_info,
             chat_id=f"test_{int(time.time())}",
             cookie_id=cookie_id,
             user_id="test_user",
-            item_id="test_item"
+            item_id="test_item",
+            skip_wait=True  # 测试时跳过10秒等待
         )
 
         if reply:
             return {"message": "测试成功", "reply": reply}
         else:
-            raise HTTPException(status_code=400, detail="AI回复生成失败")
+            raise HTTPException(status_code=400, detail="AI回复生成失败，请检查API Key是否正确、API地址是否可访问")
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"测试AI回复异常: {e}")
+        import traceback
+        logger.error(f"详细错误: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"服务器错误: {str(e)}")
 
 
