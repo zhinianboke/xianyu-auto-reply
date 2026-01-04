@@ -641,7 +641,8 @@ class DBManager:
 
             if not admin_exists:
                 # 首次创建admin用户，设置默认密码
-                default_password_hash = hashlib.sha256("admin123".encode()).hexdigest()
+                password = os.getenv("ADMIN_PASSWORD", "admin123")
+                default_password_hash = hashlib.sha256(password.encode()).hexdigest()
                 cursor.execute('''
                 INSERT INTO users (username, email, password_hash) VALUES
                 ('admin', 'admin@localhost', ?)
