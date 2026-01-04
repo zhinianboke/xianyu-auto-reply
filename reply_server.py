@@ -1173,7 +1173,7 @@ async def send_message_api(request: SendMessageRequest):
         def clean_param(param_str):
             """清理参数中的换行符"""
             if isinstance(param_str, str):
-                return param_str.replace('\\n', '').replace('\n', '')
+                return param_str.replace('\\n', '')
             return param_str
 
         # 清理所有参数
