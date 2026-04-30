@@ -13,6 +13,12 @@ from PIL import Image, ImageDraw, ImageFont
 from typing import List, Tuple, Dict, Optional, Any
 from loguru import logger
 
+
+def get_initial_admin_password() -> str:
+    """Return the password used only when creating the first admin account."""
+    return os.getenv('ADMIN_PASSWORD') or 'admin123'
+
+
 class DBManager:
     """SQLite数据库管理，持久化存储Cookie和关键字"""
     
@@ -484,6 +490,13 @@ class DBManager:
             ('qq_reply_secret_key', 'xianyu_qq_reply_2024', 'QQ回复消息API秘钥')
             ''')
 
+            env_qq_secret_key = os.getenv('QQ_REPLY_SECRET_KEY')
+            if env_qq_secret_key:
+                cursor.execute(
+                    "UPDATE system_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = 'qq_reply_secret_key'",
+                    (env_qq_secret_key,)
+                )
+
             # 检查并升级数据库
             self.check_and_upgrade_db(cursor)
 
@@ -667,12 +680,16 @@ class DBManager:
 
             if not admin_exists:
                 # 首次创建admin用户，设置默认密码
-                default_password_hash = hashlib.sha256("admin123".encode()).hexdigest()
+                default_password = get_initial_admin_password()
+                default_password_hash = hashlib.sha256(default_password.encode()).hexdigest()
                 cursor.execute('''
                 INSERT INTO users (username, email, password_hash) VALUES
                 ('admin', 'admin@localhost', ?)
                 ''', (default_password_hash,))
-                logger.info("创建默认admin用户，密码: admin123")
+                if os.getenv('ADMIN_PASSWORD'):
+                    logger.info("已使用环境变量 ADMIN_PASSWORD 创建默认admin用户")
+                else:
+                    logger.warning("创建默认admin用户，使用内置默认密码 admin123")
 
             # 获取admin用户ID，用于历史数据绑定
             self._execute_sql(cursor, "SELECT id FROM users WHERE username = 'admin'")

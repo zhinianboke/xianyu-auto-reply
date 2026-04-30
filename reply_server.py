@@ -40,10 +40,13 @@ except ImportError:
 KEYWORDS_FILE = Path(__file__).parent / "回复关键字.txt"
 
 # 简单的用户认证配置
-ADMIN_USERNAME = "admin"
-DEFAULT_ADMIN_PASSWORD = "admin123"  # 系统初始化时的默认密码
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+DEFAULT_ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")  # 系统初始化时的默认密码
 SESSION_TOKENS = {}  # 存储会话token: {token: {'user_id': int, 'username': str, 'timestamp': float}}
-TOKEN_EXPIRE_TIME = 24 * 60 * 60  # token过期时间：24小时
+try:
+    TOKEN_EXPIRE_TIME = int(os.getenv("TOKEN_EXPIRE_TIME", str(24 * 60 * 60)))  # token过期时间：默认24小时
+except ValueError:
+    TOKEN_EXPIRE_TIME = 24 * 60 * 60
 
 # HTTP Bearer认证
 security = HTTPBearer(auto_error=False)
@@ -1115,9 +1118,8 @@ async def register(request: RegisterRequest):
 
 # ------------------------- 发送消息接口 -------------------------
 
-# 固定的API秘钥（生产环境中应该从配置文件或环境变量读取）
-# 注意：现在从系统设置中读取QQ回复消息秘钥
-API_SECRET_KEY = "xianyu_api_secret_2024"  # 保留作为后备
+# API秘钥后备值。优先从系统设置读取QQ回复消息秘钥，再退回环境变量。
+API_SECRET_KEY = os.getenv("API_SECRET_KEY", "xianyu_api_secret_2024")
 
 class SendMessageRequest(BaseModel):
     api_key: str
@@ -1176,8 +1178,9 @@ async def send_message_api(request: SendMessageRequest):
                 message="API秘钥不能为空"
             )
 
-        # 特殊测试秘钥处理
-        if cleaned_api_key == "zhinina_test_key":
+        # 特殊测试秘钥处理，默认关闭，避免本地部署保留公开测试入口。
+        allow_test_key = os.getenv("ALLOW_TEST_API_KEY", "false").lower() == "true"
+        if allow_test_key and cleaned_api_key == "zhinina_test_key":
             logger.info("使用测试秘钥，直接返回成功")
             return SendMessageResponse(
                 success=True,
