@@ -218,7 +218,7 @@ export function Accounts() {
   const [deleteFaceConfirm, setDeleteFaceConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([])
-  const [batchAction, setBatchAction] = useState<'enable' | 'disable' | 'close-notice' | 'clear-token' | 'renew-login' | null>(null)
+  const [batchAction, setBatchAction] = useState<'enable' | 'disable' | 'close-notice' | 'clear-token' | 'renew-login' | 'batch-rate' | null>(null)
   const [exporting, setExporting] = useState(false)
   const [showImportModal, setShowImportModal] = useState(false)
   const [importFile, setImportFile] = useState<File | null>(null)
@@ -761,6 +761,41 @@ export function Accounts() {
       await loadAccounts()
     } catch (error) {
       addToast({ type: 'error', message: getApiErrorMessage(error, '批量账号续期失败') })
+    } finally {
+      setBatchAction(null)
+    }
+  }
+
+  const handleBatchRate = async () => {
+    if (selectedCount === 0) {
+      addToast({ type: 'warning', message: '请先选择账号' })
+      return
+    }
+
+    setBatchAction('batch-rate')
+    try {
+      const { batchRateOrders } = await import('@/api/autoRate')
+      const result = await batchRateOrders(selectedAccountIds)
+      if (result.success) {
+        const data = result.data
+        if (data) {
+          const details = data.details || []
+          const failedAccounts = details.filter(d => !d.success)
+          if (failedAccounts.length > 0) {
+            const failedMsg = failedAccounts.slice(0, 3).map(d => `${d.account_id}：${d.message}`).join('；')
+            addToast({ type: 'warning', message: `${result.message}。${failedMsg}` })
+          } else {
+            addToast({ type: 'success', message: result.message || '批量补评价完成' })
+          }
+        } else {
+          addToast({ type: 'success', message: result.message || '批量补评价完成' })
+        }
+      } else {
+        addToast({ type: 'error', message: result.message || '批量补评价失败' })
+      }
+      setSelectedAccountIds([])
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '批量补评价失败') })
     } finally {
       setBatchAction(null)
     }
@@ -1698,6 +1733,14 @@ export function Accounts() {
             >
               {batchAction === 'renew-login' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
               账号续期
+            </button>
+            <button
+              onClick={handleBatchRate}
+              disabled={selectedCount === 0 || batchOperating}
+              className="btn-ios-secondary btn-sm text-rose-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {batchAction === 'batch-rate' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Star className="w-4 h-4" />}
+              订单补评价
             </button>
             <button
               onClick={handleExport}

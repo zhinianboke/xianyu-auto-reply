@@ -1110,19 +1110,19 @@ export function Items() {
                       )}
                     </button>
                   </th>
-                  <th className="min-w-[130px]">账号ID</th>
-                  <th className="min-w-[130px]">商品ID</th>
-                  <th className="min-w-[200px]">商品标题</th>
-                  <th className="min-w-[65px]">价格</th>
-                  <th className="min-w-[75px] text-center">是否擦亮</th>
-                  <th className="min-w-[75px] text-center">多规格</th>
-                  <th className="min-w-[95px] text-center">多数量发货</th>
-                  <th className="min-w-[85px] text-center">关联卡券</th>
-                  <th className="min-w-[85px] text-center">默认回复</th>
-                  <th className="min-w-[85px] text-center">AI提示词</th>
-                  <th className="min-w-[150px]">创建时间</th>
-                  <th className="min-w-[150px]">更新时间</th>
-                  <th className="sticky right-0 bg-slate-50 dark:bg-slate-800 min-w-[60px]">操作</th>
+                  <th className="min-w-[150px]">账号ID</th>
+                  <th className="min-w-[160px]">商品ID</th>
+                  <th className="min-w-[260px]">商品标题</th>
+                  <th className="min-w-[80px]">价格</th>
+                  <th className="min-w-[100px] text-center">是否擦亮</th>
+                  <th className="min-w-[100px] text-center">多规格</th>
+                  <th className="min-w-[120px] text-center">多数量发货</th>
+                  <th className="min-w-[110px] text-center">关联卡券</th>
+                  <th className="min-w-[110px] text-center">默认回复</th>
+                  <th className="min-w-[110px] text-center">AI提示词</th>
+                  <th className="min-w-[170px]">创建时间</th>
+                  <th className="min-w-[170px]">更新时间</th>
+                  <th className="sticky right-0 bg-slate-50 dark:bg-slate-800 min-w-[70px]">操作</th>
               </tr>
             </thead>
             <tbody>

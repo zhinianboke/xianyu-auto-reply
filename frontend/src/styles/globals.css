@@ -751,7 +751,7 @@
     
     /* 表格优化 - 移动端横向滚动 */
     .table-ios {
-      @apply min-w-[600px];
+      @apply min-w-[1400px];
     }
     
     .table-ios th,
