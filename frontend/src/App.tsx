@@ -65,6 +65,7 @@ const Users = React.lazy(() => import('@/pages/admin/Users').then(m => ({ defaul
 const Logs = React.lazy(() => import('@/pages/admin/Logs').then(m => ({ default: m.Logs })))
 const AutoReplyLogs = React.lazy(() => import('@/pages/autoReplyLogs/AutoReplyLogs').then(m => ({ default: m.AutoReplyLogs })))
 const RiskLogs = React.lazy(() => import('@/pages/admin/RiskLogs').then(m => ({ default: m.RiskLogs })))
+const AccountLoginLogs = React.lazy(() => import('@/pages/admin/AccountLoginLogs').then(m => ({ default: m.AccountLoginLogs })))
 const DataManagement = React.lazy(() => import('@/pages/admin/DataManagement').then(m => ({ default: m.DataManagement })))
 const ScheduledTasks = React.lazy(() => import('@/pages/admin/ScheduledTasks').then(m => ({ default: m.ScheduledTasks })))
 const RedeliveryBatches = React.lazy(() => import('@/pages/redeliveryLogs/RedeliveryBatches').then(m => ({ default: m.RedeliveryBatches })))
@@ -77,6 +78,8 @@ const LoginRenewBatches = React.lazy(() => import('@/pages/loginRenewLogs/LoginR
 const LoginRenewBatchDetailPage = React.lazy(() => import('@/pages/loginRenewLogs/LoginRenewBatchDetail').then(m => ({ default: m.LoginRenewBatchDetailPage })))
 const CookiesRefreshBatches = React.lazy(() => import('@/pages/cookiesRefreshLogs/CookiesRefreshBatches').then(m => ({ default: m.CookiesRefreshBatches })))
 const CookiesRefreshBatchDetailPage = React.lazy(() => import('@/pages/cookiesRefreshLogs/CookiesRefreshBatchDetail').then(m => ({ default: m.CookiesRefreshBatchDetailPage })))
+const ApiCookieRenewBatches = React.lazy(() => import('@/pages/apiCookieRenewLogs/ApiCookieRenewBatches').then(m => ({ default: m.ApiCookieRenewBatches })))
+const ApiCookieRenewBatchDetailPage = React.lazy(() => import('@/pages/apiCookieRenewLogs/ApiCookieRenewBatchDetail').then(m => ({ default: m.ApiCookieRenewBatchDetailPage })))
 const CloseNoticeBatches = React.lazy(() => import('@/pages/closeNoticeLogs/CloseNoticeBatches').then(m => ({ default: m.CloseNoticeBatches })))
 const CloseNoticeBatchDetailPage = React.lazy(() => import('@/pages/closeNoticeLogs/CloseNoticeBatchDetail').then(m => ({ default: m.CloseNoticeBatchDetailPage })))
 const RedFlowerBatches = React.lazy(() => import('@/pages/redFlowerLogs/RedFlowerBatches').then(m => ({ default: m.RedFlowerBatches })))
@@ -321,6 +324,7 @@ function App() {
             <Route path="orders" element={<Orders />} />
             <Route path="keywords" element={<Keywords />} />
             <Route path="message-logs" element={<AutoReplyLogs />} />
+            <Route path="account-login-logs" element={<Navigate to="/admin/account-login-logs" replace />} />
             <Route path="risk-logs" element={<RiskLogs />} />
             <Route path="message-filters" element={<MessageFilters />} />
             {/* 在线聊天由 MainLayout 直接渲染以实现 KeepAlive，此处仅保留路由占位 */}
@@ -357,6 +361,7 @@ function App() {
             {/* Admin routes */}
             <Route path="admin/users" element={<Users />} />
             <Route path="admin/logs" element={<Logs />} />
+            <Route path="admin/account-login-logs" element={<AccountLoginLogs />} />
             <Route path="admin/auto-reply-logs" element={<Navigate to="/message-logs" replace />} />
             <Route path="admin/risk-logs" element={<Navigate to="/risk-logs" replace />} />
             <Route path="admin/data" element={<DataManagement />} />
@@ -370,6 +375,8 @@ function App() {
             <Route path="admin/login-renew-batches/:batchId" element={<LoginRenewBatchDetailPage />} />
             <Route path="admin/cookies-refresh-batches" element={<CookiesRefreshBatches />} />
             <Route path="admin/cookies-refresh-batches/:batchId" element={<CookiesRefreshBatchDetailPage />} />
+            <Route path="admin/api-cookie-renew-batches" element={<ApiCookieRenewBatches />} />
+            <Route path="admin/api-cookie-renew-batches/:batchId" element={<ApiCookieRenewBatchDetailPage />} />
             <Route path="admin/close-notice-batches" element={<CloseNoticeBatches />} />
             <Route path="admin/close-notice-batches/:batchId" element={<CloseNoticeBatchDetailPage />} />
             <Route path="admin/red-flower-batches" element={<RedFlowerBatches />} />

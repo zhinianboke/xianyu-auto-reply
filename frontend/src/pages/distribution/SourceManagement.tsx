@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 货源管理页面
  * 
  * 两个 Tab：
@@ -169,8 +169,11 @@ export function SourceManagement() {
       </div>
 
       {/* Tab 切换 */}
-      <div className="vben-card">
-        <div className="border-b border-slate-200 dark:border-slate-700">
+      <div
+        className="vben-card flex flex-col"
+        style={{ height: 'calc(100vh - 220px)', minHeight: '420px' }}
+      >
+        <div className="border-b border-slate-200 dark:border-slate-700 flex-shrink-0">
           <div className="flex">
             {tabs.map((tab) => (
               <button
@@ -195,7 +198,8 @@ export function SourceManagement() {
           </div>
         </div>
 
-        <div className="vben-card-body">
+        {/* 表格主体：横向 + 纵向滚动，粘性表头 */}
+        <div className="flex-1 overflow-x-auto overflow-y-auto scrollbar-visible">
           {/* 我的对接 Tab */}
           {activeTab === 'my-bindings' && (
             loading ? (
@@ -207,38 +211,36 @@ export function SourceManagement() {
                 <p className="text-xs mt-1">点击"新增货源"按钮，输入供应商提供的对接码即可绑定</p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="table-ios">
-                  <thead>
-                    <tr>
-                      <th>供应商</th>
-                      <th>对接码</th>
-                      <th>绑定时间</th>
-                      <th>操作</th>
+              <table className="table-ios min-w-[800px]">
+                <thead className="sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">
+                  <tr>
+                    <th className="whitespace-nowrap">供应商</th>
+                    <th className="whitespace-nowrap">对接码</th>
+                    <th className="whitespace-nowrap">绑定时间</th>
+                    <th className="whitespace-nowrap sticky right-0 bg-slate-50 dark:bg-slate-800 z-20">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bindings.map((item) => (
+                    <tr key={item.id}>
+                      <td className="whitespace-nowrap font-medium text-slate-900 dark:text-white">{item.target_username}</td>
+                      <td className="whitespace-nowrap font-mono text-sm tracking-wider">{item.dock_code}</td>
+                      <td className="whitespace-nowrap text-sm text-slate-500">
+                        {item.created_at ? new Date(item.created_at).toLocaleString('zh-CN') : '-'}
+                      </td>
+                      <td className="whitespace-nowrap sticky right-0 bg-white dark:bg-slate-900 z-10">
+                        <button
+                          onClick={() => setUnbindConfirm({ open: true, id: item.id, name: item.target_username })}
+                          className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                          title="解绑"
+                        >
+                          <Trash2 className="w-4 h-4 text-red-500" />
+                        </button>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {bindings.map((item) => (
-                      <tr key={item.id}>
-                        <td className="font-medium">{item.target_username}</td>
-                        <td className="font-mono text-sm tracking-wider">{item.dock_code}</td>
-                        <td className="text-sm text-gray-500">
-                          {item.created_at ? new Date(item.created_at).toLocaleString('zh-CN') : '-'}
-                        </td>
-                        <td>
-                          <button
-                            onClick={() => setUnbindConfirm({ open: true, id: item.id, name: item.target_username })}
-                            className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-                            title="解绑"
-                          >
-                            <Trash2 className="w-4 h-4 text-red-500" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                  ))}
+                </tbody>
+              </table>
             )
           )}
 
@@ -253,44 +255,42 @@ export function SourceManagement() {
                 <p className="text-xs mt-1">在个人设置中获取对接码并分享给分销商即可</p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="table-ios">
-                  <thead>
-                    <tr>
-                      <th>分销商</th>
-                      <th>使用对接码</th>
-                      <th>对接卡券数</th>
-                      <th>绑定时间</th>
-                      <th>操作</th>
+              <table className="table-ios min-w-[900px]">
+                <thead className="sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">
+                  <tr>
+                    <th className="whitespace-nowrap">分销商</th>
+                    <th className="whitespace-nowrap">使用对接码</th>
+                    <th className="whitespace-nowrap">对接卡券数</th>
+                    <th className="whitespace-nowrap">绑定时间</th>
+                    <th className="whitespace-nowrap sticky right-0 bg-slate-50 dark:bg-slate-800 z-20">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {boundUsers.map((item) => (
+                    <tr key={item.id}>
+                      <td className="whitespace-nowrap font-medium text-slate-900 dark:text-white">{item.username}</td>
+                      <td className="whitespace-nowrap font-mono text-sm tracking-wider">{item.dock_code}</td>
+                      <td className="whitespace-nowrap">
+                        <span className="px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
+                          {item.dock_count} 个
+                        </span>
+                      </td>
+                      <td className="whitespace-nowrap text-sm text-slate-500">
+                        {item.created_at ? new Date(item.created_at).toLocaleString('zh-CN') : '-'}
+                      </td>
+                      <td className="whitespace-nowrap sticky right-0 bg-white dark:bg-slate-900 z-10">
+                        <button
+                          onClick={() => setRemoveConfirm({ open: true, id: item.id, name: item.username })}
+                          className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                          title="删除"
+                        >
+                          <Trash2 className="w-4 h-4 text-red-500" />
+                        </button>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {boundUsers.map((item) => (
-                      <tr key={item.id}>
-                        <td className="font-medium">{item.username}</td>
-                        <td className="font-mono text-sm tracking-wider">{item.dock_code}</td>
-                        <td>
-                          <span className="px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
-                            {item.dock_count} 个
-                          </span>
-                        </td>
-                        <td className="text-sm text-gray-500">
-                          {item.created_at ? new Date(item.created_at).toLocaleString('zh-CN') : '-'}
-                        </td>
-                        <td>
-                          <button
-                            onClick={() => setRemoveConfirm({ open: true, id: item.id, name: item.username })}
-                            className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-                            title="删除"
-                          >
-                            <Trash2 className="w-4 h-4 text-red-500" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                  ))}
+                </tbody>
+              </table>
             )
           )}
         </div>
@@ -368,3 +368,6 @@ export function SourceManagement() {
     </div>
   )
 }
+
+
+

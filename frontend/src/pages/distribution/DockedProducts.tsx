@@ -343,25 +343,25 @@ export function DockedProducts() {
             </div>
           ) : (
             <table className="table-ios min-w-[1540px]">
-              <thead className="sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">
+              <thead className="bg-slate-50 dark:bg-slate-700/50">
                 <tr>
-                  <th className="whitespace-nowrap">ID</th>
-                  <th className="whitespace-nowrap">对接名称</th>
-                  <th className="whitespace-nowrap">层级</th>
-                  <th className="whitespace-nowrap">卡券ID</th>
-                  <th className="whitespace-nowrap">卡券名称</th>
-                  <th className="whitespace-nowrap">规格</th>
-                  <th className="whitespace-nowrap">对接价格</th>
-                  <th className="whitespace-nowrap">最低售价</th>
-                  <th className="whitespace-nowrap">联系方式</th>
-                  <th className="whitespace-nowrap">发货次数</th>
-                  <th className="whitespace-nowrap">状态</th>
-                  <th className="whitespace-nowrap">开放对接</th>
-                  <th className="whitespace-nowrap">下级对接价</th>
-                  <th className="whitespace-nowrap">对接类型</th>
-                  <th className="whitespace-nowrap">备注</th>
-                  <th className="whitespace-nowrap">创建时间</th>
-                  <th className="whitespace-nowrap sticky right-0 bg-slate-50 dark:bg-slate-800 z-20">操作</th>
+                  <th className="whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">ID</th>
+                  <th className="whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">对接名称</th>
+                  <th className="whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">层级</th>
+                  <th className="whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">卡券ID</th>
+                  <th className="whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">卡券名称</th>
+                  <th className="whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">规格</th>
+                  <th className="whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">对接价格</th>
+                  <th className="whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">最低售价</th>
+                  <th className="whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">联系方式</th>
+                  <th className="whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">发货次数</th>
+                  <th className="whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">状态</th>
+                  <th className="whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">开放对接</th>
+                  <th className="whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">下级对接价</th>
+                  <th className="whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">对接类型</th>
+                  <th className="whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">备注</th>
+                  <th className="whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">创建时间</th>
+                  <th className="whitespace-nowrap sticky top-0 right-0 bg-slate-50 dark:bg-slate-700/50 z-20">操作</th>
                 </tr>
               </thead>
               <tbody>

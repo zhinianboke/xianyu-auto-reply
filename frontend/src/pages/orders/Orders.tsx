@@ -11,7 +11,7 @@ import { ConfirmModal } from '@/components/common/ConfirmModal'
 import type { Order, Account } from '@/types'
 
 // 列配置类型
-type ColumnKey = 'cookie_id' | 'order_id' | 'receiver' | 'item_id' | 'sku_info' | 'buyer_id' | 'chat_id' | 'quantity' | 'amount' | 'status' | 'delivery_method' | 'delivery_fail_reason' | 'is_bargain' | 'is_rated' | 'is_red_flower' | 'is_agent_order' | 'source' | 'placed_at' | 'created_at'
+type ColumnKey = 'cookie_id' | 'order_id' | 'receiver' | 'item_id' | 'sku_info' | 'buyer_id' | 'buyer_fish_nick' | 'chat_id' | 'quantity' | 'amount' | 'status' | 'delivery_method' | 'delivery_fail_reason' | 'is_bargain' | 'is_rated' | 'is_red_flower' | 'is_agent_order' | 'source' | 'placed_at' | 'created_at'
 
 interface ColumnConfig {
   key: ColumnKey
@@ -28,6 +28,7 @@ const defaultColumns: ColumnConfig[] = [
   { key: 'item_id', label: '商品ID', visible: true, fixed: true },
   { key: 'sku_info', label: '规格', visible: true, fixed: true },
   { key: 'buyer_id', label: '买家ID', visible: true, fixed: true },
+  { key: 'buyer_fish_nick', label: '买家昵称', visible: true, fixed: true },
   { key: 'chat_id', label: '会话ID', visible: false },
   { key: 'quantity', label: '数量', visible: true, fixed: true },
   { key: 'amount', label: '金额', visible: true, fixed: true },
@@ -623,6 +624,8 @@ export function Orders() {
                             return <td key={col.key} className="whitespace-nowrap text-sm text-slate-500 dark:text-slate-400 max-w-[180px] truncate" title={order.sku_info || ''}>{order.sku_info || '-'}</td>
                           case 'buyer_id':
                             return <td key={col.key} className="whitespace-nowrap text-sm text-slate-700 dark:text-slate-200">{order.buyer_id}</td>
+                          case 'buyer_fish_nick':
+                            return <td key={col.key} className="whitespace-nowrap text-sm text-slate-700 dark:text-slate-200">{order.buyer_fish_nick || '-'}</td>
                           case 'chat_id':
                             return <td key={col.key} className="whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{order.chat_id || '-'}</td>
                           case 'quantity':
@@ -880,6 +883,10 @@ export function Orders() {
                       <div className="flex justify-between py-1 border-b border-gray-100 dark:border-gray-700">
                         <span className="text-gray-500">买家ID</span>
                         <span>{orderDetail.buyer_id || '未知'}</span>
+                      </div>
+                      <div className="flex justify-between py-1 border-b border-gray-100 dark:border-gray-700">
+                        <span className="text-gray-500">买家昵称</span>
+                        <span>{orderDetail.buyer_fish_nick || '-'}</span>
                       </div>
                       <div className="flex justify-between py-1 border-b border-gray-100 dark:border-gray-700">
                         <span className="text-gray-500">会话ID</span>

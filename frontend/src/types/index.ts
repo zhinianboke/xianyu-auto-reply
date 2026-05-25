@@ -51,6 +51,12 @@ export interface Account {
   auto_polish?: boolean
   confirm_before_send?: boolean
   auto_red_flower?: boolean
+  delivery_disabled?: boolean
+  delivery_disabled_reason?: string
+  auto_close_order?: boolean
+  delivery_only_card_after_close?: boolean
+  // 禁止发货排除商品列表（命中此列表的 item_id 跳过禁止发货拦截，按正常流程发货）
+  delivery_disabled_excluded_item_ids?: string[]
   note?: string
   remark?: string
   pause_duration?: number
@@ -120,6 +126,7 @@ export interface Order {
   item_id: string
   item_title?: string  // 商品标题
   buyer_id: string
+  buyer_fish_nick?: string  // 买家闲鱼昵称（明文）
   chat_id?: string  // 聊天会话ID
   sku_info?: string
   quantity: number
@@ -256,6 +263,9 @@ export interface SystemSettings {
   'log.retention_days'?: string
   // 账号安全设置
   'account.face_verify_timeout_disable'?: boolean
+  // 代理设置
+  'proxy.api_url'?: string
+  'proxy.enabled'?: boolean
   [key: string]: unknown
 }
 

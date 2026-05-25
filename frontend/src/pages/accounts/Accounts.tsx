@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, RefreshCw, QrCode, Key, Edit2, Trash2, Power, PowerOff, X, Loader2, Clock, CheckCircle, MessageSquare, Bot, Globe, Timer, ScanFace, ChevronLeft, ChevronRight, ChevronDown, ImagePlus, Filter, Repeat, MoreHorizontal, PackageCheck, Star, ShieldCheck, Flower2, Eye, EyeOff } from 'lucide-react'
-import { getAccountDetailsPaginated, deleteAccount, updateAccountCookie, updateAccountStatus, updateAccountsStatusBatch, closeAccountsNoticeBatch, clearTokenCacheBatch, updateAccountRemark, addAccount, generateQRLogin, checkQRLoginStatus, passwordLogin, checkPasswordLoginStatus, updateAccountAutoConfirm, updateAccountPauseDuration, updateAccountMessageExpireTime, updateAccountLoginInfo, updateAccountScheduledRedelivery, updateAccountScheduledRate, updateAccountAutoPolish, updateAccountConfirmBeforeSend, updateAccountAutoRedFlower, getAIReplySettings, updateAIReplySettings, testAIConnection, fetchAIModels, AI_PROVIDER_OPTIONS, AI_PROVIDER_DEFAULT_BASE_URLS, getProxyConfig, updateProxyConfig, getFaceVerificationScreenshot, deleteFaceVerificationScreenshot, getConfirmReceiptMessage, updateConfirmReceiptMessage, uploadConfirmReceiptImage, type AIProviderType, type AIModelOption, type ProxyConfig, type FaceVerificationScreenshot, type AccountFilterParams } from '@/api/accounts'
+import { Plus, RefreshCw, QrCode, Key, Edit2, Trash2, Power, PowerOff, X, Loader2, Clock, CheckCircle, MessageSquare, Bot, Globe, Timer, ScanFace, ChevronLeft, ChevronRight, ChevronDown, ImagePlus, Filter, Repeat, MoreHorizontal, PackageCheck, Star, ShieldCheck, Flower2, Eye, EyeOff, Ban, Download, Upload } from 'lucide-react'
+import { getAccountDetailsPaginated, deleteAccount, updateAccountCookie, updateAccountStatus, updateAccountsStatusBatch, closeAccountsNoticeBatch, clearTokenCacheBatch, updateAccountRemark, addAccount, generateQRLogin, checkQRLoginStatus, passwordLogin, checkPasswordLoginStatus, updateAccountAutoConfirm, updateAccountPauseDuration, updateAccountMessageExpireTime, updateAccountLoginInfo, updateAccountScheduledRedelivery, updateAccountScheduledRate, updateAccountAutoPolish, updateAccountConfirmBeforeSend, updateAccountAutoRedFlower, getAIReplySettings, updateAIReplySettings, testAIConnection, fetchAIModels, AI_PROVIDER_OPTIONS, AI_PROVIDER_DEFAULT_BASE_URLS, getProxyConfig, updateProxyConfig, getFaceVerificationScreenshot, deleteFaceVerificationScreenshot, getConfirmReceiptMessage, updateConfirmReceiptMessage, uploadConfirmReceiptImage, exportAccountsExcel, importAccountsExcel, type AIProviderType, type AIModelOption, type ProxyConfig, type FaceVerificationScreenshot, type AccountFilterParams } from '@/api/accounts'
 import { getDefaultReply, updateDefaultReply, uploadDefaultReplyImage } from '@/api/keywords'
 import { getAutoRateConfig, updateAutoRateConfig } from '@/api/autoRate'
 import { getApiErrorMessage } from '@/utils/request'
@@ -11,9 +11,10 @@ import { useAuthStore } from '@/store/authStore'
 import { useMenuVisibilityStore } from '@/store/menuVisibilityStore'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
+import { DeliveryBlockRulesModal } from './DeliveryBlockRulesModal'
 import type { AccountDetail } from '@/types'
 
-type ModalType = 'qrcode' | 'password' | 'manual' | 'edit' | 'default-reply' | 'ai-settings' | 'proxy-settings' | 'message-expire-time' | 'face-verification' | 'confirm-receipt' | 'auto-rate' | null
+type ModalType = 'qrcode' | 'password' | 'manual' | 'edit' | 'default-reply' | 'ai-settings' | 'proxy-settings' | 'message-expire-time' | 'face-verification' | 'confirm-receipt' | 'auto-rate' | 'delivery-disabled' | null
 
 interface AccountWithKeywordCount extends AccountDetail {
   keywordCount?: number
@@ -36,6 +37,8 @@ interface AccountFilters {
   auto_polish: boolean | null
   auto_confirm: boolean | null
   has_password: boolean | null
+  disable_reason: string | null
+  account_id: string | null
 }
 
 interface AIConfigSnapshot {
@@ -89,8 +92,14 @@ export function Accounts() {
     auto_polish: null,
     auto_confirm: null,
     has_password: null,
+    disable_reason: null,
+    account_id: null,
   })
   const [showFilters, setShowFilters] = useState(false)
+  // 「禁用原因」筛选输入框的本地草稿：输入过程不触发接口，回车/失焦/点击查询按钮时提交
+  const [disableReasonInput, setDisableReasonInput] = useState('')
+  // 「账号ID」筛选输入框的本地草稿：输入过程不触发接口，回车/失焦/点击查询按钮时提交
+  const [accountIdInput, setAccountIdInput] = useState('')
   
   // 更多操作下拉菜单状态
   const [moreMenuAccountId, setMoreMenuAccountId] = useState<string | null>(null)
@@ -201,12 +210,19 @@ export function Accounts() {
   const [autoRateApiUrl, setAutoRateApiUrl] = useState('')
   const [autoRateSaving, setAutoRateSaving] = useState(false)
 
+  // 禁止发货设置状态
+  const [deliveryDisabledAccount, setDeliveryDisabledAccount] = useState<AccountWithKeywordCount | null>(null)
+
   // 确认弹窗状态
   const [deleteAccountConfirm, setDeleteAccountConfirm] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [deleteFaceConfirm, setDeleteFaceConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([])
-  const [batchAction, setBatchAction] = useState<'enable' | 'disable' | 'close-notice' | 'clear-token' | null>(null)
+  const [batchAction, setBatchAction] = useState<'enable' | 'disable' | 'close-notice' | 'clear-token' | 'renew-login' | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [showImportModal, setShowImportModal] = useState(false)
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [importing, setImporting] = useState(false)
 
   const selectedCount = selectedAccountIds.length
   const batchOperating = batchAction !== null
@@ -226,6 +242,12 @@ export function Accounts() {
       if (currentFilters.auto_polish !== null) filterParams.auto_polish = currentFilters.auto_polish
       if (currentFilters.auto_confirm !== null) filterParams.auto_confirm = currentFilters.auto_confirm
       if (currentFilters.has_password !== null) filterParams.has_password = currentFilters.has_password
+      if (currentFilters.disable_reason && currentFilters.disable_reason.trim()) {
+        filterParams.disable_reason = currentFilters.disable_reason.trim()
+      }
+      if (currentFilters.account_id && currentFilters.account_id.trim()) {
+        filterParams.account_id = currentFilters.account_id.trim()
+      }
       
       const result = await getAccountDetailsPaginated(page, pageSize, filterParams)
 
@@ -275,13 +297,50 @@ export function Accounts() {
       auto_polish: null,
       auto_confirm: null,
       has_password: null,
+      disable_reason: null,
+      account_id: null,
     }
     setFilters(emptyFilters)
+    setDisableReasonInput('')
+    setAccountIdInput('')
     loadAccounts(1, pagination.pageSize, emptyFilters)
   }
+
+  // 提交「禁用原因」筛选（回车或失焦时调用）
+  const handleDisableReasonSubmit = () => {
+    const keyword = disableReasonInput.trim()
+    const currentValue = filters.disable_reason || ''
+    // 关键词未变化则跳过，避免重复请求
+    if (keyword === currentValue) return
+    handleFilterChange('disable_reason', keyword || null)
+  }
+
+  // 提交「账号ID」筛选（回车或失焦时调用）
+  const handleAccountIdSubmit = () => {
+    const keyword = accountIdInput.trim()
+    const currentValue = filters.account_id || ''
+    // 关键词未变化则跳过，避免重复请求
+    if (keyword === currentValue) return
+    handleFilterChange('account_id', keyword || null)
+  }
+
+  // 统一「查询」按钮：合并所有文本草稿到 filters 后按筛选条件重新查询
+  // - 文本类筛选（账号ID、禁用原因）只在草稿提交后才生效；点击查询会强制以当前草稿为准
+  // - 下拉类筛选（状态、AI 回复等）已在变更时立即生效，这里直接按当前 filters 重新查询
+  const handleSearch = () => {
+    const accountIdKeyword = accountIdInput.trim()
+    const disableReasonKeyword = disableReasonInput.trim()
+    const mergedFilters: AccountFilters = {
+      ...filters,
+      account_id: accountIdKeyword || null,
+      disable_reason: disableReasonKeyword || null,
+    }
+    setFilters(mergedFilters)
+    loadAccounts(1, pagination.pageSize, mergedFilters)
+  }
   
-  // 检查是否有筛选条件
-  const hasActiveFilters = Object.values(filters).some(v => v !== null)
+  // 检查是否有筛选条件（空字符串视为无效筛选）
+  const hasActiveFilters = Object.values(filters).some(v => v !== null && v !== '')
 
   const handleToggleSelectAllAccounts = () => {
     if (accounts.length === 0) return
@@ -673,6 +732,89 @@ export function Accounts() {
       addToast({ type: 'error', message: getApiErrorMessage(error, '批量清除Token缓存失败') })
     } finally {
       setBatchAction(null)
+    }
+  }
+
+  const handleBatchRenewLogin = async () => {
+    if (selectedCount === 0) {
+      addToast({ type: 'warning', message: '请先选择账号' })
+      return
+    }
+
+    setBatchAction('renew-login')
+    try {
+      const { renewAccountLoginBatch } = await import('@/api/accounts')
+      const result = await renewAccountLoginBatch(selectedAccountIds)
+      if (result.success) {
+        const data = result.data as { success_count?: number; failed_count?: number; results?: Array<{ account_name?: string; success: boolean; message: string }> } | undefined
+        const failedCount = data?.failed_count || 0
+        if (failedCount > 0) {
+          const failedMessages = (data?.results || []).filter(r => !r.success).map(r => `${r.account_name || '未知'}: ${r.message}`).join('；')
+          addToast({ type: 'warning', message: `${result.message}${failedMessages ? '。' + failedMessages : ''}` })
+        } else {
+          addToast({ type: 'success', message: result.message || '批量账号续期成功' })
+        }
+      } else {
+        addToast({ type: 'error', message: result.message || '批量账号续期失败' })
+      }
+      setSelectedAccountIds([])
+      await loadAccounts()
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '批量账号续期失败') })
+    } finally {
+      setBatchAction(null)
+    }
+  }
+
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      const blob = await exportAccountsExcel({
+        account_ids: selectedCount > 0 ? selectedAccountIds : undefined,
+        status: selectedCount > 0 ? null : filters.status,
+        account_id: selectedCount > 0 ? null : filters.account_id,
+        has_password: selectedCount > 0 ? null : filters.has_password,
+      })
+      // 触发下载
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `账号导出_${new Date().toISOString().slice(0, 10)}.xlsx`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(url)
+      addToast({ type: 'success', message: selectedCount > 0 ? `已导出 ${selectedCount} 个账号` : '已导出全部账号' })
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '导出失败') })
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const handleImport = async (enableAll: boolean) => {
+    if (!importFile) {
+      addToast({ type: 'warning', message: '请先选择文件' })
+      return
+    }
+    setImporting(true)
+    try {
+      const result = await importAccountsExcel(importFile, enableAll)
+      if (result.success) {
+        addToast({ type: 'success', message: result.message })
+        if (result.data?.errors && result.data.errors.length > 0) {
+          addToast({ type: 'warning', message: `部分数据导入异常：${result.data.errors.slice(0, 3).join('；')}` })
+        }
+        setShowImportModal(false)
+        setImportFile(null)
+        await loadAccounts()
+      } else {
+        addToast({ type: 'error', message: result.message || '导入失败' })
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '导入失败') })
+    } finally {
+      setImporting(false)
     }
   }
 
@@ -1207,6 +1349,12 @@ export function Accounts() {
     setActiveModal('message-expire-time')
   }
 
+  // ==================== 禁止发货设置 ====================
+  const openDeliveryDisabledModal = (account: AccountWithKeywordCount) => {
+    setDeliveryDisabledAccount(account)
+    setActiveModal('delivery-disabled')
+  }
+
   const handleSaveMessageExpireTime = async () => {
     if (!messageExpireTimeAccount) return
     
@@ -1544,6 +1692,29 @@ export function Accounts() {
               清除Token缓存
             </button>
             <button
+              onClick={handleBatchRenewLogin}
+              disabled={selectedCount === 0 || batchOperating}
+              className="btn-ios-secondary btn-sm text-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {batchAction === 'renew-login' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              账号续期
+            </button>
+            <button
+              onClick={handleExport}
+              disabled={exporting}
+              className="btn-ios-secondary btn-sm text-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              导出
+            </button>
+            <button
+              onClick={() => setShowImportModal(true)}
+              className="btn-ios-secondary btn-sm text-teal-600"
+            >
+              <Upload className="w-4 h-4" />
+              导入
+            </button>
+            <button
               onClick={() => setShowFilters(!showFilters)}
               className={`btn-ios-secondary btn-sm flex items-center gap-1 ${hasActiveFilters ? 'text-blue-600 border-blue-300' : ''}`}
             >
@@ -1660,6 +1831,66 @@ export function Accounts() {
                   <option value="false">未配置</option>
                 </select>
               </div>
+
+              {/* 账号ID筛选（模糊搜索，回车/失焦/查询按钮均会提交） */}
+              <div className="flex flex-col gap-1 col-span-2">
+                <label className="text-xs text-gray-500 dark:text-gray-400">账号ID</label>
+                <input
+                  type="text"
+                  value={accountIdInput}
+                  maxLength={255}
+                  onChange={(e) => setAccountIdInput(e.target.value)}
+                  onBlur={handleAccountIdSubmit}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      handleAccountIdSubmit()
+                    }
+                  }}
+                  placeholder="输入账号ID关键字模糊搜索"
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              {/* 禁用原因筛选（模糊搜索，回车/失焦/查询按钮均会提交） */}
+              <div className="flex flex-col gap-1 col-span-2">
+                <label className="text-xs text-gray-500 dark:text-gray-400">禁用原因</label>
+                <input
+                  type="text"
+                  value={disableReasonInput}
+                  maxLength={255}
+                  onChange={(e) => setDisableReasonInput(e.target.value)}
+                  onBlur={handleDisableReasonSubmit}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      handleDisableReasonSubmit()
+                    }
+                  }}
+                  placeholder="输入关键字模糊搜索"
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            {/* 筛选操作按钮：统一查询 / 重置 */}
+            <div className="mt-3 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={handleResetFilters}
+                disabled={!hasActiveFilters && !accountIdInput && !disableReasonInput}
+                className="btn-ios-secondary btn-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                重置
+              </button>
+              <button
+                type="button"
+                onClick={handleSearch}
+                className="btn-ios-primary btn-sm flex items-center gap-1"
+              >
+                <Filter className="w-4 h-4" />
+                查询
+              </button>
             </div>
           </div>
         )}
@@ -1669,10 +1900,10 @@ export function Accounts() {
               <RefreshCw className="w-6 h-6 animate-spin text-blue-500" />
             </div>
           ) : (
-            <table className="table-ios min-w-[1080px]">
+            <table className="table-ios min-w-[1400px]">
               <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
                 <tr>
-                  <th className="w-12">
+                  <th className="w-10">
                     <input
                       type="checkbox"
                       checked={allVisibleSelected}
@@ -1681,15 +1912,15 @@ export function Accounts() {
                       className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
                     />
                   </th>
-                  <th className="whitespace-nowrap">账号ID</th>
-                  <th className="whitespace-nowrap">关键词</th>
-                  <th className="whitespace-nowrap">过滤词</th>
-                  <th className="whitespace-nowrap">今日回复</th>
-                  <th className="whitespace-nowrap">状态</th>
-                  <th className="whitespace-nowrap">配置密码</th>
-                  <th className="whitespace-nowrap">功能开关</th>
-                  <th className="whitespace-nowrap">暂停时间</th>
-                  <th className="whitespace-nowrap sticky right-0 bg-slate-50 dark:bg-slate-800">操作</th>
+                  <th className="whitespace-nowrap min-w-[180px]">账号ID</th>
+                  <th className="whitespace-nowrap min-w-[80px]">关键词</th>
+                  <th className="whitespace-nowrap min-w-[80px]">过滤词</th>
+                  <th className="whitespace-nowrap min-w-[80px]">今日回复</th>
+                  <th className="whitespace-nowrap min-w-[120px]">状态</th>
+                  <th className="whitespace-nowrap min-w-[90px]">配置密码</th>
+                  <th className="whitespace-nowrap min-w-[280px]">功能开关</th>
+                  <th className="whitespace-nowrap min-w-[90px]">暂停时间</th>
+                  <th className="whitespace-nowrap min-w-[160px] sticky right-0 bg-slate-50 dark:bg-slate-800 z-20">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -1857,7 +2088,7 @@ export function Accounts() {
                         {account.pause_duration || 0} 分钟
                       </span>
                     </td>
-                    <td className="sticky right-0 bg-white dark:bg-slate-900 z-10">
+                    <td className="sticky right-0 bg-white dark:bg-slate-800 z-[5] shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.1)]">
                       <div className="flex items-center gap-1">
                         {/* 常用操作按钮 */}
                         <button
@@ -1980,6 +2211,13 @@ export function Accounts() {
                     >
                       <Star className="w-3.5 h-3.5 text-yellow-500" />
                       <span className="text-slate-700 dark:text-slate-300">自动评价</span>
+                    </button>
+                    <button
+                      onClick={() => { openDeliveryDisabledModal(account); setMoreMenuAccountId(null) }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                    >
+                      <Ban className={`w-3.5 h-3.5 ${account.delivery_disabled ? 'text-red-500' : 'text-slate-400'}`} />
+                      <span className="text-slate-700 dark:text-slate-300">禁止发货设置</span>
                     </button>
                   </>
                 )
@@ -3160,6 +3398,15 @@ export function Accounts() {
         </div>
       )}
 
+      {/* 禁止发货规则设置弹窗 */}
+      {activeModal === 'delivery-disabled' && deliveryDisabledAccount && (
+        <DeliveryBlockRulesModal
+          accountId={deliveryDisabledAccount.id}
+          accountDisplayId={deliveryDisabledAccount.id}
+          onClose={closeModal}
+        />
+      )}
+
       {/* 人脸验证弹窗 */}
       {activeModal === 'face-verification' && faceVerificationAccount && (
         <div className="modal-overlay">
@@ -3504,6 +3751,88 @@ export function Accounts() {
         onConfirm={handleDeleteFaceVerification}
         onCancel={() => setDeleteFaceConfirm(false)}
       />
+
+      {/* 导入弹窗 */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => !importing && setShowImportModal(false)}>
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-md mx-4 p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-slate-800 dark:text-slate-200">导入账号数据</h3>
+              <button onClick={() => !importing && setShowImportModal(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* 拖拽/选择文件区域 */}
+            <div
+              className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+                importFile
+                  ? 'border-green-300 bg-green-50 dark:border-green-700 dark:bg-green-900/20'
+                  : 'border-slate-300 dark:border-slate-600 hover:border-blue-400 dark:hover:border-blue-500'
+              }`}
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
+              onDrop={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                const file = e.dataTransfer.files[0]
+                if (file && file.name.endsWith('.xlsx')) {
+                  setImportFile(file)
+                } else {
+                  addToast({ type: 'warning', message: '请选择 .xlsx 格式的文件' })
+                }
+              }}
+              onClick={() => {
+                const input = document.createElement('input')
+                input.type = 'file'
+                input.accept = '.xlsx'
+                input.onchange = (e) => {
+                  const file = (e.target as HTMLInputElement).files?.[0]
+                  if (file) setImportFile(file)
+                }
+                input.click()
+              }}
+            >
+              {importFile ? (
+                <div className="space-y-2">
+                  <CheckCircle className="w-10 h-10 text-green-500 mx-auto" />
+                  <p className="text-sm font-medium text-slate-700 dark:text-slate-300">{importFile.name}</p>
+                  <p className="text-xs text-slate-500">{(importFile.size / 1024).toFixed(1)} KB</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <Upload className="w-10 h-10 text-slate-400 mx-auto" />
+                  <p className="text-sm text-slate-600 dark:text-slate-400">拖拽文件到此处，或点击选择文件</p>
+                  <p className="text-xs text-slate-400">支持 .xlsx 格式</p>
+                </div>
+              )}
+            </div>
+
+            {/* 操作按钮 */}
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => handleImport(false)}
+                disabled={!importFile || importing}
+                className="flex-1 btn-ios-secondary disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                保存
+              </button>
+              <button
+                onClick={() => handleImport(true)}
+                disabled={!importFile || importing}
+                className="flex-1 btn-ios-primary disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                保存并全部启用
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-400 dark:text-slate-500 mt-3 text-center">
+              「保存」按Excel中状态导入 · 「保存并全部启用」强制启用所有账号
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

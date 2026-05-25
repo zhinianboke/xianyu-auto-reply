@@ -58,7 +58,7 @@ const AUTH_FOOTER_AD_SETTING_KEYS: Array<keyof AuthFooterAdSettings> = [
   'auth.footer_ad_html',
 ]
 
-const BOOLEAN_SYSTEM_SETTING_KEYS = ['registration_enabled', 'show_default_login_info', 'login_captcha_enabled', 'smtp_use_tls', 'smtp_use_ssl', 'runtime.is_exe_mode', 'account.face_verify_timeout_disable']
+const BOOLEAN_SYSTEM_SETTING_KEYS = ['registration_enabled', 'show_default_login_info', 'login_captcha_enabled', 'smtp_use_tls', 'smtp_use_ssl', 'runtime.is_exe_mode', 'account.face_verify_timeout_disable', 'proxy.enabled']
 
 export const LOGIN_BRANDING_UPDATED_EVENT = 'login-branding-updated'
 
@@ -282,6 +282,59 @@ export const updateAISettings = (data: Record<string, unknown>): Promise<ApiResp
 
 export const testEmailSend = async (email: string): Promise<ApiResponse> => {
   return post(`${SYSTEM_SETTINGS_PREFIX}/test-email?email=${encodeURIComponent(email)}`)
+}
+
+// ========== 代理设置（独立保存） ==========
+
+export interface ProxySettingsPayload {
+  'proxy.api_url': string
+  'proxy.enabled': boolean
+}
+
+// 从全局 settings 中提取代理设置，兼容字符串/布尔回读
+// enabled 在 BOOLEAN_SYSTEM_SETTING_KEYS 白名单中，convertSystemSettings 会把字符串 'true'/'false' 转成 boolean；
+// 但 Partial<SystemSettings> 泛型意义下可能被外部传入未转换的原始值，这里用 unknown 宽泛判断兜底。
+export const normalizeProxySettings = (settings?: Partial<SystemSettings> | null): ProxySettingsPayload => {
+  const apiUrl = settings?.['proxy.api_url']
+  const enabled = settings?.['proxy.enabled'] as unknown
+  return {
+    'proxy.api_url': typeof apiUrl === 'string' ? apiUrl : '',
+    'proxy.enabled': enabled === true || enabled === 'true',
+  }
+}
+
+// 独立保存代理设置：只提交 proxy.api_url 和 proxy.enabled，不触碰其他设置
+// 不复用 updateSystemSettings 的原因：
+// 1) 后端对代理做了跨键校验（开启代理时 URL 必须非空；代理启用中不允许清空 URL），
+//    Promise.all 并发 PUT 会让后端读到对方未落库的旧值导致误拒
+// 2) updateSystemSettings 不检查 PUT 返回的 success 字段，后端校验错误消息无法回传前端
+export const updateProxySettings = async (settings?: Partial<SystemSettings> | null): Promise<ApiResponse> => {
+  const normalized = normalizeProxySettings(settings)
+  const putUrl = (): Promise<ApiResponse> =>
+    put<ApiResponse>(`${SYSTEM_SETTINGS_PREFIX}/proxy.api_url`, { value: normalized['proxy.api_url'] })
+  const putEnabled = (): Promise<ApiResponse> =>
+    put<ApiResponse>(
+      `${SYSTEM_SETTINGS_PREFIX}/proxy.enabled`,
+      { value: normalized['proxy.enabled'] ? 'true' : 'false' },
+    )
+
+  // 按目标状态编排 PUT 顺序，确保后端跨键校验总能通过：
+  // - 目标启用：先写 URL（前置条件）再开启开关
+  // - 目标禁用：先关闭开关再清空/保留 URL
+  const operations = normalized['proxy.enabled'] ? [putUrl, putEnabled] : [putEnabled, putUrl]
+
+  for (const op of operations) {
+    try {
+      const result = await op()
+      if (!result?.success) {
+        return result || { success: false, message: '代理设置保存失败' }
+      }
+    } catch (error) {
+      return { success: false, message: (error as Error)?.message || '代理设置保存失败' }
+    }
+  }
+
+  return { success: true, message: '代理设置已保存' }
 }
 
 // 修改密码

@@ -1088,16 +1088,16 @@ export function Items() {
           </h2>
           <span className="badge-primary">{pagination.total} 个商品</span>
         </div>
-        <div className="flex-1 overflow-auto">
+        <div className="flex-1 overflow-x-auto overflow-y-auto">
           {itemsLoading ? (
             <div className="flex justify-center py-8">
               <RefreshCw className="w-6 h-6 animate-spin text-blue-500" />
             </div>
           ) : (
-            <table className="table-ios min-w-[900px]">
+            <table className="table-ios">
               <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
                 <tr>
-                  <th className="w-10 whitespace-nowrap">
+                  <th className="w-10">
                     <button
                       onClick={toggleSelectAll}
                       className="p-1 hover:bg-gray-100 rounded"
@@ -1110,19 +1110,19 @@ export function Items() {
                       )}
                     </button>
                   </th>
-                  <th className="whitespace-nowrap">账号ID</th>
-                  <th className="whitespace-nowrap">商品ID</th>
-                  <th className="whitespace-nowrap">商品标题</th>
-                  <th className="whitespace-nowrap">价格</th>
-                  <th className="whitespace-nowrap">是否擦亮</th>
-                  <th className="whitespace-nowrap">多规格</th>
-                <th className="whitespace-nowrap">多数量发货</th>
-                <th className="whitespace-nowrap">关联卡券</th>
-                <th className="whitespace-nowrap">默认回复</th>
-                <th className="whitespace-nowrap">AI提示词</th>
-                <th className="whitespace-nowrap">创建时间</th>
-                <th className="whitespace-nowrap">更新时间</th>
-                <th className="whitespace-nowrap sticky right-0 bg-slate-50 dark:bg-slate-800">操作</th>
+                  <th className="min-w-[130px]">账号ID</th>
+                  <th className="min-w-[130px]">商品ID</th>
+                  <th className="min-w-[200px]">商品标题</th>
+                  <th className="min-w-[65px]">价格</th>
+                  <th className="min-w-[75px] text-center">是否擦亮</th>
+                  <th className="min-w-[75px] text-center">多规格</th>
+                  <th className="min-w-[95px] text-center">多数量发货</th>
+                  <th className="min-w-[85px] text-center">关联卡券</th>
+                  <th className="min-w-[85px] text-center">默认回复</th>
+                  <th className="min-w-[85px] text-center">AI提示词</th>
+                  <th className="min-w-[150px]">创建时间</th>
+                  <th className="min-w-[150px]">更新时间</th>
+                  <th className="sticky right-0 bg-slate-50 dark:bg-slate-800 min-w-[60px]">操作</th>
               </tr>
             </thead>
             <tbody>

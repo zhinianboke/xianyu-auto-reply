@@ -153,12 +153,20 @@ export function SupplyManagement() {
       {/* 二级分销货源Tab */}
       {activeTab === 'sub' && <SubSupplyTab ref={subSupplyRef} />}
 
-      {/* 卡券货源Tab - 搜索和过滤 */}
+      {/* 卡券货源Tab - 搜索和过滤 + 表格 + 分页合卡 */}
       {activeTab === 'card' && (<>
-      <div className="vben-card">
-        <div className="vben-card-body">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="relative flex-1 min-w-[200px] max-w-md">
+      <div
+        className="vben-card flex flex-col"
+        style={{ height: 'calc(100vh - 260px)', minHeight: '420px' }}
+      >
+        {/* 卡片头：搜索 + 过滤 */}
+        <div className="flex-shrink-0 vben-card-header flex-wrap gap-3">
+          <div className="flex items-center gap-2">
+            <h2 className="vben-card-title">卡券货源列表</h2>
+            <span className="badge-primary">{total} 条货源</span>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            <div className="relative w-full sm:w-72">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <input
                 type="text"
@@ -179,165 +187,158 @@ export function SupplyManagement() {
               <option value="data">批量</option>
               <option value="image">图片</option>
             </select>
-            <span className="text-sm text-gray-500">
-              共 {total} 条货源
-            </span>
           </div>
         </div>
-      </div>
 
-      {/* 表格 */}
-      <div className="vben-card">
-        <div className="vben-card-body p-0">
+        {/* 表格主体：横向 + 纵向滚动，粘性表头 */}
+        <div className="flex-1 overflow-x-auto overflow-y-auto scrollbar-visible">
           {loading ? (
             <PageLoading />
           ) : (
-            <div className="table-ios-container">
-              <table className="table-ios">
-                <thead>
+            <table className="table-ios">
+              <thead className="sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">
+                <tr>
+                  <th className="whitespace-nowrap">ID</th>
+                  <th className="whitespace-nowrap">名称</th>
+                  <th className="whitespace-nowrap">类型</th>
+                  <th className="whitespace-nowrap">对接价格</th>
+                  <th className="whitespace-nowrap">最低售价</th>
+                  <th className="whitespace-nowrap">手续费支付方</th>
+                  <th className="whitespace-nowrap">规格</th>
+                  <th className="whitespace-nowrap">描述</th>
+                  <th className="whitespace-nowrap">发布时间</th>
+                  <th className="whitespace-nowrap">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cards.length === 0 ? (
                   <tr>
-                    <th className="whitespace-nowrap">ID</th>
-                    <th className="whitespace-nowrap">名称</th>
-                    <th className="whitespace-nowrap">类型</th>
-                    <th className="whitespace-nowrap">对接价格</th>
-                    <th className="whitespace-nowrap">最低售价</th>
-                    <th className="whitespace-nowrap">手续费支付方</th>
-                    <th className="whitespace-nowrap">规格</th>
-                    <th className="whitespace-nowrap">描述</th>
-                    <th className="whitespace-nowrap">发布时间</th>
-                    <th className="whitespace-nowrap">操作</th>
+                    <td colSpan={10}>
+                      <div className="empty-state py-8">
+                        <PackageSearch className="empty-state-icon" />
+                        <p className="text-gray-500">
+                          {searchText || typeFilter ? '没有匹配的货源' : '暂无可对接的货源'}
+                        </p>
+                      </div>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {cards.length === 0 ? (
-                    <tr>
-                      <td colSpan={10}>
-                        <div className="empty-state py-8">
-                          <PackageSearch className="empty-state-icon" />
-                          <p className="text-gray-500">
-                            {searchText || typeFilter ? '没有匹配的货源' : '暂无可对接的货源'}
-                          </p>
-                        </div>
+                ) : (
+                  cards.map(card => (
+                    <tr key={card.id}>
+                      <td className="text-sm text-gray-500">{card.id}</td>
+                      <td className="font-medium text-gray-900 dark:text-white">
+                        {card.name}
+                      </td>
+                      <td>
+                        <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${cardTypeStyles[card.type] || ''}`}>
+                          {cardTypeLabels[card.type] || card.type}
+                        </span>
+                      </td>
+                      <td className="text-sm">
+                        {card.price ? (
+                          <span className="text-amber-600 dark:text-amber-400 font-medium">¥{card.price}</span>
+                        ) : (
+                          <span className="text-gray-400">-</span>
+                        )}
+                      </td>
+                      <td className="text-sm">
+                        {card.min_price ? (
+                          <span className="text-orange-600 dark:text-orange-400 font-medium">¥{card.min_price}</span>
+                        ) : (
+                          <span className="text-gray-400">-</span>
+                        )}
+                      </td>
+                      <td className="text-sm">
+                        {card.fee_payer === 'distributor' ? (
+                          <span className="text-blue-600 dark:text-blue-400">分销主支付</span>
+                        ) : card.fee_payer === 'dealer' ? (
+                          <span className="text-green-600 dark:text-green-400">分销商支付</span>
+                        ) : (
+                          <span className="text-gray-400">-</span>
+                        )}
+                      </td>
+                      <td>
+                        {card.is_multi_spec ? (
+                          <span className="text-xs text-blue-600">{card.spec_name}: {card.spec_value}</span>
+                        ) : (
+                          <span className="text-gray-400">-</span>
+                        )}
+                      </td>
+                      <td className="max-w-[200px]">
+                        <span className="text-xs text-gray-500 truncate block" title={card.description || ''}>
+                          {card.description || '-'}
+                        </span>
+                      </td>
+                      <td className="text-xs text-gray-500 whitespace-nowrap">
+                        {card.created_at ? new Date(card.created_at).toLocaleString('zh-CN') : '-'}
+                      </td>
+                      <td>
+                        {card.is_docked ? (
+                          <button
+                            onClick={() => handleCancelDock(card)}
+                            className="btn-ios-secondary btn-sm text-red-500 hover:text-red-600"
+                          >
+                            <Unlink className="w-3.5 h-3.5" />
+                            取消对接
+                          </button>
+                        ) : card.user_id === user?.user_id ? (
+                          <span className="text-xs text-gray-400">自己的卡券</span>
+                        ) : (
+                          <button
+                            onClick={() => { setSelectedCard(card); setDockModalOpen(true) }}
+                            className="btn-ios-primary btn-sm"
+                          >
+                            <Link className="w-3.5 h-3.5" />
+                            对接
+                          </button>
+                        )}
                       </td>
                     </tr>
-                  ) : (
-                    cards.map(card => (
-                      <tr key={card.id}>
-                        <td className="text-sm text-gray-500">{card.id}</td>
-                        <td className="font-medium text-gray-900 dark:text-white">
-                          {card.name}
-                        </td>
-                        <td>
-                          <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${cardTypeStyles[card.type] || ''}`}>
-                            {cardTypeLabels[card.type] || card.type}
-                          </span>
-                        </td>
-                        <td className="text-sm">
-                          {card.price ? (
-                            <span className="text-amber-600 dark:text-amber-400 font-medium">¥{card.price}</span>
-                          ) : (
-                            <span className="text-gray-400">-</span>
-                          )}
-                        </td>
-                        <td className="text-sm">
-                          {card.min_price ? (
-                            <span className="text-orange-600 dark:text-orange-400 font-medium">¥{card.min_price}</span>
-                          ) : (
-                            <span className="text-gray-400">-</span>
-                          )}
-                        </td>
-                        <td className="text-sm">
-                          {card.fee_payer === 'distributor' ? (
-                            <span className="text-blue-600 dark:text-blue-400">分销主支付</span>
-                          ) : card.fee_payer === 'dealer' ? (
-                            <span className="text-green-600 dark:text-green-400">分销商支付</span>
-                          ) : (
-                            <span className="text-gray-400">-</span>
-                          )}
-                        </td>
-                        <td>
-                          {card.is_multi_spec ? (
-                            <span className="text-xs text-blue-600">{card.spec_name}: {card.spec_value}</span>
-                          ) : (
-                            <span className="text-gray-400">-</span>
-                          )}
-                        </td>
-                        <td className="max-w-[200px]">
-                          <span className="text-xs text-gray-500 truncate block" title={card.description || ''}>
-                            {card.description || '-'}
-                          </span>
-                        </td>
-                        <td className="text-xs text-gray-500 whitespace-nowrap">
-                          {card.created_at ? new Date(card.created_at).toLocaleString('zh-CN') : '-'}
-                        </td>
-                        <td>
-                          {card.is_docked ? (
-                            <button
-                              onClick={() => handleCancelDock(card)}
-                              className="btn-ios-secondary btn-sm text-red-500 hover:text-red-600"
-                            >
-                              <Unlink className="w-3.5 h-3.5" />
-                              取消对接
-                            </button>
-                          ) : card.user_id === user?.user_id ? (
-                            <span className="text-xs text-gray-400">自己的卡券</span>
-                          ) : (
-                            <button
-                              onClick={() => { setSelectedCard(card); setDockModalOpen(true) }}
-                              className="btn-ios-primary btn-sm"
-                            >
-                              <Link className="w-3.5 h-3.5" />
-                              对接
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* 分页 */}
-          {total > 0 && (
-            <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-t border-slate-200 dark:border-slate-700">
-              <div className="flex items-center gap-2 text-sm text-gray-500">
-                <span>每页</span>
-                <select
-                  value={pageSize}
-                  onChange={(e) => handlePageSizeChange(Number(e.target.value))}
-                  className="input-ios w-auto py-1 px-2 text-sm"
-                >
-                  <option value={10}>10</option>
-                  <option value={20}>20</option>
-                  <option value={50}>50</option>
-                  <option value={100}>100</option>
-                </select>
-                <span>条，共 {total} 条</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => handlePageChange(page - 1)}
-                  disabled={page <= 1}
-                  className="btn-ios-secondary btn-sm"
-                >
-                  上一页
-                </button>
-                <span className="px-3 text-sm text-gray-600 dark:text-gray-400">
-                  {page} / {totalPages}
-                </span>
-                <button
-                  onClick={() => handlePageChange(page + 1)}
-                  disabled={page >= totalPages}
-                  className="btn-ios-secondary btn-sm"
-                >
-                  下一页
-                </button>
-              </div>
-            </div>
+                  ))
+                )}
+              </tbody>
+            </table>
           )}
         </div>
+
+        {/* 分页控件：固定底部 */}
+        {total > 0 && (
+          <div className="flex-shrink-0 flex flex-col sm:flex-row items-center justify-between px-4 py-3 border-t border-slate-200 dark:border-slate-700 gap-3">
+            <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+              <span>每页</span>
+              <select
+                value={pageSize}
+                onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+                className="input-ios w-auto py-1 px-2 text-sm"
+              >
+                <option value={10}>10</option>
+                <option value={20}>20</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+              <span>条，共 {total} 条</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-slate-500 dark:text-slate-400">
+                第 {page} / {totalPages || 1} 页
+              </span>
+              <button
+                onClick={() => handlePageChange(page - 1)}
+                disabled={page <= 1 || loading}
+                className="btn-ios-secondary btn-sm"
+              >
+                上一页
+              </button>
+              <button
+                onClick={() => handlePageChange(page + 1)}
+                disabled={page >= totalPages || loading}
+                className="btn-ios-secondary btn-sm"
+              >
+                下一页
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       {/* 对接弹窗 */}
       <DockModal

@@ -1,0 +1,83 @@
+"""
+共享配置基类
+
+功能：
+1. 从环境变量加载配置
+2. 提供数据库连接URL
+3. 提供Redis连接配置
+4. 提供通用配置项
+"""
+from __future__ import annotations
+
+from functools import lru_cache
+from urllib.parse import quote_plus
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class BaseConfig(BaseSettings):
+    """
+    所有服务的基础配置类
+    
+    包含数据库连接、Redis连接、日志级别等通用配置
+    各服务可以继承此类并添加自己的特定配置
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # 环境配置
+    environment: str = Field(default="development")
+    log_level: str = Field(default="INFO")
+
+    # 数据库配置
+    mysql_host: str = Field(default="localhost")
+    mysql_port: int = Field(default=3306)
+    mysql_user: str = Field(default="root")
+    mysql_password: str = Field(default="root")
+    mysql_database: str = Field(default="xianyu_data")
+    sync_driver: str = Field(default="mysql+pymysql")
+    async_driver: str = Field(default="mysql+asyncmy")
+    
+    # Redis配置（敏感信息请通过环境变量或.env文件配置）
+    redis_host: str = Field(default="localhost")
+    redis_port: int = Field(default=6379)
+    redis_password: str = Field(default="", repr=False)
+    redis_db: int = Field(default=0)
+    
+    # JWT配置（用于安全模块）
+    jwt_secret_key: str = Field(default="change-me", repr=False)
+    jwt_algorithm: str = Field(default="HS256")
+    access_token_expire_minutes: int = Field(default=30)
+    refresh_token_expire_minutes: int = Field(default=60 * 24 * 7)
+    
+    # 服务地址配置
+    websocket_service_url: str = Field(default="http://127.0.0.1:8001")
+
+    @property
+    def database_url(self) -> str:
+        """同步数据库连接URL"""
+        password = quote_plus(self.mysql_password)
+        return f"{self.sync_driver}://{self.mysql_user}:{password}@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}"
+
+    @property
+    def async_database_url(self) -> str:
+        """异步数据库连接URL"""
+        password = quote_plus(self.mysql_password)
+        return f"{self.async_driver}://{self.mysql_user}:{password}@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}"
+    
+    @property
+    def redis_url(self) -> str:
+        """Redis连接URL"""
+        password = quote_plus(self.redis_password)
+        return f"redis://:{password}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+
+@lru_cache
+def get_settings() -> BaseConfig:
+    """返回缓存的配置实例"""
+    return BaseConfig()

@@ -311,9 +311,9 @@ export function Cards() {
                     </button>
                   </th>
                   <th className="whitespace-nowrap w-16">ID</th>
-                  <th className="whitespace-nowrap min-w-[200px]">名称</th>
+                  <th className="whitespace-nowrap min-w-[250px]">名称</th>
                   <th className="whitespace-nowrap">类型</th>
-                  <th className="whitespace-nowrap">内容预览</th>
+                  <th className="whitespace-nowrap min-w-[300px]">内容预览</th>
                   <th className="whitespace-nowrap">发货设置</th>
                   <th className="whitespace-nowrap">对接信息</th>
                   <th className="whitespace-nowrap">状态</th>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Navigate } from 'react-router-dom'
-import { Settings as SettingsIcon, Save, Mail, RefreshCw, Eye, EyeOff, Copy, Upload, MessageCircle, Users, Percent, CreditCard, Megaphone, Heart } from 'lucide-react'
+import { Settings as SettingsIcon, Save, Mail, RefreshCw, Eye, EyeOff, Copy, Upload, MessageCircle, Users, Percent, CreditCard, Megaphone, Heart, Globe } from 'lucide-react'
 import {
   buildHiddenMenuSettingsPayload,
   getHiddenMenuKeysFromSettings,
@@ -12,6 +12,7 @@ import {
   updateSystemSettings,
   updateDisclaimerSettings,
   updateLoginBrandingSettings,
+  updateProxySettings,
   updateThemeAppearanceSettings,
   updateThemeFontSettings,
   testEmailSend,
@@ -22,6 +23,7 @@ import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { PageLoading, ButtonLoading } from '@/components/common/Loading'
 import { getApiErrorMessage } from '@/utils/apiError'
+import { copyToClipboard } from '@/utils/clipboard'
 import { getExeForcedHiddenMenuKeys } from '@/config/navigation'
 import { applyThemeSettings, normalizeThemeAppearanceSettings, normalizeThemeFontSettings } from '@/utils/theme'
 import { DisclaimerSettingsCard } from './DisclaimerSettingsCard'
@@ -55,6 +57,8 @@ export function Settings() {
   const [hiddenMenuSaving, setHiddenMenuSaving] = useState(false)
   const [themeAppearanceSaving, setThemeAppearanceSaving] = useState(false)
   const [themeFontSaving, setThemeFontSaving] = useState(false)
+  // 代理设置独立保存状态：与页面右上角"保存设置"按钮的 saving 分离，互不影响
+  const [proxySaving, setProxySaving] = useState(false)
   const [settings, setSettings] = useState<SystemSettings | null>(null)
 
   // SMTP密码显示状态
@@ -299,6 +303,37 @@ export function Settings() {
       addToast({ type: 'error', message: getApiErrorMessage(error, '免责声明保存失败') })
     } finally {
       setDisclaimerSaving(false)
+    }
+  }
+
+  // 代理设置独立保存：只 PUT proxy.api_url / proxy.enabled 两个键
+  // 不使用页面右上角"保存设置"按钮，避免影响其他未改动的设置
+  const handleProxySave = async () => {
+    if (!settings) {
+      return
+    }
+
+    // 业务校验：开启代理前必须先填写代理 API 的 URL
+    // 用 trim 判断仅空白字符的输入也当作"未配置"，否则开启后调用方拿到无效 URL
+    const apiUrl = ((settings['proxy.api_url'] as string) || '').trim()
+    const enabled = Boolean(settings['proxy.enabled'])
+    if (enabled && !apiUrl) {
+      addToast({ type: 'error', message: '开启代理前请先填写代理 API 的 URL' })
+      return
+    }
+
+    try {
+      setProxySaving(true)
+      const result = await updateProxySettings(settings)
+      if (result.success) {
+        addToast({ type: 'success', message: result.message || '代理设置保存成功' })
+      } else {
+        addToast({ type: 'error', message: result.message || '代理设置保存失败' })
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '代理设置保存失败') })
+    } finally {
+      setProxySaving(false)
     }
   }
 
@@ -642,10 +677,21 @@ export function Settings() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => {
-                          if (settings?.smtp_password) {
-                            navigator.clipboard.writeText(settings.smtp_password)
+                        onClick={async () => {
+                          // 先校验是否有内容可复制，避免误操作
+                          if (!settings?.smtp_password) {
+                            addToast({ type: 'warning', message: '密码为空，无内容可复制' })
+                            return
+                          }
+                          // 使用 copyToClipboard 工具：自动 fallback execCommand，
+                          // 兼容 HTTP 部署（非 secure context）以及 navigator.clipboard 不可用的场景。
+                          // 旧实现直接 navigator.clipboard.writeText 且未捕获 Promise，
+                          // 在 HTTP 环境下会静默失败但 toast 仍显示成功，误导用户。
+                          const ok = await copyToClipboard(settings.smtp_password)
+                          if (ok) {
                             addToast({ type: 'success', message: '已复制到剪贴板' })
+                          } else {
+                            addToast({ type: 'error', message: '复制失败，请手动选择文本复制' })
                           }
                         }}
                         className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
@@ -1111,6 +1157,59 @@ export function Settings() {
                     ? '按订单金额的百分比收取手续费，例如输入 5 表示每笔收取订单金额的 5%'
                     : '分销交易时收取的固定手续费金额，例如输入 2.00 表示每笔收取 2 元'}
                 </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 代理设置（仅管理员可见） */}
+      {user?.is_admin && (
+        <div className="grid grid-cols-1 gap-4">
+          <div className="vben-card">
+            <div className="vben-card-header">
+              <h2 className="vben-card-title">
+                <Globe className="w-4 h-4" />
+                代理设置
+              </h2>
+            </div>
+            <div className="vben-card-body space-y-4">
+              <p className="text-sm text-slate-500 dark:text-slate-400">配置网络请求的代理 API，启用后系统会通过该代理转发请求</p>
+              <div className="flex items-center justify-between py-3 border-b border-slate-100 dark:border-slate-700">
+                <div>
+                  <p className="font-medium text-slate-900 dark:text-slate-100">启用代理</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">开启后系统将通过下方配置的代理 API 转发网络请求</p>
+                </div>
+                <label className="switch-ios">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(settings?.['proxy.enabled'] ?? false)}
+                    onChange={(e) => setSettings(s => s ? { ...s, 'proxy.enabled': e.target.checked } : null)}
+                  />
+                  <span className="switch-slider"></span>
+                </label>
+              </div>
+              <div className="input-group">
+                <label className="input-label">代理 API 的 URL</label>
+                {/* 用 textarea 支持长 URL（包含较多查询参数时单行 input 显示不全） */}
+                <textarea
+                  value={(settings?.['proxy.api_url'] as string) || ''}
+                  onChange={(e) => setSettings(s => s ? { ...s, 'proxy.api_url': e.target.value } : null)}
+                  placeholder="请输入代理 API 的 URL，例如：https://example.com/proxy?token=xxx&region=cn"
+                  className="input-ios min-h-[72px] resize-y break-all"
+                />
+                <p className="text-xs text-slate-400 mt-1">代理 API 的完整地址，支持长链接</p>
+              </div>
+              {/* 独立保存按钮：只提交代理两项设置，不影响页面其他未改动字段 */}
+              <div className="flex justify-end pt-2">
+                <button
+                  onClick={handleProxySave}
+                  disabled={proxySaving}
+                  className="btn-ios-primary"
+                >
+                  {proxySaving ? <ButtonLoading /> : <Save className="w-4 h-4" />}
+                  保存代理设置
+                </button>
               </div>
             </div>
           </div>

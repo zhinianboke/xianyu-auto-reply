@@ -180,6 +180,71 @@ export const clearRiskLogs = async (cookieId?: string): Promise<ApiResponse> => 
   return del(`${ADMIN_PREFIX}/risk-control-logs${query}`)
 }
 
+// ========== 账号登录日志 ==========
+
+export interface AccountLoginLog {
+  id: number
+  cookie_id: string
+  username: string | null
+  trigger_reason: string | null
+  login_status: string
+  failure_reason: string | null
+  error_message: string | null
+  updated_cookie_names: string | null
+  duration_ms: number | null
+  account_status: string
+  disable_reason: string | null
+  created_at: string
+}
+
+// 获取账号登录日志
+export const getAccountLoginLogs = async (params?: {
+  page?: number
+  pageSize?: number
+  cookie_id?: string
+  start_date?: string
+  end_date?: string
+  login_status?: string
+}): Promise<{ success: boolean; data?: AccountLoginLog[]; total?: number; message?: string }> => {
+  const query = new URLSearchParams()
+  const page = params?.page || 1
+  const pageSize = params?.pageSize || 20
+  const offset = (page - 1) * pageSize
+  query.set('limit', String(pageSize))
+  query.set('offset', String(offset))
+  if (params?.cookie_id) query.set('cookie_id', params.cookie_id)
+  if (params?.start_date) query.set('start_date', params.start_date)
+  if (params?.end_date) query.set('end_date', params.end_date)
+  if (params?.login_status) query.set('login_status', params.login_status)
+  const result = await get<{
+    success: boolean
+    message?: string
+    data?: AccountLoginLog[]
+    total?: number
+  }>(`${API_PREFIX}/account-login-logs?${query.toString()}`)
+  return {
+    success: Boolean(result.success),
+    data: result.data || [],
+    total: result.total,
+    message: result.message,
+  }
+}
+
+// 清理账号登录日志
+// - 不传 days  => 清空全部
+// - 传 days=30 => 仅删除 30 天前的日志（保留近 30 天）
+// - cookieId   => 仅清理该账号的日志
+export const clearAccountLoginLogs = async (params?: {
+  days?: number
+  cookieId?: string
+}): Promise<ApiResponse> => {
+  const query = new URLSearchParams()
+  if (params?.days !== undefined && params.days !== null) query.set('days', String(params.days))
+  if (params?.cookieId) query.set('cookie_id', params.cookieId)
+  const qs = query.toString()
+  return del(`${ADMIN_PREFIX}/account-login-logs${qs ? `?${qs}` : ''}`)
+}
+
 // ========== 数据管理 ==========
 
 // 获取表数据

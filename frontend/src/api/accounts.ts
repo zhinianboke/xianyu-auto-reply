@@ -39,6 +39,8 @@ export interface AccountFilterParams {
   auto_polish?: boolean | null           // 商品擦亮
   auto_confirm?: boolean | null          // 自动确认收货
   has_password?: boolean | null          // 是否配置密码
+  disable_reason?: string | null         // 禁用原因关键词（模糊搜索）
+  account_id?: string | null             // 账号ID关键词（模糊搜索）
 }
 
 // 获取账号详情列表（分页）
@@ -64,6 +66,12 @@ export const getAccountDetailsPaginated = async (
     auto_polish?: boolean
     confirm_before_send?: boolean
     auto_red_flower?: boolean
+    delivery_disabled?: boolean
+    delivery_disabled_reason?: string
+    auto_close_order?: boolean
+    delivery_only_card_after_close?: boolean
+    // 禁止发货排除商品列表（命中此列表的 item_id 不受禁止发货拦截）
+    delivery_disabled_excluded_item_ids?: string[]
     remark?: string
     pause_duration?: number
     message_expire_time?: number
@@ -92,6 +100,14 @@ export const getAccountDetailsPaginated = async (
     if (filters.auto_polish !== null && filters.auto_polish !== undefined) params.append('auto_polish', String(filters.auto_polish))
     if (filters.auto_confirm !== null && filters.auto_confirm !== undefined) params.append('auto_confirm', String(filters.auto_confirm))
     if (filters.has_password !== null && filters.has_password !== undefined) params.append('has_password', String(filters.has_password))
+    // 禁用原因：模糊搜索关键词，去除前后空白后再判断是否传参，避免发送空字符串
+    if (filters.disable_reason && filters.disable_reason.trim()) {
+      params.append('disable_reason', filters.disable_reason.trim())
+    }
+    // 账号ID：模糊搜索关键词，去除前后空白后再判断是否传参，避免发送空字符串
+    if (filters.account_id && filters.account_id.trim()) {
+      params.append('account_id', filters.account_id.trim())
+    }
   }
   
   const result = await get<{
@@ -115,6 +131,14 @@ export const getAccountDetailsPaginated = async (
       auto_polish: item.auto_polish || false,
       confirm_before_send: item.confirm_before_send || false,
       auto_red_flower: item.auto_red_flower || false,
+      delivery_disabled: item.delivery_disabled || false,
+      delivery_disabled_reason: item.delivery_disabled_reason || '',
+      auto_close_order: item.auto_close_order || false,
+      delivery_only_card_after_close: item.delivery_only_card_after_close || false,
+      // 后端返回可能为 undefined（旧数据），默认空数组表示未配置排除商品
+      delivery_disabled_excluded_item_ids: Array.isArray(item.delivery_disabled_excluded_item_ids)
+        ? item.delivery_disabled_excluded_item_ids
+        : [],
       note: item.remark,
       pause_duration: item.pause_duration,
       message_expire_time: item.message_expire_time,
@@ -176,6 +200,11 @@ export const clearTokenCacheBatch = (accountIds: string[]): Promise<ApiResponse<
   return put(`${COOKIE_PREFIX}/clear-token-cache/batch`, { account_ids: accountIds })
 }
 
+// 批量账号续期（续期长登录token）
+export const renewAccountLoginBatch = (accountIds: string[]): Promise<ApiResponse> => {
+  return post(`${COOKIE_PREFIX}/renew-login`, accountIds)
+}
+
 // 更新账号备注
 export const updateAccountRemark = (id: string, remark: string): Promise<ApiResponse> => {
   return put(`${COOKIE_PREFIX}/${id}/remark`, { remark })
@@ -216,9 +245,54 @@ export const updateAccountConfirmBeforeSend = (id: string, confirmBeforeSend: bo
   return put(`${COOKIE_PREFIX}/${id}/confirm-before-send`, { confirm_before_send: confirmBeforeSend })
 }
 
+
 // 更新自动求小红花开关
 export const updateAccountAutoRedFlower = (id: string, autoRedFlower: boolean): Promise<ApiResponse> => {
   return put(`${COOKIE_PREFIX}/${id}/auto-red-flower`, { auto_red_flower: autoRedFlower })
+}
+
+// ==================== 禁止发货规则 ====================
+
+// 禁止发货规则项类型
+export interface DeliveryBlockRuleItem {
+  rule_code: string
+  rule_name: string
+  rule_description: string
+  enabled: boolean
+  priority: number
+  block_reason: string
+  auto_close_order: boolean
+  only_card_after_close: boolean
+  excluded_item_ids: string[]
+  config: Record<string, any>
+  default_config: Record<string, any>
+}
+
+// 获取账号的禁止发货规则列表
+export const getDeliveryBlockRules = (id: string): Promise<ApiResponse<DeliveryBlockRuleItem[]>> => {
+  return get(`${COOKIE_PREFIX}/${id}/delivery-block-rules`)
+}
+
+// 批量更新账号的禁止发货规则配置
+export const updateDeliveryBlockRules = (
+  id: string,
+  rules: Array<{
+    rule_code: string
+    enabled: boolean
+    priority: number
+    block_reason: string | null
+    auto_close_order: boolean
+    only_card_after_close: boolean
+    excluded_item_ids: string[]
+    config: Record<string, any> | null
+  }>,
+): Promise<ApiResponse> => {
+  return put(`${COOKIE_PREFIX}/${id}/delivery-block-rules`, { rules })
+}
+
+// 获取所有可用的禁止发货规则类型
+export const getAvailableDeliveryBlockRules = (): Promise<ApiResponse> => {
+  return get(`${COOKIE_PREFIX}/delivery-block-rules/available`)
 }
 
 // 更新账号登录信息（用户名、密码、是否显示浏览器）
@@ -559,4 +633,58 @@ export const getOrderAmountTrend = async (): Promise<OrderTrendItem[]> => {
     throw new Error(response.message || '获取订单金额趋势失败')
   }
   return response.data.trend
+}
+
+// 导出账号数据为Excel
+export const exportAccountsExcel = async (params: {
+  account_ids?: string[]
+  status?: string | null
+  account_id?: string | null
+  has_password?: boolean | null
+}): Promise<Blob> => {
+  const token = localStorage.getItem('auth_token')
+  const response = await fetch(`${COOKIE_PREFIX}/export`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      account_ids: params.account_ids || null,
+      status: params.status || null,
+      account_id: params.account_id || null,
+      has_password: params.has_password ?? null,
+    }),
+  })
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(errorText || '导出失败')
+  }
+  return response.blob()
+}
+
+// 导入账号数据（从Excel文件）
+export const importAccountsExcel = async (file: File, enableAll: boolean): Promise<{
+  success: boolean
+  message: string
+  data?: {
+    inserted: number
+    updated: number
+    started: number
+    failed: number
+    errors: string[]
+  }
+}> => {
+  const token = localStorage.getItem('auth_token')
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('enable_all', String(enableAll))
+  const response = await fetch(`${COOKIE_PREFIX}/import`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+    },
+    body: formData,
+  })
+  return response.json()
 }

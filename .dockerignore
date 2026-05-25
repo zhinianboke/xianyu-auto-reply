@@ -1,2 +1,18 @@
-# 排除 Windows 平台加密产物（.pyd），避免被打进 Linux Docker 镜像
+# 排除不需要进入 Docker 镜像的文件
 *.pyd
+*.pyc
+__pycache__
+.git
+.gitignore
+.gitattributes
+.claude
+.kiro
+.vscode
+browser_data
+*.log
+*.md
+deploy.sh
+update.sh
+.env
+.env.*
+docker-compose.yml
