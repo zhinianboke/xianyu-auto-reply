@@ -426,6 +426,17 @@ curl -fsSL https://xy-update.zhinianboke.com/deploy.sh | sed 's/\r$//' | bash
 - 请勿用于商业用途
 - 使用本系统可能存在账号风险，请谨慎使用
 
+## 🧸 特别鸣谢
+
+本项目参考了以下开源项目：
+
+- **[XianYuApis](https://github.com/cv-cat/XianYuApis)** - 提供了闲鱼API接口的技术参考
+- **[XianyuAutoAgent](https://github.com/shaxiu/XianyuAutoAgent)** - 提供了自动化处理的实现思路
+- **[myfish](https://github.com/Kaguya233qwq/myfish)** - 提供了扫码登录的实现思路
+
+
+感谢这些优秀的开源项目为本项目的开发提供了宝贵的参考和启发！
+
 
 ## Star History
 
