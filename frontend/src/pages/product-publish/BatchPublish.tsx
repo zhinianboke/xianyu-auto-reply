@@ -39,6 +39,7 @@ export function BatchPublish() {
   const [submitting, setSubmitting] = useState(false)
   const [progress, setProgress] = useState<BatchProgress | null>(null)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [materialSearch, setMaterialSearch] = useState('')
   const accountNameMap = new Map(accounts.map((account: any) => [account.id, account.note || account.id]))
 
   const getSyncStatusLabel = (status: BatchAccountStatus['sync_status']) => {
@@ -105,7 +106,7 @@ export function BatchPublish() {
     getAccountDetails()
       .then(list => { setAccounts(list); setLoadingAccounts(false) })
       .catch(() => { setLoadingAccounts(false) })
-    getMaterials(1, 100)
+    getMaterials(1, 1000)
       .then(res => { if (res.success) setMaterials(res.data.list); setLoadingMaterials(false) })
       .catch(() => { setLoadingMaterials(false) })
 
@@ -186,7 +187,19 @@ export function BatchPublish() {
   const toggleAccount = (id: string) => setSelectedAccounts(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
   const toggleMaterial = (id: number) => setSelectedMaterials(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
   const toggleAllAccounts = () => selectedAccounts.size === accounts.length ? setSelectedAccounts(new Set()) : setSelectedAccounts(new Set(accounts.map((a: any) => a.id)))
-  const toggleAllMaterials = () => selectedMaterials.size === materials.length ? setSelectedMaterials(new Set()) : setSelectedMaterials(new Set(materials.map(m => m.id)))
+  const toggleAllMaterials = () => {
+    const ids = filteredMaterials.map(m => m.id)
+    const allSelected = ids.length > 0 && ids.every(id => selectedMaterials.has(id))
+    if (allSelected) {
+      setSelectedMaterials(prev => { const n = new Set(prev); ids.forEach(id => n.delete(id)); return n })
+    } else {
+      setSelectedMaterials(prev => { const n = new Set(prev); ids.forEach(id => n.add(id)); return n })
+    }
+  }
+
+  const filteredMaterials = materialSearch.trim()
+    ? materials.filter(m => m.title.toLowerCase().includes(materialSearch.trim().toLowerCase()))
+    : materials
 
   const total = selectedAccounts.size * selectedMaterials.size
   const isDisabled = submitting || total === 0 || (progress !== null && !progress.finished)
@@ -250,17 +263,23 @@ export function BatchPublish() {
           <div className="vben-card-header">
             <h2 className="vben-card-title">选择素材</h2>
             <button className="text-sm text-blue-500 hover:underline" onClick={toggleAllMaterials}>
-              {selectedMaterials.size === materials.length && materials.length > 0 ? '取消全选' : '全选'}
+              {selectedMaterials.size === filteredMaterials.length && filteredMaterials.length > 0 ? '取消全选' : '全选'}
             </button>
           </div>
           <div className="vben-card-body">
+            <input
+              className="input-ios w-full mb-2"
+              placeholder="搜索素材标题..."
+              value={materialSearch}
+              onChange={e => setMaterialSearch(e.target.value)}
+            />
             {loadingMaterials ? (
               <div className="flex justify-center py-8"><Loader2 className="w-8 h-8 animate-spin text-blue-500" /></div>
-            ) : materials.length === 0 ? (
-              <p className="text-center text-slate-400 py-8">素材库为空，请先在「素材库」页面添加素材</p>
+            ) : filteredMaterials.length === 0 ? (
+              <p className="text-center text-slate-400 py-8">{materials.length === 0 ? '素材库为空，请先在「素材库」页面添加素材' : '没有匹配的素材'}</p>
             ) : (
               <div className="space-y-1 max-h-72 overflow-y-auto">
-                {materials.map(m => {
+                {filteredMaterials.map(m => {
                   const checked = selectedMaterials.has(m.id)
                   return (
                     <label key={m.id} className={`flex items-center gap-3 p-2.5 rounded-lg cursor-pointer transition-colors ${checked ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-700'}`}>

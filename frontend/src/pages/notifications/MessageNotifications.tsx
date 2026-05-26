@@ -141,7 +141,6 @@ export function MessageNotifications() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="page-title">消息通知</h1>
-          <p className="page-description">配置关键词触发的消息通知</p>
         </div>
         <div className="flex gap-3">
           <button onClick={openAddModal} className="btn-ios-primary ">

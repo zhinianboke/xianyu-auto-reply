@@ -4,17 +4,22 @@
  * 功能：
  * 1. 分页展示所有商品素材
  * 2. 新建/编辑/删除素材
- * 3. 素材用于单品发布和批量发布
+ * 3. 筛选（标题、分类、成色）
+ * 4. 勾选批量删除
+ * 5. 素材用于单品发布和批量发布
  */
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Plus, Pencil, Trash2, RefreshCw, Image, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, Pencil, Trash2, RefreshCw, Image, ChevronLeft, ChevronRight, Search, X } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
-import { getMaterials, deleteMaterial, type ProductMaterial } from '@/api/productPublish'
+import { getMaterials, deleteMaterial, batchDeleteMaterials, type ProductMaterial } from '@/api/productPublish'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { MaterialFormModal } from './MaterialFormModal'
+
+const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '其他']
+const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
 
 export function ProductMaterials() {
   const { addToast } = useUIStore()
@@ -32,15 +37,32 @@ export function ProductMaterials() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; item: ProductMaterial | null }>({ open: false, item: null })
   const [deleting, setDeleting] = useState(false)
 
+  // 筛选状态
+  const [filterTitle, setFilterTitle] = useState('')
+  const [filterCategory, setFilterCategory] = useState('')
+  const [filterCondition, setFilterCondition] = useState('')
+
+  // 批量选择状态
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false)
+  const [batchDeleting, setBatchDeleting] = useState(false)
+
   /** 加载素材列表 */
   const load = async (p = page, size = pageSize) => {
     setTableLoading(true)
     try {
-      const res = await getMaterials(p, size)
+      const filters: { title?: string; category?: string; condition?: string } = {}
+      if (filterTitle.trim()) filters.title = filterTitle.trim()
+      if (filterCategory) filters.category = filterCategory
+      if (filterCondition) filters.condition = filterCondition
+      const res = await getMaterials(p, size, Object.keys(filters).length > 0 ? filters : undefined)
       if (res.success) {
         setMaterials(res.data.list)
         setTotal(res.data.total)
         setTotalPages(res.data.total_pages)
+        // 清除不在当前页的选中项
+        const currentIds = new Set(res.data.list.map(m => m.id))
+        setSelectedIds(prev => prev.filter(id => currentIds.has(id)))
       } else {
         addToast({ type: 'error', message: res.message || '加载失败' })
       }
@@ -54,7 +76,38 @@ export function ProductMaterials() {
 
   useEffect(() => { load(page, pageSize) }, [page, pageSize])
 
-  /** 确认删除 */
+  /** 执行筛选 */
+  const handleFilter = () => {
+    setPage(1)
+    setSelectedIds([])
+    load(1, pageSize)
+  }
+
+  /** 重置筛选 */
+  const handleResetFilter = () => {
+    setFilterTitle('')
+    setFilterCategory('')
+    setFilterCondition('')
+    setPage(1)
+    setSelectedIds([])
+    // 直接用空筛选加载
+    setTableLoading(true)
+    getMaterials(1, pageSize).then(res => {
+      if (res.success) {
+        setMaterials(res.data.list)
+        setTotal(res.data.total)
+        setTotalPages(res.data.total_pages)
+        setSelectedIds([])
+      }
+    }).catch(() => {
+      addToast({ type: 'error', message: '加载失败' })
+    }).finally(() => {
+      setLoading(false)
+      setTableLoading(false)
+    })
+  }
+
+  /** 确认删除单条 */
   const handleConfirmDelete = async () => {
     if (!deleteConfirm.item) return
     setDeleting(true)
@@ -63,6 +116,7 @@ export function ProductMaterials() {
       if (res.success) {
         addToast({ type: 'success', message: '删除成功' })
         setDeleteConfirm({ open: false, item: null })
+        setSelectedIds(prev => prev.filter(id => id !== deleteConfirm.item!.id))
         load(page, pageSize)
       } else {
         addToast({ type: 'error', message: res.message || '删除失败' })
@@ -73,6 +127,48 @@ export function ProductMaterials() {
       setDeleting(false)
     }
   }
+
+  /** 批量删除 */
+  const handleBatchDelete = async () => {
+    if (selectedIds.length === 0) return
+    setBatchDeleting(true)
+    try {
+      const res = await batchDeleteMaterials(selectedIds)
+      if (res.success) {
+        addToast({ type: 'success', message: res.message || `成功删除 ${selectedIds.length} 条素材` })
+        setBatchDeleteConfirm(false)
+        setSelectedIds([])
+        load(page, pageSize)
+      } else {
+        addToast({ type: 'error', message: res.message || '批量删除失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '批量删除失败，请重试' })
+    } finally {
+      setBatchDeleting(false)
+    }
+  }
+
+  /** 全选/取消全选当前页 */
+  const handleSelectAll = () => {
+    if (materials.length === 0) return
+    const currentPageIds = materials.map(m => m.id)
+    const allSelected = currentPageIds.every(id => selectedIds.includes(id))
+    if (allSelected) {
+      setSelectedIds(prev => prev.filter(id => !currentPageIds.includes(id)))
+    } else {
+      setSelectedIds(prev => [...new Set([...prev, ...currentPageIds])])
+    }
+  }
+
+  /** 切换单条选中 */
+  const toggleSelect = (id: number) => {
+    setSelectedIds(prev =>
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    )
+  }
+
+  const allCurrentSelected = materials.length > 0 && materials.every(m => selectedIds.includes(m.id))
 
   const handlePageSizeChange = (size: number) => { setPageSize(size); setPage(1) }
 
@@ -87,6 +183,11 @@ export function ProductMaterials() {
           <p className="page-description">管理商品素材，用于单品发布和批量发布</p>
         </div>
         <div className="flex gap-2">
+          {selectedIds.length > 0 && (
+            <button className="btn-ios-danger" onClick={() => setBatchDeleteConfirm(true)}>
+              <Trash2 className="w-4 h-4" />批量删除 ({selectedIds.length})
+            </button>
+          )}
           <button className="btn-ios-secondary" onClick={() => load(page, pageSize)} disabled={tableLoading}>
             <RefreshCw className={`w-4 h-4 ${tableLoading ? 'animate-spin' : ''}`} />刷新
           </button>
@@ -96,11 +197,52 @@ export function ProductMaterials() {
         </div>
       </div>
 
+      {/* 筛选栏 */}
+      <div className="vben-card">
+        <div className="vben-card-body py-3 px-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <input
+                className="input-ios w-48"
+                placeholder="搜索标题..."
+                value={filterTitle}
+                onChange={e => setFilterTitle(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleFilter()}
+              />
+            </div>
+            <select
+              className="input-ios w-32"
+              value={filterCategory}
+              onChange={e => { setFilterCategory(e.target.value); }}
+            >
+              <option value="">全部分类</option>
+              {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select
+              className="input-ios w-28"
+              value={filterCondition}
+              onChange={e => { setFilterCondition(e.target.value); }}
+            >
+              <option value="">全部成色</option>
+              {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <button className="btn-ios-primary btn-sm" onClick={handleFilter}>
+              <Search className="w-3.5 h-3.5" />筛选
+            </button>
+            {(filterTitle || filterCategory || filterCondition) && (
+              <button className="btn-ios-secondary btn-sm" onClick={handleResetFilter}>
+                <X className="w-3.5 h-3.5" />重置
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* 表格卡片 */}
       <motion.div
         initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
         className="vben-card flex flex-col"
-        style={{ height: 'calc(100vh - 210px)', minHeight: '400px' }}
+        style={{ height: 'calc(100vh - 280px)', minHeight: '400px' }}
       >
         <div className="vben-card-header">
           <h2 className="vben-card-title"><Image className="w-4 h-4" />素材列表</h2>
@@ -110,6 +252,14 @@ export function ProductMaterials() {
           <table className="table-ios">
             <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
               <tr>
+                <th className="w-10">
+                  <input
+                    type="checkbox"
+                    checked={allCurrentSelected}
+                    onChange={handleSelectAll}
+                    className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                </th>
                 {isAdmin && <th>所属用户</th>}
                 <th>标题</th>
                 <th>价格</th>
@@ -122,18 +272,26 @@ export function ProductMaterials() {
             </thead>
             <tbody>
               {tableLoading ? (
-                <tr><td colSpan={isAdmin ? 8 : 7} className="text-center py-12">
+                <tr><td colSpan={isAdmin ? 9 : 8} className="text-center py-12">
                   <RefreshCw className="w-6 h-6 animate-spin text-blue-500 mx-auto" />
                 </td></tr>
               ) : materials.length === 0 ? (
-                <tr><td colSpan={isAdmin ? 8 : 7} className="text-center py-12 text-slate-400">
+                <tr><td colSpan={isAdmin ? 9 : 8} className="text-center py-12 text-slate-400">
                   <div className="flex flex-col items-center gap-2">
                     <Image className="w-12 h-12 text-slate-300" />
                     <p>暂无素材，点击「新建素材」添加</p>
                   </div>
                 </td></tr>
               ) : materials.map(m => (
-                <tr key={m.id}>
+                <tr key={m.id} className={selectedIds.includes(m.id) ? 'bg-blue-50 dark:bg-blue-900/10' : ''}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(m.id)}
+                      onChange={() => toggleSelect(m.id)}
+                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </td>
                   {isAdmin && (
                     <td className="text-sm text-slate-600 dark:text-slate-400 whitespace-nowrap">
                       {m.username || '-'}
@@ -220,6 +378,18 @@ export function ProductMaterials() {
         loading={deleting}
         onConfirm={handleConfirmDelete}
         onCancel={() => setDeleteConfirm({ open: false, item: null })}
+      />
+
+      {/* 批量删除确认弹窗 */}
+      <ConfirmModal
+        isOpen={batchDeleteConfirm}
+        title="确认批量删除"
+        message={`确认删除选中的 ${selectedIds.length} 条素材？此操作不可撤销。`}
+        confirmText={`删除 ${selectedIds.length} 条`}
+        type="danger"
+        loading={batchDeleting}
+        onConfirm={handleBatchDelete}
+        onCancel={() => setBatchDeleteConfirm(false)}
       />
     </div>
   )

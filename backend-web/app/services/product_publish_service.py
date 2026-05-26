@@ -47,19 +47,29 @@ class ProductMaterialService:
         return material
 
     async def list_materials(
-        self, user_id: int = None, page: int = 1, page_size: int = 20
+        self, user_id: int = None, page: int = 1, page_size: int = 20,
+        title: str = None, category: str = None, condition: str = None,
     ) -> Dict[str, Any]:
         """分页查询素材列表
         
         Args:
             user_id: 用户ID，为None时查询全部（管理员场景）
+            title: 标题模糊搜索
+            category: 分类筛选
+            condition: 成色筛选
         """
         page = max(page, 1)
-        page_size = page_size if page_size in (10, 20, 50, 100) else 20
+        page_size = page_size if page_size in (10, 20, 50, 100, 500, 1000) else 20
 
         base_cond = []
         if user_id is not None:
             base_cond.append(ProductMaterial.user_id == user_id)
+        if title:
+            base_cond.append(ProductMaterial.title.ilike(f"%{title}%"))
+        if category:
+            base_cond.append(ProductMaterial.category == category)
+        if condition:
+            base_cond.append(ProductMaterial.condition == condition)
 
         count_stmt = (
             select(func.count())
@@ -141,6 +151,24 @@ class ProductMaterialService:
         await self.session.delete(material)
         await self.session.commit()
         return True
+
+    async def batch_delete(self, material_ids: List[int], user_id: int = None) -> int:
+        """批量删除素材，返回实际删除数量
+        
+        Args:
+            material_ids: 素材ID列表
+            user_id: 用户ID，为None时管理员可操作任意素材
+        """
+        if not material_ids:
+            return 0
+        from sqlalchemy import delete as sa_delete
+        conds = [ProductMaterial.id.in_(material_ids)]
+        if user_id is not None:
+            conds.append(ProductMaterial.user_id == user_id)
+        stmt = sa_delete(ProductMaterial).where(*conds)
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        return result.rowcount
 
 
 # ==================== 工具函数 ====================

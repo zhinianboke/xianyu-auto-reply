@@ -39,7 +39,7 @@ function MaterialPickerModal({ onSelect, onClose }: { onSelect: (m: ProductMater
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    getMaterials(1, 50)
+    getMaterials(1, 1000)
       .then(res => { if (res.success) setMaterials(res.data.list); setLoading(false) })
       .catch(() => { setLoading(false) })
   }, [])

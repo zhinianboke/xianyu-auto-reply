@@ -149,12 +149,16 @@ export const createMaterial = (params: MaterialCreateParams): Promise<ApiRespons
 /** 分页查询素材列表 */
 export const getMaterials = (
   page = 1,
-  pageSize = 20
+  pageSize = 20,
+  filters?: { title?: string; category?: string; condition?: string }
 ): Promise<MaterialListResponse> => {
   const params = new URLSearchParams({
     page: String(page),
     page_size: String(pageSize),
   })
+  if (filters?.title) params.append('title', filters.title)
+  if (filters?.category) params.append('category', filters.category)
+  if (filters?.condition) params.append('condition', filters.condition)
   return get(`${PREFIX}/materials?${params}`)
 }
 
@@ -171,6 +175,10 @@ export const updateMaterial = (
 /** 删除素材 */
 export const deleteMaterial = (id: number): Promise<ApiResponse> =>
   del(`${PREFIX}/materials/${id}`)
+
+/** 批量删除素材 */
+export const batchDeleteMaterials = (ids: number[]): Promise<ApiResponse> =>
+  post(`${PREFIX}/materials/batch-delete`, { ids })
 
 // ==================== 发布接口 ====================
 
