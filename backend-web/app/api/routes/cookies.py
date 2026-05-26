@@ -35,6 +35,7 @@ from common.schemas.account import (
     AccountRemarkUpdate,
     AccountScheduledRedeliveryUpdate,
     AccountScheduledRateUpdate,
+    AccountSendBeforeConfirmUpdate,
     AccountStatusUpdate,
     DeliveryBlockRulesUpdate,
 )
@@ -196,6 +197,7 @@ async def list_cookie_details(
                 scheduled_rate=bool(account.scheduled_rate),
                 auto_polish=bool(account.auto_polish),
                 confirm_before_send=bool(account.confirm_before_send),
+                send_before_confirm=bool(account.send_before_confirm),
                 auto_red_flower=bool(account.auto_red_flower),
                 delivery_disabled=bool(account.delivery_disabled),
                 delivery_disabled_reason=account.delivery_disabled_reason or "",
@@ -314,6 +316,7 @@ async def list_cookie_details_paginated(
             "scheduled_rate": bool(account.scheduled_rate),
             "auto_polish": bool(account.auto_polish),
             "confirm_before_send": bool(account.confirm_before_send),
+            "send_before_confirm": bool(account.send_before_confirm),
             "auto_red_flower": bool(account.auto_red_flower),
             "delivery_disabled": bool(account.delivery_disabled),
             "delivery_disabled_reason": account.delivery_disabled_reason or "",
@@ -744,6 +747,19 @@ async def update_account_confirm_before_send(
     account = await _get_account_or_404(current_user, account_id, account_service)
     await account_service.update_confirm_before_send(account, payload.confirm_before_send)
     return ApiResponse(success=True, message="发货成功再发卡券设置已更新")
+
+
+@router.put("/{account_id}/send-before-confirm", response_model=ApiResponse)
+async def update_account_send_before_confirm(
+    account_id: str,
+    payload: AccountSendBeforeConfirmUpdate,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+) -> ApiResponse:
+    """更新卡券发送成功再确认发货开关"""
+    account = await _get_account_or_404(current_user, account_id, account_service)
+    await account_service.update_send_before_confirm(account, payload.send_before_confirm)
+    return ApiResponse(success=True, message="卡券发送成功再确认发货设置已更新")
 
 
 @router.put("/{account_id}/auto-red-flower", response_model=ApiResponse)

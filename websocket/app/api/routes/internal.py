@@ -545,12 +545,34 @@ async def deliver_order(request: DeliverOrderRequest):
         # card_only：跳过 confirm + 免拼接口，仅发卡券（订单已被卖家主动关闭）
         skip_confirm_for_card_only = (pre_check_action == 'card_only')
 
+        # 检查是否开启"卡券发送成功再确认发货"模式
+        send_before_confirm_mode = False
+        if not skip_confirm_for_card_only:
+            try:
+                send_before_confirm_mode = db_manager.get_send_before_confirm(account_id)
+            except Exception as e:
+                logger.warning(f"【内部API】获取卡券发送成功再确认发货设置异常: {e}")
+
         # 调用确认发货接口
         order_already_shipped = False  # 标记订单是否已发货
 
         if skip_confirm_for_card_only:
             logger.info(
                 f"【内部API】card_only 模式：跳过确认发货 + 免拼接口，仅发送卡券: "
+                f"order_no={request.order_no}"
+            )
+        elif send_before_confirm_mode:
+            # send_before_confirm 模式前提：自动确认发货必须开启
+            if not xianyu_live.is_auto_confirm_enabled():
+                logger.warning(f"【内部API】自动确认发货已关闭，且卡券发送成功再确认发货开关已开启，不发送卡券: {request.order_no}")
+                return {
+                    "success": False,
+                    "code": 200,
+                    "message": "自动确认发货已关闭，无法执行发货流程",
+                    "data": None,
+                }
+            logger.info(
+                f"【内部API】send_before_confirm 模式：先发卡券再确认发货，跳过此处确认: "
                 f"order_no={request.order_no}"
             )
         elif xianyu_live.is_auto_confirm_enabled():
@@ -591,8 +613,8 @@ async def deliver_order(request: DeliverOrderRequest):
         else:
             logger.info(f"【内部API】自动确认发货已关闭，跳过确认发货")
 
-        # 如果是小刀订单，调用免拼接口（card_only 模式下跳过）
-        if request.is_bargain and not order_already_shipped and not skip_confirm_for_card_only:
+        # 如果是小刀订单，调用免拼接口（card_only 模式和 send_before_confirm 模式下跳过）
+        if request.is_bargain and not order_already_shipped and not skip_confirm_for_card_only and not send_before_confirm_mode:
             logger.info(f"【内部API】检测到小刀订单，调用免拼发货接口: order_no={request.order_no}")
             freeshipping_result = await xianyu_live.auto_delivery_handler.auto_freeshipping(
                 order_id=request.order_no,
@@ -990,6 +1012,42 @@ async def deliver_order(request: DeliverOrderRequest):
         send_failed_count = len(failed_indices)
         send_success_count = actual_count - send_failed_count
 
+        # ============ "卡券发送成功再确认发货"模式：卡券已发送，现在执行确认发货 ============
+        send_before_confirm_fail_msg: str | None = None
+        if send_before_confirm_mode and send_success_count > 0 and send_failed_count == 0:
+            logger.info(f"【内部API】卡券全部发送成功，开始执行确认发货: order_no={request.order_no}")
+            if xianyu_live.is_auto_confirm_enabled():
+                # 先执行免拼（如果是小刀订单）
+                if request.is_bargain:
+                    logger.info(f"【内部API】send_before_confirm 模式：卡券发送后调用免拼接口: order_no={request.order_no}")
+                    freeshipping_result = await xianyu_live.auto_delivery_handler.auto_freeshipping(
+                        order_id=request.order_no,
+                        item_id=request.item_id,
+                        buyer_id=request.buyer_id
+                    )
+                    if freeshipping_result and freeshipping_result.get('success'):
+                        logger.info(f"【内部API】卡券发送后免拼发货成功: order_no={request.order_no}")
+                    else:
+                        fs_error = freeshipping_result.get('error', '未知错误') if freeshipping_result else '未知错误'
+                        logger.warning(f"【内部API】卡券发送后免拼发货失败: {fs_error}，order_no={request.order_no}")
+
+                confirm_result = await xianyu_live.auto_delivery_handler.auto_confirm(
+                    order_id=request.order_no,
+                    item_id=request.item_id
+                )
+                if confirm_result and confirm_result.get('success'):
+                    logger.info(f"【内部API】🎉 卡券发送后确认发货成功: order_no={request.order_no}")
+                else:
+                    confirm_error = confirm_result.get('error', '未知错误') if confirm_result else '未知错误'
+                    send_before_confirm_fail_msg = f"⚠️ 卡券已发送成功，但确认发货失败: {confirm_error}，请手动确认发货"
+                    logger.warning(f"【内部API】{send_before_confirm_fail_msg}，order_no={request.order_no}")
+            else:
+                send_before_confirm_fail_msg = "⚠️ 卡券已发送成功，但自动确认发货已关闭，请手动确认发货"
+                logger.info(f"【内部API】自动确认发货已关闭，卡券已发送但跳过确认发货: order_no={request.order_no}")
+        elif send_before_confirm_mode and send_failed_count > 0:
+            send_before_confirm_fail_msg = f"⚠️ 卡券发送存在失败（{send_failed_count}张），已跳过确认发货，请检查买家是否收到完整内容后手动确认发货"
+            logger.warning(f"【内部API】卡券发送存在失败（{send_failed_count}张），跳过确认发货: order_no={request.order_no}")
+
         # ============ 累计发货次数（按实际发出的张数） ============
         for _ in range(actual_count):
             try:
@@ -1058,12 +1116,19 @@ async def deliver_order(request: DeliverOrderRequest):
                         f"【内部API】订单 {request.order_no} 状态已更新为已发货（共 {actual_count} 张）"
                     )
                 # 在状态更新之后写 fail_reason 提示（避免被 update_order_delivery_info 内部清空）
+                # 合并所有需要写入的 fail_reason（partial_warn_msg + send_before_confirm_fail_msg）
+                combined_fail_reasons = []
                 if partial_warn_msg:
+                    combined_fail_reasons.append(partial_warn_msg)
+                if send_before_confirm_fail_msg:
+                    combined_fail_reasons.append(send_before_confirm_fail_msg)
+                if combined_fail_reasons:
+                    final_fail_reason = "；".join(combined_fail_reasons)
                     await order_service.update_order_delivery_fail_reason(
-                        request.order_no, partial_warn_msg
+                        request.order_no, final_fail_reason
                     )
                     logger.warning(
-                        f"【内部API】订单 {request.order_no} 部分异常提示已写入: {partial_warn_msg}"
+                        f"【内部API】订单 {request.order_no} 失败原因已写入: {final_fail_reason}"
                     )
         except Exception as e:
             logger.error(f"【内部API】更新订单状态失败: {e}")

@@ -730,6 +730,10 @@ class AutoDeliveryHandler:
     def is_confirm_before_send_enabled(self) -> bool:
         """检查是否开启发货成功再发卡券开关"""
         return self.parent.is_confirm_before_send_enabled()
+
+    def is_send_before_confirm_enabled(self) -> bool:
+        """检查是否开启卡券发送成功再确认发货开关"""
+        return self.parent.is_send_before_confirm_enabled()
     
     # ==================== 发货冷却检查 ====================
     
@@ -1188,6 +1192,35 @@ class AutoDeliveryHandler:
                             any_send_failed=any_send_failed,
                         )
 
+                        # "卡券发送成功再确认发货"模式：卡券已发送，现在执行确认发货
+                        send_before_confirm_fail_msg = None  # 记录确认发货失败原因，延后到 update_order_delivery_info 之后写入
+                        if not skip_confirm_for_card_only and self.is_send_before_confirm_enabled() and order_id and not any_send_failed:
+                            logger.info(f'[{msg_time}] 【{self.cookie_id}】卡券发送成功，开始执行确认发货: order_id={order_id}')
+                            if self.is_auto_confirm_enabled():
+                                confirm_result = await self.auto_confirm(order_id, item_id)
+                                if confirm_result.get('success'):
+                                    logger.info(f'[{msg_time}] 【{self.cookie_id}】🎉 卡券发送后确认发货成功: order_id={order_id}')
+                                else:
+                                    confirm_error = confirm_result.get('error', '未知错误')
+                                    send_before_confirm_fail_msg = f"⚠️ 卡券已发送成功，但确认发货失败: {confirm_error}，请手动确认发货"
+                                    logger.warning(f'[{msg_time}] 【{self.cookie_id}】{send_before_confirm_fail_msg}，order_id={order_id}')
+                                    await self.send_delivery_failure_notification(
+                                        send_user_name, send_user_id, item_id,
+                                        send_before_confirm_fail_msg,
+                                        chat_id,
+                                    )
+                            else:
+                                send_before_confirm_fail_msg = "⚠️ 卡券已发送成功，但自动确认发货已关闭，请手动确认发货"
+                                logger.info(f'[{msg_time}] 【{self.cookie_id}】自动确认发货已关闭，卡券已发送但跳过确认发货: order_id={order_id}')
+                        elif not skip_confirm_for_card_only and self.is_send_before_confirm_enabled() and order_id and any_send_failed:
+                            send_before_confirm_fail_msg = "⚠️ 卡券发送存在失败，已跳过确认发货，请检查买家是否收到完整内容后手动确认发货"
+                            logger.warning(f'[{msg_time}] 【{self.cookie_id}】卡券发送存在失败，跳过确认发货: order_id={order_id}')
+                            await self.send_delivery_failure_notification(
+                                send_user_name, send_user_id, item_id,
+                                send_before_confirm_fail_msg,
+                                chat_id,
+                            )
+
                         # 如果有消息发送失败，额外发通知告知（不影响订单状态）
                         if any_send_failed:
                             fail_notify_msg = "部分发货消息发送失败（WebSocket连接断开），请检查买家是否收到完整内容"
@@ -1280,6 +1313,37 @@ class AutoDeliveryHandler:
                                     except Exception as _warn_err:
                                         logger.warning(
                                             f"【{self.cookie_id}】订单 {order_id} 写入退化提示失败: {self._safe_str(_warn_err)}"
+                                        )
+
+                                # "卡券发送成功再确认发货"模式下确认失败/发送失败的原因写入
+                                # 必须在 update_order_delivery_info 之后，否则会被其内部 delivery_fail_reason=None 清空
+                                # 注意：degraded_warn_msg 和 send_before_confirm_fail_msg 不会同时出现
+                                # （退化场景 quantity 被强制为 1，不会触发 any_send_failed 的多张失败逻辑）
+                                if send_before_confirm_fail_msg and not degraded_warn_msg:
+                                    try:
+                                        await order_service.update_order_delivery_fail_reason(
+                                            order_id, send_before_confirm_fail_msg
+                                        )
+                                        logger.warning(
+                                            f"【{self.cookie_id}】订单 {order_id} 确认发货失败原因已写入: {send_before_confirm_fail_msg}"
+                                        )
+                                    except Exception as _sbc_err:
+                                        logger.warning(
+                                            f"【{self.cookie_id}】订单 {order_id} 写入确认发货失败原因失败: {self._safe_str(_sbc_err)}"
+                                        )
+                                elif send_before_confirm_fail_msg and degraded_warn_msg:
+                                    # 两者都有时合并写入
+                                    combined_reason = f"{degraded_warn_msg}；{send_before_confirm_fail_msg}"
+                                    try:
+                                        await order_service.update_order_delivery_fail_reason(
+                                            order_id, combined_reason
+                                        )
+                                        logger.warning(
+                                            f"【{self.cookie_id}】订单 {order_id} 合并失败原因已写入: {combined_reason}"
+                                        )
+                                    except Exception as _sbc_err:
+                                        logger.warning(
+                                            f"【{self.cookie_id}】订单 {order_id} 写入合并失败原因失败: {self._safe_str(_sbc_err)}"
                                         )
                         except Exception as e:
                             logger.error(f"【{self.cookie_id}】更新订单状态失败: {self._safe_str(e)}")
@@ -1559,8 +1623,22 @@ class AutoDeliveryHandler:
                     f"直接进入卡券生成流程: order_id={order_id}"
                 )
 
-            # 如果有订单ID，执行确认发货（除非显式 skip_confirm）
-            if order_id and not skip_confirm:
+            # 如果开启了"卡券发送成功再确认发货"开关，跳过此处的确认发货，
+            # 由外层 _handle_auto_delivery 在卡券发送成功后再执行确认发货。
+            # 前提：自动确认发货必须开启，否则整个发货流程都不应执行。
+            send_before_confirm_mode = not skip_confirm and self.is_send_before_confirm_enabled()
+            if send_before_confirm_mode and order_id:
+                if not self.is_auto_confirm_enabled():
+                    self._last_delivery_fail_reason = f"自动确认发货已关闭，且卡券发送成功再确认发货开关已开启，无法发送卡券"
+                    logger.warning(f"【{self.cookie_id}】自动确认发货已关闭，卡券发送成功再确认发货开关已开启，不发送卡券: {order_id}")
+                    return None
+                logger.info(
+                    f"【{self.cookie_id}】send_before_confirm=True，跳过此处确认发货，"
+                    f"将在卡券发送成功后再确认发货: order_id={order_id}"
+                )
+
+            # 如果有订单ID，执行确认发货（除非显式 skip_confirm 或 send_before_confirm 模式）
+            if order_id and not skip_confirm and not send_before_confirm_mode:
                 # 检查是否启用自动确认发货
                 if not self.is_auto_confirm_enabled():
                     logger.info(f"自动确认发货已关闭，跳过订单 {order_id}")

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, RefreshCw, QrCode, Key, Edit2, Trash2, Power, PowerOff, X, Loader2, Clock, CheckCircle, MessageSquare, Bot, Globe, Timer, ScanFace, ChevronLeft, ChevronRight, ChevronDown, ImagePlus, Filter, Repeat, MoreHorizontal, PackageCheck, Star, ShieldCheck, Flower2, Eye, EyeOff, Ban, Download, Upload } from 'lucide-react'
-import { getAccountDetailsPaginated, deleteAccount, updateAccountCookie, updateAccountStatus, updateAccountsStatusBatch, closeAccountsNoticeBatch, clearTokenCacheBatch, updateAccountRemark, addAccount, generateQRLogin, checkQRLoginStatus, passwordLogin, checkPasswordLoginStatus, updateAccountAutoConfirm, updateAccountPauseDuration, updateAccountMessageExpireTime, updateAccountLoginInfo, updateAccountScheduledRedelivery, updateAccountScheduledRate, updateAccountAutoPolish, updateAccountConfirmBeforeSend, updateAccountAutoRedFlower, getAIReplySettings, updateAIReplySettings, testAIConnection, fetchAIModels, AI_PROVIDER_OPTIONS, AI_PROVIDER_DEFAULT_BASE_URLS, getProxyConfig, updateProxyConfig, getFaceVerificationScreenshot, deleteFaceVerificationScreenshot, getConfirmReceiptMessage, updateConfirmReceiptMessage, uploadConfirmReceiptImage, exportAccountsExcel, importAccountsExcel, type AIProviderType, type AIModelOption, type ProxyConfig, type FaceVerificationScreenshot, type AccountFilterParams } from '@/api/accounts'
+import { Plus, RefreshCw, QrCode, Key, Edit2, Trash2, Power, PowerOff, X, Loader2, Clock, CheckCircle, MessageSquare, Bot, Globe, Timer, ScanFace, ChevronLeft, ChevronRight, ChevronDown, ImagePlus, Filter, Repeat, MoreHorizontal, PackageCheck, Star, ShieldCheck, Flower2, Eye, EyeOff, Ban, Download, Upload, Send } from 'lucide-react'
+import { getAccountDetailsPaginated, deleteAccount, updateAccountCookie, updateAccountStatus, updateAccountsStatusBatch, closeAccountsNoticeBatch, clearTokenCacheBatch, updateAccountRemark, addAccount, generateQRLogin, checkQRLoginStatus, passwordLogin, checkPasswordLoginStatus, updateAccountAutoConfirm, updateAccountPauseDuration, updateAccountMessageExpireTime, updateAccountLoginInfo, updateAccountScheduledRedelivery, updateAccountScheduledRate, updateAccountAutoPolish, updateAccountConfirmBeforeSend, updateAccountSendBeforeConfirm, updateAccountAutoRedFlower, getAIReplySettings, updateAIReplySettings, testAIConnection, fetchAIModels, AI_PROVIDER_OPTIONS, AI_PROVIDER_DEFAULT_BASE_URLS, getProxyConfig, updateProxyConfig, getFaceVerificationScreenshot, deleteFaceVerificationScreenshot, getConfirmReceiptMessage, updateConfirmReceiptMessage, uploadConfirmReceiptImage, exportAccountsExcel, importAccountsExcel, type AIProviderType, type AIModelOption, type ProxyConfig, type FaceVerificationScreenshot, type AccountFilterParams } from '@/api/accounts'
 import { getDefaultReply, updateDefaultReply, uploadDefaultReplyImage } from '@/api/keywords'
 import { getAutoRateConfig, updateAutoRateConfig } from '@/api/autoRate'
 import { getApiErrorMessage } from '@/utils/request'
@@ -1089,11 +1089,25 @@ export function Accounts() {
     try {
       await updateAccountConfirmBeforeSend(account.id, newEnabled)
       setAccounts(prev => prev.map(a =>
-        a.id === account.id ? { ...a, confirm_before_send: newEnabled } : a,
+        a.id === account.id ? { ...a, confirm_before_send: newEnabled, ...(newEnabled ? { send_before_confirm: false } : {}) } : a,
       ))
       addToast({ type: 'success', message: `发货成功再发卡券已${newEnabled ? '开启' : '关闭'}` })
     } catch {
       addToast({ type: 'error', message: '更新发货成功再发卡券开关失败' })
+    }
+  }
+
+  // ==================== 卡券发送成功再确认发货开关 ====================
+  const handleToggleSendBeforeConfirm = async (account: AccountWithKeywordCount) => {
+    const newEnabled = !account.send_before_confirm
+    try {
+      await updateAccountSendBeforeConfirm(account.id, newEnabled)
+      setAccounts(prev => prev.map(a =>
+        a.id === account.id ? { ...a, send_before_confirm: newEnabled, ...(newEnabled ? { confirm_before_send: false } : {}) } : a,
+      ))
+      addToast({ type: 'success', message: `卡券发送成功再确认发货已${newEnabled ? '开启' : '关闭'}` })
+    } catch {
+      addToast({ type: 'error', message: '更新卡券发送成功再确认发货开关失败' })
     }
   }
 
@@ -2110,6 +2124,18 @@ export function Accounts() {
                           title={`发货成功再发卡券：${account.confirm_before_send ? '已开启（点击关闭）' : '已关闭（点击开启，开启后确认发货失败将不发送卡券）'}`}
                         >
                           <ShieldCheck className="w-3.5 h-3.5" />
+                        </button>
+                        {/* 卡券发送成功再确认发货 */}
+                        <button
+                          onClick={() => handleToggleSendBeforeConfirm(account)}
+                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
+                            account.send_before_confirm
+                              ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50'
+                              : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
+                          }`}
+                          title={`卡券发送成功再确认发货：${account.send_before_confirm ? '已开启（点击关闭）' : '已关闭（点击开启，开启后先发卡券，发送成功后再确认发货）'}`}
+                        >
+                          <Send className="w-3.5 h-3.5" />
                         </button>
                         {/* 自动求小红花 */}
                         <button

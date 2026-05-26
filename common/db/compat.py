@@ -237,6 +237,16 @@ class DBManagerCompat:
                 return bool(confirm_before_send) if confirm_before_send is not None else False
         return self._run_async(_query)
 
+    def get_send_before_confirm(self, cookie_id: str) -> bool:
+        """获取卡券发送成功再确认发货开关设置"""
+        async def _query(session_maker):
+            async with session_maker() as session:
+                stmt = select(XYAccount.send_before_confirm).where(XYAccount.account_id == cookie_id)
+                result = await session.execute(stmt)
+                send_before_confirm = result.scalar_one_or_none()
+                return bool(send_before_confirm) if send_before_confirm is not None else False
+        return self._run_async(_query)
+
     def get_cookie_status(self, cookie_id: str) -> bool:
         """获取账号是否启用"""
         async def _query(session_maker):

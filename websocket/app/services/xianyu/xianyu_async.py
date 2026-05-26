@@ -1074,6 +1074,16 @@ class XianyuAsync:
         except Exception as e:
             logger.error(f"【{self.cookie_id}】获取发货成功再发卡券设置失败: {e}")
             return False
+
+    def is_send_before_confirm_enabled(self) -> bool:
+        """检查是否开启卡券发送成功再确认发货开关"""
+        try:
+            from common.db.compat import db_manager
+            return db_manager.get_send_before_confirm(self.cookie_id)
+        except Exception as e:
+            logger.error(f"【{self.cookie_id}】获取卡券发送成功再确认发货设置失败: {e}")
+            return False
+            return False
     
     def _extract_order_id(self, message: dict) -> str:
         """从消息中提取订单ID（参照旧框架utils.py的extract_order_id实现）"""

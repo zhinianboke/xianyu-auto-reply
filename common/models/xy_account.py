@@ -69,6 +69,9 @@ class XYAccount(TimestampMixin, Base):
     # 发货成功再发卡券开关（开启后确认发货失败则不发送卡券）
     confirm_before_send: Mapped[bool] = mapped_column(Boolean, default=False, comment="发货成功再发卡券开关")
     
+    # 卡券发送成功再确认发货开关（与confirm_before_send互斥，开启后先发卡券再确认发货）
+    send_before_confirm: Mapped[bool] = mapped_column(Boolean, default=False, comment="卡券发送成功再确认发货开关")
+    
     # 自动求小红花开关
     auto_red_flower: Mapped[bool] = mapped_column(Boolean, default=False, comment="自动求小红花开关")
 

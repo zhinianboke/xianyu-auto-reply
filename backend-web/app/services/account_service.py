@@ -463,8 +463,18 @@ class AccountService:
         await self.session.commit()
 
     async def update_confirm_before_send(self, account: XYAccount, confirm_before_send: bool) -> None:
-        """更新发货成功再发卡券开关"""
+        """更新发货成功再发卡券开关（与send_before_confirm互斥）"""
         account.confirm_before_send = confirm_before_send
+        if confirm_before_send:
+            account.send_before_confirm = False
+        self.session.add(account)
+        await self.session.commit()
+
+    async def update_send_before_confirm(self, account: XYAccount, send_before_confirm: bool) -> None:
+        """更新卡券发送成功再确认发货开关（与confirm_before_send互斥）"""
+        account.send_before_confirm = send_before_confirm
+        if send_before_confirm:
+            account.confirm_before_send = False
         self.session.add(account)
         await self.session.commit()
 

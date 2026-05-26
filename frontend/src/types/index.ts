@@ -50,6 +50,7 @@ export interface Account {
   scheduled_rate?: boolean
   auto_polish?: boolean
   confirm_before_send?: boolean
+  send_before_confirm?: boolean
   auto_red_flower?: boolean
   delivery_disabled?: boolean
   delivery_disabled_reason?: string

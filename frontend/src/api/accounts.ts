@@ -65,6 +65,7 @@ export const getAccountDetailsPaginated = async (
     scheduled_rate?: boolean
     auto_polish?: boolean
     confirm_before_send?: boolean
+    send_before_confirm?: boolean
     auto_red_flower?: boolean
     delivery_disabled?: boolean
     delivery_disabled_reason?: string
@@ -130,6 +131,7 @@ export const getAccountDetailsPaginated = async (
       scheduled_rate: item.scheduled_rate || false,
       auto_polish: item.auto_polish || false,
       confirm_before_send: item.confirm_before_send || false,
+      send_before_confirm: item.send_before_confirm || false,
       auto_red_flower: item.auto_red_flower || false,
       delivery_disabled: item.delivery_disabled || false,
       delivery_disabled_reason: item.delivery_disabled_reason || '',
@@ -243,6 +245,11 @@ export const updateAccountAutoPolish = (id: string, autoPolish: boolean): Promis
 // 更新发货成功再发卡券开关
 export const updateAccountConfirmBeforeSend = (id: string, confirmBeforeSend: boolean): Promise<ApiResponse> => {
   return put(`${COOKIE_PREFIX}/${id}/confirm-before-send`, { confirm_before_send: confirmBeforeSend })
+}
+
+// 更新卡券发送成功再确认发货开关
+export const updateAccountSendBeforeConfirm = (id: string, sendBeforeConfirm: boolean): Promise<ApiResponse> => {
+  return put(`${COOKIE_PREFIX}/${id}/send-before-confirm`, { send_before_confirm: sendBeforeConfirm })
 }
 
 

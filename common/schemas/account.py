@@ -23,6 +23,7 @@ class AccountDetail(BaseModel):
     scheduled_rate: bool = False
     auto_polish: bool = False
     confirm_before_send: bool = False
+    send_before_confirm: bool = False
     auto_red_flower: bool = False
     delivery_disabled: bool = False
     delivery_disabled_reason: str | None = None
@@ -117,6 +118,11 @@ class AccountAutoPolishUpdate(BaseModel):
 class AccountConfirmBeforeSendUpdate(BaseModel):
     """发货成功再发卡券开关更新"""
     confirm_before_send: bool = Field(..., description="发货成功再发卡券开关")
+
+
+class AccountSendBeforeConfirmUpdate(BaseModel):
+    """卡券发送成功再确认发货开关更新"""
+    send_before_confirm: bool = Field(..., description="卡券发送成功再确认发货开关")
 
 
 class AccountAutoRedFlowerUpdate(BaseModel):
