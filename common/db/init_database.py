@@ -1818,6 +1818,57 @@ class DatabaseInitializer:
             except Exception as e:
                 logger.warning(f"✗ xy_card_item_relations idx_cir_user_item 创建失败: {e}")
 
+            # 为 xy_card_item_relations 补建 (item_id, card_id) 复合索引 —— 加速关联卡券弹窗 JOIN 查询
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_card_item_relations'
+                    AND INDEX_NAME = 'idx_cir_item_card'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    await conn.execute(text(
+                        "ALTER TABLE xy_card_item_relations ADD INDEX idx_cir_item_card (item_id, card_id)"
+                    ))
+                    logger.info("✓ xy_card_item_relations: 创建 idx_cir_item_card 复合索引")
+            except Exception as e:
+                logger.warning(f"✗ xy_card_item_relations idx_cir_item_card 创建失败: {e}")
+
+            # 为 xy_cards 补建 (user_id, id) 复合索引 —— 加速按用户分页查询（ORDER BY id DESC）
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_cards'
+                    AND INDEX_NAME = 'idx_cards_user_id_desc'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    await conn.execute(text(
+                        "ALTER TABLE xy_cards ADD INDEX idx_cards_user_id_desc (user_id, id)"
+                    ))
+                    logger.info("✓ xy_cards: 创建 idx_cards_user_id_desc 复合索引")
+            except Exception as e:
+                logger.warning(f"✗ xy_cards idx_cards_user_id_desc 创建失败: {e}")
+
+            # 为 xy_cards 补建 (user_id, enabled) 复合索引 —— 加速发货匹配时过滤启用卡券
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_cards'
+                    AND INDEX_NAME = 'idx_cards_user_enabled'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    await conn.execute(text(
+                        "ALTER TABLE xy_cards ADD INDEX idx_cards_user_enabled (user_id, enabled)"
+                    ))
+                    logger.info("✓ xy_cards: 创建 idx_cards_user_enabled 复合索引")
+            except Exception as e:
+                logger.warning(f"✗ xy_cards idx_cards_user_enabled 创建失败: {e}")
+
             # 为 xy_agent_orders 补建 (upstream_user_id, status) 复合索引
             try:
                 check = text("""

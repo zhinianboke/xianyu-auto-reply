@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from common.db.base_class import Base
@@ -14,6 +14,13 @@ class Card(Base):
     """卡券表"""
 
     __tablename__ = "xy_cards"
+
+    # 复合索引：加速按 user_id 分页查询（ORDER BY id DESC）
+    # 复合索引：加速按 user_id + enabled 过滤（发货匹配场景）
+    __table_args__ = (
+        Index("idx_cards_user_id_desc", "user_id", "id"),
+        Index("idx_cards_user_enabled", "user_id", "enabled"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)

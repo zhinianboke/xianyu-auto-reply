@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, DateTime, String, func
+from sqlalchemy import BigInteger, DateTime, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base
@@ -21,6 +21,13 @@ class CardItemRelation(Base):
     """卡券商品关联表 - 多对多关系"""
 
     __tablename__ = "xy_card_item_relations"
+
+    # 复合索引：加速 item_id + card_id 的 JOIN 查询（关联卡券弹窗、发货匹配）
+    # 复合索引：加速按 user_id + item_id 过滤（用户维度的商品卡券查询）
+    __table_args__ = (
+        Index("idx_cir_item_card", "item_id", "card_id"),
+        Index("idx_cir_user_item", "user_id", "item_id"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment="所属用户ID")

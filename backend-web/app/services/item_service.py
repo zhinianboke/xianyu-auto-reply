@@ -82,7 +82,7 @@ class ItemService:
         """
         stmt = (
             select(XYCatalogItem, XYAccount.account_id)
-            .join(XYAccount, XYCatalogItem.account_pk == XYAccount.id)
+            .outerjoin(XYAccount, XYCatalogItem.account_pk == XYAccount.id)
             .order_by(XYCatalogItem.created_at.desc())
         )
         if owner_id is not None:
@@ -128,7 +128,7 @@ class ItemService:
         
         base_stmt = (
             select(XYCatalogItem, XYAccount.account_id)
-            .join(XYAccount, XYCatalogItem.account_pk == XYAccount.id)
+            .outerjoin(XYAccount, XYCatalogItem.account_pk == XYAccount.id)
         )
         
         conditions = []
