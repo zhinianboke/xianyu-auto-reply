@@ -41,6 +41,7 @@ const GoofishCompass = React.lazy(() => import('@/pages/compass/GoofishCompass')
 const GoofishScheduledCrawler = React.lazy(() => import('@/pages/crawler/GoofishScheduledCrawler').then(m => ({ default: m.GoofishScheduledCrawler })))
 const Cards = React.lazy(() => import('@/pages/cards/Cards').then(m => ({ default: m.Cards })))
 const PersonalSettings = React.lazy(() => import('@/pages/personalSettings/PersonalSettings').then(m => ({ default: m.PersonalSettings })))
+const Blacklist = React.lazy(() => import('@/pages/blacklist/Blacklist'))
 const SupplyManagement = React.lazy(() => import('@/pages/distribution/SupplyManagement').then(m => ({ default: m.SupplyManagement })))
 const DockedProducts = React.lazy(() => import('@/pages/distribution/DockedProducts').then(m => ({ default: m.DockedProducts })))
 const DealerManagement = React.lazy(() => import('@/pages/distribution/DealerManagement').then(m => ({ default: m.DealerManagement })))
@@ -351,6 +352,7 @@ function App() {
             <Route path="product-publish/addresses" element={<PublishAddresses />} />
             <Route path="product-publish/logs" element={<PublishLogs />} />
             <Route path="personal-settings" element={<PersonalSettings />} />
+            <Route path="blacklist" element={<Blacklist />} />
             <Route path="settings" element={<Settings />} />
             {/* 共享多人扫码登录管理端 */}
             <Route path="shared-scan" element={<Navigate to="/accounts/shared-scan" replace />} />

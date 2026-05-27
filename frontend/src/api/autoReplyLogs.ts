@@ -48,6 +48,7 @@ export const getAutoReplyLogs = async (params?: {
   account_id?: string
   start_date?: string
   end_date?: string
+  matched_rule_type?: string
   page?: number
   page_size?: number
 }): Promise<AutoReplyLogListResponse> => {
@@ -55,6 +56,7 @@ export const getAutoReplyLogs = async (params?: {
   if (params?.account_id) queryParams.append('account_id', params.account_id)
   if (params?.start_date) queryParams.append('start_date', params.start_date)
   if (params?.end_date) queryParams.append('end_date', params.end_date)
+  if (params?.matched_rule_type) queryParams.append('matched_rule_type', params.matched_rule_type)
   if (params?.page) queryParams.append('page', params.page.toString())
   if (params?.page_size) queryParams.append('page_size', params.page_size.toString())
 

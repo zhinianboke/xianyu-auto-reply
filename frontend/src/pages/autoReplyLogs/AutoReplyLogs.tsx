@@ -114,6 +114,7 @@ export function AutoReplyLogs() {
   const [logs, setLogs] = useState<AutoReplyLogItem[]>([])
   const [accounts, setAccounts] = useState<AccountDetail[]>([])
   const [selectedAccount, setSelectedAccount] = useState('')
+  const [selectedRuleType, setSelectedRuleType] = useState('')
   const [startDate, setStartDate] = useState(today)
   const [endDate, setEndDate] = useState(today)
   const [page, setPage] = useState(1)
@@ -152,6 +153,7 @@ export function AutoReplyLogs() {
         account_id: selectedAccount || undefined,
         start_date: startDate || undefined,
         end_date: endDate || undefined,
+        matched_rule_type: selectedRuleType || undefined,
         page: nextPage,
         page_size: nextPageSize,
       })
@@ -236,6 +238,21 @@ export function AutoReplyLogs() {
             <div className="input-group">
               <label className="input-label">结束日期</label>
               <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="input-ios" />
+            </div>
+            <div className="input-group min-w-[160px]">
+              <label className="input-label">规则类型</label>
+              <select
+                value={selectedRuleType}
+                onChange={(e) => setSelectedRuleType(e.target.value)}
+                className="input-ios"
+              >
+                <option value="">全部类型</option>
+                <option value="keyword_item">商品关键词</option>
+                <option value="keyword_common">通用关键词</option>
+                <option value="ai">AI回复</option>
+                <option value="default_item">商品默认回复</option>
+                <option value="default_account">账号默认回复</option>
+              </select>
             </div>
             <button onClick={handleSearch} className="btn-ios-primary">
               <Calendar className="w-4 h-4" />

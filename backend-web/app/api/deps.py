@@ -165,3 +165,9 @@ async def get_message_notification_service(session: AsyncSession = Depends(get_d
     """获取消息通知服务"""
     from app.services.notification_service import MessageNotificationService
     return MessageNotificationService(session)
+
+
+async def get_blacklist_service(session: AsyncSession = Depends(get_db_session)):
+    """获取黑名单服务"""
+    from app.services.blacklist_service import BlacklistService
+    return BlacklistService(session)

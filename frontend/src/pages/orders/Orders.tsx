@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { ShoppingCart, RefreshCw, Search, Trash2, Eye, X, Send, Loader2, Settings, Filter } from 'lucide-react'
+import { ShoppingCart, RefreshCw, Search, Trash2, Eye, X, Send, Loader2, Settings, Filter, Ban } from 'lucide-react'
 import { fetchXianyuOrders, getOrders, deleteOrder, batchDeleteOrders, getOrderDetail, manualDelivery, type OrderDetail, type OrderFilterParams } from '@/api/orders'
 import { getAccountDetails } from '@/api/accounts'
 import { useUIStore } from '@/store/uiStore'
@@ -8,6 +8,7 @@ import { useAuthStore } from '@/store/authStore'
 import { PageLoading } from '@/components/common/Loading'
 import { Select } from '@/components/common/Select'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
+import { BlacklistLevelModal } from './BlacklistLevelModal'
 import type { Order, Account } from '@/types'
 
 // 列配置类型
@@ -97,6 +98,9 @@ export function Orders() {
 
   // 筛选面板展开状态
   const [showFilters, setShowFilters] = useState(false)
+
+  // 拉黑弹窗状态
+  const [blacklistModal, setBlacklistModal] = useState<{ open: boolean; orders: Array<{ buyer_id: string; cookie_id: string; item_id: string }> }>({ open: false, orders: [] })
 
   // 列配置状态
   const [columns, setColumns] = useState<ColumnConfig[]>(() => {
@@ -394,14 +398,28 @@ export function Orders() {
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
             {selectedOrderIds.size > 0 && (
-              <button
-                onClick={() => setBatchDeleteConfirm(true)}
-                disabled={deleting}
-                className="btn-ios-danger btn-sm"
-              >
-                {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                删除选中({selectedOrderIds.size})
-              </button>
+              <>
+                <button
+                  onClick={() => {
+                    const selectedOrders = orders
+                      .filter((o) => selectedOrderIds.has(o.id))
+                      .map((o) => ({ buyer_id: o.buyer_id, cookie_id: o.cookie_id, item_id: o.item_id }))
+                    setBlacklistModal({ open: true, orders: selectedOrders })
+                  }}
+                  className="btn-ios-secondary btn-sm flex items-center gap-1 text-orange-600 border-orange-300 hover:bg-orange-50 dark:hover:bg-orange-900/20"
+                >
+                  <Ban className="w-3.5 h-3.5" />
+                  批量拉黑({selectedOrderIds.size})
+                </button>
+                <button
+                  onClick={() => setBatchDeleteConfirm(true)}
+                  disabled={deleting}
+                  className="btn-ios-danger btn-sm"
+                >
+                  {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                  删除选中({selectedOrderIds.size})
+                </button>
+              </>
             )}
             <button
               onClick={() => setShowFilters(!showFilters)}
@@ -769,6 +787,13 @@ export function Orders() {
                             )}
                           </button>
                           <button
+                            onClick={() => setBlacklistModal({ open: true, orders: [{ buyer_id: order.buyer_id, cookie_id: order.cookie_id, item_id: order.item_id }] })}
+                            className="p-2 rounded-lg hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors"
+                            title="一键拉黑"
+                          >
+                            <Ban className="w-4 h-4 text-orange-500" />
+                          </button>
+                          <button
                             onClick={() => setDeleteConfirm({ open: true, id: order.id })}
                             className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
                             title="删除"
@@ -1117,6 +1142,18 @@ export function Orders() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* 拉黑级别选择弹窗 */}
+      {blacklistModal.open && (
+        <BlacklistLevelModal
+          orders={blacklistModal.orders}
+          onClose={() => setBlacklistModal({ open: false, orders: [] })}
+          onSuccess={() => {
+            setBlacklistModal({ open: false, orders: [] })
+            setSelectedOrderIds(new Set())
+          }}
+        />
       )}
     </div>
   )

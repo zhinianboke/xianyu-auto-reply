@@ -1295,6 +1295,39 @@ class DatabaseInitializer:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='共享扫码登录兼职工作者表';
         """,
 
+        # 49. 个人黑名单表
+        "xy_personal_blacklist": """
+            CREATE TABLE IF NOT EXISTS xy_personal_blacklist (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                owner_id BIGINT NOT NULL COMMENT '用户ID',
+                account_id VARCHAR(64) DEFAULT NULL COMMENT '账号ID',
+                buyer_id VARCHAR(64) NOT NULL COMMENT '买家ID',
+                buyer_nick VARCHAR(120) DEFAULT NULL COMMENT '买家昵称',
+                item_id VARCHAR(64) DEFAULT NULL COMMENT '商品ID',
+                reason VARCHAR(500) DEFAULT NULL COMMENT '拉黑原因',
+                is_enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX idx_pb_owner_id (owner_id),
+                INDEX idx_pb_owner_buyer (owner_id, buyer_id),
+                INDEX idx_pb_owner_account (owner_id, account_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='个人黑名单表';
+        """,
+
+        # 50. 闲鱼黑名单表
+        "xy_platform_blacklist": """
+            CREATE TABLE IF NOT EXISTS xy_platform_blacklist (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                owner_id BIGINT NOT NULL COMMENT '拉黑用户（本系统用户ID）',
+                buyer_id VARCHAR(64) NOT NULL COMMENT '买家ID',
+                buyer_nick VARCHAR(120) DEFAULT NULL COMMENT '买家昵称',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX idx_plb_owner_id (owner_id),
+                INDEX idx_plb_owner_buyer (owner_id, buyer_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='闲鱼黑名单表';
+        """,
+
     }
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]

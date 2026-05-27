@@ -80,6 +80,7 @@ const routeTitles: Record<string, string> = {
   '/product-publish/batch': '批量发布',
   '/product-publish/addresses': '随机地址库',
   '/product-publish/logs': '发布日志',
+  '/blacklist': '黑名单管理',
 }
 
 const hiddenAliasPaths = new Set(['/shared-scan'])

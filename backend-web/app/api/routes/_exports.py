@@ -18,6 +18,7 @@ from . import (
     auto_reply_logs,
     auth,
     auto_rate,
+    blacklist,
     captcha,
     cards,
     distribution,
@@ -142,6 +143,9 @@ api_router.include_router(shared_scan.router, tags=["共享多人扫码登录"])
 api_router.include_router(goofish_compass.router, tags=["Goofish数据罗盘"])  # 已定义prefix="/compass/goofish"
 api_router.include_router(goofish_crawler.router, tags=["Goofish定时采集"])  # 已定义prefix="/goofish/crawler"
 api_router.include_router(goofish_tasks.router, tags=["Goofish采集任务"])  # 已定义prefix="/goofish/tasks"
+
+# 黑名单管理
+api_router.include_router(blacklist.router, tags=["黑名单管理"])  # 已定义prefix="/blacklist"
 
 # 搜索
 api_router.include_router(search.router, tags=["商品搜索"])  # 已定义prefix="/search"

@@ -1,6 +1,7 @@
 import type React from 'react'
 import {
   AlertTriangle,
+  Ban,
   Bell,
   BellOff,
   BookOpen,
@@ -75,6 +76,7 @@ export const mainNavItems: NavEntry[] = [
   { key: 'online-chat-new', icon: MessageSquare, label: '在线聊天', path: '/online-chat-new' },
   { key: 'items', icon: Package, label: '商品管理', path: '/items' },
   { key: 'cards', icon: Ticket, label: '卡券管理', path: '/cards' },
+  { key: 'orders', icon: ShoppingCart, label: '订单管理', path: '/orders' },
   {
     key: 'distribution',
     icon: PackageSearch,
@@ -100,13 +102,13 @@ export const mainNavItems: NavEntry[] = [
       { key: 'product-publish-logs', icon: ScrollText, label: '发布日志', path: '/product-publish/logs' },
     ],
   },
-  { key: 'orders', icon: ShoppingCart, label: '订单管理', path: '/orders' },
   { key: 'keywords', icon: MessageSquare, label: '自动回复', path: '/keywords' },
   { key: 'message-logs', icon: ScrollText, label: '消息日志', path: '/message-logs' },
   { key: 'risk-logs', icon: Shield, label: '风控日志', path: '/risk-logs' },
   { key: 'message-filters', icon: Filter, label: '消息过滤', path: '/message-filters' },
   { key: 'notification-channels', icon: Bell, label: '通知渠道', path: '/notification-channels' },
   { key: 'message-notifications', icon: MessageCircle, label: '消息通知', path: '/message-notifications' },
+  { key: 'blacklist', icon: Ban, label: '黑名单管理', path: '/blacklist' },
   { key: 'personal-settings', icon: UserCog, label: '个人设置', path: '/personal-settings' },
 ]
 

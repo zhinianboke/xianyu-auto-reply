@@ -71,6 +71,7 @@ class AutoReplyLogService:
         account_id: str | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
+        matched_rule_type: str | None = None,
         limit: int = 20,
         offset: int = 0,
     ) -> tuple[list[dict], int]:
@@ -85,6 +86,13 @@ class AutoReplyLogService:
             start_time=start_time,
             end_time=end_time,
         )
+
+        # 追加 matched_rule_type 筛选条件
+        if matched_rule_type:
+            branch_conditions = [
+                [*conds, XYAutoReplyMessageLog.matched_rule_type == matched_rule_type]
+                for conds in branch_conditions
+            ]
 
         total = 0
         for current_conditions in branch_conditions:

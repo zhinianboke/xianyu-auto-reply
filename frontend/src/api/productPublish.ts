@@ -197,7 +197,7 @@ export const publishSingle = (params: {
   brand?: string
   condition?: string
 }): Promise<PublishSingleResponse> =>
-  post(`${PREFIX}/publish/single`, params, { timeout: 300000 }) // 5分钟超时
+  post(`${PREFIX}/publish/single`, params, { timeout: 600000 }) // 10分钟超时
 
 /** 批量发布（异步，立即返回 batch_id） */
 export const publishBatch = (params: {

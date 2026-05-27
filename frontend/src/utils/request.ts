@@ -169,6 +169,16 @@ export const del = async <T = unknown>(
   return response.data
 }
 
+// 封装 PATCH 请求
+export const patch = async <T = unknown>(
+  url: string,
+  data?: unknown,
+  config?: AxiosRequestConfig
+): Promise<T> => {
+  const response = await request.patch<T>(url, data, config)
+  return response.data
+}
+
 // 复用 utils/apiError.ts 的实现，保留 re-export 以兼容 `import { getApiErrorMessage } from '@/utils/request'` 的旧调用点
 export { getApiErrorMessage } from './apiError'
 

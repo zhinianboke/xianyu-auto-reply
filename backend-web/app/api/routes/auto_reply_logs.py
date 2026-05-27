@@ -16,6 +16,7 @@ async def list_auto_reply_logs(
     account_id: str | None = Query(default=None, description="账号ID"),
     start_date: str | None = Query(default=None, description="开始日期，格式：YYYY-MM-DD"),
     end_date: str | None = Query(default=None, description="结束日期，格式：YYYY-MM-DD"),
+    matched_rule_type: str | None = Query(default=None, description="规则类型筛选"),
     page: int = Query(default=1, ge=1, description="页码"),
     page_size: int = Query(default=20, ge=1, le=100, description="每页数量"),
     current_user: User = Depends(deps.get_current_active_user),
@@ -30,6 +31,7 @@ async def list_auto_reply_logs(
             account_id=account_id,
             start_date=start_date,
             end_date=end_date,
+            matched_rule_type=matched_rule_type,
             limit=page_size,
             offset=offset,
         )
