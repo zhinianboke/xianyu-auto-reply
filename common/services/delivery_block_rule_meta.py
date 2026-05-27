@@ -35,6 +35,13 @@ DELIVERY_BLOCK_RULE_METADATA: list[dict[str, Any]] = [
         "default_config": {"min_count": 1, "same_item_only": False},
         "default_priority": 30,
     },
+    {
+        "rule_code": "personal_blacklist",
+        "rule_name": "个人黑名单",
+        "rule_description": "检查买家是否在个人黑名单中（支持商品级、账户级、用户级匹配）",
+        "default_config": {},
+        "default_priority": 5,
+    },
 ]
 
 

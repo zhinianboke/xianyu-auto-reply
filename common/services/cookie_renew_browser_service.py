@@ -304,6 +304,19 @@ class CookieRenewBrowserService:
             except Exception:
                 original_dict = {}
 
+            logger.info(
+                f"{log_prefix} 原始Cookie解析出 {len(original_dict)} 个字段，"
+                f"浏览器返回 {len(browser_cookies_dict)} 个字段"
+            )
+
+            # 记录浏览器没有返回但原始Cookie中存在的字段（这些字段会被保留）
+            only_in_original = set(original_dict.keys()) - set(browser_cookies_dict.keys())
+            if only_in_original:
+                logger.info(
+                    f"{log_prefix} 原始Cookie中有但浏览器未返回的字段（已保留）: "
+                    f"{', '.join(sorted(only_in_original))}"
+                )
+
             merged_dict: Dict[str, str] = dict(original_dict)
             merged_dict.update(browser_cookies_dict)
 
@@ -536,8 +549,10 @@ class CookieRenewBrowserService:
             cookie_dict = {}
 
         payloads: list[dict[str, Any]] = []
+        skipped_empty_value = 0
         for name, value in cookie_dict.items():
             if not name or not value:
+                skipped_empty_value += 1
                 continue
             for domain in self.COOKIE_DOMAINS:
                 payloads.append(
@@ -548,6 +563,12 @@ class CookieRenewBrowserService:
                         "path": "/",
                     }
                 )
+        if skipped_empty_value > 0:
+            logger.info(
+                f"构建Cookie注入列表: 解析出 {len(cookie_dict)} 个字段，"
+                f"跳过 {skipped_empty_value} 个空值字段，"
+                f"最终注入 {len(payloads)} 个（{len(payloads) // len(self.COOKIE_DOMAINS)} 字段 × {len(self.COOKIE_DOMAINS)} 域名）"
+            )
         return payloads
 
 

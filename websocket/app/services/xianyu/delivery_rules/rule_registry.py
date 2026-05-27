@@ -1,4 +1,4 @@
-﻿"""
+"""
 规则注册表
 
 功能：
@@ -14,6 +14,7 @@ from app.services.xianyu.delivery_rules.base_rule import BaseDeliveryRule
 from app.services.xianyu.delivery_rules.buyer_credit_rule import BuyerCreditRule
 from app.services.xianyu.delivery_rules.buyer_has_order_rule import BuyerHasOrderRule
 from app.services.xianyu.delivery_rules.buyer_unconfirmed_rule import BuyerUnconfirmedRule
+from app.services.xianyu.delivery_rules.personal_blacklist_rule import PersonalBlacklistRule
 
 
 # 所有可用规则的注册表：rule_code -> 规则类
@@ -22,6 +23,7 @@ RULE_REGISTRY: dict[str, type[BaseDeliveryRule]] = {
     "buyer_credit_zero": BuyerCreditRule,
     "buyer_has_order": BuyerHasOrderRule,
     "buyer_unconfirmed": BuyerUnconfirmedRule,
+    "personal_blacklist": PersonalBlacklistRule,
 }
 
 

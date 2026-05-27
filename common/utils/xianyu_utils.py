@@ -25,6 +25,7 @@ def trans_cookies(cookies_str: str) -> Dict[str, str]:
     
     Args:
         cookies_str: Cookie字符串，格式如 "key1=value1; key2=value2"
+                     兼容 "key1=value1;key2=value2"（分号后无空格）的情况
         
     Returns:
         Cookie字典
@@ -36,10 +37,16 @@ def trans_cookies(cookies_str: str) -> Dict[str, str]:
         raise ValueError("cookies不能为空")
     
     cookies = {}
-    for cookie in cookies_str.split("; "):
+    # 按分号分割，兼容 "; " 和 ";" 两种分隔符
+    for cookie in cookies_str.split(";"):
+        cookie = cookie.strip()
+        if not cookie:
+            continue
         if "=" in cookie:
             key, value = cookie.split("=", 1)
-            cookies[key.strip()] = value.strip()
+            key = key.strip()
+            if key:
+                cookies[key] = value.strip()
     return cookies
 
 
