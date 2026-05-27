@@ -201,6 +201,23 @@ async def login(
     )
 
 
+@router.get("/check-default-password", response_model=ApiResponse)
+async def check_default_password(
+    current_user: User = Depends(deps.get_current_admin_user),
+    auth_service: AuthService = Depends(deps.get_auth_service),
+) -> ApiResponse:
+    """
+    检查管理员密码是否为默认值（admin123）
+    仅管理员可调用，返回 data.is_default 表示是否为默认密码
+    """
+    is_default = auth_service._verify_user_password(current_user, "admin123")
+    return ApiResponse(
+        success=True,
+        message="检查完成",
+        data={"is_default": is_default},
+    )
+
+
 @router.post("/register", response_model=ApiResponse, status_code=status.HTTP_201_CREATED)
 async def register_user(
     payload: UserCreate,

@@ -5,6 +5,7 @@ import { Plus, RefreshCw, QrCode, Key, Edit2, Trash2, Power, PowerOff, X, Loader
 import { getAccountDetailsPaginated, deleteAccount, updateAccountCookie, updateAccountStatus, updateAccountsStatusBatch, closeAccountsNoticeBatch, clearTokenCacheBatch, updateAccountRemark, addAccount, generateQRLogin, checkQRLoginStatus, passwordLogin, checkPasswordLoginStatus, updateAccountAutoConfirm, updateAccountPauseDuration, updateAccountMessageExpireTime, updateAccountLoginInfo, updateAccountScheduledRedelivery, updateAccountScheduledRate, updateAccountAutoPolish, updateAccountConfirmBeforeSend, updateAccountSendBeforeConfirm, updateAccountAutoRedFlower, getAIReplySettings, updateAIReplySettings, testAIConnection, fetchAIModels, AI_PROVIDER_OPTIONS, AI_PROVIDER_DEFAULT_BASE_URLS, getProxyConfig, updateProxyConfig, getFaceVerificationScreenshot, deleteFaceVerificationScreenshot, getConfirmReceiptMessage, updateConfirmReceiptMessage, uploadConfirmReceiptImage, exportAccountsExcel, importAccountsExcel, type AIProviderType, type AIModelOption, type ProxyConfig, type FaceVerificationScreenshot, type AccountFilterParams } from '@/api/accounts'
 import { getDefaultReply, updateDefaultReply, uploadDefaultReplyImage } from '@/api/keywords'
 import { getAutoRateConfig, updateAutoRateConfig } from '@/api/autoRate'
+import { checkAdminDefaultPassword } from '@/api/auth'
 import { getApiErrorMessage } from '@/utils/request'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
@@ -69,7 +70,7 @@ const getAIConfigIncompleteMessage = (missingItems: string[]): string => (
 
 export function Accounts() {
   const { addToast } = useUIStore()
-  const { isAuthenticated, token, _hasHydrated } = useAuthStore()
+  const { isAuthenticated, token, user, _hasHydrated } = useAuthStore()
   const { isExeMode } = useMenuVisibilityStore()
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
@@ -403,8 +404,38 @@ export function Accounts() {
     setEditPasswordVisible(false)
   }, [clearQrCheck, clearPwdCheck])
 
+  // ==================== 管理员默认密码检查 ====================
+  /**
+   * 检查管理员是否使用默认密码，如果是则弹窗提示并阻止添加账号
+   * 返回 true 表示通过检查（可以继续），false 表示被拦截
+   */
+  const checkAdminPassword = async (): Promise<boolean> => {
+    // 仅管理员需要检查
+    if (!user?.is_admin) {
+      return true
+    }
+    try {
+      const result = await checkAdminDefaultPassword()
+      if (result.success && result.data?.is_default) {
+        addToast({
+          type: 'warning',
+          message: '检测到您仍在使用默认密码，为保障系统安全，请先前往个人设置修改密码后再添加账号',
+        })
+        return false
+      }
+      return true
+    } catch {
+      // 接口异常时不阻止操作
+      return true
+    }
+  }
+
   // ==================== 扫码登录 ====================
   const startQRCodeLogin = async () => {
+    // 管理员默认密码检查
+    const passed = await checkAdminPassword()
+    if (!passed) return
+
     setActiveModal('qrcode')
     setQrStatus('loading')
     setQrErrorMessage('')
@@ -1650,7 +1681,11 @@ export function Accounts() {
 
             {!isExeMode && (
               <button
-                onClick={() => navigate('/accounts/shared-scan')}
+                onClick={async () => {
+                  const passed = await checkAdminPassword()
+                  if (!passed) return
+                  navigate('/accounts/shared-scan')
+                }}
                 className="flex items-center gap-3 p-4 rounded-md border border-emerald-200 dark:border-emerald-800 
                            bg-emerald-50 dark:bg-emerald-900/30 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors text-left"
               >
@@ -1666,7 +1701,11 @@ export function Accounts() {
 
             {/* 账号密码登录 */}
             <button
-              onClick={() => setActiveModal('password')}
+              onClick={async () => {
+                const passed = await checkAdminPassword()
+                if (!passed) return
+                setActiveModal('password')
+              }}
               className="flex items-center gap-3 p-4 rounded-md border border-slate-200 dark:border-slate-700 
                          hover:border-blue-300 dark:hover:border-blue-700 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors text-left"
             >
@@ -1681,7 +1720,11 @@ export function Accounts() {
 
             {/* 手动输入 */}
             <button
-              onClick={() => setActiveModal('manual')}
+              onClick={async () => {
+                const passed = await checkAdminPassword()
+                if (!passed) return
+                setActiveModal('manual')
+              }}
               className="flex items-center gap-3 p-4 rounded-md border border-slate-200 dark:border-slate-700 
                          hover:border-blue-300 dark:hover:border-blue-700 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors text-left"
             >

@@ -163,3 +163,8 @@ export const geetestValidate = (data: {
 }): Promise<GeetestValidateResponse> => {
   return post(`${GEETEST_PREFIX}/validate`, data)
 }
+
+// 检查管理员密码是否为默认值
+export const checkAdminDefaultPassword = (): Promise<ApiResponse<{ is_default: boolean }>> => {
+  return get(`${AUTH_PREFIX}/check-default-password`)
+}
