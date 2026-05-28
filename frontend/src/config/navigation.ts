@@ -2,6 +2,7 @@ import type React from 'react'
 import {
   AlertTriangle,
   Ban,
+  BarChart3,
   Bell,
   BellOff,
   BookOpen,
@@ -13,6 +14,7 @@ import {
   Key,
   Layers,
   LayoutDashboard,
+  LineChart,
   Link2,
   LogIn,
   MapPin,
@@ -72,6 +74,14 @@ export function isNavGroup(entry: NavEntry): entry is NavGroup {
 
 export const mainNavItems: NavEntry[] = [
   { key: 'dashboard', icon: LayoutDashboard, label: '仪表盘', path: '/dashboard' },
+  {
+    key: 'data-analysis',
+    icon: BarChart3,
+    label: '数据分析',
+    children: [
+      { key: 'data-overview', icon: LineChart, label: '数据总览', path: '/data-analysis/overview' },
+    ],
+  },
   { key: 'accounts', icon: Users, label: '账号管理', path: '/accounts' },
   { key: 'online-chat-new', icon: MessageSquare, label: '在线聊天', path: '/online-chat-new' },
   { key: 'items', icon: Package, label: '商品管理', path: '/items' },

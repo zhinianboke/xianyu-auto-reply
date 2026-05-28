@@ -135,6 +135,25 @@ class XianyuSliderStealth(PlaywrightSliderService):
             logger.info(f"【{self.pure_user_id}】页面标题: {self.page.title()}")
             logger.info(f"【{self.pure_user_id}】=====================================")
             
+            # ====== 优先检查是否有[快速进入]按钮（cookies注入后可能直接可用） ======
+            logger.info(f"【{self.pure_user_id}】检查是否有[快速进入]按钮...")
+            quick_enter_clicked = self._find_and_click_quick_enter_button()
+            if quick_enter_clicked:
+                logger.info(f"【{self.pure_user_id}】已点击[快速进入]按钮，等待3秒后获取Cookie...")
+                time.sleep(3)
+                cookies = self._get_cookies()
+                if cookies and cookies.get("unb"):
+                    logger.success(f"【{self.pure_user_id}】✅ 点击[快速进入]后成功获取到有效Cookie（含unb）")
+                    return cookies
+                else:
+                    logger.info(f"【{self.pure_user_id}】点击[快速进入]后未获取到有效Cookie，继续执行密码登录流程...")
+                    # 重新访问登录页面（点击快速进入后页面可能已变化）
+                    logger.info(f"【{self.pure_user_id}】重新访问登录页面: {login_url}")
+                    self.page.goto(login_url, wait_until='domcontentloaded', timeout=30000)
+                    time.sleep(2)
+            else:
+                logger.info(f"【{self.pure_user_id}】未找到[快速进入]按钮，继续执行密码登录流程...")
+            
             # 查找登录frame
             logger.info(f"【{self.pure_user_id}】查找登录frame...")
             login_frame = self._find_login_frame()
@@ -355,6 +374,95 @@ class XianyuSliderStealth(PlaywrightSliderService):
         finally:
             self.close()
     
+    def _find_and_click_quick_enter_button(self) -> bool:
+        """查找并点击[快速进入]按钮
+
+        在主页面和所有iframe中查找"快速进入"按钮，找到则点击。
+        该按钮通常出现在登录iframe中，表示cookies仍有效可以快速登录。
+
+        Returns:
+            是否找到并成功点击了[快速进入]按钮
+        """
+        # 策略1：在主页面直接查找
+        if self._try_click_quick_enter_in_page(self.page, "主页面"):
+            return True
+
+        # 策略2：在所有iframe中查找
+        try:
+            iframes = self.page.query_selector_all("iframe")
+            logger.info(f"【{self.pure_user_id}】找到 {len(iframes)} 个iframe，逐一检查[快速进入]按钮...")
+
+            for idx, iframe in enumerate(iframes):
+                try:
+                    frame = iframe.content_frame()
+                    if not frame:
+                        continue
+
+                    # 等待iframe内容加载
+                    try:
+                        frame.wait_for_load_state("domcontentloaded", timeout=5000)
+                    except Exception:
+                        pass
+
+                    if self._try_click_quick_enter_in_page(frame, f"iframe[{idx}]"):
+                        return True
+                except Exception as exc:
+                    logger.info(f"【{self.pure_user_id}】检查iframe[{idx}]时出错: {exc}")
+                    continue
+        except Exception as exc:
+            logger.warning(f"【{self.pure_user_id}】查找iframe时出错: {exc}")
+
+        return False
+
+    def _try_click_quick_enter_in_page(self, frame, frame_name: str) -> bool:
+        """在指定frame中尝试查找并点击[快速进入]按钮
+
+        Args:
+            frame: 页面或frame对象
+            frame_name: frame名称（用于日志）
+
+        Returns:
+            是否成功点击
+        """
+        target_text = "快速进入"
+
+        # 选择器列表：按优先级排列
+        selectors = [
+            f'button:has-text("{target_text}")',
+            f'button[type="submit"]:has-text("{target_text}")',
+            f'.fm-button:has-text("{target_text}")',
+            f'.fn-button:has-text("{target_text}")',
+        ]
+
+        for selector in selectors:
+            try:
+                element = frame.query_selector(selector)
+                if element and element.is_visible():
+                    logger.info(f"【{self.pure_user_id}】✓ 在{frame_name}找到[快速进入]按钮: {selector}")
+                    element.click()
+                    logger.info(f"【{self.pure_user_id}】✓ [快速进入]按钮已点击")
+                    return True
+            except Exception:
+                continue
+
+        # 兜底策略：通过文本内容匹配所有button
+        try:
+            buttons = frame.query_selector_all("button")
+            for btn in buttons:
+                try:
+                    text = btn.text_content() or ""
+                    if target_text in text.strip() and btn.is_visible():
+                        logger.info(f"【{self.pure_user_id}】✓ 在{frame_name}通过文本匹配找到[快速进入]按钮")
+                        btn.click()
+                        logger.info(f"【{self.pure_user_id}】✓ [快速进入]按钮已点击")
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        return False
+
     def _find_login_frame(self) -> Optional[Page]:
         """查找登录frame
         

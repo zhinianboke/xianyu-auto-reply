@@ -28,6 +28,7 @@ from common.models.default_reply import DefaultReply
 from common.models.confirm_receipt_message import ConfirmReceiptMessage
 from common.models.user_setting import UserSetting
 from common.models.system_setting import SystemSetting
+from common.utils.time_utils import get_beijing_now
 
 
 # 线程本地存储，用于缓存每个线程的数据库引擎和会话工厂
@@ -490,6 +491,38 @@ class DBManagerCompat:
                 account_result = await session.execute(account_stmt)
                 account_row = account_result.first()
 
+                # 判断当天是否已存在相同状态和失败原因的记录，存在则只更新不重复插入
+                today_start = get_beijing_now().replace(hour=0, minute=0, second=0, microsecond=0)
+                today_end = get_beijing_now().replace(hour=23, minute=59, second=59, microsecond=999999)
+
+                # 构建去重查询条件
+                dedup_filters = [
+                    XYAccountLoginLog.account_identifier == cookie_id,
+                    XYAccountLoginLog.login_status == login_status,
+                    XYAccountLoginLog.created_at >= today_start,
+                    XYAccountLoginLog.created_at <= today_end,
+                ]
+                if failure_reason is not None:
+                    dedup_filters.append(XYAccountLoginLog.failure_reason == failure_reason)
+                else:
+                    dedup_filters.append(XYAccountLoginLog.failure_reason.is_(None))
+
+                existing_stmt = select(XYAccountLoginLog).where(*dedup_filters)
+                existing_result = await session.execute(existing_stmt)
+                existing_log = existing_result.scalars().first()
+
+                if existing_log:
+                    # 当天已存在相同状态和失败原因的记录，只更新相关字段
+                    existing_log.username = username
+                    existing_log.trigger_reason = trigger_reason
+                    existing_log.error_message = error_message
+                    existing_log.updated_cookie_names = updated_cookie_names
+                    existing_log.duration_ms = duration_ms
+                    existing_log.created_at = get_beijing_now()
+                    await session.commit()
+                    return existing_log.id
+
+                # 当天不存在相同记录，新增一条
                 log = XYAccountLoginLog(
                     owner_id=account_row.owner_id if account_row else None,
                     account_pk=account_row.id if account_row else None,

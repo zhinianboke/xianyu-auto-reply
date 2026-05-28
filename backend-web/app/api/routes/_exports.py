@@ -21,6 +21,7 @@ from . import (
     blacklist,
     captcha,
     cards,
+    data_analysis,
     distribution,
     chat_new,
     chat_new_ws,
@@ -138,6 +139,9 @@ api_router.include_router(captcha.router, tags=["验证码"])  # 已定义prefix
 api_router.include_router(qr_login.router, tags=["二维码登录"])  # 已定义prefix="/qr-login"
 api_router.include_router(password_login.router, tags=["密码登录"])  # 已定义prefix="/password-login"
 api_router.include_router(shared_scan.router, tags=["共享多人扫码登录"])  # 已定义prefix="/shared-scan"
+
+# 数据分析
+api_router.include_router(data_analysis.router, tags=["数据分析"])  # 已定义prefix="/data-analysis"
 
 # Goofish相关
 api_router.include_router(goofish_compass.router, tags=["Goofish数据罗盘"])  # 已定义prefix="/compass/goofish"
