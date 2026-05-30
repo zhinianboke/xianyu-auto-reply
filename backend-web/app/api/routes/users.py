@@ -11,6 +11,7 @@ from app.core.security import get_password_hash, verify_password
 from common.models.user import User
 from common.schemas.common import ApiResponse
 from common.schemas.user import UserPublic, UserUpdate
+from common.utils.security import generate_secret_key as _generate_secret_key
 from app.services.user_service import UserService
 
 
@@ -148,3 +149,48 @@ async def reset_dock_code(
             current_user.dock_code = None
             continue
     raise HTTPException(status_code=500, detail="重置对接码失败，请重试")
+
+
+@router.get("/secret-key")
+async def get_secret_key(
+    current_user: User = Depends(deps.get_current_active_user),
+    user_service: UserService = Depends(deps.get_user_service),
+):
+    """获取当前用户的分销秘钥，若无则自动生成（32位随机字符，全局唯一）"""
+    if not current_user.secret_key:
+        # 自动生成秘钥，最多尝试10次避免唯一约束冲突
+        for _ in range(10):
+            key = _generate_secret_key()
+            current_user.secret_key = key
+            try:
+                await user_service.update(current_user, UserUpdate())
+                break
+            except Exception:
+                current_user.secret_key = None
+                continue
+        else:
+            raise HTTPException(status_code=500, detail="生成分销秘钥失败，请重试")
+    return {"success": True, "secret_key": current_user.secret_key}
+
+
+@router.post("/secret-key/reset", response_model=ApiResponse)
+async def reset_secret_key(
+    current_user: User = Depends(deps.get_current_active_user),
+    user_service: UserService = Depends(deps.get_user_service),
+) -> ApiResponse:
+    """更换当前用户的分销秘钥，生成新的32位随机字符（全局唯一）"""
+    # 最多尝试10次避免唯一约束冲突
+    for _ in range(10):
+        key = _generate_secret_key()
+        current_user.secret_key = key
+        try:
+            await user_service.update(current_user, UserUpdate())
+            return ApiResponse(
+                success=True,
+                message="分销秘钥已更换",
+                data={"secret_key": key},
+            )
+        except Exception:
+            current_user.secret_key = None
+            continue
+    raise HTTPException(status_code=500, detail="更换分销秘钥失败，请重试")

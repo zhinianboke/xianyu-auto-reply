@@ -7,17 +7,23 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from app.core.config import get_settings
+from common.models.dock_record import DockRecord
 from common.models.user import User
 from common.schemas.common import ApiResponse
 from common.utils.auth_scope import resolve_owner_scope
+from common.utils.security import generate_secret_key as _generate_secret_key
 from app.services.card_service import CardService
 from app.services.dock_record_service import DockRecordService
 from app.services.fund_flow_service import FundFlowService
+from app.services.pickup_service import PickupService
 
 from common.utils.time_utils import safe_isoformat
 router = APIRouter(tags=["分销管理"])
@@ -187,6 +193,69 @@ async def get_dock_records(
         allow_sub_dock=allow_sub_dock,
     )
     return result
+
+
+# ========== 提货地址 ==========
+
+@router.get("/dock-records/{record_id}/pickup-url", response_model=ApiResponse)
+async def get_pickup_url(
+    record_id: int,
+    request: Request,
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """获取对接记录的提货地址（免认证GET链接）
+
+    返回一个拼接了用户提货秘钥和对接记录ID的URL，外部系统GET访问即可提货。
+    秘钥为空时自动生成。地址优先使用站点对外域名（前端地址），否则使用当前请求来源。
+    """
+    # 校验对接记录归属
+    record = await session.get(DockRecord, record_id)
+    if not record:
+        return ApiResponse(success=False, message="对接记录不存在")
+    if record.user_id != current_user.id:
+        return ApiResponse(success=False, message="无权操作该对接记录")
+
+    # 获取或生成用户提货秘钥
+    if not current_user.secret_key:
+        for _ in range(10):
+            key = _generate_secret_key()
+            current_user.secret_key = key
+            try:
+                await session.commit()
+                break
+            except Exception:
+                await session.rollback()
+                current_user.secret_key = None
+                continue
+        else:
+            return ApiResponse(success=False, message="生成提货秘钥失败，请重试")
+
+    # 计算站点基础地址：优先用配置的前端对外地址，否则用当前请求来源（避免写死localhost）
+    settings = get_settings()
+    base = (settings.frontend_public_url or '').strip().rstrip('/')
+    if not base:
+        base = str(request.base_url).rstrip('/')
+
+    pickup_url = f"{base}/api/v1/distribution/pickup?key={current_user.secret_key}&dock_id={record_id}"
+    return ApiResponse(success=True, message="获取成功", data={"pickup_url": pickup_url})
+
+
+@router.get("/pickup", response_class=PlainTextResponse)
+async def pickup(
+    key: str = Query(default="", description="用户提货秘钥"),
+    dock_id: int = Query(default=0, description="对接记录ID"),
+    session: AsyncSession = Depends(deps.get_db_session),
+) -> PlainTextResponse:
+    """提货接口（免认证，纯文本返回）
+
+    通过 提货秘钥 + 对接记录ID 触发一次提货：
+    参照自动发货逻辑取卡券内容，按对接记录的对接价格扣费并分润结算。
+    成功返回卡券内容文本，失败返回错误提示文本（HTTP 200）。
+    """
+    service = PickupService(session)
+    result = await service.pickup(key.strip(), dock_id)
+    return PlainTextResponse(content=result.content, status_code=200)
 
 
 # ========== 分销商管理 ==========
@@ -642,7 +711,7 @@ def _serialize_agent_order_common(
     为保持与原版返回 JSON 完全一致的字段顺序：
     - 通用前缀（id 到 owner_user_id）写在前面
     - ``extra_after_owner`` 紧跟 owner_user_id 之后（用于 upstream 的 dealer / upstream 信息）
-    - 通用后缀（delivery_content / buyer_id / status / created_at）
+    - 通用后缀（delivery_content / buyer_id / status / source / created_at）
     - ``extra_at_end`` 写在最末尾（用于 my 的 user_id / user_name）
     """
     item: dict = {
@@ -668,10 +737,24 @@ def _serialize_agent_order_common(
     item["delivery_content"] = order.delivery_content
     item["buyer_id"] = order.buyer_id
     item["status"] = order.status
+    item["source"] = _resolve_agent_order_source(order.order_no)
     item["created_at"] = safe_isoformat(order.created_at)
     if extra_at_end:
         item.update(extra_at_end)
     return item
+
+
+def _resolve_agent_order_source(order_no: str | None) -> str:
+    """根据订单号判断代理订单来源
+
+    提货接口使用 PICKUP 前缀的虚拟订单号，其余为闲鱼订单发货产生。
+
+    Returns:
+        'pickup'-提货，'order'-闲鱼订单
+    """
+    if order_no and str(order_no).startswith('PICKUP'):
+        return 'pickup'
+    return 'order'
 
 
 def _build_agent_orders_response(data, total: int, page: int, page_size: int, total_pages: int) -> dict:
@@ -871,6 +954,7 @@ async def get_agent_order_detail(
             "upstream_name": upstream_name,
             "status": order.status,
             "settle_remark": order.settle_remark,
+            "source": _resolve_agent_order_source(order.order_no),
             "created_at": safe_isoformat(order.created_at),
             "updated_at": safe_isoformat(order.updated_at),
         },

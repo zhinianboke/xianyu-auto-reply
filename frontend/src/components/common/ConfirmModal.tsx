@@ -46,13 +46,12 @@ export function ConfirmModal({
     <AnimatePresence>
       {isOpen && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center">
-          {/* 遮罩层 */}
+          {/* 遮罩层（按规范禁止点击遮罩关闭，仅可通过按钮关闭） */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-            onClick={onCancel}
           />
 
           {/* 弹窗内容 */}

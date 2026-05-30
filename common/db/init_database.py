@@ -28,7 +28,7 @@ from common.db.default_publish_addresses import (
     build_default_publish_addresses,
 )
 from common.db.session import async_engine, async_session_maker
-from common.utils.security import get_password_hash
+from common.utils.security import generate_secret_key, get_password_hash
 
 
 @contextmanager
@@ -367,7 +367,8 @@ class DatabaseInitializer:
                 INDEX idx_owner_id (owner_id),
                 INDEX idx_account_id (account_id),
                 INDEX idx_item_id (item_id),
-                INDEX idx_cat_account_item (account_id, item_id)
+                INDEX idx_cat_account_item (account_id, item_id),
+                INDEX idx_cat_owner_created (owner_id, created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品目录表';
         """,
         
@@ -440,7 +441,8 @@ class DatabaseInitializer:
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_user_id (user_id),
                 INDEX idx_item_id (item_id),
-                INDEX idx_card_user_item (user_id, item_id)
+                INDEX idx_card_user_item (user_id, item_id),
+                INDEX idx_cards_dockable_enabled (is_dockable, enabled)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='卡券表';
         """,
         
@@ -513,7 +515,8 @@ class DatabaseInitializer:
                 INDEX idx_account_id (account_id),
                 INDEX idx_event_type (event_type),
                 INDEX idx_rcl_account_status (account_id, processing_status),
-                INDEX idx_rcl_identifier_status_created (account_identifier, processing_status, created_at)
+                INDEX idx_rcl_identifier_status_created (account_identifier, processing_status, created_at),
+                INDEX idx_rcl_owner_created (owner_id, created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='风控日志表';
         """,
 
@@ -931,7 +934,8 @@ class DatabaseInitializer:
                 INDEX idx_user_id (user_id),
                 INDEX idx_card_id (card_id),
                 INDEX idx_parent_dock_id (parent_dock_id),
-                INDEX idx_dock_user_level (user_id, level)
+                INDEX idx_dock_user_level (user_id, level),
+                INDEX idx_dock_source_level (source_user_id, level)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='对接记录表';
         """,
 
@@ -1310,7 +1314,8 @@ class DatabaseInitializer:
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_pb_owner_id (owner_id),
                 INDEX idx_pb_owner_buyer (owner_id, buyer_id),
-                INDEX idx_pb_owner_account (owner_id, account_id)
+                INDEX idx_pb_owner_account (owner_id, account_id),
+                INDEX idx_pb_owner_created (owner_id, created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='个人黑名单表';
         """,
 
@@ -1324,7 +1329,8 @@ class DatabaseInitializer:
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_plb_owner_id (owner_id),
-                INDEX idx_plb_owner_buyer (owner_id, buyer_id)
+                INDEX idx_plb_owner_buyer (owner_id, buyer_id),
+                INDEX idx_plb_created (created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='闲鱼黑名单表';
         """,
 
@@ -1390,6 +1396,7 @@ class DatabaseInitializer:
             ("login_fail_count", "INT DEFAULT 0 COMMENT '登录失败次数'", "last_login_at"),
             ("login_locked_until", "DATETIME COMMENT '登录锁定截止时间'", "login_fail_count"),
             ("dock_code", "VARCHAR(32) DEFAULT NULL UNIQUE COMMENT '对接码，用于分销商识别'", "login_locked_until"),
+            ("secret_key", "VARCHAR(64) DEFAULT NULL UNIQUE COMMENT '分销秘钥，32位随机字符，全局唯一'", "dock_code"),
         ],
         "xy_default_replies": [
             ("item_id", "VARCHAR(64) DEFAULT NULL COMMENT '商品ID'", "account_id"),
@@ -1466,6 +1473,9 @@ class DatabaseInitializer:
 
                 # 8. 迁移旧禁止发货设置到规则配置表
                 await self.migrate_delivery_block_rules()
+
+                # 9. 为历史用户回填分销秘钥（secret_key 为空的存量用户）
+                await self.backfill_user_secret_keys()
             
             logger.info("数据库初始化完成")
             logger.info("=" * 50)
@@ -1651,6 +1661,26 @@ class DatabaseInitializer:
             except Exception as e:
                 logger.warning(f"✗ xy_scheduled_api_cookie_renew_log status 字段迁移失败: {e}")
 
+            # xy_cards: 将 text_content / data_content 从 TEXT 升级为 LONGTEXT（支持超大卡券内容）
+            for card_col in ("text_content", "data_content"):
+                try:
+                    check_card_col = text("""
+                        SELECT DATA_TYPE FROM information_schema.COLUMNS
+                        WHERE TABLE_SCHEMA = DATABASE()
+                        AND TABLE_NAME = 'xy_cards'
+                        AND COLUMN_NAME = :col_name
+                    """)
+                    result = await conn.execute(check_card_col, {"col_name": card_col})
+                    data_type = result.scalar()
+                    # DATA_TYPE 返回小写类型名（如 text/longtext），非 longtext 时升级
+                    if data_type and data_type.lower() != 'longtext':
+                        await conn.execute(text(
+                            f"ALTER TABLE xy_cards MODIFY COLUMN {card_col} LONGTEXT NULL"
+                        ))
+                        logger.info(f"✓ xy_cards: {card_col} 字段已升级为 LONGTEXT")
+                except Exception as e:
+                    logger.warning(f"✗ xy_cards {card_col} 字段迁移失败: {e}")
+
     async def migrate_indexes(self):
         """检查并迁移索引（如更新 UNIQUE KEY 等）"""
         logger.info("检查索引迁移...")
@@ -1834,6 +1864,23 @@ class DatabaseInitializer:
                     logger.info("✓ xy_dock_records: 创建 idx_dock_user_level 复合索引")
             except Exception as e:
                 logger.warning(f"✗ xy_dock_records idx_dock_user_level 创建失败: {e}")
+
+            # 为 xy_catalog_items 补建 (owner_id, created_at) 复合索引 —— 加速商品管理列表分页（owner_id 过滤 + created_at 倒序）
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_catalog_items'
+                    AND INDEX_NAME = 'idx_cat_owner_created'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    await conn.execute(text(
+                        "ALTER TABLE xy_catalog_items ADD INDEX idx_cat_owner_created (owner_id, created_at)"
+                    ))
+                    logger.info("✓ xy_catalog_items: 创建 idx_cat_owner_created 复合索引")
+            except Exception as e:
+                logger.warning(f"✗ xy_catalog_items idx_cat_owner_created 创建失败: {e}")
 
             # 为 xy_card_item_relations 补建 (user_id, item_id) 复合索引
             try:
@@ -2388,6 +2435,91 @@ class DatabaseInitializer:
                 except Exception as e:
                     logger.warning(f"✗ xy_auto_reply_message_logs idx_arml_status_created 创建失败: {e}")
 
+            # 为 xy_dock_records 补建 (source_user_id, level) 复合索引 —— 加速二级分销商列表查询
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_dock_records'
+                    AND INDEX_NAME = 'idx_dock_source_level'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    await conn.execute(text(
+                        "ALTER TABLE xy_dock_records ADD INDEX idx_dock_source_level (source_user_id, level)"
+                    ))
+                    logger.info("✓ xy_dock_records: 创建 idx_dock_source_level 复合索引")
+            except Exception as e:
+                logger.warning(f"✗ xy_dock_records idx_dock_source_level 创建失败: {e}")
+
+            # 为 xy_cards 补建 (is_dockable, enabled) 复合索引 —— 加速可对接卡券列表主筛选
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_cards'
+                    AND INDEX_NAME = 'idx_cards_dockable_enabled'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    await conn.execute(text(
+                        "ALTER TABLE xy_cards ADD INDEX idx_cards_dockable_enabled (is_dockable, enabled)"
+                    ))
+                    logger.info("✓ xy_cards: 创建 idx_cards_dockable_enabled 复合索引")
+            except Exception as e:
+                logger.warning(f"✗ xy_cards idx_cards_dockable_enabled 创建失败: {e}")
+
+            # 为 xy_personal_blacklist 补建 (owner_id, created_at) 复合索引 —— 加速个人黑名单列表分页排序
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_personal_blacklist'
+                    AND INDEX_NAME = 'idx_pb_owner_created'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    await conn.execute(text(
+                        "ALTER TABLE xy_personal_blacklist ADD INDEX idx_pb_owner_created (owner_id, created_at)"
+                    ))
+                    logger.info("✓ xy_personal_blacklist: 创建 idx_pb_owner_created 复合索引")
+            except Exception as e:
+                logger.warning(f"✗ xy_personal_blacklist idx_pb_owner_created 创建失败: {e}")
+
+            # 为 xy_platform_blacklist 补建 created_at 索引 —— 加速闲鱼黑名单列表分页排序
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_platform_blacklist'
+                    AND INDEX_NAME = 'idx_plb_created'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    await conn.execute(text(
+                        "ALTER TABLE xy_platform_blacklist ADD INDEX idx_plb_created (created_at)"
+                    ))
+                    logger.info("✓ xy_platform_blacklist: 创建 idx_plb_created 索引")
+            except Exception as e:
+                logger.warning(f"✗ xy_platform_blacklist idx_plb_created 创建失败: {e}")
+
+            # 为 xy_risk_control_logs 补建 (owner_id, created_at) 复合索引 —— 加速按用户筛选+时间倒序分页
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_risk_control_logs'
+                    AND INDEX_NAME = 'idx_rcl_owner_created'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    await conn.execute(text(
+                        "ALTER TABLE xy_risk_control_logs ADD INDEX idx_rcl_owner_created (owner_id, created_at)"
+                    ))
+                    logger.info("✓ xy_risk_control_logs: 创建 idx_rcl_owner_created 复合索引")
+            except Exception as e:
+                logger.warning(f"✗ xy_risk_control_logs idx_rcl_owner_created 创建失败: {e}")
+
 
     async def create_default_admin(self):
         """创建默认管理员用户 (admin/admin123)"""
@@ -2731,6 +2863,63 @@ class DatabaseInitializer:
 
         except Exception as e:
             logger.warning(f"✗ 禁止发货规则迁移失败（不影响系统运行）: {e}")
+
+    async def backfill_user_secret_keys(self):
+        """为历史用户回填分销秘钥
+
+        存量用户在新增 secret_key 列后值为 NULL，这里在服务启动自检时
+        统一为它们生成 32 位随机秘钥（全局唯一），避免依赖用户访问页面才懒生成。
+        逐个用户生成并校验唯一性，遇到唯一约束冲突时重试，最多 10 次。
+        不影响已有秘钥的用户。
+        """
+        try:
+            async with async_session_maker() as session:
+                # 查询所有秘钥为空的用户ID
+                result = await session.execute(
+                    text("SELECT id FROM xy_users WHERE secret_key IS NULL OR secret_key = ''")
+                )
+                user_ids = [row[0] for row in result.fetchall()]
+
+                if not user_ids:
+                    logger.info("✓ 无需回填分销秘钥")
+                    return
+
+                # 预加载已有秘钥，减少唯一性冲突的数据库往返
+                existing_result = await session.execute(
+                    text("SELECT secret_key FROM xy_users WHERE secret_key IS NOT NULL AND secret_key != ''")
+                )
+                used_keys = {row[0] for row in existing_result.fetchall()}
+
+                backfilled = 0
+                for user_id in user_ids:
+                    # 生成不与已知秘钥重复的新秘钥
+                    new_key = None
+                    for _ in range(10):
+                        candidate = generate_secret_key()
+                        if candidate not in used_keys:
+                            new_key = candidate
+                            break
+                    if not new_key:
+                        logger.warning(f"✗ 用户 {user_id} 分销秘钥生成失败（多次重复），跳过")
+                        continue
+
+                    try:
+                        await session.execute(
+                            text("UPDATE xy_users SET secret_key = :key WHERE id = :uid"),
+                            {"key": new_key, "uid": user_id},
+                        )
+                        used_keys.add(new_key)
+                        backfilled += 1
+                    except Exception as row_err:
+                        logger.warning(f"✗ 回填用户 {user_id} 分销秘钥失败: {row_err}")
+
+                await session.commit()
+                logger.info(
+                    f"✓ 分销秘钥回填完成：共 {len(user_ids)} 个历史用户，成功回填 {backfilled} 个"
+                )
+
+        except Exception as e:
+            logger.warning(f"✗ 分销秘钥回填失败（不影响系统运行）: {e}")
 
 
 async def init_database():

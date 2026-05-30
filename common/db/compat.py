@@ -1795,12 +1795,19 @@ class DBManagerCompat:
     def consume_batch_data(self, card_id: int) -> Optional[str]:
         """消费批量数据卡券的一条数据
 
-        从卡券的data_content中取出第一行数据并删除
+        从卡券的 data_content 中取出第一行数据并删除。
 
-        注意：
-            使用 ``SELECT ... FOR UPDATE`` 行锁 + 显式事务串行化，
-            防止同一张卡券在多订单/多任务并发发货时重复消费同一行数据，
-            避免唯一卡密/兑换码被重复派发。
+        并发安全设计（CAS 乐观锁，不依赖行锁与事务隔离级别）：
+            采用「读取当前内容 → 用单条 UPDATE 原子替换」的比较并交换方式：
+            ``UPDATE xy_cards SET data_content=<去掉首行后的剩余内容>
+              WHERE id=:card_id AND data_content=<读取到的旧内容>``。
+            MySQL（InnoDB）保证对同一行的单条 UPDATE 是串行执行的，因此并发的
+            多个消费请求中只有一个能匹配到旧内容并成功（rowcount=1），其余请求
+            rowcount=0（说明内容已被其他请求改写）后自动重读重试，从根本上避免
+            同一条卡密/兑换码被重复派发给不同订单。
+
+            相比 ``SELECT ... FOR UPDATE`` 行锁，本方案不依赖连接是否处于显式
+            事务、隔离级别或 autocommit 行为，在任意运行环境下都成立。
 
         Args:
             card_id: 卡券ID
@@ -1808,37 +1815,50 @@ class DBManagerCompat:
         Returns:
             消费的数据内容或None
         """
+        # CAS 失败（被其他并发请求抢先消费）时的最大重试次数，避免极端竞争下死循环
+        max_cas_retries = 50
+
         async def _consume(session_maker):
             async with session_maker() as session:
-                # 开启显式事务，确保 FOR UPDATE 行锁在本次消费与回写期间持续持有
-                async with session.begin():
-                    # 使用行锁查询卡券，并发消费时第二个请求会等待第一个事务提交后再读取
-                    stmt = select(Card).where(Card.id == card_id).with_for_update()
+                for _ in range(max_cas_retries):
+                    # 1. 读取当前卡券内容（普通读，无需行锁）
+                    stmt = select(Card.data_content).where(Card.id == card_id)
                     result = await session.execute(stmt)
-                    card = result.scalars().first()
+                    current_content = result.scalar_one_or_none()
 
-                    if not card or not card.data_content:
+                    if current_content is None:
                         logger.warning(f"卡券 {card_id} 不存在或没有批量数据")
                         return None
 
-                    # 分割数据行
-                    lines = [line.strip() for line in card.data_content.split('\n') if line.strip()]
-
+                    # 2. 计算首行与剩余内容
+                    lines = [line.strip() for line in current_content.split('\n') if line.strip()]
                     if not lines:
                         logger.warning(f"卡券 {card_id} 批量数据已用完")
                         return None
 
-                    # 取出第一行
                     consumed_data = lines[0]
                     remaining_lines = lines[1:]
-
-                    # 更新卡券数据（退出 async with session.begin() 时自动提交事务并释放行锁）
                     new_content = '\n'.join(remaining_lines) if remaining_lines else ''
-                    stmt = update(Card).where(Card.id == card_id).values(data_content=new_content)
-                    await session.execute(stmt)
 
-                    logger.info(f"卡券 {card_id} 消费数据成功，剩余 {len(remaining_lines)} 条")
-                    return consumed_data
+                    # 3. CAS 原子替换：仅当 data_content 仍等于刚读取到的旧值时才更新
+                    #    并发下只有一个请求能命中（rowcount=1），其余 rowcount=0 重试
+                    cas_stmt = (
+                        update(Card)
+                        .where(Card.id == card_id, Card.data_content == current_content)
+                        .values(data_content=new_content)
+                    )
+                    cas_result = await session.execute(cas_stmt)
+                    await session.commit()
+
+                    if cas_result.rowcount == 1:
+                        logger.info(f"卡券 {card_id} 消费数据成功，剩余 {len(remaining_lines)} 条")
+                        return consumed_data
+
+                    # rowcount=0：内容已被其他并发请求改写，重读重试
+                    logger.warning(f"卡券 {card_id} 消费存在并发竞争，重试中...")
+
+                logger.error(f"卡券 {card_id} 消费失败：并发竞争超过最大重试次数 {max_cas_retries}")
+                return None
 
         try:
             return self._run_async(_consume)

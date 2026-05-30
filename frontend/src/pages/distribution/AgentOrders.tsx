@@ -35,6 +35,18 @@ const DOCK_LEVEL_MAP: Record<number, string> = {
   2: '二级对接',
 }
 
+/** 来源映射 */
+const SOURCE_MAP: Record<string, { label: string; className: string }> = {
+  pickup: {
+    label: '提货',
+    className: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+  },
+  order: {
+    label: '闲鱼订单',
+    className: 'bg-slate-100 text-slate-600 dark:bg-slate-700/50 dark:text-slate-300',
+  },
+}
+
 type TabKey = 'my' | 'upstream'
 
 export function AgentOrders() {
@@ -190,6 +202,7 @@ export function AgentOrders() {
                   <th className="whitespace-nowrap">ID</th>
                   {isAdmin && <th className="whitespace-nowrap">所属用户</th>}
                   <th className="whitespace-nowrap">订单号</th>
+                  <th className="whitespace-nowrap">来源</th>
                   <th className="whitespace-nowrap">卡券</th>
                   <th className="whitespace-nowrap">对接名称</th>
                   <th className="whitespace-nowrap">层级</th>
@@ -228,6 +241,13 @@ export function AgentOrders() {
                       )}
                       <td className="whitespace-nowrap text-sm font-mono text-slate-600 dark:text-slate-300">
                         {order.order_no}
+                      </td>
+                      <td className="whitespace-nowrap">
+                        <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                          SOURCE_MAP[order.source || 'order']?.className || SOURCE_MAP.order.className
+                        }`}>
+                          {SOURCE_MAP[order.source || 'order']?.label || '闲鱼订单'}
+                        </span>
                       </td>
                       <td className="whitespace-nowrap text-sm text-slate-700 dark:text-slate-200 max-w-[220px] truncate" title={order.card_name || ''}>
                         {order.card_name || '-'}

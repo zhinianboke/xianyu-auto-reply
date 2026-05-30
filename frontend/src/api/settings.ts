@@ -418,6 +418,19 @@ export const resetDockCode = async (): Promise<ApiResponse> => {
 }
 
 
+// ========== 分销秘钥管理 ==========
+
+// 获取分销秘钥（无则自动生成）
+export const getSecretKey = async (): Promise<{ success: boolean; secret_key?: string }> => {
+  return get(`${USERS_PREFIX}/secret-key`)
+}
+
+// 更换分销秘钥
+export const resetSecretKey = async (): Promise<ApiResponse<{ secret_key: string }>> => {
+  return post(`${USERS_PREFIX}/secret-key/reset`)
+}
+
+
 // ========== 群二维码管理 ==========
 
 // 二维码类型

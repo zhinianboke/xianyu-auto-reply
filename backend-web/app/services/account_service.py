@@ -199,8 +199,10 @@ class AccountService:
         if conditions:
             base_stmt = base_stmt.where(and_(*conditions))
         
-        # 查询总数
-        count_stmt = select(func.count()).select_from(base_stmt.subquery())
+        # 查询总数：直接基于条件统计，避免把整表 SELECT 包进子查询
+        count_stmt = select(func.count(XYAccount.id))
+        if conditions:
+            count_stmt = count_stmt.where(and_(*conditions))
         total_result = await self.session.execute(count_stmt)
         total = total_result.scalar() or 0
         

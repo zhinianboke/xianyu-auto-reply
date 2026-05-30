@@ -5,8 +5,8 @@
  * 支持搜索、分页、编辑、删除操作
  */
 import { useState, useEffect, useCallback } from 'react'
-import { Search, RefreshCw, PackageCheck, Pencil, Trash2, X, Filter, MessageCircle, MessageSquare, Mail } from 'lucide-react'
-import { getDockRecords, updateDockRecord, deleteDockRecord, toggleSubDock } from '@/api/distribution'
+import { Search, RefreshCw, PackageCheck, Pencil, Trash2, X, Filter, MessageCircle, MessageSquare, Mail, Truck, Copy } from 'lucide-react'
+import { getDockRecords, updateDockRecord, deleteDockRecord, toggleSubDock, getPickupUrl } from '@/api/distribution'
 import type { DockRecord, DockRecordFilterParams } from '@/api/distribution'
 import { useUIStore } from '@/store/uiStore'
 import { EditDockModal } from './EditDockModal'
@@ -34,6 +34,12 @@ export function DockedProducts() {
   const [subDockVisibility, setSubDockVisibility] = useState('public')
   const [priceSubmitting, setPriceSubmitting] = useState(false)
   const [isEditMode, setIsEditMode] = useState(false)
+
+  // 提货地址弹窗状态
+  const [pickupModalOpen, setPickupModalOpen] = useState(false)
+  const [pickupUrl, setPickupUrl] = useState('')
+  const [pickupLoading, setPickupLoading] = useState(false)
+  const [pickupRecord, setPickupRecord] = useState<DockRecord | null>(null)
 
   // 加载数据
   const loadData = useCallback(async (
@@ -162,6 +168,36 @@ export function DockedProducts() {
     } catch {
       addToast({ type: 'error', message: '删除失败' })
     }
+  }
+
+  // 打开提货地址弹窗
+  const handleOpenPickup = async (record: DockRecord) => {
+    setPickupRecord(record)
+    setPickupUrl('')
+    setPickupModalOpen(true)
+    setPickupLoading(true)
+    try {
+      const result = await getPickupUrl(record.id)
+      if (result.success && result.data?.pickup_url) {
+        setPickupUrl(result.data.pickup_url)
+      } else {
+        addToast({ type: 'error', message: result.message || '获取提货地址失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '获取提货地址失败' })
+    } finally {
+      setPickupLoading(false)
+    }
+  }
+
+  // 复制提货地址
+  const handleCopyPickupUrl = () => {
+    if (!pickupUrl) return
+    navigator.clipboard.writeText(pickupUrl).then(() => {
+      addToast({ type: 'success', message: '提货地址已复制到剪贴板' })
+    }).catch(() => {
+      addToast({ type: 'error', message: '复制失败，请手动复制' })
+    })
   }
 
   const handlePageChange = (newPage: number) => {
@@ -505,6 +541,13 @@ export function DockedProducts() {
                       <td className="whitespace-nowrap sticky right-0 bg-white dark:bg-slate-900 z-10">
                         <div className="flex items-center gap-1">
                           <button
+                            onClick={() => handleOpenPickup(record)}
+                            className="p-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 transition-colors"
+                            title="提货地址"
+                          >
+                            <Truck className="w-4 h-4" />
+                          </button>
+                          <button
                             onClick={() => { setSelectedRecord(record); setEditModalOpen(true) }}
                             className="p-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400 transition-colors"
                             title="编辑"
@@ -651,6 +694,72 @@ export function DockedProducts() {
                 ) : (
                   isEditMode ? '保存修改' : '确认开放'
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 提货地址弹窗（仅可通过按钮关闭） */}
+      {pickupModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50" />
+          <div className="relative w-full max-w-lg mx-4 bg-white dark:bg-slate-800 rounded-xl shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-700">
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">提货地址</h3>
+              <button
+                onClick={() => setPickupModalOpen(false)}
+                className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                title="关闭"
+              >
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <div className="px-4 py-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
+                <p className="text-sm text-blue-700 dark:text-blue-400">
+                  对接：<strong>{pickupRecord?.dock_name}</strong>
+                  {pickupRecord?.card_name && <span> · 卡券：{pickupRecord.card_name}</span>}
+                </p>
+              </div>
+              <div>
+                <label className="input-label">免认证提货地址</label>
+                {pickupLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-slate-400 py-3">
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    生成中...
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-2">
+                    <textarea
+                      readOnly
+                      value={pickupUrl}
+                      rows={3}
+                      className="input-ios font-mono text-xs break-all flex-1 resize-none"
+                      onFocus={(e) => e.currentTarget.select()}
+                    />
+                    <button
+                      onClick={handleCopyPickupUrl}
+                      disabled={!pickupUrl}
+                      className="btn-ios-secondary text-sm shrink-0"
+                      title="复制地址"
+                    >
+                      <Copy className="w-4 h-4" />
+                      复制
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="px-4 py-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+                <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+                  说明：该地址无需登录即可访问，每次访问会按对接价格扣费并发放一张卡券，返回纯文本内容。
+                  请妥善保管，避免泄露。每 5 秒最多提货一次。更换秘钥后旧地址将失效。
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-200 dark:border-slate-700">
+              <button onClick={() => setPickupModalOpen(false)} className="btn-ios-secondary">
+                关闭
               </button>
             </div>
           </div>

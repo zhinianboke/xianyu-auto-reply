@@ -59,6 +59,8 @@ class User(TimestampMixin, Base):
     login_fail_count: Mapped[int] = mapped_column(default=0, server_default="0")
     login_locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     dock_code: Mapped[str | None] = mapped_column(String(32), unique=True, nullable=True, comment='对接码，用于分销商识别')
+    # 分销秘钥：32位随机字符，全局唯一，支持更换；用于分销接口的身份校验
+    secret_key: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, comment='分销秘钥，32位随机字符，全局唯一')
 
     # 关系定义 - 无外键约束，通过代码控制数据一致性
     accounts: Mapped[list["XYAccount"]] = relationship(

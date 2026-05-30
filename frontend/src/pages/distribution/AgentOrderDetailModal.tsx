@@ -41,6 +41,18 @@ const FEE_PAYER_MAP: Record<string, string> = {
   distributor: '货主',
 }
 
+/** 来源映射 */
+const SOURCE_MAP: Record<string, { label: string; className: string }> = {
+  pickup: {
+    label: '提货',
+    className: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+  },
+  order: {
+    label: '闲鱼订单',
+    className: 'bg-slate-100 text-slate-600 dark:bg-slate-700/50 dark:text-slate-300',
+  },
+}
+
 interface Props {
   orderId: number
   onClose: () => void
@@ -127,6 +139,13 @@ export function AgentOrderDetailModal({ orderId, onClose }: Props) {
                 <div className="bg-slate-50 dark:bg-slate-700/30 rounded-lg px-4">
                   <DetailRow label="订单ID" value={detail.id} />
                   <DetailRow label="订单号" value={<span className="font-mono">{detail.order_no}</span>} />
+                  <DetailRow label="来源" value={
+                    <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                      SOURCE_MAP[detail.source || 'order']?.className || SOURCE_MAP.order.className
+                    }`}>
+                      {SOURCE_MAP[detail.source || 'order']?.label || '闲鱼订单'}
+                    </span>
+                  } />
                   <DetailRow label="商品ID" value={<span className="font-mono">{detail.item_id}</span>} />
                   <DetailRow label="状态" value={
                     <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${

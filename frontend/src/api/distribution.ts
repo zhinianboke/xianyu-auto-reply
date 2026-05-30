@@ -303,6 +303,11 @@ export const toggleSubDock = (recordId: number, allow: boolean, subDockPrice?: s
   return put(`/api/v1/distribution/dock-records/${recordId}/toggle-sub-dock`, { allow, sub_dock_price: subDockPrice, sub_dock_visibility: subDockVisibility })
 }
 
+// 获取对接记录的提货地址（免认证GET链接）
+export const getPickupUrl = (recordId: number): Promise<ApiResponse<{ pickup_url: string }>> => {
+  return get(`/api/v1/distribution/dock-records/${recordId}/pickup-url`)
+}
+
 // 更新对接记录状态（带级联禁用下级）
 export const cascadeUpdateStatus = (
   recordId: number,
@@ -429,6 +434,7 @@ export interface AgentOrder {
   upstream_name?: string
   status: string
   settle_remark?: string
+  source?: string  // 来源：pickup-提货，order-闲鱼订单
   created_at?: string
   updated_at?: string
 }

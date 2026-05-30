@@ -24,6 +24,8 @@ class XYCatalogItem(Base):
     __table_args__ = (
         # 复合索引：加速与 xy_keyword_rules 的 (account_pk, item_id) JOIN 查询
         Index("idx_cat_account_item", "account_id", "item_id"),
+        # 复合索引：加速商品管理列表分页查询（owner_id 过滤 + created_at 倒序）
+        Index("idx_cat_owner_created", "owner_id", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)

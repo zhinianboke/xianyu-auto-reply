@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import BigInteger, Boolean, DateTime, Index, Integer, String, Text, func
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from common.db.base_class import Base
@@ -44,8 +45,8 @@ class Card(Base):
     
     # 根据类型存储不同内容
     api_config: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 格式
-    text_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    data_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    text_content: Mapped[Optional[str]] = mapped_column(LONGTEXT, nullable=True)  # 文本卡券内容，使用 LONGTEXT 存储超大内容
+    data_content: Mapped[Optional[str]] = mapped_column(LONGTEXT, nullable=True)  # 批量数据（卡密）内容，使用 LONGTEXT 存储超大内容
     image_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     image_urls: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON数组，最多3张图片
     

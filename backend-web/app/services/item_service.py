@@ -183,8 +183,12 @@ class ItemService:
         if conditions:
             base_stmt = base_stmt.where(and_(*conditions))
         
-        # 查询总数
-        count_stmt = select(func.count()).select_from(base_stmt.subquery())
+        # 查询总数：仅在按账号筛选时才需要 JOIN 账号表，否则直接基于商品表统计，避免无谓 JOIN
+        count_stmt = select(func.count(XYCatalogItem.id)).select_from(XYCatalogItem)
+        if account_id:
+            count_stmt = count_stmt.outerjoin(XYAccount, XYCatalogItem.account_pk == XYAccount.id)
+        if conditions:
+            count_stmt = count_stmt.where(and_(*conditions))
         total_result = await self.session.execute(count_stmt)
         total = total_result.scalar() or 0
         

@@ -8,7 +8,7 @@
  */
 import { useState, useEffect, useRef } from 'react'
 import { User, RefreshCw, Wallet, Plus, Key, Link2, Copy, RotateCcw, Save, Package, X, ScrollText, ArrowUpFromLine, Upload, QrCode } from 'lucide-react'
-import { getUserSetting, updateUserSetting, changePassword, getDockCode, resetDockCode, uploadPaymentQrcode, getSystemSettings } from '@/api/settings'
+import { getUserSetting, updateUserSetting, changePassword, getDockCode, resetDockCode, getSecretKey, resetSecretKey, uploadPaymentQrcode, getSystemSettings } from '@/api/settings'
 import { createWithdraw, getSettlementRecords, type SettlementRecord } from '@/api/payment'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
@@ -55,6 +55,12 @@ export function PersonalSettings() {
   const [dockCodeLoading, setDockCodeLoading] = useState(false)
   const [resettingDockCode, setResettingDockCode] = useState(false)
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
+
+  // 分销秘钥状态
+  const [secretKey, setSecretKey] = useState('')
+  const [secretKeyLoading, setSecretKeyLoading] = useState(false)
+  const [resettingSecretKey, setResettingSecretKey] = useState(false)
+  const [secretKeyResetConfirmOpen, setSecretKeyResetConfirmOpen] = useState(false)
 
   // 联系方式状态
   const [contactWechat, setContactWechat] = useState('')
@@ -155,6 +161,54 @@ export function PersonalSettings() {
     })
   }
 
+  // 加载分销秘钥
+  const loadSecretKey = async () => {
+    try {
+      setSecretKeyLoading(true)
+      const result = await getSecretKey()
+      if (result.success && result.secret_key) {
+        setSecretKey(result.secret_key)
+      }
+    } catch {
+      // 静默失败
+    } finally {
+      setSecretKeyLoading(false)
+    }
+  }
+
+  // 更换分销秘钥
+  const handleResetSecretKey = async () => {
+    try {
+      setResettingSecretKey(true)
+      const result = await resetSecretKey()
+      if (result.success) {
+        addToast({ type: 'success', message: '分销秘钥已更换' })
+        if (result.data?.secret_key) {
+          setSecretKey(result.data.secret_key)
+        } else {
+          await loadSecretKey()
+        }
+      } else {
+        addToast({ type: 'error', message: result.message || '更换失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '更换分销秘钥失败' })
+    } finally {
+      setResettingSecretKey(false)
+      setSecretKeyResetConfirmOpen(false)
+    }
+  }
+
+  // 复制分销秘钥
+  const handleCopySecretKey = () => {
+    if (!secretKey) return
+    navigator.clipboard.writeText(secretKey).then(() => {
+      addToast({ type: 'success', message: '分销秘钥已复制到剪贴板' })
+    }).catch(() => {
+      addToast({ type: 'error', message: '复制失败，请手动复制' })
+    })
+  }
+
   const loadSettlementRecords = async (page: number = 1, pageSize: number = settlementPageSize) => {
     try {
       setSettlementLoading(true)
@@ -182,6 +236,7 @@ export function PersonalSettings() {
   useEffect(() => {
     loadSettings()
     loadDockCode()
+    loadSecretKey()
   }, [_hasHydrated, isAuthenticated, token])
 
   // 保存重发货触发关键字
@@ -522,6 +577,39 @@ export function PersonalSettings() {
             </div>
           </div>
 
+          {/* 秘钥设置 */}
+          <div>
+            <label className="input-label">秘钥</label>
+            <p className="text-xs text-gray-500 mb-2">分销秘钥为32位随机字符，全局唯一，用于分销接口的身份校验。请妥善保管，可随时更换。</p>
+            <div className="flex items-center gap-3 flex-wrap">
+              {secretKeyLoading ? (
+                <div className="text-sm text-gray-400">加载中...</div>
+              ) : (
+                <div className="flex items-center px-4 py-2.5 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 font-mono text-sm tracking-wider font-semibold text-gray-900 dark:text-white break-all select-all">
+                  {secretKey || '-'}
+                </div>
+              )}
+              <button
+                onClick={handleCopySecretKey}
+                disabled={!secretKey}
+                className="btn-ios-secondary text-sm"
+                title="复制秘钥"
+              >
+                <Copy className="w-4 h-4" />
+                复制
+              </button>
+              <button
+                onClick={() => setSecretKeyResetConfirmOpen(true)}
+                disabled={resettingSecretKey}
+                className="btn-ios-secondary text-sm text-amber-600 dark:text-amber-400"
+                title="更换秘钥"
+              >
+                <RotateCcw className={`w-4 h-4 ${resettingSecretKey ? 'animate-spin' : ''}`} />
+                更换
+              </button>
+            </div>
+          </div>
+
           {/* 联系方式 */}
           <div>
             <label className="input-label">联系方式</label>
@@ -660,6 +748,19 @@ export function PersonalSettings() {
         loading={resettingDockCode}
         onConfirm={handleResetDockCode}
         onCancel={() => setResetConfirmOpen(false)}
+      />
+
+      {/* 更换分销秘钥确认弹窗 */}
+      <ConfirmModal
+        isOpen={secretKeyResetConfirmOpen}
+        title="更换秘钥"
+        message="确定要更换分销秘钥吗？更换后将生成新的32位秘钥，旧秘钥立即失效。"
+        confirmText="确定更换"
+        cancelText="取消"
+        type="warning"
+        loading={resettingSecretKey}
+        onConfirm={handleResetSecretKey}
+        onCancel={() => setSecretKeyResetConfirmOpen(false)}
       />
 
       {/* 结算记录弹窗 */}
