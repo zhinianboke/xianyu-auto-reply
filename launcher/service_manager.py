@@ -198,7 +198,6 @@ class ServiceManager:
             f"REDIS_PASSWORD={config['redis_password']}\n"
             f"REDIS_DB={config['redis_db']}\n"
             f"BACKEND_WEB_PORT=8089\n"
-            f"JWT_SECRET_KEY=xianyu-auto-reply-jwt-secret-key-2024\n"
             f"JWT_ALGORITHM=HS256\n"
             f"ACCESS_TOKEN_EXPIRE_MINUTES=30\n"
             f"REFRESH_TOKEN_EXPIRE_MINUTES=10080\n"

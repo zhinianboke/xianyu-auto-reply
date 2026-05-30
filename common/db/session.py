@@ -5,9 +5,9 @@
 """
 from __future__ import annotations
 
-import logging
 from collections.abc import AsyncGenerator
 
+from loguru import logger
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -57,25 +57,6 @@ def _patch_asyncmy_ping():
 
 # 在引擎创建前执行 patch
 _patch_asyncmy_ping()
-
-# 配置SQL日志记录器（关闭SQL输出）
-sql_logger = logging.getLogger("sqlalchemy.engine")
-sql_logger.setLevel(logging.WARNING)  # 只输出警告及以上级别
-
-# 创建自定义的SQL格式化处理器
-class SQLFormatter(logging.Formatter):
-    """自定义SQL格式化器，输出拼接好参数的完整SQL"""
-    
-    def format(self, record):
-        # 添加时间戳和SQL标识
-        return f"[SQL] {record.getMessage()}"
-
-
-# 添加控制台处理器
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(SQLFormatter())
-sql_logger.addHandler(console_handler)
-sql_logger.propagate = False
 
 
 def _compile_sql_with_params(statement, parameters):
@@ -137,13 +118,19 @@ async_engine = create_async_engine(
 
 
 # 监听SQL执行事件，输出完整的SQL（带参数）
-@event.listens_for(async_engine.sync_engine, "before_cursor_execute")
-def receive_before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
-    """
-    在SQL执行前触发，打印完整的SQL语句（参数已拼接）
-    """
-    compiled_sql = _compile_sql_with_params(statement, parameters)
-    sql_logger.info(f"\n{'='*60}\n{compiled_sql}\n{'='*60}")
+# 仅在 settings.sql_echo 为 True 时注册钩子：
+# - 开启时通过 loguru 输出，控制台与文件日志均可见（Docker 环境亦可见）；
+# - 关闭时不注册钩子，不产生任何字符串拼接开销（适合高并发生产环境）。
+def _register_sql_echo() -> None:
+    @event.listens_for(async_engine.sync_engine, "before_cursor_execute")
+    def receive_before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        """在SQL执行前触发，打印拼接好参数的完整SQL。"""
+        compiled_sql = _compile_sql_with_params(statement, parameters)
+        logger.opt(depth=1).info(f"[SQL]\n{'='*60}\n{compiled_sql}\n{'='*60}")
+
+
+if settings.sql_echo:
+    _register_sql_echo()
 
 
 async_session_maker = async_sessionmaker(

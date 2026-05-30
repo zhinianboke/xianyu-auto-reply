@@ -83,8 +83,7 @@ MYSQL_PASSWORD=xianyu@2026
 REDIS_PASSWORD=xianyu@2026
 REDIS_DB=0
 
-# JWT密钥（生产环境请修改）
-JWT_SECRET_KEY=change-me-in-production-please
+# 说明：JWT 密钥由数据库统一托管（首次启动自动生成并持久化），无需在此配置
 
 # 端口
 FRONTEND_PORT=9000

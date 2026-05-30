@@ -78,7 +78,6 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-xianyu@2026}
       - REDIS_DB=${REDIS_DB:-0}
       - BACKEND_WEB_PORT=8089
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production-please}
       - JWT_ALGORITHM=HS256
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
       - REFRESH_TOKEN_EXPIRE_MINUTES=${REFRESH_TOKEN_EXPIRE_MINUTES:-10080}
@@ -89,6 +88,7 @@ services:
       - BACKEND_WEB_PUBLIC_URL=${BACKEND_WEB_PUBLIC_URL:-}
       - BROWSER_HEADLESS=true
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SQL_ECHO=${SQL_ECHO:-true}
       - TZ=Asia/Shanghai
     volumes:
       - backend_web_logs:/app/backend-web/logs
@@ -133,6 +133,7 @@ services:
       - BACKEND_WEB_SERVICE_URL=http://backend-web:8089
       - STATIC_DIR=/app/static
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SQL_ECHO=${SQL_ECHO:-true}
       - TZ=Asia/Shanghai
     volumes:
       - websocket_logs:/app/websocket/logs
@@ -181,6 +182,7 @@ services:
       - BACKEND_WEB_SERVICE_URL=http://backend-web:8089
       - STATIC_DIR=/app/static
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SQL_ECHO=${SQL_ECHO:-true}
       - TZ=Asia/Shanghai
     volumes:
       - scheduler_logs:/app/scheduler/logs

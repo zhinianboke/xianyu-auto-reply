@@ -34,6 +34,10 @@ class BaseConfig(BaseSettings):
     environment: str = Field(default="development")
     log_level: str = Field(default="INFO")
 
+    # SQL 日志开关：开启后会在每条 SQL 执行前打印拼接好参数的完整 SQL。
+    # 默认开启，便于开发与 Docker 环境排查；高并发生产环境如需降低开销可设为 false。
+    sql_echo: bool = Field(default=True)
+
     # 数据库配置
     mysql_host: str = Field(default="localhost")
     mysql_port: int = Field(default=3306)
@@ -50,6 +54,8 @@ class BaseConfig(BaseSettings):
     redis_db: int = Field(default=0)
     
     # JWT配置（用于安全模块）
+    # 注意：jwt_secret_key 由数据库统一托管（backend-web 启动时自动生成并持久化），
+    # 此处 default 仅作占位，运行期会被数据库中的值覆盖；请勿依赖环境变量配置该值。
     jwt_secret_key: str = Field(default="change-me", repr=False)
     jwt_algorithm: str = Field(default="HS256")
     access_token_expire_minutes: int = Field(default=30)

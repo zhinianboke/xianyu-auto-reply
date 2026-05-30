@@ -64,8 +64,7 @@ MYSQL_PASSWORD=xianyu@2026
 REDIS_PASSWORD=xianyu@2026
 REDIS_DB=0
 
-# 安全配置 - JWT密钥（建议修改为随机字符串）
-JWT_SECRET_KEY=change-me-in-production-please
+# 说明：JWT 密钥由数据库统一托管（首次启动自动生成并持久化），无需在此配置
 
 # 端口配置
 FRONTEND_PORT=9000
@@ -80,6 +79,9 @@ IMAGE_TAG=latest
 # 日志级别
 LOG_LEVEL=INFO
 
+# SQL 日志开关：true=打印每条执行的完整 SQL（默认，便于排查）；高并发生产环境可设为 false
+SQL_ECHO=true
+
 # Token过期时间（分钟）
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
 REFRESH_TOKEN_EXPIRE_MINUTES=10080
@@ -92,7 +94,7 @@ RATE_INTERVAL=20
 MAX_CAPTCHA_CONCURRENT=3
 ENVEOF
     echo -e "${GREEN}✓ 已生成 .env 文件${NC}"
-    echo -e "${YELLOW}[提示] 如需修改配置（如JWT密钥、端口等），请编辑 $ENV_FILE 后重新运行${NC}"
+    echo -e "${YELLOW}[提示] 如需修改配置（如端口等），请编辑 $ENV_FILE 后重新运行${NC}"
     echo ""
 fi
 
@@ -176,7 +178,6 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-xianyu@2026}
       - REDIS_DB=${REDIS_DB:-0}
       - BACKEND_WEB_PORT=8089
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production-please}
       - JWT_ALGORITHM=HS256
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
       - REFRESH_TOKEN_EXPIRE_MINUTES=${REFRESH_TOKEN_EXPIRE_MINUTES:-10080}
@@ -187,6 +188,7 @@ services:
       - BACKEND_WEB_PUBLIC_URL=${BACKEND_WEB_PUBLIC_URL:-}
       - BROWSER_HEADLESS=true
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SQL_ECHO=${SQL_ECHO:-true}
       - TZ=Asia/Shanghai
     volumes:
       - ./xianyu_auto_reply/logs/backend_web:/app/backend-web/logs
@@ -229,6 +231,7 @@ services:
       - BACKEND_WEB_SERVICE_URL=http://backend-web:8089
       - STATIC_DIR=/app/static
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SQL_ECHO=${SQL_ECHO:-true}
       - TZ=Asia/Shanghai
     volumes:
       - ./xianyu_auto_reply/logs/websocket:/app/websocket/logs
@@ -275,6 +278,7 @@ services:
       - BACKEND_WEB_SERVICE_URL=http://backend-web:8089
       - STATIC_DIR=/app/static
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SQL_ECHO=${SQL_ECHO:-true}
       - TZ=Asia/Shanghai
     volumes:
       - ./xianyu_auto_reply/logs/scheduler:/app/scheduler/logs

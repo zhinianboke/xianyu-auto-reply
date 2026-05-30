@@ -246,7 +246,6 @@ REDIS_HOST=127.0.0.1
 REDIS_PORT=6379
 REDIS_PASSWORD=
 REDIS_DB=0
-JWT_SECRET_KEY=change-me
 CORS_ORIGINS=*
 BACKEND_WEB_PORT=8089
 WEBSOCKET_PORT=8090
@@ -323,7 +322,7 @@ npm run dev
 |------|------|
 | `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE` | MySQL 连接 |
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` / `REDIS_DB` | Redis 连接 |
-| `JWT_SECRET_KEY` | JWT 密钥，生产环境必须修改 |
+| `JWT_SECRET_KEY` | JWT 密钥，由数据库统一托管（首次启动自动生成并持久化），无需手动配置 |
 | `BACKEND_WEB_PORT` / `WEBSOCKET_PORT` / `SCHEDULER_PORT` | 各服务端口 |
 | `WEBSOCKET_SERVICE_URL` / `SCHEDULER_SERVICE_URL` / `BACKEND_WEB_SERVICE_URL` | 服务间调用地址 |
 | `BACKEND_WEB_PUBLIC_URL` | 对外访问地址，用于生成文件 URL |
@@ -378,7 +377,7 @@ npm run dev
 ### 生产环境建议
 
 1. 立即修改默认管理员密码
-2. 使用强随机字符串作为 `JWT_SECRET_KEY`
+2. JWT 密钥由数据库统一托管，首次启动自动生成强随机密钥（无需手动设置）
 3. 设置正确的 `BACKEND_WEB_PUBLIC_URL` 与反向代理地址
 4. 为外网入口配置 HTTPS
 5. 定期备份 MySQL 与静态资源目录

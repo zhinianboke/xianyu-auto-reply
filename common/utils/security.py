@@ -39,6 +39,40 @@ def generate_secret_key(length: int = 32) -> str:
     return ''.join(secrets.choice(_SECRET_KEY_ALPHABET) for _ in range(length))
 
 
+# 已知的弱/占位 JWT 密钥（与 deploy.sh / update.sh 中的 WEAK_JWT_KEYS 保持一致）。
+# 命中其一、或为空、或长度过短，均视为不安全，需要自动替换为随机值。
+WEAK_JWT_SECRETS: frozenset[str] = frozenset({
+    "change-me",
+    "change-me-in-production-please",
+    "your-secret-key",
+    "your-secret-key-change-me-to-a-random-string",
+    "changeme",
+    "secret",
+})
+
+# 低于该长度的密钥视为过弱
+_MIN_JWT_SECRET_LENGTH = 16
+
+
+def is_weak_jwt_secret(secret: str | None) -> bool:
+    """判断 JWT 密钥是否为弱/默认值。
+
+    Args:
+        secret: 待校验的密钥字符串
+
+    Returns:
+        True 表示密钥为空、过短或命中已知占位值（不安全）；False 表示为可接受的强密钥。
+    """
+    if not secret or len(secret) < _MIN_JWT_SECRET_LENGTH:
+        return True
+    return secret in WEAK_JWT_SECRETS
+
+
+def generate_jwt_secret() -> str:
+    """生成一个强随机 JWT 密钥（64位十六进制，等价于 32 字节熵）。"""
+    return secrets.token_hex(32)
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """验证密码"""
     if hashed_password.startswith("$2") and len(hashed_password) >= 4:

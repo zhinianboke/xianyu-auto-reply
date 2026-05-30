@@ -37,5 +37,7 @@ dependencies = [
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["app", "app.api", "app.api.routes", "app.core", "app.services", "app.services.xianyu", "app.services.captcha", "app.services.shipping", "app.utils", "app.websocket"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+exclude = ["logs*", "static*", "__pycache__*"]

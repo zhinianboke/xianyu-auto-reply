@@ -338,7 +338,6 @@ services:
       - REDIS_PASSWORD=\${REDIS_PASSWORD:-xianyu@2026}
       - REDIS_DB=\${REDIS_DB:-0}
       - BACKEND_WEB_PORT=8089
-      - JWT_SECRET_KEY=\${JWT_SECRET_KEY:-change-me-in-production-please}
       - JWT_ALGORITHM=HS256
       - ACCESS_TOKEN_EXPIRE_MINUTES=\${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
       - REFRESH_TOKEN_EXPIRE_MINUTES=\${REFRESH_TOKEN_EXPIRE_MINUTES:-10080}
@@ -453,8 +452,7 @@ MYSQL_PASSWORD=xianyu@2026
 REDIS_PASSWORD=xianyu@2026
 REDIS_DB=0
 
-# 安全配置 - JWT密钥（建议修改为随机字符串）
-JWT_SECRET_KEY=change-me-in-production-please
+# 说明：JWT 密钥由数据库统一托管（首次启动自动生成并持久化），无需在此配置
 
 # 端口配置
 FRONTEND_PORT=9000
