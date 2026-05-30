@@ -487,7 +487,7 @@ class XianyuSliderStealth(PlaywrightSliderService):
                 if element and element.is_visible():
                     logger.info(f"【{self.pure_user_id}】✓ 在主页面找到登录表单元素: {selector}")
                     return self.page
-            except:
+            except Exception:
                 continue
         
         # 如果主页面没找到，在iframe中查找
@@ -501,7 +501,7 @@ class XianyuSliderStealth(PlaywrightSliderService):
                     # 等待iframe内容加载
                     try:
                         frame.wait_for_selector('#fm-login-id', timeout=3000)
-                    except:
+                    except Exception:
                         pass
                     
                     # 检查是否有登录表单
@@ -511,7 +511,7 @@ class XianyuSliderStealth(PlaywrightSliderService):
                             if element and element.is_visible():
                                 logger.info(f"【{self.pure_user_id}】✓ 在Frame {idx} 找到登录表单: {selector}")
                                 return frame
-                        except:
+                        except Exception:
                             continue
             except Exception as e:
                 logger.debug(f"【{self.pure_user_id}】检查Frame {idx}时出错: {e}")
@@ -540,7 +540,7 @@ class XianyuSliderStealth(PlaywrightSliderService):
                     logger.info(f"【{self.pure_user_id}】✅ 检测到滑块验证元素: {selector}")
                     has_slider = True
                     break
-            except:
+            except Exception:
                 continue
         
         if has_slider:
@@ -780,9 +780,9 @@ class XianyuSliderStealth(PlaywrightSliderService):
                                 
                                 # 返回 False, None 表示不是二维码/人脸验证（已处理滑块）
                                 return False, None
-                        except:
+                        except Exception:
                             continue
-                except:
+                except Exception:
                     continue
             
             # 检测所有frames中的二维码/人脸验证
@@ -902,7 +902,7 @@ class XianyuSliderStealth(PlaywrightSliderService):
                                 if element and element.is_visible():
                                     is_slider = True
                                     break
-                            except:
+                            except Exception:
                                 continue
                         
                         if not is_slider:
@@ -918,7 +918,7 @@ class XianyuSliderStealth(PlaywrightSliderService):
                                 logger.debug(f"【{self.pure_user_id}】Frame {idx} 包含滑块验证元素，跳过")
                                 is_slider_frame = True
                                 break
-                        except:
+                        except Exception:
                             continue
                     
                     if is_slider_frame:
@@ -941,7 +941,7 @@ class XianyuSliderStealth(PlaywrightSliderService):
                             if not has_slider_keyword:
                                 logger.info(f"【{self.pure_user_id}】✅ 在Frame {idx} 检测到人脸验证")
                                 return True, frame
-                    except:
+                    except Exception:
                         pass
                         
                 except Exception as e:
@@ -980,7 +980,7 @@ class XianyuSliderStealth(PlaywrightSliderService):
                             time.sleep(2)
                             other_verify_clicked = True
                             break
-                    except:
+                    except Exception:
                         continue
             except Exception as e:
                 logger.debug(f"【{self.pure_user_id}】查找'其他验证方式'链接时出错: {e}")
@@ -1045,7 +1045,7 @@ class XianyuSliderStealth(PlaywrightSliderService):
                                                 verify_button.click()
                                                 logger.info(f"【{self.pure_user_id}】已点击'立即验证'按钮")
                                                 break
-                        except:
+                        except Exception:
                             continue
                 except Exception as e:
                     logger.debug(f"【{self.pure_user_id}】方法2查找失败: {e}")

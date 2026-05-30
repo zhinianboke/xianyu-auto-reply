@@ -107,7 +107,7 @@ class ImageManager:
                     'WEBP': 'webp'
                 }
                 return format_to_ext.get(img.format, 'jpg')
-        except:
+        except Exception:
             return 'jpg'
     
     def _process_image(self, image_data: bytes) -> bytes:

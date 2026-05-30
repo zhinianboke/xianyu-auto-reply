@@ -90,7 +90,7 @@ class SliderHandler:
                                 if has_scratch:
                                     logger.warning("🎯 在iframe中检测到刮刮乐滑块！")
                                     return True, "iframe-scratch-captcha"
-                            except:
+                            except Exception:
                                 continue
                 except Exception as e:
                     logger.debug(f"检查iframe时出错: {e}")
@@ -193,7 +193,7 @@ class SliderHandler:
                 if local_ip.startswith('172.') or local_ip.startswith('10.'):
                     logger.warning(f"⚠️ 检测到Docker内网IP: {local_ip}")
                     local_ip = None
-            except:
+            except Exception:
                 pass
 
         if not local_ip:
@@ -259,12 +259,12 @@ class SliderHandler:
                 if button:
                     logger.info(f"✅ 找到刮刮乐滑块按钮: {selector}")
                     return button
-            except:
+            except Exception:
                 try:
                     button = await page.wait_for_selector(selector, timeout=300, state='attached')
                     if button:
                         return button
-                except:
+                except Exception:
                     continue
 
         # 尝试在iframe中查找
@@ -279,9 +279,9 @@ class SliderHandler:
                         if button:
                             logger.info(f"✅ 在iframe中找到滑块按钮: {selector}")
                             return button
-                    except:
+                    except Exception:
                         continue
-        except:
+        except Exception:
             pass
 
         return None
@@ -302,7 +302,7 @@ class SliderHandler:
             if js_box:
                 logger.info(f"✅ JavaScript获取到按钮位置: {js_box}")
             return js_box
-        except:
+        except Exception:
             return None
 
     async def _perform_slide(self, page: Page, button_box: dict) -> bool:
@@ -358,7 +358,7 @@ class SliderHandler:
             if captcha_in_main:
                 try:
                     main_visible = await captcha_in_main.is_visible()
-                except:
+                except Exception:
                     pass
 
             # 检查iframe中的滑块
@@ -372,9 +372,9 @@ class SliderHandler:
                                 if await captcha_in_iframe.is_visible():
                                     iframe_visible = True
                                     break
-                            except:
+                            except Exception:
                                 pass
-            except:
+            except Exception:
                 pass
 
             return not main_visible and not iframe_visible

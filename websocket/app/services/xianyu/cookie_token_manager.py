@@ -1139,7 +1139,7 @@ class CookieTokenManager:
                 finally:
                     try:
                         slider.close()
-                    except:
+                    except Exception:
                         pass
             
             result = await asyncio.to_thread(_do_password_login)
@@ -1327,7 +1327,7 @@ class CookieTokenManager:
                     try:
                         os.remove(test_image_path)
                         logger.info(f"【{self.cookie_id}】已清理测试图片")
-                    except:
+                    except Exception:
                         pass
                         
         except Exception as e:

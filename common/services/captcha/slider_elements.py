@@ -156,7 +156,7 @@ class SliderElementFinder:
                                     slider_container = element
                                     found_frame = target_frame
                                     break
-                            except:
+                            except Exception:
                                 logger.info(f"【{self.pure_user_id}】在已知Frame中找到滑块容器（无法检查可见性）: {selector}")
                                 slider_container = element
                                 found_frame = target_frame
@@ -207,7 +207,7 @@ class SliderElementFinder:
                                                 slider_container = element
                                                 found_frame = frame
                                                 break
-                                        except:
+                                        except Exception:
                                             logger.info(f"【{self.pure_user_id}】在Frame {idx} 找到滑块容器（无法检查可见性）: {selector}")
                                             slider_container = element
                                             found_frame = frame
@@ -269,7 +269,7 @@ class SliderElementFinder:
                     else:
                         try:
                             element = search_frame.wait_for_selector(selector, timeout=3000)
-                        except:
+                        except Exception:
                             time.sleep(0.5)
                             element = search_frame.query_selector(selector)
 
@@ -278,7 +278,7 @@ class SliderElementFinder:
                         is_visible = element.is_visible()
                         if not is_visible:
                             element = None
-                    except:
+                    except Exception:
                         pass
 
                 if element:
@@ -313,7 +313,7 @@ class SliderElementFinder:
                     try:
                         if not element.is_visible():
                             element = None
-                    except:
+                    except Exception:
                         pass
 
                 if element:

@@ -800,7 +800,7 @@ class AIReplyEngine:
                 if isinstance(custom_prompts, str) and custom_prompts:
                     try:
                         custom_prompts = json.loads(custom_prompts)
-                    except:
+                    except Exception:
                         custom_prompts = {}
                 elif not isinstance(custom_prompts, dict):
                     custom_prompts = {}

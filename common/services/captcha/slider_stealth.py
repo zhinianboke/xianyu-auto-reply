@@ -1025,7 +1025,7 @@ class PlaywrightSliderService:
                                     left_px = float(left_value.replace('px', ''))
                                     self.trajectory_generator.update_trajectory_data("final_left_px", left_px)
                                     logger.info(f"【{self.pure_user_id}】滑动完成: {len(trajectory)}步 - 最终位置: {left_value}")
-                        except:
+                        except Exception:
                             pass
 
                 # 刮刮乐特殊处理
@@ -1069,7 +1069,7 @@ class PlaywrightSliderService:
                 logger.error(traceback.format_exc())
                 try:
                     self.page.mouse.up()
-                except:
+                except Exception:
                     pass
                 return False
 
@@ -1256,7 +1256,7 @@ class PlaywrightSliderService:
             try:
                 pure_id = getattr(self, 'pure_user_id', 'unknown')
                 logger.debug(f"【{pure_id}】析构函数清理时出错: {e}")
-            except:
+            except Exception:
                 pass
 
     def __enter__(self):

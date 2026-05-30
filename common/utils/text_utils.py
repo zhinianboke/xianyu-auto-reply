@@ -26,4 +26,26 @@ def escape_xss(text: str | None) -> str | None:
     return html.escape(text)
 
 
-__all__ = ["escape_xss"]
+def safe_str(obj: object) -> str:
+    """安全地将任意对象（通常是异常）转换为字符串。
+
+    某些异常/对象的 ``__str__`` 自身可能抛错（例如携带异常的 repr），
+    这里依次尝试 ``str()`` → ``repr()``，全部失败时返回兜底文案，
+    保证日志记录等场景永不因转换字符串而二次抛错。
+
+    Args:
+        obj: 待转换的对象，通常是捕获到的异常实例。
+
+    Returns:
+        对象的字符串表示；无法转换时返回 ``"未知错误"``。
+    """
+    try:
+        return str(obj)
+    except Exception:
+        try:
+            return repr(obj)
+        except Exception:
+            return "未知错误"
+
+
+__all__ = ["escape_xss", "safe_str"]

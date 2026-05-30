@@ -152,7 +152,7 @@ class ItemParser:
                         numeric_price = clean_price.replace('万', '').strip()
                         price_value = float(numeric_price) * 10000
                         price = f"¥{price_value:.0f}"
-                    except:
+                    except Exception:
                         price = f"¥{clean_price}"
                 else:
                     if clean_price and (clean_price[0].isdigit() or clean_price.replace('.', '').isdigit()):
@@ -191,7 +191,7 @@ class ItemParser:
                 publish_time = datetime.fromtimestamp(
                     int(publish_timestamp) / 1000
                 ).strftime("%Y-%m-%d %H:%M")
-            except:
+            except Exception:
                 pass
 
         return publish_time

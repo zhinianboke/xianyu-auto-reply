@@ -154,7 +154,7 @@ class ImageUploader:
             if temp_path and os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
-                except:
+                except Exception:
                     pass
     
     def _parse_upload_response(self, response_text: str) -> Optional[str]:

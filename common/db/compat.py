@@ -101,7 +101,7 @@ class DBManagerCompat:
                         # 清理事件循环
                         try:
                             new_loop.run_until_complete(new_loop.shutdown_asyncgens())
-                        except:
+                        except Exception:
                             pass
                         new_loop.close()
                 except Exception as e:
@@ -795,7 +795,7 @@ class DBManagerCompat:
                 if current_urls:
                     try:
                         urls_list = json.loads(current_urls)
-                    except:
+                    except Exception:
                         urls_list = []
                 else:
                     urls_list = []

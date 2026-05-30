@@ -2374,7 +2374,7 @@ class AutoDeliveryHandler:
                         content = result.get('data') or result.get('content') or result.get('card') or str(result)
                     else:
                         content = str(result)
-                except:
+                except Exception:
                     content = response_text
 
                 logger.info(f"API调用成功，返回内容长度: {len(content)}")

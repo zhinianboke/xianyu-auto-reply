@@ -972,7 +972,7 @@ class CardService:
                     if field in data:
                         return str(data[field])
                     return json.dumps(data, ensure_ascii=False)
-                except:
+                except Exception:
                     return response.text
                     
         except Exception as e:

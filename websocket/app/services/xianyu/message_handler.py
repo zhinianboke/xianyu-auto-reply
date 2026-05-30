@@ -504,7 +504,7 @@ class MessageHandler:
                 if biz_type not in ('IDLE_SPACE_PRICING',):
                     logger.warning(f"【{self.cookie_id}】解密消息: {json.dumps(parsed_data, ensure_ascii=False)[:1000]}")
                 return parsed_data
-            except:
+            except Exception:
                 # base64解码失败，尝试使用decrypt解密
                 decrypted = json.loads(decrypt(data))
                 # 过滤不需要打印的消息类型

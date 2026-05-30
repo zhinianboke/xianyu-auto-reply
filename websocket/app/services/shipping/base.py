@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.xy_account import XYAccount
+from common.utils.text_utils import safe_str
 from common.models.xy_catalog_item import XYCatalogItem
 from common.utils.cookie_refresh import clear_cookie_refresh_snapshot
 from common.utils.xianyu_utils import trans_cookies, generate_sign
@@ -62,18 +63,15 @@ class BaseShippingService:
         self.token_refresh_interval: int = 3600  # 1小时
 
     def _safe_str(self, obj: Any) -> str:
-        """安全字符串转换
-        
+        """安全字符串转换（委托公共实现）
+
         Args:
             obj: 需要转换的对象
-            
+
         Returns:
             字符串表示
         """
-        try:
-            return str(obj)
-        except Exception:
-            return "无法转换的对象"
+        return safe_str(obj)
 
     async def _load_account(self) -> bool:
         """加载账号信息

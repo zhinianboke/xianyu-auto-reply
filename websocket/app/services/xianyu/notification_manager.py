@@ -23,6 +23,7 @@ from common.utils.notification_utils import (
     send_wechat_notification,
     send_telegram_notification
 )
+from common.utils.text_utils import safe_str
 
 
 class NotificationManager:
@@ -51,14 +52,8 @@ class NotificationManager:
         self.notification_lock = asyncio.Lock()
     
     def _safe_str(self, e) -> str:
-        """安全地将异常转换为字符串"""
-        try:
-            return str(e)
-        except:
-            try:
-                return repr(e)
-            except:
-                return "未知错误"
+        """安全地将异常转换为字符串（委托公共实现）"""
+        return safe_str(e)
 
     async def send_notification(self, send_user_name: str, send_user_id: str, 
                                send_message: str, item_id: str = None, chat_id: str = None):

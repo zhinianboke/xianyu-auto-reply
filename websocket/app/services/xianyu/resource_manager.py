@@ -13,6 +13,8 @@ import asyncio
 import time
 from loguru import logger
 
+from common.utils.text_utils import safe_str
+
 
 class AutoReplyPauseManager:
     """自动回复暂停管理器
@@ -136,14 +138,8 @@ class BrowserResourceManager:
         self.cookie_id = cookie_id
     
     def _safe_str(self, e):
-        """安全地将异常转换为字符串"""
-        try:
-            return str(e)
-        except:
-            try:
-                return repr(e)
-            except:
-                return "未知错误"
+        """安全地将异常转换为字符串（委托公共实现）"""
+        return safe_str(e)
     
     async def normal_close_resources(self, browser, playwright):
         """正常关闭资源:浏览器+Playwright短超时关闭

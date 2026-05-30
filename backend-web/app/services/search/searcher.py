@@ -180,7 +180,7 @@ class ItemSearchService:
             try:
                 await self.browser.press_key('Escape')
                 await asyncio.sleep(0.5)
-            except:
+            except Exception:
                 pass
 
             # 处理滑块验证
@@ -277,7 +277,7 @@ class ItemSearchService:
             # 处理弹窗和滑块
             try:
                 await self.browser.press_key('Escape')
-            except:
+            except Exception:
                 pass
 
             slider_result = await self.slider_handler.handle_verification(
@@ -333,7 +333,7 @@ class ItemSearchService:
                 if element:
                     logger.info(f"✅ 找到搜索框: {selector}")
                     return element
-            except:
+            except Exception:
                 continue
 
         return None
@@ -389,7 +389,7 @@ class ItemSearchService:
                             logger.warning(f"第 {page_num} 页没有新数据")
                             return False
 
-            except:
+            except Exception:
                 continue
 
         logger.warning(f"无法找到下一页按钮")

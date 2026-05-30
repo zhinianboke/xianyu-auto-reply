@@ -22,6 +22,7 @@ from common.utils.xianyu_utils import (
     trans_cookies, generate_device_id, generate_mid
 )
 from common.utils.time_utils import get_beijing_now_naive
+from common.utils.text_utils import safe_str
 from app.services.xianyu.connection_manager import ConnectionManager, ConnectionState
 from app.services.xianyu.token_manager import TokenManager
 
@@ -555,14 +556,8 @@ class XianyuAsync:
             logger.error(f"【{self.cookie_id}】重启实例失败: {self._safe_str(e)}")
     
     def _safe_str(self, obj):
-        """安全地将对象转换为字符串"""
-        try:
-            return str(obj)
-        except:
-            try:
-                return repr(obj)
-            except:
-                return "未知对象"
+        """安全地将对象转换为字符串（委托公共实现）"""
+        return safe_str(obj)
     
     async def init(self, ws):
         """
@@ -1675,7 +1670,7 @@ class XianyuAsync:
                                         # 清理临时文件
                                         try:
                                             os.unlink(tmp_path)
-                                        except:
+                                        except Exception:
                                             pass
                                 else:
                                     logger.error(f"[{msg_time}] 【{self.cookie_id}】从backend-web获取图片失败，状态码: {response.status}")

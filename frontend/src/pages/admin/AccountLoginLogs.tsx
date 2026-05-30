@@ -216,12 +216,20 @@ export function AccountLoginLogs() {
       text: status || '-',
       cls: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300',
     }
-    return <span className={`text-xs px-2 py-1 rounded ${meta.cls}`}>{meta.text}</span>
+    return (
+      <span className={`inline-block text-xs px-2 py-1 rounded whitespace-nowrap ${meta.cls}`}>
+        {meta.text}
+      </span>
+    )
   }
 
   const renderAccountStatus = (status: string) => {
     const meta = ACCOUNT_STATUS_LABELS[status] || ACCOUNT_STATUS_LABELS.unknown
-    return <span className={`text-xs px-2 py-1 rounded ${meta.cls}`}>{meta.text}</span>
+    return (
+      <span className={`inline-block text-xs px-2 py-1 rounded whitespace-nowrap ${meta.cls}`}>
+        {meta.text}
+      </span>
+    )
   }
 
   const renderFailureReason = (reason: string | null) => {
@@ -351,11 +359,11 @@ export function AccountLoginLogs() {
             <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
               <tr>
                 <th className="min-w-[130px]">账号ID</th>
-                <th className="min-w-[70px]">账号状态</th>
+                <th className="min-w-[80px]">账号状态</th>
                 <th className="min-w-[120px]">禁用原因</th>
                 <th className="min-w-[110px]">登录用户名</th>
                 <th className="min-w-[120px]">触发原因</th>
-                <th className="min-w-[90px]">状态</th>
+                <th className="min-w-[100px]">状态</th>
                 <th className="min-w-[130px]">失败原因</th>
                 <th className="min-w-[180px]">更新Cookie</th>
                 <th className="min-w-[250px]">错误详情</th>
@@ -396,7 +404,7 @@ export function AccountLoginLogs() {
                       <td className="text-slate-500 dark:text-slate-400">
                         {log.trigger_reason || '-'}
                       </td>
-                      <td>{renderStatus(log.login_status)}</td>
+                      <td className="whitespace-nowrap">{renderStatus(log.login_status)}</td>
                       <td className="text-slate-500 dark:text-slate-400">
                         {renderFailureReason(log.failure_reason)}
                       </td>

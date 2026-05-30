@@ -10,6 +10,8 @@ from typing import Optional, Dict, Any, List
 
 from loguru import logger
 
+from common.utils.text_utils import safe_str
+
 
 class ItemInfoManager:
     """商品信息管理器
@@ -37,14 +39,8 @@ class ItemInfoManager:
         return trans_cookies(cookies_str)
     
     def _safe_str(self, e) -> str:
-        """安全地将异常转换为字符串"""
-        try:
-            return str(e)
-        except:
-            try:
-                return repr(e)
-            except:
-                return "未知错误"
+        """安全地将异常转换为字符串（委托公共实现）"""
+        return safe_str(e)
     
     def update_cookies(self, cookies_str: str):
         """更新Cookie"""
