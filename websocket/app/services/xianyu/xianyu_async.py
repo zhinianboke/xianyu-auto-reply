@@ -21,6 +21,7 @@ from loguru import logger
 from common.utils.xianyu_utils import (
     trans_cookies, generate_device_id, generate_mid
 )
+from common.utils.time_utils import get_beijing_now_naive
 from app.services.xianyu.connection_manager import ConnectionManager, ConnectionState
 from app.services.xianyu.token_manager import TokenManager
 
@@ -1492,8 +1493,7 @@ class XianyuAsync:
             websocket: WebSocket连接
         """
         try:
-            from datetime import datetime
-            msg_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            msg_time = get_beijing_now_naive().strftime("%Y-%m-%d %H:%M:%S")
             
             chat_id = parsed_message.get("chat_id", "")
             send_user_id = parsed_message.get("send_user_id", "")

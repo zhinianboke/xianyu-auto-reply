@@ -29,6 +29,7 @@ from common.models.scheduled_login_renew_log import ScheduledLoginRenewLog
 from common.models.xy_account import XYAccount
 from common.utils.cookie_refresh import clear_cookie_refresh_snapshot
 from common.utils.xianyu_utils import trans_cookies, generate_sign
+from common.utils.time_utils import get_beijing_now_naive
 
 
 class LoginRenewTaskService:
@@ -160,7 +161,7 @@ class LoginRenewTaskService:
             if new_cookies and new_cookies != cookies_str:
                 account.cookie = new_cookies
                 account.metadata_json = clear_cookie_refresh_snapshot(account.metadata_json)
-                account.last_refresh_at = datetime.now()
+                account.last_refresh_at = get_beijing_now_naive()
                 session.add(account)
                 await session.commit()
                 logger.info(f"【{self.task_name}】账号 {account_id} Cookie已更新")

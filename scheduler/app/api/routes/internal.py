@@ -9,13 +9,12 @@ Scheduler服务内部API路由
 """
 from __future__ import annotations
 
-from datetime import datetime
-
 from fastapi import APIRouter
 from loguru import logger
 from pydantic import BaseModel
 
 from app.services.scheduler_service import get_scheduler_service
+from common.utils.time_utils import get_beijing_now_naive
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -142,7 +141,7 @@ async def trigger_task(task_code: str):
             "message": f"任务 {task_code} 已触发执行",
             "data": {
                 "task_code": task_code,
-                "triggered_at": datetime.now().isoformat(),
+                "triggered_at": get_beijing_now_naive().isoformat(),
             },
         }
     except Exception as e:

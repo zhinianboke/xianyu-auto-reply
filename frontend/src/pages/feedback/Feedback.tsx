@@ -656,8 +656,8 @@ export default function Feedback() {
 
       {/* 详情弹窗（对话形式） */}
       {detailOpen && (
-        <div className="modal-overlay" onClick={() => setDetailOpen(false)}>
-          <div className="modal-content max-w-2xl h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay">
+          <div className="modal-content max-w-2xl h-[80vh] flex flex-col">
             {detailLoading ? (
               <div className="flex-1 flex items-center justify-center">
                 <Loader2 className="w-8 h-8 animate-spin text-blue-500" />

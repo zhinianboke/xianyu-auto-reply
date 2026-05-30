@@ -28,7 +28,7 @@ from common.models.default_reply import DefaultReply
 from common.models.confirm_receipt_message import ConfirmReceiptMessage
 from common.models.user_setting import UserSetting
 from common.models.system_setting import SystemSetting
-from common.utils.time_utils import get_beijing_now
+from common.utils.time_utils import get_beijing_now, get_beijing_now_naive
 
 
 # 线程本地存储，用于缓存每个线程的数据库引擎和会话工厂
@@ -1253,8 +1253,8 @@ class DBManagerCompat:
             }
             try:
                 async with session_maker() as session:
-                    from datetime import datetime, timedelta
-                    cutoff_date = datetime.now() - timedelta(days=days)
+                    from datetime import timedelta
+                    cutoff_date = get_beijing_now_naive() - timedelta(days=days)
                     
                     # 清理风控日志
                     try:
@@ -1534,7 +1534,6 @@ class DBManagerCompat:
                             continue  # 已存在，跳过
                         
                         # 创建新商品
-                        from datetime import datetime
                         new_item = XYCatalogItem(
                             owner_id=account_row.owner_id,
                             account_pk=account_row.id,
@@ -1546,7 +1545,7 @@ class DBManagerCompat:
                                 'detail': item_data.get('item_detail', ''),
                                 'description': item_data.get('item_description', ''),
                             },
-                            created_at=datetime.now()
+                            created_at=get_beijing_now_naive()
                         )
                         session.add(new_item)
                         saved_count += 1
@@ -1748,7 +1747,6 @@ class DBManagerCompat:
                         return False
                     
                     # 插入新订单
-                    from datetime import datetime
                     new_order = XYOrder(
                         order_no=order_id,
                         owner_id=owner_id,
@@ -1757,7 +1755,7 @@ class DBManagerCompat:
                         chat_id=chat_id or '',
                         account_id=cookie_id,
                         status='processing',
-                        created_at=datetime.now()
+                        created_at=get_beijing_now_naive()
                     )
                     session.add(new_order)
                     await session.commit()

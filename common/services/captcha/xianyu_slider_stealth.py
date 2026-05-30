@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 from loguru import logger
 
 from common.services.captcha.slider_stealth import PlaywrightSliderService
+from common.utils.time_utils import get_beijing_now_naive
 
 try:
     from playwright.sync_api import sync_playwright, Page
@@ -846,8 +847,7 @@ class XianyuSliderStealth(PlaywrightSliderService):
                                         
                                         if screenshot_bytes:
                                             # 生成带时间戳的文件名并直接保存
-                                            from datetime import datetime
-                                            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                                            timestamp = get_beijing_now_naive().strftime('%Y%m%d_%H%M%S')
                                             filename = f"face_verify_{self.pure_user_id}_{timestamp}.jpg"
                                             file_path = os.path.join(screenshots_dir, filename)
                                             
@@ -1118,8 +1118,7 @@ class XianyuSliderStealth(PlaywrightSliderService):
             
             if screenshot_bytes:
                 # 生成带时间戳的文件名并直接保存
-                from datetime import datetime
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                timestamp = get_beijing_now_naive().strftime('%Y%m%d_%H%M%S')
                 filename = f"face_verify_{self.pure_user_id}_{timestamp}.jpg"
                 file_path = os.path.join(screenshots_dir, filename)
                 

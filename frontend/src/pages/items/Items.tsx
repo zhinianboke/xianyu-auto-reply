@@ -1596,8 +1596,8 @@ export function Items() {
 
       {/* 图片预览弹窗 */}
       {isImagePreviewOpen && (
-        <div className="modal-overlay" style={{ zIndex: 70 }} onClick={() => setIsImagePreviewOpen(false)}>
-          <div className="modal-content max-w-4xl p-4" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" style={{ zIndex: 70 }}>
+          <div className="modal-content max-w-4xl p-4">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-semibold">图片预览</h3>
               <button

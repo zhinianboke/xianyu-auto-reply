@@ -180,10 +180,9 @@ export function TopNavbar({ systemName = '闲鱼管理系统' }: TopNavbarProps)
 
       {/* 公告列表弹窗 */}
       {showAnnouncementModal && (
-        <div className="modal-overlay" onClick={() => setShowAnnouncementModal(false)}>
+        <div className="modal-overlay">
           <div 
             className="modal-content max-w-4xl w-full"
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="modal-header">
               <h2 className="modal-title flex items-center gap-2">
@@ -245,10 +244,9 @@ export function TopNavbar({ systemName = '闲鱼管理系统' }: TopNavbarProps)
 
       {/* 公告详情弹窗 */}
       {selectedAnnouncement && (
-        <div className="modal-overlay" onClick={() => setSelectedAnnouncement(null)}>
+        <div className="modal-overlay">
           <div 
             className="modal-content max-w-lg"
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="modal-header">
               <h2 className="modal-title flex items-center gap-2">

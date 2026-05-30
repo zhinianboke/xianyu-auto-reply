@@ -586,8 +586,8 @@ export function Cards() {
 
       {/* 图片预览弹窗 */}
       {isImagePreviewOpen && (
-        <div className="modal-overlay" onClick={() => setIsImagePreviewOpen(false)}>
-          <div className="modal-content max-w-2xl" onClick={e => e.stopPropagation()}>
+        <div className="modal-overlay">
+          <div className="modal-content max-w-2xl">
             <div className="modal-header">
               <h2 className="modal-title">图片预览</h2>
               <button onClick={() => setIsImagePreviewOpen(false)} className="modal-close">&times;</button>

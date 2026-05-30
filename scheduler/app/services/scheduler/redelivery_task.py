@@ -24,6 +24,7 @@ from common.db.session import async_session_maker
 from common.models.scheduled_redelivery_log import ScheduledRedeliveryLog
 from common.models.xy_account import XYAccount
 from common.models.xy_order import XYOrder
+from common.utils.time_utils import get_beijing_now_naive
 from common.models.card import Card
 from app.core.config import get_settings
 from app.core.http_client import get_http_client
@@ -229,7 +230,7 @@ class RedeliveryTask:
         - 状态为 'pending_payment'（待付款）、'processing'（处理中）、'pending_ship'（待发货）
         """
         # 获取今天的开始时间（北京时间）
-        now = datetime.now()
+        now = get_beijing_now_naive()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         
         stmt = select(XYOrder).where(

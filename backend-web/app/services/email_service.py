@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.db.session import async_session_maker
+from common.utils.time_utils import get_beijing_now_naive
 
 
 async def get_smtp_settings() -> dict:
@@ -471,7 +472,6 @@ async def send_withdraw_notification_email(
         (是否成功, 消息)
     """
     import os
-    from datetime import datetime
     from app.services.settlement_service import get_withdraw_notify_email
     
     # 从系统设置获取提现通知邮箱
@@ -505,7 +505,7 @@ async def send_withdraw_notification_email(
     reject_url = f"{base_url}/api/v1/payment/withdraw/review?id={record_id}&action=reject&token={reject_token}"
     
     # 当前时间
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = get_beijing_now_naive().strftime("%Y-%m-%d %H:%M:%S")
 
     # ── 风控检验 ──────────────────────────────────────────────────────────
     risk_html = ''

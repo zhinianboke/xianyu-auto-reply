@@ -33,7 +33,7 @@ from app.services.dashboard_stats_service import DashboardStatsService
 from app.services.scheduled_batch_log_service import ScheduledBatchLogService
 from app.services.user_service import UserService
 
-from common.utils.time_utils import safe_isoformat
+from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 router = APIRouter(tags=["admin"])
 settings = get_settings()
 
@@ -242,7 +242,7 @@ async def clear_account_login_logs(
     try:
         stmt = delete(XYAccountLoginLog)
         if days is not None:
-            cutoff = datetime.now() - timedelta(days=days)
+            cutoff = get_beijing_now_naive() - timedelta(days=days)
             stmt = stmt.where(XYAccountLoginLog.created_at < cutoff)
         if cookie_id:
             stmt = stmt.where(XYAccountLoginLog.account_identifier == cookie_id)
@@ -509,7 +509,7 @@ async def reload_system_cache(
             success=True, 
             message="缓存刷新成功",
             data={
-                "timestamp": str(datetime.now()),
+                "timestamp": str(get_beijing_now_naive()),
                 "actions": [
                     "数据库连接池已刷新",
                     "内存缓存已清理"
@@ -875,7 +875,7 @@ async def clear_redelivery_logs(
     
     try:
         # 计算30天前的时间
-        thirty_days_ago = datetime.now() - timedelta(days=30)
+        thirty_days_ago = get_beijing_now_naive() - timedelta(days=30)
         
         # 删除30天前的日志
         stmt = delete(ScheduledRedeliveryLog).where(
@@ -913,7 +913,7 @@ async def clear_rate_logs(
     
     try:
         # 计算30天前的时间
-        thirty_days_ago = datetime.now() - timedelta(days=30)
+        thirty_days_ago = get_beijing_now_naive() - timedelta(days=30)
         
         # 删除30天前的日志
         stmt = delete(ScheduledRateLog).where(
@@ -951,7 +951,7 @@ async def clear_polish_logs(
     
     try:
         # 计算30天前的时间
-        thirty_days_ago = datetime.now() - timedelta(days=30)
+        thirty_days_ago = get_beijing_now_naive() - timedelta(days=30)
         
         # 删除30天前的日志
         stmt = delete(ScheduledPolishLog).where(
@@ -1035,7 +1035,7 @@ async def clear_red_flower_logs(
     from loguru import logger
 
     try:
-        thirty_days_ago = datetime.now() - timedelta(days=30)
+        thirty_days_ago = get_beijing_now_naive() - timedelta(days=30)
         stmt = delete(ScheduledRedFlowerLog).where(
             ScheduledRedFlowerLog.created_at < thirty_days_ago
         )
@@ -1206,7 +1206,7 @@ async def clear_login_renew_logs(
     
     try:
         # 计算30天前的时间
-        thirty_days_ago = datetime.now() - timedelta(days=30)
+        thirty_days_ago = get_beijing_now_naive() - timedelta(days=30)
         
         # 删除30天前的日志
         stmt = delete(ScheduledLoginRenewLog).where(
@@ -1370,7 +1370,7 @@ async def clear_close_notice_logs(
 
     try:
         # 计算30天前的时间
-        thirty_days_ago = datetime.now() - timedelta(days=30)
+        thirty_days_ago = get_beijing_now_naive() - timedelta(days=30)
 
         # 删除30天前的日志
         stmt = delete(ScheduledCloseNoticeLog).where(

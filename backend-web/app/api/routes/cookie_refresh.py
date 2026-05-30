@@ -9,7 +9,7 @@ Cookie 刷新管理路由模块
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Dict, Any
 from loguru import logger
 
@@ -17,7 +17,7 @@ from app.api.deps import get_db_session as get_db
 from common.models.xy_account import XYAccount as Cookie
 from common.schemas.common import ApiResponse
 
-from common.utils.time_utils import safe_isoformat
+from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 router = APIRouter(prefix="/cookie-refresh", tags=["Cookie刷新管理"])
 
 
@@ -54,7 +54,7 @@ async def get_refresh_cooldown(
         password_login_cooldown = False
         password_login_remaining = 0
         if cookie.last_password_login_time:
-            elapsed = (datetime.now() - cookie.last_password_login_time).total_seconds()
+            elapsed = (get_beijing_now_naive() - cookie.last_password_login_time).total_seconds()
             if elapsed < 60:
                 password_login_cooldown = True
                 password_login_remaining = int(60 - elapsed)
@@ -63,7 +63,7 @@ async def get_refresh_cooldown(
         account_error_cooldown = False
         account_error_remaining = 0
         if cookie.last_account_error_time:
-            elapsed = (datetime.now() - cookie.last_account_error_time).total_seconds()
+            elapsed = (get_beijing_now_naive() - cookie.last_account_error_time).total_seconds()
             if elapsed < 18000:  # 5小时 = 18000秒
                 account_error_cooldown = True
                 account_error_remaining = int(18000 - elapsed)
@@ -189,7 +189,7 @@ async def trigger_manual_refresh(
         
         # 检查是否在冷却期
         if cookie.last_password_login_time:
-            elapsed = (datetime.now() - cookie.last_password_login_time).total_seconds()
+            elapsed = (get_beijing_now_naive() - cookie.last_password_login_time).total_seconds()
             if elapsed < 60:
                 return ApiResponse(
                     success=False,
@@ -198,7 +198,7 @@ async def trigger_manual_refresh(
                 )
         
         if cookie.last_account_error_time:
-            elapsed = (datetime.now() - cookie.last_account_error_time).total_seconds()
+            elapsed = (get_beijing_now_naive() - cookie.last_account_error_time).total_seconds()
             if elapsed < 18000:
                 remaining_hours = int((18000 - elapsed) / 3600)
                 remaining_minutes = int(((18000 - elapsed) % 3600) / 60)

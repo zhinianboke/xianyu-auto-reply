@@ -2,8 +2,6 @@
 
 提供确认收货消息的增删改查接口
 """
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -14,6 +12,7 @@ from common.models.confirm_receipt_message import ConfirmReceiptMessage
 from common.models.user import User
 from common.schemas.common import ApiResponse
 from common.utils.local_image_upload import ImageUploadError, save_uploaded_image
+from common.utils.time_utils import get_beijing_now_naive
 
 router = APIRouter(tags=["confirm-receipt-messages"])
 
@@ -76,7 +75,7 @@ async def update_confirm_receipt_message(
         message.enabled = data.enabled
         message.message_content = data.message_content
         message.message_image = data.message_image
-        message.updated_at = datetime.now()
+        message.updated_at = get_beijing_now_naive()
     else:
         # 创建新记录
         message = ConfirmReceiptMessage(

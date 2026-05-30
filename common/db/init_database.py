@@ -28,6 +28,7 @@ from common.db.default_publish_addresses import (
     build_default_publish_addresses,
 )
 from common.db.session import async_engine, async_session_maker
+from common.utils.time_utils import get_beijing_now_naive
 from common.utils.security import generate_secret_key, get_password_hash
 
 
@@ -2716,7 +2717,6 @@ class DatabaseInitializer:
         logger.info("初始化Redis平台日...")
         
         try:
-            from datetime import datetime
             from common.db.redis_client import get_redis_client
             
             redis_client = await get_redis_client()
@@ -2729,7 +2729,7 @@ class DatabaseInitializer:
                 logger.info(f"✓ Redis平台日已存在: {existing_day}")
             else:
                 # 设置当前日期为平台日
-                current_day = datetime.now().strftime("%Y-%m-%d")
+                current_day = get_beijing_now_naive().strftime("%Y-%m-%d")
                 await redis_client.set(platform_day_key, current_day)
                 logger.info(f"✓ Redis平台日初始化完成: {current_day}")
                 

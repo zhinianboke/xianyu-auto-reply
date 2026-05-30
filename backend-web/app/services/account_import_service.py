@@ -26,6 +26,7 @@ from common.models.default_reply import DefaultReply
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.confirm_receipt_message import ConfirmReceiptMessage
 from common.models.auto_rate_config import AutoRateConfig
+from common.utils.time_utils import get_beijing_now_naive
 
 
 def _parse_bool(value: str | None) -> bool:
@@ -337,7 +338,6 @@ class AccountImportService:
                 existing.price = _parse_str(row.get("价格")) or existing.price
                 existing.ai_prompt = _parse_str(row.get("AI提示词")) or existing.ai_prompt
             else:
-                from datetime import datetime
                 item = XYCatalogItem(
                     owner_id=self.owner_id,
                     account_pk=account_pk,
@@ -345,7 +345,7 @@ class AccountImportService:
                     title=_parse_str(row.get("标题")),
                     price=_parse_str(row.get("价格")),
                     ai_prompt=_parse_str(row.get("AI提示词")) or None,
-                    created_at=datetime.now(),
+                    created_at=get_beijing_now_naive(),
                 )
                 self.session.add(item)
 

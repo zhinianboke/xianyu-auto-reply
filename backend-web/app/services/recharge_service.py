@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
@@ -22,7 +21,7 @@ from common.models.recharge_order import RechargeOrder
 from common.models.user_setting import UserSetting
 from app.services.alipay_service import AlipayService
 
-from common.utils.time_utils import safe_isoformat
+from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 logger = logging.getLogger(__name__)
 
 # 余额在 user_settings 中的 key
@@ -210,7 +209,7 @@ class RechargeService:
         # 更新充值订单状态
         order.status = 'paid'
         order.trade_no = trade_no
-        order.paid_at = datetime.now()
+        order.paid_at = get_beijing_now_naive()
 
         await self.session.commit()
         logger.info(

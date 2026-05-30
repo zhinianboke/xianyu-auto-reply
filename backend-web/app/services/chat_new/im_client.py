@@ -15,7 +15,7 @@ import base64
 import json
 import random
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
 import aiohttp
@@ -23,6 +23,7 @@ from loguru import logger
 from sqlalchemy import text
 
 from common.db.session import async_session_maker
+from common.utils.time_utils import get_beijing_now_naive
 from common.utils.xianyu_utils import (
     generate_device_id,
     generate_mid,
@@ -353,7 +354,7 @@ class GoofishImClient:
 
                 if row:
                     token_val, device_id_val, expire_at = row
-                    now = datetime.now()
+                    now = get_beijing_now_naive()
                     if expire_at and expire_at > now:
                         remaining = expire_at - now
                         hours = int(remaining.total_seconds() // 3600)
@@ -391,7 +392,7 @@ class GoofishImClient:
         """
         try:
             ttl_hours = random.uniform(8, 10)
-            expire_at = datetime.now() + timedelta(hours=ttl_hours)
+            expire_at = get_beijing_now_naive() + timedelta(hours=ttl_hours)
 
             async with async_session_maker() as session:
                 await session.execute(

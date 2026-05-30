@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from common.models.account_login_log import XYAccountLoginLog
 from common.models.xy_account import XYAccount
 from common.utils.pagination import execute_paginated_with_filters
-from common.utils.time_utils import safe_isoformat
+from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 
 
 class AccountLoginLogService:
@@ -125,7 +125,7 @@ class AccountLoginLogService:
         """
         if days < 1:
             days = 1
-        cutoff = datetime.now() - timedelta(days=days)
+        cutoff = get_beijing_now_naive() - timedelta(days=days)
         stmt = delete(XYAccountLoginLog).where(XYAccountLoginLog.created_at < cutoff)
         result = await self.session.execute(stmt)
         await self.session.commit()

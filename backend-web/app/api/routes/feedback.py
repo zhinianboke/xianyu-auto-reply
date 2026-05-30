@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, func, desc, asc
@@ -24,7 +23,7 @@ from common.models.feedback_message import FeedbackMessage
 from common.schemas.common import ApiResponse
 from common.utils.text_utils import escape_xss
 
-from common.utils.time_utils import safe_isoformat
+from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 from common.utils.pagination import execute_paginated_with_filters
 router = APIRouter(tags=["feedback"])
 
@@ -277,7 +276,7 @@ async def resolve_feedback(
         return ApiResponse(success=False, message="反馈不存在")
     
     feedback.is_resolved = True
-    feedback.resolved_at = datetime.now()
+    feedback.resolved_at = get_beijing_now_naive()
     await db.commit()
     
     return ApiResponse(success=True, message="已标记为解决")

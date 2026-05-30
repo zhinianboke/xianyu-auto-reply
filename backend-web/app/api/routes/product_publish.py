@@ -24,6 +24,7 @@ from app.services.publish_execution_service import PublishExecutorService, Publi
 from common.models.user import User, UserRole
 from common.schemas.common import ApiResponse
 from common.utils.local_image_upload import ImageUploadError, save_uploaded_image
+from common.utils.time_utils import get_beijing_now_naive
 
 def _is_admin(user: User) -> bool:
     """判断用户是否为管理员"""
@@ -445,7 +446,7 @@ async def clear_publish_logs(
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
     """清空发布日志（只清空30天前的数据）"""
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
     from loguru import logger
     from sqlalchemy import delete
@@ -453,7 +454,7 @@ async def clear_publish_logs(
     from common.models.publish_log import PublishLog
 
     try:
-        thirty_days_ago = datetime.now() - timedelta(days=30)
+        thirty_days_ago = get_beijing_now_naive() - timedelta(days=30)
         stmt = delete(PublishLog).where(
             PublishLog.user_id == current_user.id,
             PublishLog.created_at < thirty_days_ago,

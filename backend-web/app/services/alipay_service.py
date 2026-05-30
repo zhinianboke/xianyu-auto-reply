@@ -15,7 +15,6 @@ import logging
 import random
 import re
 import string
-from datetime import datetime
 from typing import Any, Dict, Optional
 
 import requests
@@ -26,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.system_setting import SystemSetting
+from common.utils.time_utils import get_beijing_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ class AlipayService:
                 'method': 'alipay.trade.precreate',
                 'charset': 'utf-8',
                 'sign_type': 'RSA2',
-                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'timestamp': get_beijing_now_naive().strftime('%Y-%m-%d %H:%M:%S'),
                 'version': '1.0',
                 'biz_content': json.dumps({
                     'out_trade_no': order_no,
@@ -201,7 +201,7 @@ class AlipayService:
     @staticmethod
     def generate_order_no() -> str:
         """生成唯一充值订单号"""
-        ts = datetime.now().strftime('%Y%m%d%H%M%S')
+        ts = get_beijing_now_naive().strftime('%Y%m%d%H%M%S')
         rand = ''.join(random.choices(string.digits, k=6))
         return f"RC{ts}{rand}"
 

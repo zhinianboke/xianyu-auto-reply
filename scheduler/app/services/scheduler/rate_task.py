@@ -24,6 +24,7 @@ from common.db.session import async_session_maker
 from common.models.xy_account import XYAccount
 from common.models.xy_order import XYOrder
 from common.models.scheduled_rate_log import ScheduledRateLog
+from common.utils.time_utils import get_beijing_now_naive
 
 
 # 全局冷却缓存：订单号 -> 冷却过期时间
@@ -165,7 +166,7 @@ class RateTask:
         - 未评价（is_rated = False 或 NULL）
         """
         # 获取今天的开始时间（北京时间）
-        now = datetime.now()
+        now = get_beijing_now_naive()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         
         stmt = select(XYOrder).where(

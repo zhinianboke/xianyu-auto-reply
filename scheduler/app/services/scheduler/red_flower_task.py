@@ -29,6 +29,7 @@ from common.db.session import async_session_maker
 from common.models.scheduled_red_flower_log import ScheduledRedFlowerLog
 from common.models.xy_account import XYAccount
 from common.models.xy_order import XYOrder
+from common.utils.time_utils import get_beijing_now_naive
 from common.utils.xianyu_utils import trans_cookies, generate_sign
 from common.utils.cookie_refresh import (
     is_token_expired_error, handle_token_expired_response,
@@ -157,7 +158,7 @@ class RedFlowerTask:
         - 排除已取消(cancelled)和待付款(processing)的订单
         - 按下单时间升序排列
         """
-        now = datetime.now()
+        now = get_beijing_now_naive()
         ten_days_ago = now - timedelta(days=10)
 
         stmt = select(XYOrder).where(

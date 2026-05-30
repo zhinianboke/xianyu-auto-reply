@@ -15,6 +15,7 @@ from sqlalchemy import text
 
 from common.db.session import async_session_maker
 from common.db.redis_client import get_redis_client
+from common.utils.time_utils import get_beijing_now_naive
 
 
 class DaySwitchTaskService:
@@ -33,7 +34,7 @@ class DaySwitchTaskService:
         
         try:
             # 1. 获取服务器当前日期（北京时间，格式：yyyy-MM-dd）
-            current_day = datetime.now().strftime("%Y-%m-%d")
+            current_day = get_beijing_now_naive().strftime("%Y-%m-%d")
             logger.debug(f"【{self.task_name}】服务器当前日期: {current_day}")
             
             # 2. 从Redis获取平台日

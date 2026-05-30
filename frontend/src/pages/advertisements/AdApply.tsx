@@ -505,8 +505,15 @@ export default function AdApply() {
 
       {/* 图片预览 */}
       {previewImage && (
-        <div className="modal-overlay" onClick={() => setPreviewImage(null)}>
-          <div className="max-w-4xl max-h-[90vh] p-2" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay">
+          <div className="relative max-w-4xl max-h-[90vh] p-2">
+            <button
+              onClick={() => setPreviewImage(null)}
+              className="absolute -top-2 -right-2 z-10 p-1.5 bg-white dark:bg-gray-800 rounded-full shadow-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+              title="关闭"
+            >
+              <X className="w-5 h-5 text-gray-700 dark:text-gray-200" />
+            </button>
             <img src={previewImage} alt="" className="max-w-full max-h-full object-contain rounded-lg" />
           </div>
         </div>
