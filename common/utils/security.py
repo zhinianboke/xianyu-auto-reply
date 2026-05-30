@@ -91,9 +91,17 @@ def get_password_hash(password: str) -> str:
 def create_access_token(
     subject: Union[str, Dict[str, Any]],
     expires_delta: timedelta | None = None,
+    settings: Any = None,
 ) -> str:
-    """创建访问令牌"""
-    settings = get_settings()
+    """创建访问令牌
+
+    Args:
+        subject: 令牌主体（字符串或包含 sub 的字典）
+        expires_delta: 过期时长，默认取配置的 access_token_expire_minutes
+        settings: 配置实例。默认用 common 配置；backend-web 等服务应传入各自的
+            配置实例（其 jwt_secret_key 在启动时已由数据库托管写回），以保证签名密钥一致。
+    """
+    settings = settings or get_settings()
     if isinstance(subject, str):
         to_encode: Dict[str, Any] = {"sub": subject}
     else:
@@ -109,9 +117,16 @@ def create_access_token(
 def create_refresh_token(
     subject: Union[str, Dict[str, Any]],
     expires_delta: timedelta | None = None,
+    settings: Any = None,
 ) -> str:
-    """创建刷新令牌"""
-    settings = get_settings()
+    """创建刷新令牌
+
+    Args:
+        subject: 令牌主体（字符串或包含 sub 的字典）
+        expires_delta: 过期时长，默认取配置的 refresh_token_expire_minutes
+        settings: 配置实例。默认用 common 配置；backend-web 等服务应传入各自的配置实例。
+    """
+    settings = settings or get_settings()
     if isinstance(subject, str):
         to_encode: Dict[str, Any] = {"sub": subject, "type": "refresh"}
     else:
@@ -125,9 +140,14 @@ def create_refresh_token(
     return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
-def decode_token(token: str) -> Dict[str, Any]:
-    """解析令牌"""
-    settings = get_settings()
+def decode_token(token: str, settings: Any = None) -> Dict[str, Any]:
+    """解析令牌
+
+    Args:
+        token: 待解析的 JWT 字符串
+        settings: 配置实例。默认用 common 配置；backend-web 等服务应传入各自的配置实例。
+    """
+    settings = settings or get_settings()
     try:
         payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
     except JWTError as exc:
