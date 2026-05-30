@@ -43,8 +43,8 @@ def _get_thread_local_session_maker():
             settings.async_database_url,
             echo=False,
             pool_pre_ping=False,  # 关闭 pre_ping（asyncmy 新版本不兼容）
-            pool_size=3,
-            max_overflow=5,
+            pool_size=1,   # 兼容层线程为一次性，单协程只需 1 条连接（原 3，避免连接累积）
+            max_overflow=2,  # 仅留少量溢出余量（原 5），降低单引擎最大连接数 8 -> 3
             pool_timeout=30,  # 获取连接超时时间
             pool_recycle=600,  # 连接回收时间（10分钟），防止MySQL断开
         )
@@ -98,6 +98,19 @@ class DBManagerCompat:
                         # 执行异步函数
                         result[0] = new_loop.run_until_complete(async_func(session_maker))
                     finally:
+                        # 主动释放本线程引擎的连接池：本兼容层使用一次性线程，
+                        # threading.local 缓存对新线程必然 miss（每次新建引擎），
+                        # 若不主动 dispose，连接需等 GC 才回收，高并发下易累积、打满 MySQL。
+                        try:
+                            engine = getattr(_thread_local, 'engine', None)
+                            if engine is not None:
+                                new_loop.run_until_complete(engine.dispose())
+                                # 清掉缓存，避免后续误用已释放的引擎
+                                _thread_local.engine = None
+                                if hasattr(_thread_local, 'session_maker'):
+                                    del _thread_local.session_maker
+                        except Exception:
+                            pass
                         # 清理事件循环
                         try:
                             new_loop.run_until_complete(new_loop.shutdown_asyncgens())

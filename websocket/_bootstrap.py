@@ -136,6 +136,12 @@ app.include_router(internal.router)
 app.include_router(cookies_refresh.router)
 app.include_router(password_login.router)
 
+# 开启本进程内浏览器续期执行：所有浏览器续期（含 scheduler / backend-web 的 HTTP 委托）
+# 统一收敛到 WebSocket 进程，与滑块验证同进程串行，复用持久化目录与账号级互斥锁。
+from common.services.cookie_renew_browser_service import enable_local_browser_renew
+
+enable_local_browser_renew()
+
 
 @app.get("/health")
 async def health_check():

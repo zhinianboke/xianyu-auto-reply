@@ -8,6 +8,7 @@ COOKIES续期内部接口
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter
@@ -17,6 +18,7 @@ from sqlalchemy import select
 
 from common.db.session import async_session_maker
 from common.models.xy_account import XYAccount
+from common.services.cookie_renew_browser_service import cookie_renew_browser_service
 from app.services.xianyu.cookies_refresh_service import cookies_refresh_service
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -26,6 +28,52 @@ class CookiesRefreshRequest(BaseModel):
     """COOKIES续期请求。"""
 
     account_id: str
+
+
+class BrowserRenewRequest(BaseModel):
+    """浏览器续期委托请求（由 scheduler / backend-web 调用）。"""
+
+    account_id: str
+    cookies_str: str
+
+
+@router.post("/cookies/browser-renew")
+async def browser_renew(request: BrowserRenewRequest) -> dict[str, Any]:
+    """在 WebSocket 进程内执行浏览器续期（复用持久化目录与账号级互斥锁）。
+
+    供 scheduler / backend-web 通过 HTTP 委托调用，保证所有浏览器续期都收敛到
+    WebSocket 进程，与滑块验证同进程串行执行，避免跨进程并发占用同一持久化目录。
+    """
+    logger.info(f"【内部API】收到账号 {request.account_id} 的浏览器续期委托请求")
+    try:
+        # renew_local 为同步阻塞执行（内部含等待槽位/账号锁 + 浏览器操作），放入线程池
+        result = await asyncio.to_thread(
+            cookie_renew_browser_service.renew_local,
+            request.cookies_str,
+            request.account_id,
+        )
+        return {
+            "success": result.success,
+            "code": 200,
+            "message": result.message,
+            "data": {
+                "has_quick_enter": result.has_quick_enter,
+                "new_cookies_str": result.new_cookies_str,
+                "updated_cookie_names": result.updated_cookie_names,
+            },
+        }
+    except Exception as exc:
+        logger.error(f"【内部API】账号 {request.account_id} 浏览器续期委托异常: {exc}")
+        return {
+            "success": False,
+            "code": 500,
+            "message": f"浏览器续期失败: {exc}",
+            "data": {
+                "has_quick_enter": False,
+                "new_cookies_str": "",
+                "updated_cookie_names": [],
+            },
+        }
 
 
 @router.post("/cookies/refresh")
