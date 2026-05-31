@@ -2188,27 +2188,6 @@ class XianyuAsync:
                 "error_message": str(e),
             }
     
-    async def fetch_item_detail_from_api(self, item_id: str) -> dict:
-        """从API获取商品详情"""
-        try:
-            # 这里可以实现具体的API调用逻辑
-            # 暂时返回空字典，实际使用时需要实现
-            logger.debug(f"【{self.cookie_id}】获取商品详情: {item_id}")
-            return {}
-        except Exception as e:
-            logger.error(f"【{self.cookie_id}】获取商品详情失败: {e}")
-            return {}
-    
-    async def save_item_detail_only(self, item_id: str, detail: str) -> bool:
-        """保存商品详情"""
-        try:
-            # 这里可以实现具体的保存逻辑
-            logger.debug(f"【{self.cookie_id}】保存商品详情: {item_id}")
-            return True
-        except Exception as e:
-            logger.error(f"【{self.cookie_id}】保存商品详情失败: {e}")
-            return False
-    
     async def _cancel_background_tasks(self):
         """取消并清理所有后台任务"""
         tasks_to_cancel = []

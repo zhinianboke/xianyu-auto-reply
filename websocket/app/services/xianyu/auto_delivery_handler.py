@@ -718,12 +718,6 @@ class AutoDeliveryHandler:
         except Exception as e:
             logger.error(f"【{self.cookie_id}】更新订单详情到数据库失败: {self._safe_str(e)}")
     
-    async def fetch_item_detail_from_api(self, item_id: str):
-        return await self.parent.fetch_item_detail_from_api(item_id)
-    
-    async def save_item_detail_only(self, item_id: str, detail: str):
-        return await self.parent.save_item_detail_only(item_id, detail)
-    
     def is_auto_confirm_enabled(self) -> bool:
         return self.parent.is_auto_confirm_enabled()
     
