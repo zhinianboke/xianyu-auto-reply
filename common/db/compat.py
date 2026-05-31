@@ -1107,49 +1107,6 @@ class DBManagerCompat:
                 return False
         return self._run_async(_delete)
     
-    def update_default_reply_image_url(self, cookie_id: str, item_id: str, new_image_url: str) -> bool:
-        """更新默认回复的图片URL（上传CDN后更新）
-        
-        Args:
-            cookie_id: 账号标识
-            item_id: 商品ID，为None表示账号级别默认回复
-            new_image_url: 新的CDN图片URL
-        """
-        async def _update(session_maker):
-            try:
-                async with session_maker() as session:
-                    if item_id:
-                        # 商品级别的默认回复
-                        stmt = select(DefaultReply).where(
-                            and_(
-                                DefaultReply.account_id == cookie_id,
-                                DefaultReply.item_id == item_id
-                            )
-                        )
-                    else:
-                        # 账号级别的默认回复
-                        stmt = select(DefaultReply).where(
-                            and_(
-                                DefaultReply.account_id == cookie_id,
-                                DefaultReply.item_id.is_(None)
-                            )
-                        )
-                    result = await session.execute(stmt)
-                    default_reply = result.scalar_one_or_none()
-                    
-                    if default_reply:
-                        default_reply.reply_image = new_image_url
-                        await session.commit()
-                        logger.info(f"更新默认回复图片URL成功: cookie_id={cookie_id}, item_id={item_id}")
-                        return True
-                    else:
-                        logger.warning(f"未找到默认回复记录: cookie_id={cookie_id}, item_id={item_id}")
-                        return False
-            except Exception as e:
-                logger.error(f"更新默认回复图片URL失败: {e}")
-                return False
-        return self._run_async(_update)
-    
     def get_item_replay(self, item_id: str) -> Optional[Dict[str, Any]]:
         """获取商品回复信息（用于变量替换）"""
         # 返回空字典，变量替换时会使用默认值
