@@ -496,6 +496,25 @@ class AccountService:
         # 同步内存对象属性（expire_on_commit=False 下对象属性不会自动刷新）
         account.auto_red_flower = auto_red_flower
 
+    async def update_ai_reply_block_ordered_users(self, account: XYAccount, ai_reply_block_ordered_users: bool) -> None:
+        """更新已下单用户禁止AI回复开关
+        
+        使用显式 UPDATE SQL 写入，确保操作一定会发送 UPDATE 语句到数据库。
+        
+        Args:
+            account: 账号对象
+            ai_reply_block_ordered_users: 是否禁止对已下单用户进行AI回复
+        """
+        stmt = (
+            update(XYAccount)
+            .where(XYAccount.id == account.id)
+            .values(ai_reply_block_ordered_users=ai_reply_block_ordered_users)
+        )
+        await self.session.execute(stmt)
+        await self.session.commit()
+        # 同步内存对象属性（expire_on_commit=False 下对象属性不会自动刷新）
+        account.ai_reply_block_ordered_users = ai_reply_block_ordered_users
+
     async def update_delivery_disabled(
         self,
         account: XYAccount,

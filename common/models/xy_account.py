@@ -97,6 +97,12 @@ class XYAccount(TimestampMixin, Base):
         JSON, comment="禁止发货排除商品列表（item_id 数组，命中后按正常流程发货）"
     )
 
+    # 已下单用户禁止AI回复开关
+    # 开启后：对已在订单表中有订单记录的买家，跳过AI回复，使用关键词或默认回复
+    ai_reply_block_ordered_users: Mapped[bool] = mapped_column(
+        Boolean, default=False, comment="已下单用户禁止AI回复"
+    )
+
     # 关系定义 - 无外键约束
     owner: Mapped["User"] = relationship(
         "User",

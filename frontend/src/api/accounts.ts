@@ -67,6 +67,7 @@ export const getAccountDetailsPaginated = async (
     confirm_before_send?: boolean
     send_before_confirm?: boolean
     auto_red_flower?: boolean
+    ai_reply_block_ordered_users?: boolean
     delivery_disabled?: boolean
     delivery_disabled_reason?: string
     auto_close_order?: boolean
@@ -133,6 +134,7 @@ export const getAccountDetailsPaginated = async (
       confirm_before_send: item.confirm_before_send || false,
       send_before_confirm: item.send_before_confirm || false,
       auto_red_flower: item.auto_red_flower || false,
+      ai_reply_block_ordered_users: item.ai_reply_block_ordered_users || false,
       delivery_disabled: item.delivery_disabled || false,
       delivery_disabled_reason: item.delivery_disabled_reason || '',
       auto_close_order: item.auto_close_order || false,
@@ -256,6 +258,11 @@ export const updateAccountSendBeforeConfirm = (id: string, sendBeforeConfirm: bo
 // 更新自动求小红花开关
 export const updateAccountAutoRedFlower = (id: string, autoRedFlower: boolean): Promise<ApiResponse> => {
   return put(`${COOKIE_PREFIX}/${id}/auto-red-flower`, { auto_red_flower: autoRedFlower })
+}
+
+// 更新已下单用户禁止AI回复开关
+export const updateAccountAiReplyBlockOrderedUsers = (id: string, aiReplyBlockOrderedUsers: boolean): Promise<ApiResponse> => {
+  return put(`${COOKIE_PREFIX}/${id}/ai-reply-block-ordered-users`, { ai_reply_block_ordered_users: aiReplyBlockOrderedUsers })
 }
 
 // ==================== 禁止发货规则 ====================
