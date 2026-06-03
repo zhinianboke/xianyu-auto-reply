@@ -16,6 +16,7 @@ import asyncio
 from typing import Optional, Dict
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
@@ -612,11 +613,74 @@ class OrderService:
     }
     _XIANYU_ORDER_PAGE_SIZE = 30
 
-    async def fetch_xianyu_orders(self, account) -> dict:
-        """获取闲鱼卖家已售订单并同步到数据库
+    async def fetch_xianyu_orders(
+        self,
+        account,
+        query_code: str = "ALL",
+        max_pages: int | None = None,
+    ) -> dict:
+        """获取闲鱼卖家已售订单并同步到数据库（账号级加锁入口）
+
+        通过 Redis 账号级互斥锁，保证同一账号同一时刻只有一个同步流程在
+        拉取+落库，避免「定时获取闲鱼订单(ALL)」与「获取待发货订单(NOT_SHIP)」
+        两个任务并发 upsert 同一订单。Redis 不可用时降级为无锁执行，
+        由 xy_orders 的 (account_id, order_no) 唯一约束做最终兜底。
+
+        Args:
+            account: XYAccount 对象，需要 cookie / account_id / owner_id
+            query_code: 闲鱼订单查询类型，"ALL"=全部订单，"NOT_SHIP"=待发货订单
+            max_pages: 最大拉取页数；None 表示按 totalCount 翻页直到结束，
+                       传入正整数则最多只拉该页数（如待发货任务只拉 1 页）
+
+        Returns:
+            { total_fetched, new_inserted, updated, failed, errors }
+        """
+        from common.db.redis_client import distributed_lock
+
+        account_id = account.account_id
+        lock_name = f"order_sync:{account_id}"
+        try:
+            async with distributed_lock(
+                lock_name, expire=180, blocking=True, timeout=8
+            ) as lock:
+                if not lock.is_locked:
+                    logger.info(
+                        f"获取闲鱼订单: 账号 {account_id} 同步锁被占用，"
+                        f"跳过本次（避免与其他同步任务并发）"
+                    )
+                    return {
+                        'total_fetched': 0,
+                        'new_inserted': 0,
+                        'updated': 0,
+                        'failed': 0,
+                        'errors': ['账号同步锁被占用，已跳过'],
+                    }
+                return await self._fetch_xianyu_orders_impl(
+                    account, query_code, max_pages
+                )
+        except Exception as e:
+            # Redis 不可用等异常时降级为无锁执行，靠唯一约束兜底防止重复插入
+            logger.warning(
+                f"获取闲鱼订单: 账号 {account_id} 获取同步锁异常，"
+                f"降级无锁执行（依赖唯一约束兜底）: {e}"
+            )
+            return await self._fetch_xianyu_orders_impl(
+                account, query_code, max_pages
+            )
+
+    async def _fetch_xianyu_orders_impl(
+        self,
+        account,
+        query_code: str = "ALL",
+        max_pages: int | None = None,
+    ) -> dict:
+        """获取闲鱼卖家已售订单并同步到数据库（实际实现，调用方需已持有账号锁）
         
         Args:
             account: XYAccount 对象，需要 cookie / account_id / owner_id
+            query_code: 闲鱼订单查询类型，"ALL"=全部订单，"NOT_SHIP"=待发货订单
+            max_pages: 最大拉取页数；None 表示按 totalCount 翻页直到结束，
+                       传入正整数则最多只拉该页数（如待发货任务只拉 1 页）
             
         Returns:
             { total_fetched, new_inserted, updated, failed, errors }
@@ -631,7 +695,7 @@ class OrderService:
         errors = []
         try:
             first_page_data = await self._fetch_sold_orders_page(
-                cookies_str, 1, account_id=account.account_id
+                cookies_str, 1, account_id=account.account_id, query_code=query_code
             )
         except Exception as e:
             errors.append(f"第1页请求失败: {str(e)}")
@@ -670,7 +734,13 @@ class OrderService:
 
         total_count = first_page_data.get('total_count', 0)
         total_pages = max(1, (total_count + self._XIANYU_ORDER_PAGE_SIZE - 1) // self._XIANYU_ORDER_PAGE_SIZE)
-        logger.info(f"获取闲鱼订单: 账号 {account.account_id} 总数{total_count}, 预计共{total_pages}页")
+        # max_pages 限制最大拉取页数（如待发货任务只拉首页）
+        if max_pages is not None and max_pages > 0:
+            total_pages = min(total_pages, max_pages)
+        logger.info(
+            f"获取闲鱼订单: 账号 {account.account_id} 查询类型{query_code} "
+            f"总数{total_count}, 预计共{total_pages}页"
+        )
 
         for page in range(1, total_pages + 1):
             if page == 1:
@@ -678,7 +748,7 @@ class OrderService:
             else:
                 try:
                     page_data = await self._fetch_sold_orders_page(
-                        cookies_str, page, account_id=account.account_id
+                        cookies_str, page, account_id=account.account_id, query_code=query_code
                     )
                 except Exception as e:
                     errors.append(f"第{page}页请求失败: {str(e)}")
@@ -780,7 +850,8 @@ class OrderService:
 
     async def _fetch_sold_orders_page(
         self, cookies_str: str, page: int,
-        account_id: str = None, is_retry: bool = False
+        account_id: str = None, is_retry: bool = False,
+        query_code: str = "ALL",
     ) -> Optional[dict]:
         """获取闲鱼卖家已售订单的单页数据
         
@@ -791,6 +862,7 @@ class OrderService:
             page: 页码（从1开始）
             account_id: 账号ID，用于令牌过期时更新数据库Cookie（可选）
             is_retry: 是否为令牌过期后的重试请求
+            query_code: 查询类型，"ALL"=全部，"NOT_SHIP"=待发货
             
         Returns:
             { items, next_page, total_count, error }
@@ -812,7 +884,7 @@ class OrderService:
             "pageNumber": page,
             "rowsPerPage": self._XIANYU_ORDER_PAGE_SIZE,
             "orderIds": "",
-            "queryCode": "ALL",
+            "queryCode": query_code,
             "orderSearchParam": "{}"
         }, separators=(',', ':'))
         
@@ -872,7 +944,8 @@ class OrderService:
                                 await update_account_cookies_in_db(account_id, new_cookies_str)
                             # 用新Cookie重试，并将最新Cookie传递给调用方
                             retry_result = await self._fetch_sold_orders_page(
-                                new_cookies_str, page, account_id, is_retry=True
+                                new_cookies_str, page, account_id, is_retry=True,
+                                query_code=query_code
                             )
                             if retry_result and 'cookies_str' not in retry_result:
                                 retry_result['cookies_str'] = new_cookies_str
@@ -1084,8 +1157,30 @@ class OrderService:
                 source='fetch_xianyu',
             )
             self.session.add(new_order)
-            await self.session.commit()
-            return 'inserted'
+            try:
+                await self.session.commit()
+                return 'inserted'
+            except IntegrityError:
+                # 并发兜底：(account_id, order_no) 唯一约束命中，说明另一个任务
+                # （如定时获取闲鱼订单 / 获取待发货订单）已抢先插入同一订单。
+                # 回滚后改走更新分支，避免重复插入，也保证收货信息得到补充。
+                await self.session.rollback()
+                logger.info(
+                    f"订单 {order_no} 并发插入命中唯一约束，转为更新已存在记录"
+                )
+                stmt = select(XYOrder).where(
+                    XYOrder.order_no == order_no,
+                    XYOrder.account_id == account.account_id
+                )
+                result = await self.session.execute(stmt)
+                concurrent_existing = result.scalars().first()
+                if concurrent_existing is None:
+                    # 理论上不会发生（唯一约束刚命中），保守跳过
+                    logger.warning(
+                        f"订单 {order_no} 唯一约束命中但未查到已存在记录，跳过"
+                    )
+                    return 'skipped'
+                return await self._upsert_order(parsed, account, existing=concurrent_existing)
 
 
 class OrderDetailService:
