@@ -23,6 +23,7 @@ from common.schemas.account import (
     AccountBatchIdsUpdate,
     AccountBatchStatusUpdate,
     AccountAutoRedFlowerUpdate,
+    AccountAiReplyBlockOrderedUsersUpdate,
     AccountConfirmBeforeSendUpdate,
     AccountCookieUpdate,
     AccountCreate,
@@ -199,6 +200,7 @@ async def list_cookie_details(
                 confirm_before_send=bool(account.confirm_before_send),
                 send_before_confirm=bool(account.send_before_confirm),
                 auto_red_flower=bool(account.auto_red_flower),
+                ai_reply_block_ordered_users=bool(account.ai_reply_block_ordered_users),
                 delivery_disabled=bool(account.delivery_disabled),
                 delivery_disabled_reason=account.delivery_disabled_reason or "",
                 auto_close_order=bool(account.auto_close_order),
@@ -318,6 +320,7 @@ async def list_cookie_details_paginated(
             "confirm_before_send": bool(account.confirm_before_send),
             "send_before_confirm": bool(account.send_before_confirm),
             "auto_red_flower": bool(account.auto_red_flower),
+            "ai_reply_block_ordered_users": bool(account.ai_reply_block_ordered_users),
             "delivery_disabled": bool(account.delivery_disabled),
             "delivery_disabled_reason": account.delivery_disabled_reason or "",
             "auto_close_order": bool(account.auto_close_order),
@@ -773,6 +776,19 @@ async def update_account_auto_red_flower(
     account = await _get_account_or_404(current_user, account_id, account_service)
     await account_service.update_auto_red_flower(account, payload.auto_red_flower)
     return ApiResponse(success=True, message="自动求小红花设置已更新")
+
+
+@router.put("/{account_id}/ai-reply-block-ordered-users", response_model=ApiResponse)
+async def update_account_ai_reply_block_ordered_users(
+    account_id: str,
+    payload: AccountAiReplyBlockOrderedUsersUpdate,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+) -> ApiResponse:
+    """更新已下单用户禁止AI回复开关"""
+    account = await _get_account_or_404(current_user, account_id, account_service)
+    await account_service.update_ai_reply_block_ordered_users(account, payload.ai_reply_block_ordered_users)
+    return ApiResponse(success=True, message="已下单用户禁止AI回复设置已更新")
 
 
 @router.put("/{account_id}/delivery-disabled", response_model=ApiResponse)

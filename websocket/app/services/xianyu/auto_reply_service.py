@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import os
 import time
+import traceback
 from typing import Optional, List, Dict, Any
 from contextvars import ContextVar
 
-from sqlalchemy import select, text
+from sqlalchemy import select, text, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
@@ -26,6 +27,7 @@ from common.models.xy_account import XYAccount
 from common.models.xy_keyword_rule import XYKeywordRule
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.default_reply import DefaultReply, DefaultReplyRecord
+from common.models.xy_order import XYOrder
 from common.db.session import async_session_maker
 
 from app.services.xianyu.resource_manager import pause_manager
@@ -476,7 +478,6 @@ class AutoReplyService:
                 return keywords
         except Exception as e:
             logger.error(f"【{self.cookie_id}】获取消息过滤关键词失败: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             return []
     
@@ -1493,6 +1494,17 @@ class AutoReplyService:
             if not account:
                 return None
             
+            # 【新增】检查是否开启"已下单用户禁止AI回复"开关
+            if account.ai_reply_block_ordered_users:
+                # 检查该买家是否在订单表中有订单记录
+                has_orders = await self._check_user_has_orders(session, send_user_id)
+                if has_orders:
+                    logger.info(f"【{self.cookie_id}】用户 {send_user_id} 已下单，跳过AI回复（ai_reply_block_ordered_users=True）")
+                    if reply_trace is not None:
+                        reply_trace.setdefault("context_snapshot", {})["ai_blocked_reason"] = "ordered_user"
+                        reply_trace.setdefault("context_snapshot", {})["buyer_has_orders"] = True
+                    return None  # 返回None，流程会自动进入默认回复判断
+            
             ai_engine = get_ai_reply_engine()
             if not await ai_engine.is_ai_enabled(self.cookie_id, session):
                 logger.debug(f"【{self.cookie_id}】AI回复未启用")
@@ -1575,3 +1587,40 @@ class AutoReplyService:
         except Exception as e:
             logger.error(f"【{self.cookie_id}】获取AI回复失败: {e}")
             return None
+
+    async def _check_user_has_orders(self, session: AsyncSession, buyer_user_id: str) -> bool:
+        """检查指定买家在当前账号下是否有订单记录
+        
+        Args:
+            session: 数据库会话
+            buyer_user_id: 买家用户ID
+            
+        Returns:
+            True表示有订单，False表示无订单
+        """
+        try:
+            # 防御性检查：买家ID为空时直接返回False
+            if not buyer_user_id or not buyer_user_id.strip():
+                logger.info(f"【{self.cookie_id}】买家ID为空，跳过订单检查")
+                return False
+            
+            # 检查订单表中是否存在该买家的订单记录
+            # 使用 account_id 字段匹配卖家账号（对应订单表的 seller_account_id）
+            # 注意：account_id 和 buyer_id 都可能为 None，需要显式排除
+            stmt = select(exists().where(
+                XYOrder.account_id == self.cookie_id,
+                XYOrder.buyer_id == buyer_user_id,
+                XYOrder.account_id.isnot(None),  # 显式排除 account_id 为空的记录
+                XYOrder.buyer_id.isnot(None),    # 显式排除 buyer_id 为空的记录
+            ))
+            result = await session.execute(stmt)
+            has_orders = result.scalar()
+            
+            logger.info(f"【{self.cookie_id}】检查买家 {buyer_user_id} 订单记录: {has_orders}")
+            return bool(has_orders)
+            
+        except Exception as e:
+            logger.error(f"【{self.cookie_id}】检查买家订单记录失败: {e}")
+            logger.error(traceback.format_exc())
+            # 出错时返回False，不影响正常流程
+            return False

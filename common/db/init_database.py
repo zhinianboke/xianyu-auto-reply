@@ -1358,6 +1358,7 @@ class DatabaseInitializer:
             ("auto_close_order", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '主动关闭订单开关'", "delivery_disabled_reason"),
             ("delivery_only_card_after_close", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '关闭订单后继续发货（只发卡券）'", "auto_close_order"),
             ("delivery_disabled_excluded_items", "JSON DEFAULT NULL COMMENT '禁止发货排除商品列表（item_id 数组，命中后按正常流程发货）'", "delivery_only_card_after_close"),
+            ("ai_reply_block_ordered_users", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '已下单用户禁止AI回复'", "delivery_disabled_excluded_items"),
         ],
         "xy_orders": [
             ("is_bargain", "TINYINT(1) DEFAULT 0 COMMENT '是否小刀'", "account_name"),
