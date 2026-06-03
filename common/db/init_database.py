@@ -200,6 +200,13 @@ class DatabaseInitializer:
             "定时获取闲鱼订单数据",
         ),
         (
+            "fetch_pending_orders",
+            "获取待发货订单任务",
+            60,
+            True,
+            "定时获取待发货订单并同步收货人姓名/手机号/地址等信息",
+        ),
+        (
             "login_renew",
             "登录续期任务",
             600,
@@ -403,6 +410,7 @@ class DatabaseInitializer:
                 synced_at DATETIME COMMENT '同步时间',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                UNIQUE KEY uk_order_account_no (account_id, order_no),
                 INDEX idx_owner_id (owner_id),
                 INDEX idx_order_no (order_no),
                 INDEX idx_account_id (account_id),
@@ -2521,6 +2529,44 @@ class DatabaseInitializer:
                     logger.info("✓ xy_risk_control_logs: 创建 idx_rcl_owner_created 复合索引")
             except Exception as e:
                 logger.warning(f"✗ xy_risk_control_logs idx_rcl_owner_created 创建失败: {e}")
+
+            # 为 xy_orders 补建 (account_id, order_no) 唯一约束 —— 防止「定时获取闲鱼订单」
+            # 与「获取待发货订单」两个任务并发 upsert 时重复插入同一订单（B方案兜底）。
+            # 注意：项目硬性规范禁止删除数据，存在历史重复数据时不自动清理，
+            # 仅打印警告并跳过创建，待人工合并后下次启动自检再补建。
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_orders'
+                    AND INDEX_NAME = 'uk_order_account_no'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    # 先检测是否存在 (account_id, order_no) 重复数据
+                    dup_check = text("""
+                        SELECT COUNT(*) FROM (
+                            SELECT account_id, order_no
+                            FROM xy_orders
+                            GROUP BY account_id, order_no
+                            HAVING COUNT(*) > 1
+                        ) AS dup
+                    """)
+                    dup_result = await conn.execute(dup_check)
+                    dup_groups = dup_result.scalar() or 0
+                    if dup_groups > 0:
+                        logger.warning(
+                            f"✗ xy_orders 存在 {dup_groups} 组 (account_id, order_no) 重复数据，"
+                            f"为遵守禁止删除数据规范，暂不创建 uk_order_account_no 唯一约束。"
+                            f"请人工合并重复订单后，重启服务自动补建（当前由 Redis 账号锁兜底防并发）"
+                        )
+                    else:
+                        await conn.execute(text(
+                            "ALTER TABLE xy_orders ADD UNIQUE KEY uk_order_account_no (account_id, order_no)"
+                        ))
+                        logger.info("✓ xy_orders: 创建 uk_order_account_no 唯一约束")
+            except Exception as e:
+                logger.warning(f"✗ xy_orders uk_order_account_no 创建失败: {e}")
 
 
     async def create_default_admin(self):
