@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import os
 import time
+import traceback
 from typing import Optional, List, Dict, Any
 from contextvars import ContextVar
 
-from sqlalchemy import select, text
+from sqlalchemy import select, text, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
@@ -26,6 +27,7 @@ from common.models.xy_account import XYAccount
 from common.models.xy_keyword_rule import XYKeywordRule
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.default_reply import DefaultReply, DefaultReplyRecord
+from common.models.xy_order import XYOrder
 from common.db.session import async_session_maker
 
 from app.services.xianyu.resource_manager import pause_manager
@@ -476,7 +478,6 @@ class AutoReplyService:
                 return keywords
         except Exception as e:
             logger.error(f"【{self.cookie_id}】获取消息过滤关键词失败: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             return []
     
@@ -1598,12 +1599,9 @@ class AutoReplyService:
             True表示有订单，False表示无订单
         """
         try:
-            from common.models.xy_order import XYOrder
-            from sqlalchemy import exists
-            
             # 防御性检查：买家ID为空时直接返回False
             if not buyer_user_id or not buyer_user_id.strip():
-                logger.debug(f"【{self.cookie_id}】买家ID为空，跳过订单检查")
+                logger.info(f"【{self.cookie_id}】买家ID为空，跳过订单检查")
                 return False
             
             # 检查订单表中是否存在该买家的订单记录
@@ -1618,12 +1616,11 @@ class AutoReplyService:
             result = await session.execute(stmt)
             has_orders = result.scalar()
             
-            logger.debug(f"【{self.cookie_id}】检查买家 {buyer_user_id} 订单记录: {has_orders}")
+            logger.info(f"【{self.cookie_id}】检查买家 {buyer_user_id} 订单记录: {has_orders}")
             return bool(has_orders)
             
         except Exception as e:
             logger.error(f"【{self.cookie_id}】检查买家订单记录失败: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             # 出错时返回False，不影响正常流程
             return False

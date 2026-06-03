@@ -37,6 +37,7 @@ async def get_redis_client() -> redis.Redis:
             socket_timeout=5,          # 读写超时 5 秒
             socket_connect_timeout=3,  # 连接超时 3 秒
             retry_on_timeout=True,     # 超时后自动重试一次
+            protocol=2,                # 强制使用 RESP2，兼容 Redis 5.x 及以下版本
         )
         _redis_client = redis.Redis(connection_pool=_redis_pool)
         
