@@ -135,8 +135,9 @@ async def update_dock_record(
     service: DockRecordService = Depends(get_dock_record_service),
 ) -> ApiResponse:
     """更新对接记录"""
+    _, is_admin = resolve_owner_scope(current_user)
     update_data = data.model_dump(exclude_unset=True)
-    success = await service.update_dock_record(record_id, current_user.id, **update_data)
+    success = await service.update_dock_record(record_id, current_user.id, is_admin=is_admin, **update_data)
     if not success:
         return ApiResponse(success=False, message="对接记录不存在或无权限")
     return ApiResponse(success=True, message="更新成功")
@@ -164,7 +165,8 @@ async def delete_dock_record(
     service: DockRecordService = Depends(get_dock_record_service),
 ) -> ApiResponse:
     """删除对接记录"""
-    success = await service.delete_dock_record(record_id, current_user.id)
+    _, is_admin = resolve_owner_scope(current_user)
+    success = await service.delete_dock_record(record_id, current_user.id, is_admin=is_admin)
     if not success:
         return ApiResponse(success=False, message="对接记录不存在或无权限")
     return ApiResponse(success=True, message="删除成功")
@@ -208,25 +210,38 @@ async def get_pickup_url(
 
     返回一个拼接了用户提货秘钥和对接记录ID的URL，外部系统GET访问即可提货。
     秘钥为空时自动生成。地址优先使用站点对外域名（前端地址），否则使用当前请求来源。
+
+    权限：记录归属人可获取；管理员可获取任意用户的对接记录提货地址。
+    注意：提货校验以"对接记录归属人"的秘钥为准，因此管理员代为获取时，
+    使用并按需生成该记录归属人的提货秘钥，保证生成的链接可正常提货。
     """
-    # 校验对接记录归属
+    # 校验对接记录归属（管理员不限制归属）
+    _, is_admin = resolve_owner_scope(current_user)
     record = await session.get(DockRecord, record_id)
     if not record:
         return ApiResponse(success=False, message="对接记录不存在")
-    if record.user_id != current_user.id:
+    if not is_admin and record.user_id != current_user.id:
         return ApiResponse(success=False, message="无权操作该对接记录")
 
-    # 获取或生成用户提货秘钥
-    if not current_user.secret_key:
+    # 提货秘钥归属于"对接记录归属人"：本人操作即当前用户；管理员代为操作时取记录归属人
+    if record.user_id == current_user.id:
+        key_owner = current_user
+    else:
+        key_owner = await session.get(User, record.user_id)
+        if not key_owner:
+            return ApiResponse(success=False, message="对接记录归属用户不存在")
+
+    # 获取或生成提货秘钥
+    if not key_owner.secret_key:
         for _ in range(10):
             key = _generate_secret_key()
-            current_user.secret_key = key
+            key_owner.secret_key = key
             try:
                 await session.commit()
                 break
             except Exception:
                 await session.rollback()
-                current_user.secret_key = None
+                key_owner.secret_key = None
                 continue
         else:
             return ApiResponse(success=False, message="生成提货秘钥失败，请重试")
@@ -237,7 +252,7 @@ async def get_pickup_url(
     if not base:
         base = str(request.base_url).rstrip('/')
 
-    pickup_url = f"{base}/api/v1/distribution/pickup?key={current_user.secret_key}&dock_id={record_id}"
+    pickup_url = f"{base}/api/v1/distribution/pickup?key={key_owner.secret_key}&dock_id={record_id}"
     return ApiResponse(success=True, message="获取成功", data={"pickup_url": pickup_url})
 
 
@@ -342,8 +357,9 @@ async def toggle_sub_dock(
     current_user: User = Depends(deps.get_current_active_user),
     service: DockRecordService = Depends(get_dock_record_service),
 ) -> ApiResponse:
-    """开放/关闭下级对接（仅一级分销商可操作自己的对接记录）"""
-    success = await service.toggle_allow_sub_dock(record_id, current_user.id, data.allow, data.sub_dock_price, data.sub_dock_visibility)
+    """开放/关闭下级对接（一级分销商可操作自己的对接记录，管理员可操作任意记录）"""
+    _, is_admin = resolve_owner_scope(current_user)
+    success = await service.toggle_allow_sub_dock(record_id, current_user.id, data.allow, data.sub_dock_price, data.sub_dock_visibility, is_admin=is_admin)
     if not success:
         return ApiResponse(success=False, message="对接记录不存在或无权限（仅一级分销商可操作）")
     action = "开放" if data.allow else "关闭"
