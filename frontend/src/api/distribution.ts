@@ -37,6 +37,7 @@ export interface SupplyListResponse {
 export interface DockRecord {
   id: number
   user_id: number
+  owner_username?: string  // 记录归属用户名（管理员视图展示）
   card_id: number
   card_name?: string
   dock_name: string

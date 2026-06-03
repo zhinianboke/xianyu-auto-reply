@@ -72,6 +72,7 @@ class DockRecordService:
         self,
         record_id: int,
         user_id: int,
+        is_admin: bool = False,
         **kwargs,
     ) -> bool:
         """更新对接记录
@@ -79,15 +80,17 @@ class DockRecordService:
         Args:
             record_id: 记录ID
             user_id: 用户ID（权限校验）
+            is_admin: 是否管理员，管理员可操作任意用户的对接记录
             **kwargs: 要更新的字段
             
         Returns:
             是否更新成功
         """
-        stmt = select(DockRecord).where(
-            DockRecord.id == record_id,
-            DockRecord.user_id == user_id,
-        )
+        # 非管理员仅能操作本人记录；管理员不限制归属
+        conditions = [DockRecord.id == record_id]
+        if not is_admin:
+            conditions.append(DockRecord.user_id == user_id)
+        stmt = select(DockRecord).where(*conditions)
         result = await self.session.execute(stmt)
         record = result.scalar_one_or_none()
         if not record:
@@ -141,20 +144,22 @@ class DockRecordService:
         await self.session.commit()
         return True
 
-    async def delete_dock_record(self, record_id: int, user_id: int) -> bool:
+    async def delete_dock_record(self, record_id: int, user_id: int, is_admin: bool = False) -> bool:
         """删除对接记录
         
         Args:
             record_id: 记录ID
             user_id: 用户ID（权限校验）
+            is_admin: 是否管理员，管理员可删除任意用户的对接记录
             
         Returns:
             是否删除成功
         """
-        stmt = select(DockRecord).where(
-            DockRecord.id == record_id,
-            DockRecord.user_id == user_id,
-        )
+        # 非管理员仅能删除本人记录；管理员不限制归属
+        conditions = [DockRecord.id == record_id]
+        if not is_admin:
+            conditions.append(DockRecord.user_id == user_id)
+        stmt = select(DockRecord).where(*conditions)
         result = await self.session.execute(stmt)
         record = result.scalar_one_or_none()
         if not record:
@@ -162,7 +167,7 @@ class DockRecordService:
 
         await self.session.delete(record)
         await self.session.commit()
-        logger.info(f"用户 {user_id} 删除对接记录 {record_id}")
+        logger.info(f"用户 {user_id} 删除对接记录 {record_id}（管理员={is_admin}）")
         return True
 
     async def get_dock_records_paginated(
@@ -219,9 +224,11 @@ class DockRecordService:
                 Card.fee_payer, Card.min_price,
                 ParentDock.sub_dock_price.label("parent_sub_dock_price"),
                 Card.user_id.label("card_owner_id"),
+                User.username.label("owner_username"),
             )
             .outerjoin(Card, DockRecord.card_id == Card.id)
             .outerjoin(ParentDock, DockRecord.parent_dock_id == ParentDock.id)
+            .outerjoin(User, DockRecord.user_id == User.id)
             .where(*base_conditions)
             .order_by(DockRecord.id.desc())
             .offset(offset)
@@ -263,7 +270,7 @@ class DockRecordService:
             records.append(self._record_to_dict(
                 record, display_price, card_name,
                 is_multi_spec, spec_name, spec_value, fee_payer, min_price,
-                contact,
+                contact, owner_username=row.owner_username,
             ))
 
         return {
@@ -285,12 +292,14 @@ class DockRecordService:
         fee_payer: Optional[str] = None,
         min_price: Optional[str] = None,
         contact: Optional[Dict[str, str]] = None,
+        owner_username: Optional[str] = None,
     ) -> Dict[str, Any]:
         """将对接记录转换为字典"""
         c = contact or {}
         return {
             "id": record.id,
             "user_id": record.user_id,
+            "owner_username": owner_username,
             "card_id": record.card_id,
             "card_name": card_name,
             "dock_name": record.dock_name,
@@ -798,8 +807,9 @@ class DockRecordService:
         allow: bool,
         sub_dock_price: Optional[str] = None,
         sub_dock_visibility: Optional[str] = None,
+        is_admin: bool = False,
     ) -> bool:
-        """开放/关闭下级对接（仅一级分销商可操作自己的对接记录）
+        """开放/关闭下级对接（一级分销商可操作自己的对接记录，管理员可操作任意记录）
         
         Args:
             record_id: 对接记录ID
@@ -807,15 +817,16 @@ class DockRecordService:
             allow: 是否允许下级对接
             sub_dock_price: 给下级的对接价格
             sub_dock_visibility: 下级对接可见性：public/dealer_only
+            is_admin: 是否管理员，管理员不限制记录归属
             
         Returns:
             是否操作成功
         """
-        stmt = select(DockRecord).where(
-            DockRecord.id == record_id,
-            DockRecord.user_id == user_id,
-            DockRecord.level == 1,
-        )
+        # 仅限一级分销记录；非管理员还需校验记录归属
+        conditions = [DockRecord.id == record_id, DockRecord.level == 1]
+        if not is_admin:
+            conditions.append(DockRecord.user_id == user_id)
+        stmt = select(DockRecord).where(*conditions)
         result = await self.session.execute(stmt)
         record = result.scalar_one_or_none()
         if not record:
