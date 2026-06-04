@@ -140,8 +140,8 @@ class XianyuSliderStealth(PlaywrightSliderService):
             logger.info(f"【{self.pure_user_id}】检查是否有[快速进入]按钮...")
             quick_enter_clicked = self._find_and_click_quick_enter_button()
             if quick_enter_clicked:
-                logger.info(f"【{self.pure_user_id}】已点击[快速进入]按钮，等待3秒后获取Cookie...")
-                time.sleep(3)
+                logger.info(f"【{self.pure_user_id}】已点击[快速进入]按钮，等待5秒让界面自动刷新后获取Cookie...")
+                time.sleep(5)
                 cookies = self._get_cookies()
                 if cookies and cookies.get("unb"):
                     logger.success(f"【{self.pure_user_id}】✅ 点击[快速进入]后成功获取到有效Cookie（含unb）")
