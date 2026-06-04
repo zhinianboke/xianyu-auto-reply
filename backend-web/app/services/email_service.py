@@ -17,6 +17,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from common.db.session import async_session_maker
 from common.utils.time_utils import get_beijing_now_naive
 
@@ -498,7 +499,8 @@ async def send_withdraw_notification_email(
     
     # 生成审核链接
     from app.services.settlement_service import generate_review_token
-    base_url = "https://xy.zhinianboke.com"
+    # 公网访问地址从配置读取，避免写死域名，方便他人部署
+    base_url = get_settings().backend_web_public_url.rstrip('/')
     approve_token = generate_review_token(record_id, "approve")
     reject_token = generate_review_token(record_id, "reject")
     approve_url = f"{base_url}/api/v1/payment/withdraw/review?id={record_id}&action=approve&token={approve_token}"
