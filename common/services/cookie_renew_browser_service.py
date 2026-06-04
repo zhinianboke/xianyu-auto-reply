@@ -48,8 +48,8 @@ except ImportError:
 _TARGET_URL = "https://www.goofish.com/"
 # 页面加载等待时间（秒）
 _PAGE_LOAD_WAIT_SECONDS = 3
-# 点击[快速进入]后等待时间（秒）
-_AFTER_CLICK_WAIT_SECONDS = 2
+# 点击[快速进入]后等待时间（秒），等待页面自动刷新跳转完成
+_AFTER_CLICK_WAIT_SECONDS = 5
 # 浏览器操作超时（毫秒）
 _BROWSER_TIMEOUT_MS = 30000
 
@@ -505,9 +505,9 @@ class CookieRenewBrowserService:
             )
 
             if quick_enter_found:
-                # 点击成功，等待2秒让页面完成跳转和cookie更新
+                # 点击成功，等待5秒让界面自动刷新、完成跳转和cookie更新
                 logger.info(
-                    f"{log_prefix} 已点击[快速进入]，等待{_AFTER_CLICK_WAIT_SECONDS}秒..."
+                    f"{log_prefix} 已点击[快速进入]，等待{_AFTER_CLICK_WAIT_SECONDS}秒让界面自动刷新..."
                 )
                 time.sleep(_AFTER_CLICK_WAIT_SECONDS)
             else:
