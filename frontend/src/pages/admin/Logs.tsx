@@ -26,12 +26,12 @@ export function Logs() {
   const [clearConfirm, setClearConfirm] = useState(false)
   const [clearing, setClearing] = useState(false)
 
-  // 从后端获取最近 N 条日志（不按级别过滤）
+  // 从后端按级别获取最近 N 条日志（级别筛选交给后端，避免只在最后 N 行里过滤导致筛不到数据）
   const loadLogs = async () => {
     if (!_hasHydrated || !isAuthenticated || !token) return
     try {
       setLoading(true)
-      const result = await getSystemLogs({ limit })
+      const result = await getSystemLogs({ limit, level: levelFilter || undefined })
       if (result.success) {
         setLogs(result.data || [])
       }
@@ -42,17 +42,16 @@ export function Logs() {
     }
   }
 
+  // 级别或条数变化时，重新向后端请求对应数据
   useEffect(() => {
     if (!_hasHydrated) return
     if (!isAuthenticated || !token) return
     loadLogs()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [_hasHydrated, isAuthenticated, token, limit])
+  }, [_hasHydrated, isAuthenticated, token, limit, levelFilter])
 
-  // 前端根据当前筛选级别过滤日志
-  const filteredLogs = levelFilter
-    ? logs.filter((log) => log.level === levelFilter)
-    : logs
+  // 后端已按级别筛选，这里直接展示返回结果
+  const filteredLogs = logs
 
   const handleClear = async () => {
     setClearing(true)
