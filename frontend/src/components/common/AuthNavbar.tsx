@@ -21,7 +21,7 @@ const isOnlineEnv = () => {
 
 /** 导航菜单项定义 */
 const NAV_ITEMS = [
-  { path: '/login', label: '首页', icon: Home, hideOnLocal: false },
+  { path: '/login', label: '首页', icon: Home, hideOnLocal: true },
   { path: '/get-activation', label: '获取激活码', icon: Key, hideOnLocal: true },
   { path: '/renew-activation', label: '激活码续期', icon: RefreshCw, hideOnLocal: true },
   { path: '/get-local-version', label: '获取本地版', icon: Monitor, hideOnLocal: true },
