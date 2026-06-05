@@ -31,6 +31,8 @@ DEFAULT_AI_SETTINGS = {
     "max_discount_amount": 100,
     "max_bargain_rounds": 3,
     "custom_prompts": "",
+    "ai_time_range_start": "",
+    "ai_time_range_end": "",
 }
 
 
@@ -57,6 +59,8 @@ class AIReplySettingsService:
         payload["api_key"] = clean_ai_text(payload.get("api_key"))
         payload["base_url"] = clean_ai_text(payload.get("base_url"))
         payload["custom_prompts"] = payload.get("custom_prompts") or ""
+        payload["ai_time_range_start"] = payload.get("ai_time_range_start") or ""
+        payload["ai_time_range_end"] = payload.get("ai_time_range_end") or ""
         return payload
 
     async def get_settings(self, account: XYAccount) -> dict:
@@ -92,6 +96,10 @@ class AIReplySettingsService:
             merged["max_bargain_rounds"] = int(payload.get("max_bargain_rounds", 3) or 0)
         if "custom_prompts" in payload:
             merged["custom_prompts"] = payload.get("custom_prompts") or ""
+        if "ai_time_range_start" in payload:
+            merged["ai_time_range_start"] = payload.get("ai_time_range_start") or ""
+        if "ai_time_range_end" in payload:
+            merged["ai_time_range_end"] = payload.get("ai_time_range_end") or ""
         merged["provider_type"] = normalize_ai_provider_type(
             merged.get("provider_type"),
             merged.get("base_url"),
