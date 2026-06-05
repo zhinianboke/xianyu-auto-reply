@@ -124,7 +124,7 @@ async def trigger_task(task_code: str):
     """
     try:
         # 验证任务代码
-        if task_code not in ["redelivery", "rate", "polish", "day_switch", "cleanup_browser_data", "fetch_orders", "fetch_pending_orders", "login_renew", "cookies_refresh", "api_cookie_renew", "close_notice", "red_flower"]:
+        if task_code not in ["redelivery", "rate", "polish", "day_switch", "cleanup_browser_data", "fetch_orders", "fetch_pending_orders", "fetch_items", "login_renew", "cookies_refresh", "api_cookie_renew", "close_notice", "red_flower"]:
             return {
                 "success": False,
                 "code": 400,
