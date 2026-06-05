@@ -438,6 +438,8 @@ export interface AIReplySettings {
   max_discount_amount?: number
   max_bargain_rounds?: number
   custom_prompts?: string
+  ai_time_range_start?: string
+  ai_time_range_end?: string
   // 兼容旧字段（前端内部使用）
   enabled?: boolean
 }
@@ -472,6 +474,8 @@ export const updateAIReplySettings = (cookieId: string, settings: Partial<AIRepl
   if (settings.max_discount_amount !== undefined) payload.max_discount_amount = settings.max_discount_amount
   if (settings.max_bargain_rounds !== undefined) payload.max_bargain_rounds = settings.max_bargain_rounds
   if (settings.custom_prompts !== undefined) payload.custom_prompts = settings.custom_prompts
+  if (settings.ai_time_range_start !== undefined) payload.ai_time_range_start = settings.ai_time_range_start
+  if (settings.ai_time_range_end !== undefined) payload.ai_time_range_end = settings.ai_time_range_end
   return put(`${AI_SETTINGS_PREFIX}/${cookieId}`, payload)
 }
 

@@ -163,6 +163,8 @@ export function Accounts() {
   const [aiMaxDiscountAmount, setAiMaxDiscountAmount] = useState(100)
   const [aiMaxBargainRounds, setAiMaxBargainRounds] = useState(3)
   const [aiCustomPrompts, setAiCustomPrompts] = useState('')
+  const [aiTimeRangeStart, setAiTimeRangeStart] = useState('')
+  const [aiTimeRangeEnd, setAiTimeRangeEnd] = useState('')
   const [aiSettingsSaving, setAiSettingsSaving] = useState(false)
   const [aiSettingsLoading, setAiSettingsLoading] = useState(false)
   const [aiTesting, setAiTesting] = useState(false)
@@ -402,6 +404,8 @@ export function Accounts() {
     setManualCookie('')
     setManualLoading(false)
     setEditPasswordVisible(false)
+    setAiTimeRangeStart('')
+    setAiTimeRangeEnd('')
   }, [clearQrCheck, clearPwdCheck])
 
   // ==================== 管理员默认密码检查 ====================
@@ -1210,6 +1214,13 @@ export function Accounts() {
       setAiMaxDiscountAmount(settings.max_discount_amount ?? 100)
       setAiMaxBargainRounds(settings.max_bargain_rounds ?? 3)
       setAiCustomPrompts(settings.custom_prompts ?? '')
+      const formatTime = (t: string | undefined | null) => {
+        if (!t) return ''
+        const parts = t.split(':')
+        return parts.length >= 2 ? `${parts[0].padStart(2, '0')}:${parts[1].padStart(2, '0')}` : t
+      }
+      setAiTimeRangeStart(formatTime(settings.ai_time_range_start))
+      setAiTimeRangeEnd(formatTime(settings.ai_time_range_end))
     } catch (error) {
       const detail = getApiErrorMessage(error, '加载AI设置失败')
       addToast({ type: 'error', message: detail })
@@ -1314,6 +1325,8 @@ export function Accounts() {
         max_discount_amount: aiMaxDiscountAmount,
         max_bargain_rounds: aiMaxBargainRounds,
         custom_prompts: aiCustomPrompts,
+        ai_time_range_start: aiTimeRangeStart,
+        ai_time_range_end: aiTimeRangeEnd,
       })
       if (!result.success) {
         addToast({ type: 'warning', message: result.message || 'AI配置未填写完整，无法开启AI回复' })
@@ -1355,6 +1368,8 @@ export function Accounts() {
         max_discount_amount: aiMaxDiscountAmount,
         max_bargain_rounds: aiMaxBargainRounds,
         custom_prompts: aiCustomPrompts,
+        ai_time_range_start: aiTimeRangeStart,
+        ai_time_range_end: aiTimeRangeEnd,
       })
       if (!saveResult.success) {
         addToast({ type: 'warning', message: saveResult.message || 'AI配置未填写完整，无法测试AI连接' })
@@ -3004,6 +3019,64 @@ export function Accounts() {
                       />
                     </button>
                   </div>
+
+                  {/* 启用时间段选择 */}
+                  {aiEnabled && (
+                    <div className="bg-slate-50 dark:bg-slate-800/40 rounded-xl p-3.5 border border-slate-100 dark:border-slate-800 space-y-3 transition-all duration-300">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">启用时间范围</label>
+                        {(aiTimeRangeStart || aiTimeRangeEnd) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAiTimeRangeStart('')
+                              setAiTimeRangeEnd('')
+                            }}
+                            className="text-xs text-rose-500 hover:text-rose-600 dark:text-rose-400 dark:hover:text-rose-300 font-medium transition-colors"
+                          >
+                            重置为全天
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="flex-1 relative">
+                          <input
+                            type="time"
+                            value={aiTimeRangeStart}
+                            onChange={(e) => setAiTimeRangeStart(e.target.value)}
+                            className="input-ios w-full pl-3 pr-10 text-sm font-medium"
+                          />
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 dark:text-slate-500 pointer-events-none uppercase">
+                            开始
+                          </span>
+                        </div>
+                        <span className="text-slate-400 dark:text-slate-600 text-xs font-medium">至</span>
+                        <div className="flex-1 relative">
+                          <input
+                            type="time"
+                            value={aiTimeRangeEnd}
+                            onChange={(e) => setAiTimeRangeEnd(e.target.value)}
+                            className="input-ios w-full pl-3 pr-10 text-sm font-medium"
+                          />
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 dark:text-slate-500 pointer-events-none uppercase">
+                            结束
+                          </span>
+                        </div>
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                        {aiTimeRangeStart && aiTimeRangeEnd ? (
+                          <span>
+                            当前配置：每天 <strong className="text-blue-600 dark:text-blue-400">{aiTimeRangeStart}</strong> 到 <strong className="text-blue-600 dark:text-blue-400">{aiTimeRangeEnd}</strong>
+                            {aiTimeRangeStart > aiTimeRangeEnd ? <span className="text-amber-500 dark:text-amber-400 font-medium">（跨天至次日）</span> : ''} 启用AI自动回复。其余时间将使用普通规则回复。
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 dark:text-slate-500">
+                            未设置时间范围，默认全天 24 小时启用AI自动回复。
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  )}
 
                   {/* API配置 */}
                   <div className="border-t border-slate-200 dark:border-slate-700 pt-4">

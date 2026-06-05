@@ -320,8 +320,40 @@ class AIReplyEngine:
         result = await db_session.execute(stmt)
         return result.scalars().first()
     
+    def _is_time_in_range(self, start_str: str, end_str: str) -> bool:
+        """判断当前北京时间是否在指定范围内"""
+        if not start_str or not end_str:
+            return True
+        try:
+            from datetime import datetime, timezone, timedelta, time
+            # 获取当前北京时间
+            tz_bj = timezone(timedelta(hours=8))
+            now_bj = datetime.now(tz_bj)
+            current_time = now_bj.time()
+
+            # 解析开始和结束时间
+            def parse_time_str(t_str: str) -> time:
+                parts = [int(p) for p in t_str.split(":")]
+                if len(parts) == 2:
+                    return time(parts[0], parts[1])
+                elif len(parts) >= 3:
+                    return time(parts[0], parts[1], parts[2])
+                raise ValueError(f"Invalid time format: {t_str}")
+
+            start_time = parse_time_str(start_str)
+            end_time = parse_time_str(end_str)
+
+            if start_time <= end_time:
+                return start_time <= current_time <= end_time
+            else:
+                # 跨天情况 (例如 22:00 到 06:00)
+                return current_time >= start_time or current_time <= end_time
+        except Exception as e:
+            logger.error(f"时间范围解析判断失败: {start_str} - {end_str}, error: {e}")
+            return True
+
     async def is_ai_enabled(self, cookie_id: str, db_session: AsyncSession) -> bool:
-        """检查指定账号是否启用AI回复（同时检查API Key是否配置）"""
+        """检查指定账号是否启用AI回复（同时检查API Key是否配置及时间范围）"""
         try:
             account = await self._get_account(cookie_id, db_session)
             if not account:
@@ -338,6 +370,13 @@ class AIReplyEngine:
             missing_fields = get_ai_settings_missing_fields(settings)
             if missing_fields:
                 logger.warning(f"【{cookie_id}】AI已启用但配置未填写完整，跳过AI回复: {'、'.join(missing_fields)}")
+                return False
+            
+            # 检查启用时间范围
+            start_str = settings.get("ai_time_range_start", "")
+            end_str = settings.get("ai_time_range_end", "")
+            if not self._is_time_in_range(start_str, end_str):
+                logger.info(f"【{cookie_id}】当前时间不在AI启用时间段（{start_str} - {end_str}）内，跳过AI回复")
                 return False
             
             return True
@@ -375,6 +414,8 @@ class AIReplyEngine:
             "max_discount_percent": 10,
             "max_discount_amount": 100,
             "custom_prompts": "",
+            "ai_time_range_start": "",
+            "ai_time_range_end": "",
         }
 
     def _extract_ai_settings(self, ai_settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -393,6 +434,8 @@ class AIReplyEngine:
         payload["max_discount_percent"] = int(payload.get("max_discount_percent") or 10)
         payload["max_discount_amount"] = int(payload.get("max_discount_amount") or 100)
         payload["custom_prompts"] = payload.get("custom_prompts") or ""
+        payload["ai_time_range_start"] = payload.get("ai_time_range_start") or ""
+        payload["ai_time_range_end"] = payload.get("ai_time_range_end") or ""
         return payload
     
     def _get_api_provider_name(self, settings: Dict) -> str:
