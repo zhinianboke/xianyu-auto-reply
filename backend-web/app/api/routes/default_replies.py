@@ -9,6 +9,7 @@ from app.api import deps
 from common.models.user import User
 from common.utils.auth_scope import resolve_owner_scope
 from common.utils.local_image_upload import ImageUploadError, save_uploaded_image
+from common.utils.default_reply_api import validate_api_url, normalize_api_timeout
 from app.services.account_service import AccountService
 from app.services.default_reply_service import DefaultReplyService
 
@@ -22,8 +23,11 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 class DefaultReplyUpdate(BaseModel):
     enabled: bool = False
+    reply_type: str = "text"  # text-文本(可附带图片)，api-接口
     reply_content: str = ""
     reply_image: str = ""
+    api_url: str = ""
+    api_timeout: int = 80
     reply_once: bool = False
 
 
@@ -49,7 +53,15 @@ async def get_default_reply(
     
     result = await reply_service.get_default_reply(account_id)
     if result is None:
-        return {"enabled": False, "reply_content": "", "reply_image": "", "reply_once": False}
+        return {
+            "enabled": False,
+            "reply_type": "text",
+            "reply_content": "",
+            "reply_image": "",
+            "api_url": "",
+            "api_timeout": 80,
+            "reply_once": False,
+        }
     return result
 
 
@@ -67,13 +79,26 @@ async def update_default_reply(
     account = await account_service.get_account_for_user(owner_id, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="账号不存在")
-    
+
+    # API 类型需校验地址合法性（防 SSRF）
+    api_timeout = normalize_api_timeout(reply_data.api_timeout)
+    if reply_data.reply_type == "api":
+        valid, err = validate_api_url(reply_data.api_url)
+        if not valid:
+            return {
+                "success": False,
+                "message": err,
+            }
+
     await reply_service.save_default_reply(
         account_id,
         reply_data.enabled,
         reply_data.reply_content,
         reply_data.reply_once,
         reply_data.reply_image,
+        reply_type=reply_data.reply_type,
+        api_url=reply_data.api_url,
+        api_timeout=api_timeout,
     )
     return {
         "success": True,

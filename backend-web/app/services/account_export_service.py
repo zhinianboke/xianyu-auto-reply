@@ -304,12 +304,15 @@ class AccountExportService:
         _write_sheet(wb, "关键词规则", headers, rows)
 
     def _write_default_replies(self, wb: Workbook, replies: list[DefaultReply]) -> None:
-        headers = ["账号ID", "商品ID", "启用", "回复内容", "回复图片", "仅回复一次"]
+        headers = ["账号ID", "商品ID", "启用", "回复内容", "回复图片", "仅回复一次", "回复类型", "API地址", "API超时"]
         rows = []
         for reply in replies:
             rows.append([
                 reply.account_id, reply.item_id, reply.enabled,
                 reply.reply_content, reply.reply_image, reply.reply_once,
+                getattr(reply, "reply_type", "text") or "text",
+                getattr(reply, "api_url", "") or "",
+                getattr(reply, "api_timeout", 80) or 80,
             ])
         _write_sheet(wb, "默认回复", headers, rows)
 

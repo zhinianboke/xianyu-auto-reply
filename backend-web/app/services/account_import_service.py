@@ -527,6 +527,11 @@ class AccountImportService:
                 existing.reply_content = _parse_str(row.get("回复内容")) or existing.reply_content
                 existing.reply_image = _parse_str(row.get("回复图片")) or existing.reply_image
                 existing.reply_once = _parse_bool(row.get("仅回复一次"))
+                existing.reply_type = _parse_str(row.get("回复类型")) or existing.reply_type or "text"
+                existing.api_url = _parse_str(row.get("API地址")) or existing.api_url
+                api_timeout = _parse_int(row.get("API超时"))
+                if api_timeout:
+                    existing.api_timeout = api_timeout
             else:
                 reply = DefaultReply(
                     account_id=account_id,
@@ -535,6 +540,9 @@ class AccountImportService:
                     reply_content=_parse_str(row.get("回复内容")) or None,
                     reply_image=_parse_str(row.get("回复图片")) or None,
                     reply_once=_parse_bool(row.get("仅回复一次")),
+                    reply_type=_parse_str(row.get("回复类型")) or "text",
+                    api_url=_parse_str(row.get("API地址")) or None,
+                    api_timeout=_parse_int(row.get("API超时")) or 80,
                 )
                 self.session.add(reply)
 

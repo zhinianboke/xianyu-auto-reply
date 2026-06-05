@@ -27,8 +27,11 @@ class DefaultReplyService:
             return None
         return {
             "enabled": reply.enabled,
+            "reply_type": reply.reply_type or "text",
             "reply_content": reply.reply_content or "",
             "reply_image": reply.reply_image or "",
+            "api_url": reply.api_url or "",
+            "api_timeout": reply.api_timeout or 80,
             "reply_once": reply.reply_once,
         }
 
@@ -39,6 +42,9 @@ class DefaultReplyService:
         reply_content: str,
         reply_once: bool = False,
         reply_image: str = "",
+        reply_type: str = "text",
+        api_url: str = "",
+        api_timeout: int = 80,
     ) -> bool:
         """保存默认回复设置（账号级别，item_id为空）"""
         stmt = select(DefaultReply).where(
@@ -50,16 +56,22 @@ class DefaultReplyService:
 
         if reply:
             reply.enabled = enabled
+            reply.reply_type = reply_type
             reply.reply_content = reply_content
             reply.reply_image = reply_image
+            reply.api_url = api_url
+            reply.api_timeout = api_timeout
             reply.reply_once = reply_once
         else:
             reply = DefaultReply(
                 account_id=account_id,
                 item_id=None,  # 账号级别默认回复
                 enabled=enabled,
+                reply_type=reply_type,
                 reply_content=reply_content,
                 reply_image=reply_image,
+                api_url=api_url,
+                api_timeout=api_timeout,
                 reply_once=reply_once,
             )
             self.session.add(reply)
@@ -89,8 +101,11 @@ class DefaultReplyService:
         return {
             reply.account_id: {
                 "enabled": reply.enabled,
+                "reply_type": reply.reply_type or "text",
                 "reply_content": reply.reply_content or "",
                 "reply_image": reply.reply_image or "",
+                "api_url": reply.api_url or "",
+                "api_timeout": reply.api_timeout or 80,
                 "reply_once": reply.reply_once,
             }
             for reply in replies
@@ -139,8 +154,11 @@ class DefaultReplyService:
             return None
         return {
             "enabled": reply.enabled,
+            "reply_type": reply.reply_type or "text",
             "reply_content": reply.reply_content or "",
             "reply_image": reply.reply_image or "",
+            "api_url": reply.api_url or "",
+            "api_timeout": reply.api_timeout or 80,
             "reply_once": reply.reply_once,
             "item_id": reply.item_id,
         }
@@ -153,6 +171,9 @@ class DefaultReplyService:
         enabled: bool = True,
         reply_once: bool = False,
         reply_image: str = "",
+        reply_type: str = "text",
+        api_url: str = "",
+        api_timeout: int = 80,
     ) -> bool:
         """保存商品级别的默认回复设置"""
         stmt = select(DefaultReply).where(
@@ -164,16 +185,22 @@ class DefaultReplyService:
 
         if reply:
             reply.enabled = enabled
+            reply.reply_type = reply_type
             reply.reply_content = reply_content
             reply.reply_image = reply_image
+            reply.api_url = api_url
+            reply.api_timeout = api_timeout
             reply.reply_once = reply_once
         else:
             reply = DefaultReply(
                 account_id=account_id,
                 item_id=item_id,
                 enabled=enabled,
+                reply_type=reply_type,
                 reply_content=reply_content,
                 reply_image=reply_image,
+                api_url=api_url,
+                api_timeout=api_timeout,
                 reply_once=reply_once,
             )
             self.session.add(reply)

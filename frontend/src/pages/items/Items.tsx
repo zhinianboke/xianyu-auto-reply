@@ -60,6 +60,9 @@ export function Items() {
   const [defaultReplyImage, setDefaultReplyImage] = useState('')
   const [defaultReplyEnabled, setDefaultReplyEnabled] = useState(true)
   const [defaultReplyOnce, setDefaultReplyOnce] = useState(false)
+  const [defaultReplyType, setDefaultReplyType] = useState<'text' | 'api'>('text')
+  const [defaultReplyApiUrl, setDefaultReplyApiUrl] = useState('')
+  const [defaultReplyApiTimeout, setDefaultReplyApiTimeout] = useState(80)
   const [loadingDefaultReply, setLoadingDefaultReply] = useState(false)
   const [savingDefaultReply, setSavingDefaultReply] = useState(false)
   const [defaultReplyImageUploading, setDefaultReplyImageUploading] = useState(false)
@@ -72,6 +75,9 @@ export function Items() {
   const [batchReplyImage, setBatchReplyImage] = useState('')
   const [batchReplyEnabled, setBatchReplyEnabled] = useState(true)
   const [batchReplyOnce, setBatchReplyOnce] = useState(false)
+  const [batchReplyType, setBatchReplyType] = useState<'text' | 'api'>('text')
+  const [batchReplyApiUrl, setBatchReplyApiUrl] = useState('')
+  const [batchReplyApiTimeout, setBatchReplyApiTimeout] = useState(80)
   const [savingBatchReply, setSavingBatchReply] = useState(false)
   const [batchItemSearch, setBatchItemSearch] = useState('')
   const [batchReplyImageUploading, setBatchReplyImageUploading] = useState(false)
@@ -405,17 +411,26 @@ export function Items() {
         setDefaultReplyImage(result.data.reply_image || '')
         setDefaultReplyEnabled(result.data.enabled ?? true)
         setDefaultReplyOnce(result.data.reply_once ?? false)
+        setDefaultReplyType((result.data.reply_type as 'text' | 'api') || 'text')
+        setDefaultReplyApiUrl(result.data.api_url || '')
+        setDefaultReplyApiTimeout(result.data.api_timeout || 80)
       } else {
         setDefaultReplyContent('')
         setDefaultReplyImage('')
         setDefaultReplyEnabled(true)
         setDefaultReplyOnce(false)
+        setDefaultReplyType('text')
+        setDefaultReplyApiUrl('')
+        setDefaultReplyApiTimeout(80)
       }
     } catch {
       setDefaultReplyContent('')
       setDefaultReplyImage('')
       setDefaultReplyEnabled(true)
       setDefaultReplyOnce(false)
+      setDefaultReplyType('text')
+      setDefaultReplyApiUrl('')
+      setDefaultReplyApiTimeout(80)
     } finally {
       setLoadingDefaultReply(false)
     }
@@ -428,11 +443,18 @@ export function Items() {
     setDefaultReplyImage('')
     setDefaultReplyEnabled(true)
     setDefaultReplyOnce(false)
+    setDefaultReplyType('text')
+    setDefaultReplyApiUrl('')
+    setDefaultReplyApiTimeout(80)
   }
 
   // 保存默认回复配置
   const handleSaveDefaultReply = async () => {
     if (!defaultReplyItem) return
+    if (defaultReplyType === 'api' && !defaultReplyApiUrl.trim()) {
+      addToast({ type: 'warning', message: '请输入 API 地址' })
+      return
+    }
     setSavingDefaultReply(true)
     try {
       const result = await saveItemDefaultReply(
@@ -443,6 +465,9 @@ export function Items() {
           reply_image: defaultReplyImage,
           enabled: defaultReplyEnabled,
           reply_once: defaultReplyOnce,
+          reply_type: defaultReplyType,
+          api_url: defaultReplyApiUrl,
+          api_timeout: defaultReplyApiTimeout,
         }
       )
       if (result.success) {
@@ -527,6 +552,9 @@ export function Items() {
     setBatchReplyImage('')
     setBatchReplyEnabled(true)
     setBatchReplyOnce(false)
+    setBatchReplyType('text')
+    setBatchReplyApiUrl('')
+    setBatchReplyApiTimeout(80)
     setShowBatchDefaultReplyModal(true)
   }
 
@@ -538,6 +566,9 @@ export function Items() {
     setBatchReplyImage('')
     setBatchReplyEnabled(true)
     setBatchReplyOnce(false)
+    setBatchReplyType('text')
+    setBatchReplyApiUrl('')
+    setBatchReplyApiTimeout(80)
     setBatchItemSearch('')
   }
 
@@ -572,8 +603,13 @@ export function Items() {
       addToast({ type: 'warning', message: '请选择至少一个商品' })
       return
     }
-    if (!batchReplyContent.trim()) {
-      addToast({ type: 'warning', message: '请输入回复内容' })
+    if (batchReplyType === 'api') {
+      if (!batchReplyApiUrl.trim()) {
+        addToast({ type: 'warning', message: '请输入 API 地址' })
+        return
+      }
+    } else if (!batchReplyContent.trim() && !batchReplyImage.trim()) {
+      addToast({ type: 'warning', message: '请输入回复内容或上传图片' })
       return
     }
 
@@ -585,6 +621,9 @@ export function Items() {
         reply_image: batchReplyImage,
         enabled: batchReplyEnabled,
         reply_once: batchReplyOnce,
+        reply_type: batchReplyType,
+        api_url: batchReplyApiUrl,
+        api_timeout: batchReplyApiTimeout,
       })
       if (result.success) {
         addToast({ type: 'success', message: result.message || '批量保存成功' })
@@ -1468,6 +1507,84 @@ export function Items() {
                       启用商品默认回复
                     </label>
                   </div>
+
+                  {/* 回复类型选择 */}
+                  <div className="input-group">
+                    <label className="input-label">回复类型</label>
+                    <div className="flex gap-2">
+                      {([
+                        { value: 'text', label: '默认回复' },
+                        { value: 'api', label: 'API接口' },
+                      ] as const).map((opt) => (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          onClick={() => setDefaultReplyType(opt.value)}
+                          disabled={!defaultReplyEnabled}
+                          className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors border disabled:opacity-50 disabled:cursor-not-allowed ${
+                            defaultReplyType === opt.value
+                              ? 'bg-purple-600 text-white border-purple-600'
+                              : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-purple-400'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* API 接口配置（仅 API 类型显示） */}
+                  {defaultReplyType === 'api' && (
+                    <>
+                      <div className="input-group">
+                        <label className="input-label">API 地址</label>
+                        <input
+                          type="text"
+                          value={defaultReplyApiUrl}
+                          onChange={(e) => setDefaultReplyApiUrl(e.target.value)}
+                          className="input-ios"
+                          placeholder="https://example.com/api/reply"
+                          disabled={!defaultReplyEnabled}
+                        />
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label">超时时间（秒）</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={120}
+                          value={defaultReplyApiTimeout}
+                          onChange={(e) => setDefaultReplyApiTimeout(Number(e.target.value) || 80)}
+                          className="input-ios"
+                          placeholder="80"
+                          disabled={!defaultReplyEnabled}
+                        />
+                      </div>
+                      <div className="p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg space-y-2">
+                        <p className="text-xs text-purple-600 dark:text-purple-400">
+                          <strong>调用说明：</strong>触发默认回复时，系统会向上述地址发起 <code className="bg-purple-100 dark:bg-purple-800 px-1 rounded">POST</code> 请求，请求体为 JSON：
+                        </p>
+                        <pre className="text-xs bg-purple-100 dark:bg-purple-800 p-2 rounded overflow-x-auto whitespace-pre-wrap break-all">{`{
+  "account_id": "闲鱼账号标识",
+  "message": "买家发来的消息内容"
+}`}</pre>
+                        <p className="text-xs text-purple-600 dark:text-purple-400">
+                          <strong>返回格式：</strong>兼容以下两种，任选其一：
+                        </p>
+                        <pre className="text-xs bg-purple-100 dark:bg-purple-800 p-2 rounded overflow-x-auto whitespace-pre-wrap break-all">{`// 方式一：JSON
+{ "success": true, "reply": "要发送给买家的内容" }
+
+// 方式二：纯文本
+要发送给买家的内容`}</pre>
+                        <p className="text-xs text-amber-600 dark:text-amber-400">
+                          返回内容支持用 <code className="bg-purple-100 dark:bg-purple-800 px-1 rounded">######</code> 分隔为多条消息依次发送。接口调用失败、超时或返回空内容时，将不发送任何回复。
+                        </p>
+                      </div>
+                    </>
+                  )}
+
+                  {/* 文本回复内容（API 类型时隐藏） */}
+                  {defaultReplyType !== 'api' && (
                   <div className="input-group">
                     <label className="input-label">回复内容</label>
                     <textarea
@@ -1483,8 +1600,10 @@ export function Items() {
                       例如：第一条消息######第二条消息
                     </p>
                   </div>
+                  )}
                   
-                  {/* 图片上传 */}
+                  {/* 图片上传（默认回复类型显示，与文本一起） */}
+                  {defaultReplyType !== 'api' && (
                   <div className="input-group">
                     <label className="input-label">回复图片（可选）</label>
                     <input
@@ -1538,6 +1657,7 @@ export function Items() {
                       发送顺序：如果同时配置了图片和文字，将先发送图片，再发送文字内容
                     </p>
                   </div>
+                  )}
 
                   <div className="flex items-center gap-3">
                     <input
@@ -1803,7 +1923,83 @@ export function Items() {
                 </label>
               </div>
 
-              {/* 回复内容 */}
+              {/* 回复类型选择 */}
+              <div className="input-group">
+                <label className="input-label">回复类型</label>
+                <div className="flex gap-2">
+                  {([
+                    { value: 'text', label: '默认回复' },
+                    { value: 'api', label: 'API接口' },
+                  ] as const).map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setBatchReplyType(opt.value)}
+                      disabled={!batchReplyEnabled}
+                      className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors border disabled:opacity-50 disabled:cursor-not-allowed ${
+                        batchReplyType === opt.value
+                          ? 'bg-purple-600 text-white border-purple-600'
+                          : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-purple-400'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* API 接口配置（仅 API 类型显示） */}
+              {batchReplyType === 'api' && (
+                <>
+                  <div className="input-group">
+                    <label className="input-label">API 地址</label>
+                    <input
+                      type="text"
+                      value={batchReplyApiUrl}
+                      onChange={(e) => setBatchReplyApiUrl(e.target.value)}
+                      className="input-ios"
+                      placeholder="https://example.com/api/reply"
+                      disabled={!batchReplyEnabled}
+                    />
+                  </div>
+                  <div className="input-group">
+                    <label className="input-label">超时时间（秒）</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={120}
+                      value={batchReplyApiTimeout}
+                      onChange={(e) => setBatchReplyApiTimeout(Number(e.target.value) || 80)}
+                      className="input-ios"
+                      placeholder="80"
+                      disabled={!batchReplyEnabled}
+                    />
+                  </div>
+                  <div className="p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg space-y-2">
+                    <p className="text-xs text-purple-600 dark:text-purple-400">
+                      <strong>调用说明：</strong>触发默认回复时，系统会向上述地址发起 <code className="bg-purple-100 dark:bg-purple-800 px-1 rounded">POST</code> 请求，请求体为 JSON：
+                    </p>
+                    <pre className="text-xs bg-purple-100 dark:bg-purple-800 p-2 rounded overflow-x-auto whitespace-pre-wrap break-all">{`{
+  "account_id": "闲鱼账号标识",
+  "message": "买家发来的消息内容"
+}`}</pre>
+                    <p className="text-xs text-purple-600 dark:text-purple-400">
+                      <strong>返回格式：</strong>兼容以下两种，任选其一：
+                    </p>
+                    <pre className="text-xs bg-purple-100 dark:bg-purple-800 p-2 rounded overflow-x-auto whitespace-pre-wrap break-all">{`// 方式一：JSON
+{ "success": true, "reply": "要发送给买家的内容" }
+
+// 方式二：纯文本
+要发送给买家的内容`}</pre>
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                      返回内容支持用 <code className="bg-purple-100 dark:bg-purple-800 px-1 rounded">######</code> 分隔为多条消息依次发送。所有选中商品将使用相同的 API 配置。接口调用失败、超时或返回空内容时，将不发送任何回复。
+                    </p>
+                  </div>
+                </>
+              )}
+
+              {/* 回复内容（API 类型时隐藏） */}
+              {batchReplyType !== 'api' && (
               <div className="input-group">
                 <label className="input-label">回复内容</label>
                 <textarea
@@ -1819,8 +2015,10 @@ export function Items() {
                   例如：第一条消息######第二条消息
                 </p>
               </div>
+              )}
 
-              {/* 图片上传 */}
+              {/* 图片上传（API 类型时隐藏） */}
+              {batchReplyType !== 'api' && (
               <div className="input-group">
                 <label className="input-label">回复图片（可选）</label>
                 <input
@@ -1874,6 +2072,7 @@ export function Items() {
                   发送顺序：如果同时配置了图片和文字，将先发送图片，再发送文字内容
                 </p>
               </div>
+              )}
 
               {/* 只回复一次 */}
               <div className="flex items-center gap-3">

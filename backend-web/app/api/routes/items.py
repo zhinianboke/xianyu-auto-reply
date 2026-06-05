@@ -10,6 +10,7 @@ from app.api import deps
 from common.models.user import User
 from common.schemas.common import ApiResponse
 from common.utils.auth_scope import resolve_owner_scope
+from common.utils.default_reply_api import validate_api_url, normalize_api_timeout
 from common.schemas.item import (
     ItemBatchDeleteRequest,
     ItemFullFetchRequest,
@@ -170,6 +171,9 @@ class ItemDefaultReplyRequest(PydanticBaseModel):
     reply_image: str = ""
     enabled: bool = True
     reply_once: bool = False
+    reply_type: str = "text"  # text-文本(可附带图片)，api-接口
+    api_url: str = ""
+    api_timeout: int = 80
 
 
 @items_router.get("/{cookie_id}/{item_id}/default-reply")
@@ -201,6 +205,9 @@ async def get_item_default_reply(
                     "reply_image": reply_config.get("reply_image", ""),
                     "enabled": reply_config.get("enabled", False),
                     "reply_once": reply_config.get("reply_once", False),
+                    "reply_type": reply_config.get("reply_type", "text"),
+                    "api_url": reply_config.get("api_url", ""),
+                    "api_timeout": reply_config.get("api_timeout", 80),
                 }
             )
         else:
@@ -213,6 +220,9 @@ async def get_item_default_reply(
                     "reply_image": "",
                     "enabled": False,
                     "reply_once": False,
+                    "reply_type": "text",
+                    "api_url": "",
+                    "api_timeout": 80,
                 }
             )
     except Exception as e:
@@ -237,6 +247,13 @@ async def save_item_default_reply(
     if not account:
         return ApiResponse(success=False, message="账号不存在")
     
+    # API 类型需校验地址合法性（防 SSRF）
+    api_timeout = normalize_api_timeout(payload.api_timeout)
+    if payload.reply_type == "api":
+        valid, err = validate_api_url(payload.api_url)
+        if not valid:
+            return ApiResponse(success=False, message=err)
+
     try:
         success = await default_reply_service.save_item_default_reply(
             account_id=cookie_id,
@@ -245,6 +262,9 @@ async def save_item_default_reply(
             reply_image=payload.reply_image,
             enabled=payload.enabled,
             reply_once=payload.reply_once,
+            reply_type=payload.reply_type,
+            api_url=payload.api_url,
+            api_timeout=api_timeout,
         )
         
         if success:
@@ -333,6 +353,9 @@ class BatchItemDefaultReplyRequest(PydanticBaseModel):
     reply_image: str = ""
     enabled: bool = True
     reply_once: bool = False
+    reply_type: str = "text"  # text-文本(可附带图片)，api-接口
+    api_url: str = ""
+    api_timeout: int = 80
 
 
 @items_router.post("/{cookie_id}/batch-default-reply/upload-image")
@@ -385,6 +408,13 @@ async def batch_save_item_default_reply(
     if not payload.item_ids:
         return ApiResponse(success=False, message="请选择至少一个商品")
 
+    # API 类型需校验地址合法性（防 SSRF）
+    api_timeout = normalize_api_timeout(payload.api_timeout)
+    if payload.reply_type == "api":
+        valid, err = validate_api_url(payload.api_url)
+        if not valid:
+            return ApiResponse(success=False, message=err)
+
     return await _execute_batch_item_operation(
         item_ids=payload.item_ids,
         operation=lambda item_id: default_reply_service.save_item_default_reply(
@@ -394,6 +424,9 @@ async def batch_save_item_default_reply(
             reply_image=payload.reply_image,
             enabled=payload.enabled,
             reply_once=payload.reply_once,
+            reply_type=payload.reply_type,
+            api_url=payload.api_url,
+            api_timeout=api_timeout,
         ),
         action_verb="保存",
         subject="默认回复",

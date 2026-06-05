@@ -469,8 +469,11 @@ class DatabaseInitializer:
                 account_id VARCHAR(80) NOT NULL COMMENT '账号标识',
                 item_id VARCHAR(64) DEFAULT NULL COMMENT '商品ID(空为账号默认回复)',
                 enabled TINYINT(1) DEFAULT 0 COMMENT '是否启用',
+                reply_type VARCHAR(16) DEFAULT 'text' COMMENT '回复类型：text-文本(可附带图片)，api-接口',
                 reply_content TEXT COMMENT '回复内容',
                 reply_image VARCHAR(512) COMMENT '回复图片URL',
+                api_url VARCHAR(1024) DEFAULT NULL COMMENT 'API地址(reply_type=api时POST此地址)',
+                api_timeout INT DEFAULT 80 COMMENT 'API请求超时时间(秒)',
                 reply_once TINYINT(1) DEFAULT 0 COMMENT '只回复一次',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -1418,6 +1421,9 @@ class DatabaseInitializer:
         "xy_default_replies": [
             ("item_id", "VARCHAR(64) DEFAULT NULL COMMENT '商品ID'", "account_id"),
             ("reply_image", "VARCHAR(512) COMMENT '回复图片URL'", "reply_content"),
+            ("reply_type", "VARCHAR(16) DEFAULT 'text' COMMENT '回复类型：text-文本(可附带图片)，api-接口'", "enabled"),
+            ("api_url", "VARCHAR(1024) DEFAULT NULL COMMENT 'API地址(reply_type=api时POST此地址)'", "reply_image"),
+            ("api_timeout", "INT DEFAULT 80 COMMENT 'API请求超时时间(秒)'", "api_url"),
         ],
         "xy_default_reply_records": [
             ("item_id", "VARCHAR(64) DEFAULT NULL COMMENT '商品ID'", "account_id"),

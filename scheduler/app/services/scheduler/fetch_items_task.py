@@ -135,13 +135,21 @@ class FetchItemsTaskService:
             return list(result.scalars().all())
 
     async def _fetch_items_for_account(self, account) -> dict:
-        """获取单个账号的全部商品并入库（复用 ItemService 的加锁入口）"""
+        """获取单个账号的全部商品并入库（复用 ItemService 的加锁入口）
+
+        增量同步策略：开启 stop_when_page_all_existing，当某一页商品在本地库中
+        全部已存在（且无跳过项）时停止继续翻页。由于闲鱼「在售」列表默认按上架
+        时间倒序（新品在前），首页全部已存在即说明无新上架商品，停止翻页是安全
+        的，不会漏抓新品；首次同步或有新品时仍会按需翻页直至拉全，从而在保证数据
+        完整的前提下大幅降低对闲鱼接口的请求量，规避风控风险。
+        """
         async with async_session_maker() as session:
             item_svc = ItemService(session)
             return await item_svc.fetch_all_items_from_account(
                 account=account,
                 page_size=self.page_size,
                 max_pages=self.max_pages,
+                stop_when_page_all_existing=True,
             )
 
 

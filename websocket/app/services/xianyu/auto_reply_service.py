@@ -29,6 +29,8 @@ from common.models.xy_catalog_item import XYCatalogItem
 from common.models.default_reply import DefaultReply, DefaultReplyRecord
 from common.models.xy_order import XYOrder
 from common.db.session import async_session_maker
+from common.db.redis_client import distributed_lock
+from common.utils.default_reply_api import call_reply_api
 
 from app.services.xianyu.resource_manager import pause_manager
 from app.services.xianyu.auto_reply_log_service import AutoReplyLogService
@@ -1250,6 +1252,52 @@ class AutoReplyService:
         url_lower = url.lower()
         return any(domain in url_lower for domain in cdn_domains)
     
+    async def _do_api_default_reply(
+        self,
+        session: AsyncSession,
+        send_message: str,
+        api_url: str,
+        api_timeout,
+        settings: dict,
+        settings_item_id: Optional[str],
+        chat_id: str,
+        reply_trace: Optional[dict],
+    ) -> Optional[str]:
+        """调用外部 API 获取默认回复内容并处理结果。
+
+        由 get_default_reply 在持有会话级去重锁（或降级无锁）时调用：
+        - 调用失败/超时/无有效内容：返回 None，不回复，且不记录 reply_once（便于下次重试）；
+        - 调用成功：按需记录 reply_once，返回回复文本（下游按 ###### 分段发送）。
+        """
+        api_reply = await call_reply_api(
+            account_id=self.cookie_id,
+            message=send_message,
+            api_url=api_url,
+            timeout=api_timeout,
+        )
+
+        # 失败/无有效内容：不回复（不记录 reply_once，便于下次重试）
+        if not api_reply or not api_reply.strip():
+            logger.info(f"【{self.cookie_id}】默认回复API未返回有效内容,不进行回复")
+            if reply_trace is not None:
+                reply_trace["process_status"] = "skipped"
+                reply_trace["decision_reason"] = "no_rule_matched"
+                reply_trace.setdefault("context_snapshot", {})["default_reply_api_url"] = api_url
+            return None
+
+        # 调用成功后再记录 reply_once
+        if settings.get("reply_once", False) and chat_id:
+            await self._record_user_replied(session, self.cookie_id, chat_id, settings_item_id)
+            logger.info(f"【{self.cookie_id}】记录默认回复(API): chat_id={chat_id}, item_id={settings_item_id}")
+
+        logger.info(f"【{self.cookie_id}】使用API默认回复: {api_reply[:50]}")
+        if reply_trace is not None:
+            reply_trace["reply_mode"] = "text"
+            reply_trace["reply_text"] = api_reply
+            reply_trace["reply_segments"] = self._build_text_reply_segments(api_reply)
+            reply_trace.setdefault("context_snapshot", {})["default_reply_api_url"] = api_url
+        return api_reply
+
     async def get_default_reply(
         self,
         session: AsyncSession,
@@ -1303,8 +1351,104 @@ class AutoReplyService:
                         reply_trace["decision_reason"] = "default_reply_once"
                     return None
 
+            reply_type = settings.get("reply_type", "text") or "text"
             reply_content = settings.get("reply_content", "")
             reply_image = settings.get("reply_image", "")
+
+            # API 类型：调用外部接口获取回复内容，失败则不回复
+            if reply_type == "api":
+                api_url = settings.get("api_url", "")
+                api_timeout = settings.get("api_timeout", 80)
+                if not api_url or not api_url.strip():
+                    logger.info(f"【{self.cookie_id}】默认回复API地址为空,不进行回复")
+                    return "EMPTY_REPLY"
+
+                # 无会话标识时不加锁，避免把不同会话的消息全局串行化
+                if not chat_id:
+                    return await self._do_api_default_reply(
+                        session=session,
+                        send_message=send_message,
+                        api_url=api_url,
+                        api_timeout=api_timeout,
+                        settings=settings,
+                        settings_item_id=settings_item_id,
+                        chat_id=chat_id,
+                        reply_trace=reply_trace,
+                    )
+
+                # 会话级串行（阻塞等待而非丢弃）：外部接口最长可等待 api_timeout 秒，
+                # 期间买家在同一会话连发的多条消息若并发触发调用，会并发猛打外部接口，
+                # 且 reply_once 场景下可能重复回复。故对同一 chat_id 的 API 调用串行化——
+                # 后到的消息排队等前一条调用完成后再执行自己的调用，从而：
+                #   1) 不漏回复：每条消息都会被依次应答（不同问题各自得到回复）；
+                #   2) reply_once 正确：持锁后重新核对是否已回复，已回复才跳过；
+                #   3) 不并发猛打外部接口。
+                # Redis 不可用或等待超时时降级为无锁直接调用，保证可用性、绝不漏回复。
+                api_lock_name = f"default_reply_api:{self.cookie_id}:{chat_id}"
+                # 锁自动过期时间覆盖整个外部调用窗口，防止持锁者崩溃后死锁；
+                # 但排队等待上限收敛到较小值（最多 15 秒），避免上游 DB session 与消息
+                # 处理被长时间（最长 api_timeout 秒）挂起，拖垮连接池。等待超时即降级直接
+                # 调用——绝大多数并发只是毫秒级排队，极少触发降级。
+                lock_expire = int(api_timeout or 80) + 10
+                lock_wait_timeout = min(int(api_timeout or 80), 15)
+                try:
+                    async with distributed_lock(
+                        api_lock_name, expire=lock_expire, blocking=True, timeout=lock_wait_timeout
+                    ) as api_lock:
+                        if not api_lock.is_locked:
+                            # 等待超时仍未拿到锁：降级直接调用，避免漏回复
+                            logger.warning(
+                                f"【{self.cookie_id}】chat_id {chat_id} 等待API默认回复会话锁超时，"
+                                f"降级直接调用"
+                            )
+                            return await self._do_api_default_reply(
+                                session=session,
+                                send_message=send_message,
+                                api_url=api_url,
+                                api_timeout=api_timeout,
+                                settings=settings,
+                                settings_item_id=settings_item_id,
+                                chat_id=chat_id,
+                                reply_trace=reply_trace,
+                            )
+                        # 持锁后重新核对 reply_once：前一条同会话消息可能刚已回复并记录
+                        if settings.get("reply_once", False):
+                            if await self._check_user_replied(
+                                session, self.cookie_id, chat_id, settings_item_id
+                            ):
+                                logger.info(
+                                    f"【{self.cookie_id}】chat_id {chat_id} 已使用过默认回复,"
+                                    f"跳过(只回复一次)"
+                                )
+                                if reply_trace is not None:
+                                    reply_trace["process_status"] = "skipped"
+                                    reply_trace["decision_reason"] = "default_reply_once"
+                                return None
+                        return await self._do_api_default_reply(
+                            session=session,
+                            send_message=send_message,
+                            api_url=api_url,
+                            api_timeout=api_timeout,
+                            settings=settings,
+                            settings_item_id=settings_item_id,
+                            chat_id=chat_id,
+                            reply_trace=reply_trace,
+                        )
+                except Exception as lock_exc:
+                    # Redis 异常等情况降级为无锁直接调用，不阻断正常回复
+                    logger.warning(
+                        f"【{self.cookie_id}】API默认回复获取会话锁异常，降级无锁执行: {lock_exc}"
+                    )
+                    return await self._do_api_default_reply(
+                        session=session,
+                        send_message=send_message,
+                        api_url=api_url,
+                        api_timeout=api_timeout,
+                        settings=settings,
+                        settings_item_id=settings_item_id,
+                        chat_id=chat_id,
+                        reply_trace=reply_trace,
+                    )
 
             if reply_image and reply_image.strip():
                 logger.info(f"【{self.cookie_id}】默认回复包含图片: {reply_image}")
@@ -1403,8 +1547,11 @@ class AutoReplyService:
                 logger.info(f"【{account_id}】使用商品级别默认回复，item_id={item_id}")
                 return {
                     "enabled": reply.enabled,
+                    "reply_type": getattr(reply, "reply_type", "text") or "text",
                     "reply_content": reply.reply_content or "",
                     "reply_image": reply.reply_image or "",
+                    "api_url": getattr(reply, "api_url", "") or "",
+                    "api_timeout": getattr(reply, "api_timeout", 80) or 80,
                     "reply_once": reply.reply_once,
                     "item_id": item_id,
                 }
@@ -1421,8 +1568,11 @@ class AutoReplyService:
         logger.info(f"【{account_id}】使用账号级别默认回复")
         return {
             "enabled": reply.enabled,
+            "reply_type": getattr(reply, "reply_type", "text") or "text",
             "reply_content": reply.reply_content or "",
             "reply_image": reply.reply_image or "",
+            "api_url": getattr(reply, "api_url", "") or "",
+            "api_timeout": getattr(reply, "api_timeout", 80) or 80,
             "reply_once": reply.reply_once,
             "item_id": None,
         }

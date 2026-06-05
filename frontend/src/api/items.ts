@@ -128,6 +128,9 @@ export interface ItemDefaultReplyConfig {
   reply_image: string
   enabled: boolean
   reply_once: boolean
+  reply_type?: string  // text-文本，image-图片，api-接口
+  api_url?: string
+  api_timeout?: number
 }
 
 // 获取商品默认回复配置
@@ -139,7 +142,7 @@ export const getItemDefaultReply = (cookieId: string, itemId: string): Promise<A
 export const saveItemDefaultReply = (
   cookieId: string,
   itemId: string,
-  data: { reply_content: string; reply_image?: string; enabled: boolean; reply_once: boolean }
+  data: { reply_content: string; reply_image?: string; enabled: boolean; reply_once: boolean; reply_type?: string; api_url?: string; api_timeout?: number }
 ): Promise<ApiResponse> => {
   return put(`${ITEM_PREFIX}/${cookieId}/${itemId}/default-reply`, data)
 }
@@ -165,7 +168,7 @@ export const deleteItemDefaultReply = (cookieId: string, itemId: string): Promis
 // 批量保存商品默认回复配置
 export const batchSaveItemDefaultReply = (
   cookieId: string,
-  data: { item_ids: string[]; reply_content: string; reply_image?: string; enabled: boolean; reply_once: boolean }
+  data: { item_ids: string[]; reply_content: string; reply_image?: string; enabled: boolean; reply_once: boolean; reply_type?: string; api_url?: string; api_timeout?: number }
 ): Promise<ApiResponse> => {
   return post(`${ITEM_PREFIX}/${cookieId}/batch-default-reply`, data)
 }
