@@ -1746,10 +1746,18 @@ class AutoDeliveryHandler:
                 if rule['card_type'] == 'api':
                     # API类型：调用API获取内容，传入订单和商品信息用于动态参数替换
                     text_content = await self._get_api_card_content(rule, order_id, item_id, send_user_id, spec_name, spec_value)
+                    if text_content is None:
+                        self._last_delivery_fail_reason = f"获取API卡券内容失败: 卡券ID={rule['card_id']}, 名称={rule['card_name']}"
+                        logger.warning(self._last_delivery_fail_reason)
+                        return None
 
                 elif rule['card_type'] == 'yifan_api':
                     # 亦凡卡劵API类型：调用亦凡API获取内容
                     text_content = await self._get_yifan_api_card_content(rule, order_id, item_id, send_user_id, chat_id)
+                    if text_content is None:
+                        self._last_delivery_fail_reason = f"获取亦凡API卡券内容失败: 卡券ID={rule['card_id']}, 名称={rule['card_name']}"
+                        logger.warning(self._last_delivery_fail_reason)
+                        return None
 
                 elif rule['card_type'] == 'text':
                     # 固定文字类型：直接使用文字内容
@@ -1758,6 +1766,10 @@ class AutoDeliveryHandler:
                 elif rule['card_type'] == 'data':
                     # 批量数据类型：获取并消费第一条数据
                     text_content = db_manager.consume_batch_data(rule['card_id'])
+                    if text_content is None:
+                        self._last_delivery_fail_reason = f"批量卡券数据已用完或获取失败: 卡券ID={rule['card_id']}, 名称={rule['card_name']}"
+                        logger.warning(self._last_delivery_fail_reason)
+                        return None
 
                 elif rule['card_type'] == 'image':
                     # 图片类型：文字内容为空，只发送图片
@@ -2331,6 +2343,12 @@ class AutoDeliveryHandler:
             if isinstance(params, str):
                 params = json.loads(params)
 
+            # 如果是POST请求且没有指定Content-Type，则默认设为application/json
+            if method == 'POST' and isinstance(headers, dict):
+                has_content_type = any(k.lower() == 'content-type' for k in headers.keys())
+                if not has_content_type:
+                    headers['Content-Type'] = 'application/json'
+
             # 如果是POST请求且有动态参数，进行参数替换
             if method == 'POST' and params:
                 params = await self._replace_api_dynamic_params(params, order_id, item_id, buyer_id, spec_name, spec_value)
@@ -2340,24 +2358,22 @@ class AutoDeliveryHandler:
             if method == 'POST' and params:
                 logger.warning(f"POST请求参数: {json.dumps(params, ensure_ascii=False)}")
 
-            # 确保session存在
-            if not self.session:
-                await self.create_session()
-
             # 发起HTTP请求
             timeout_obj = aiohttp.ClientTimeout(total=timeout)
 
-            if method == 'GET':
-                async with self.session.get(url, headers=headers, params=params, timeout=timeout_obj) as response:
-                    status_code = response.status
-                    response_text = await response.text()
-            elif method == 'POST':
-                async with self.session.post(url, headers=headers, json=params, timeout=timeout_obj) as response:
-                    status_code = response.status
-                    response_text = await response.text()
-            else:
-                logger.error(f"不支持的HTTP方法: {method}")
-                return None
+            # 使用临时的纯净 ClientSession，避免共用闲鱼 session 导致敏感 Cookie 泄露或 Headers 冲突（如 Content-Type 冲突返回 415）
+            async with aiohttp.ClientSession() as http_session:
+                if method == 'GET':
+                    async with http_session.get(url, headers=headers, params=params, timeout=timeout_obj) as response:
+                        status_code = response.status
+                        response_text = await response.text()
+                elif method == 'POST':
+                    async with http_session.post(url, headers=headers, json=params, timeout=timeout_obj) as response:
+                        status_code = response.status
+                        response_text = await response.text()
+                else:
+                    logger.error(f"不支持的HTTP方法: {method}")
+                    return None
 
             if status_code == 200:
                 # 尝试解析JSON响应，如果失败则使用原始文本

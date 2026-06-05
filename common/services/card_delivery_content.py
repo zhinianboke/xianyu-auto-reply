@@ -110,6 +110,12 @@ async def get_api_card_content(
         if isinstance(params, str):
             params = json.loads(params)
 
+        # 如果是POST请求且没有指定Content-Type，则默认设为application/json
+        if method == 'POST' and isinstance(headers, dict):
+            has_content_type = any(k.lower() == 'content-type' for k in headers.keys())
+            if not has_content_type:
+                headers['Content-Type'] = 'application/json'
+
         # POST 动态参数替换
         if method == 'POST' and params:
             params = _build_api_params(params, context or {})
