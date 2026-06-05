@@ -207,6 +207,13 @@ class DatabaseInitializer:
             "定时获取待发货订单并同步收货人姓名/手机号/地址等信息",
         ),
         (
+            "fetch_items",
+            "获取闲鱼商品任务",
+            1200,
+            True,
+            "定时获取所有启用账号的闲鱼在售商品并入库（新增或更新）",
+        ),
+        (
             "login_renew",
             "登录续期任务",
             600,
@@ -1891,6 +1898,44 @@ class DatabaseInitializer:
                     logger.info("✓ xy_catalog_items: 创建 idx_cat_owner_created 复合索引")
             except Exception as e:
                 logger.warning(f"✗ xy_catalog_items idx_cat_owner_created 创建失败: {e}")
+
+            # 为 xy_catalog_items 补建 (account_id, item_id) 唯一约束 —— 防止「定时获取闲鱼商品任务」
+            # 与「商品管理页手动触发同步」两个流程并发 upsert 时重复插入同一商品（兜底）。
+            # 注意：项目硬性规范禁止删除数据，存在历史重复数据时不自动清理，
+            # 仅打印警告并跳过创建，待人工合并后下次启动自检再补建。
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_catalog_items'
+                    AND INDEX_NAME = 'uk_cat_account_item'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    # 先检测是否存在 (account_id, item_id) 重复数据
+                    dup_check = text("""
+                        SELECT COUNT(*) FROM (
+                            SELECT account_id, item_id
+                            FROM xy_catalog_items
+                            GROUP BY account_id, item_id
+                            HAVING COUNT(*) > 1
+                        ) AS dup
+                    """)
+                    dup_result = await conn.execute(dup_check)
+                    dup_groups = dup_result.scalar() or 0
+                    if dup_groups > 0:
+                        logger.warning(
+                            f"✗ xy_catalog_items 存在 {dup_groups} 组 (account_id, item_id) 重复数据，"
+                            f"为遵守禁止删除数据规范，暂不创建 uk_cat_account_item 唯一约束。"
+                            f"请人工合并重复商品后，重启服务自动补建（当前由 Redis 账号锁兜底防并发）"
+                        )
+                    else:
+                        await conn.execute(text(
+                            "ALTER TABLE xy_catalog_items ADD UNIQUE KEY uk_cat_account_item (account_id, item_id)"
+                        ))
+                        logger.info("✓ xy_catalog_items: 创建 uk_cat_account_item 唯一约束")
+            except Exception as e:
+                logger.warning(f"✗ xy_catalog_items uk_cat_account_item 创建失败: {e}")
 
             # 为 xy_card_item_relations 补建 (user_id, item_id) 复合索引
             try:

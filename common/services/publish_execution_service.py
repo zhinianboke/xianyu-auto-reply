@@ -16,19 +16,10 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.xy_account import XYAccount
-from common.services.backend_web_loader import load_backend_web_class
+from common.services.item_service import ItemService
 from common.services.publish_address_service import PublishAddressService
 from common.services.publish_log_service import PublishLogService
 from common.services.xianyu_publish_service import publish_single_item
-
-
-def _get_item_service_class():
-    """加载 backend-web 的商品同步服务类。"""
-    return load_backend_web_class(
-        module_name="common.services._backend_web_item_service",
-        relative_path="backend-web/app/services/item_service.py",
-        class_name="ItemService",
-    )
 
 
 async def _get_account(session: AsyncSession, account_id: str, user_id: int) -> Optional[XYAccount]:
@@ -52,8 +43,7 @@ async def _sync_account_items_after_publish(
     account: XYAccount,
 ) -> Dict[str, Any]:
     """发布成功后自动同步账号商品。"""
-    item_service_class = _get_item_service_class()
-    item_svc = item_service_class(session)
+    item_svc = ItemService(session)
     try:
         sync_result = await item_svc.fetch_all_items_from_account(account=account)
         sync_status = "success" if sync_result.get("success") else "failed"

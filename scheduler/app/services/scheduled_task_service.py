@@ -26,6 +26,7 @@ TASK_CODE_DAY_SWITCH = "day_switch"
 TASK_CODE_CLEANUP_BROWSER_DATA = "cleanup_browser_data"
 TASK_CODE_FETCH_ORDERS = "fetch_orders"
 TASK_CODE_FETCH_PENDING_ORDERS = "fetch_pending_orders"
+TASK_CODE_FETCH_ITEMS = "fetch_items"
 TASK_CODE_LOGIN_RENEW = "login_renew"
 TASK_CODE_COOKIES_REFRESH = "cookies_refresh"
 TASK_CODE_API_COOKIE_RENEW = "api_cookie_renew"
@@ -41,6 +42,7 @@ DEFAULT_CONFIGS = {
     TASK_CODE_CLEANUP_BROWSER_DATA: {"interval_seconds": 600, "enabled": False},
     TASK_CODE_FETCH_ORDERS: {"interval_seconds": 600, "enabled": True},
     TASK_CODE_FETCH_PENDING_ORDERS: {"interval_seconds": 60, "enabled": True},
+    TASK_CODE_FETCH_ITEMS: {"interval_seconds": 1200, "enabled": True},
     TASK_CODE_LOGIN_RENEW: {"interval_seconds": 600, "enabled": False},
     TASK_CODE_COOKIES_REFRESH: {"interval_seconds": 600, "enabled": False},
     TASK_CODE_API_COOKIE_RENEW: {"interval_seconds": 3600, "enabled": True},

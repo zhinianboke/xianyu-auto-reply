@@ -24,6 +24,7 @@ from app.services.scheduler.fetch_orders_task import (
     fetch_orders_task_service,
     fetch_pending_orders_task_service,
 )
+from app.services.scheduler.fetch_items_task import fetch_items_task_service
 from app.services.scheduler.login_renew_task import login_renew_task_service
 from app.services.scheduler.cookies_refresh_task import cookies_refresh_task_service
 from app.services.scheduler.api_cookie_renew_task import api_cookie_renew_task_service
@@ -38,6 +39,7 @@ from app.services.scheduled_task_service import (
     TASK_CODE_CLEANUP_BROWSER_DATA,
     TASK_CODE_FETCH_ORDERS,
     TASK_CODE_FETCH_PENDING_ORDERS,
+    TASK_CODE_FETCH_ITEMS,
     TASK_CODE_LOGIN_RENEW,
     TASK_CODE_COOKIES_REFRESH,
     TASK_CODE_API_COOKIE_RENEW,
@@ -61,6 +63,7 @@ class SchedulerService:
         self._cleanup_browser_data_task_handle: Optional[asyncio.Task] = None
         self._fetch_orders_task_handle: Optional[asyncio.Task] = None
         self._fetch_pending_orders_task_handle: Optional[asyncio.Task] = None
+        self._fetch_items_task_handle: Optional[asyncio.Task] = None
         self._login_renew_task_handle: Optional[asyncio.Task] = None
         self._cookies_refresh_task_handle: Optional[asyncio.Task] = None
         self._api_cookie_renew_task_handle: Optional[asyncio.Task] = None
@@ -73,6 +76,7 @@ class SchedulerService:
         self._cleanup_browser_data_task = cleanup_browser_data_task_service
         self._fetch_orders_task = fetch_orders_task_service
         self._fetch_pending_orders_task = fetch_pending_orders_task_service
+        self._fetch_items_task = fetch_items_task_service
         self._login_renew_task = login_renew_task_service
         self._cookies_refresh_task = cookies_refresh_task_service
         self._api_cookie_renew_task = api_cookie_renew_task_service
@@ -106,7 +110,7 @@ class SchedulerService:
     
     async def reload_all_configs(self) -> None:
         """重新加载所有任务配置"""
-        for task_code in [TASK_CODE_REDELIVERY, TASK_CODE_RATE, TASK_CODE_POLISH, TASK_CODE_DAY_SWITCH, TASK_CODE_CLEANUP_BROWSER_DATA, TASK_CODE_FETCH_ORDERS, TASK_CODE_FETCH_PENDING_ORDERS, TASK_CODE_LOGIN_RENEW, TASK_CODE_COOKIES_REFRESH, TASK_CODE_API_COOKIE_RENEW, TASK_CODE_CLOSE_NOTICE, TASK_CODE_RED_FLOWER]:
+        for task_code in [TASK_CODE_REDELIVERY, TASK_CODE_RATE, TASK_CODE_POLISH, TASK_CODE_DAY_SWITCH, TASK_CODE_CLEANUP_BROWSER_DATA, TASK_CODE_FETCH_ORDERS, TASK_CODE_FETCH_PENDING_ORDERS, TASK_CODE_FETCH_ITEMS, TASK_CODE_LOGIN_RENEW, TASK_CODE_COOKIES_REFRESH, TASK_CODE_API_COOKIE_RENEW, TASK_CODE_CLOSE_NOTICE, TASK_CODE_RED_FLOWER]:
             await self.reload_task_config(task_code)
     
     def start(self) -> None:
@@ -124,6 +128,7 @@ class SchedulerService:
         self._cleanup_browser_data_task_handle = asyncio.create_task(self._run_cleanup_browser_data_loop())
         self._fetch_orders_task_handle = asyncio.create_task(self._run_fetch_orders_loop())
         self._fetch_pending_orders_task_handle = asyncio.create_task(self._run_fetch_pending_orders_loop())
+        self._fetch_items_task_handle = asyncio.create_task(self._run_fetch_items_loop())
         self._login_renew_task_handle = asyncio.create_task(self._run_login_renew_loop())
         self._cookies_refresh_task_handle = asyncio.create_task(self._run_cookies_refresh_loop())
         self._api_cookie_renew_task_handle = asyncio.create_task(self._run_api_cookie_renew_loop())
@@ -159,6 +164,9 @@ class SchedulerService:
         if self._fetch_pending_orders_task_handle:
             self._fetch_pending_orders_task_handle.cancel()
             self._fetch_pending_orders_task_handle = None
+        if self._fetch_items_task_handle:
+            self._fetch_items_task_handle.cancel()
+            self._fetch_items_task_handle = None
         if self._login_renew_task_handle:
             self._login_renew_task_handle.cancel()
             self._login_renew_task_handle = None
@@ -185,6 +193,7 @@ class SchedulerService:
         cleanup_browser_data_config = ScheduledTaskService.get_cached_config(TASK_CODE_CLEANUP_BROWSER_DATA)
         fetch_orders_config = ScheduledTaskService.get_cached_config(TASK_CODE_FETCH_ORDERS)
         fetch_pending_orders_config = ScheduledTaskService.get_cached_config(TASK_CODE_FETCH_PENDING_ORDERS)
+        fetch_items_config = ScheduledTaskService.get_cached_config(TASK_CODE_FETCH_ITEMS)
         login_renew_config = ScheduledTaskService.get_cached_config(TASK_CODE_LOGIN_RENEW)
         cookies_refresh_config = ScheduledTaskService.get_cached_config(TASK_CODE_COOKIES_REFRESH)
         api_cookie_renew_config = ScheduledTaskService.get_cached_config(TASK_CODE_API_COOKIE_RENEW)
@@ -241,6 +250,13 @@ class SchedulerService:
                     "task_running": (
                         self._fetch_pending_orders_task_handle is not None
                         and not self._fetch_pending_orders_task_handle.done()
+                    ),
+                },
+                TASK_CODE_FETCH_ITEMS: {
+                    "config": fetch_items_config or {"interval_seconds": 1200, "enabled": True},
+                    "task_running": (
+                        self._fetch_items_task_handle is not None
+                        and not self._fetch_items_task_handle.done()
                     ),
                 },
                 TASK_CODE_LOGIN_RENEW: {
@@ -309,6 +325,9 @@ class SchedulerService:
         elif task_code == TASK_CODE_FETCH_PENDING_ORDERS:
             logger.info("[定时任务调度] 手动触发获取待发货订单任务")
             await self._fetch_pending_orders_task.execute()
+        elif task_code == TASK_CODE_FETCH_ITEMS:
+            logger.info("[定时任务调度] 手动触发获取闲鱼商品任务")
+            await self._fetch_items_task.execute()
         elif task_code == TASK_CODE_LOGIN_RENEW:
             logger.info("[定时任务调度] 手动触发登录续期任务")
             await self._login_renew_task.execute()
@@ -557,6 +576,39 @@ class SchedulerService:
                 break
 
         logger.info("[定时任务调度] 获取待发货订单任务循环结束")
+
+    async def _run_fetch_items_loop(self) -> None:
+        """获取闲鱼商品任务执行循环"""
+        logger.info("[定时任务调度] 获取闲鱼商品任务循环开始")
+
+        # 初始加载配置
+        await self.reload_task_config(TASK_CODE_FETCH_ITEMS)
+
+        while self._running:
+            config = ScheduledTaskService.get_cached_config(TASK_CODE_FETCH_ITEMS)
+            if not config:
+                config = {"interval_seconds": 1200, "enabled": True}
+
+            interval = config.get("interval_seconds", 1200)
+            enabled = config.get("enabled", True)
+
+            if enabled:
+                try:
+                    await self._fetch_items_task.execute()
+                except asyncio.CancelledError:
+                    logger.info("[定时任务调度] 获取闲鱼商品任务被取消")
+                    break
+                except Exception as e:
+                    logger.error(f"[定时任务调度] 获取闲鱼商品任务执行异常: {e}")
+
+            # 等待下一次执行
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                logger.info("[定时任务调度] 获取闲鱼商品任务等待被取消")
+                break
+
+        logger.info("[定时任务调度] 获取闲鱼商品任务循环结束")
 
     async def _run_login_renew_loop(self) -> None:
         """登录续期任务执行循环"""
