@@ -76,6 +76,10 @@ SCHEDULER_PORT=8091
 IMAGE_REGISTRY=registry.cn-shanghai.aliyuncs.com/zhinian-software
 IMAGE_TAG=latest
 
+# 基础镜像（MySQL / Redis，从阿里云仓库拉取，由 sync_base_images.sh 同步上传）
+MYSQL_IMAGE=registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-mysql:8.0
+REDIS_IMAGE=registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-redis:7-alpine
+
 # 日志级别
 LOG_LEVEL=INFO
 
@@ -108,9 +112,9 @@ cat > "$COMPOSE_FILE" << 'COMPOSEEOF'
 services:
   # ====== 基础设施 ======
 
-  # MySQL数据库
+  # MySQL数据库（默认从阿里云仓库拉取，可通过 MYSQL_IMAGE 覆盖）
   mysql:
-    image: mysql:8.0
+    image: ${MYSQL_IMAGE:-registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-mysql:8.0}
     container_name: xianyu-mysql
     restart: unless-stopped
     environment:
@@ -135,9 +139,9 @@ services:
       retries: 10
       start_period: 30s
 
-  # Redis缓存
+  # Redis缓存（默认从阿里云仓库拉取，可通过 REDIS_IMAGE 覆盖）
   redis:
-    image: redis:7-alpine
+    image: ${REDIS_IMAGE:-registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-redis:7-alpine}
     container_name: xianyu-redis
     restart: unless-stopped
     command: >

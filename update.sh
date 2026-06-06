@@ -101,7 +101,7 @@ generate_compose_file() {
     cat > "$COMPOSE_FILE" << 'COMPOSEEOF'
 services:
   mysql:
-    image: mysql:8.0
+    image: ${MYSQL_IMAGE:-registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-mysql:8.0}
     container_name: xianyu-mysql
     restart: unless-stopped
     environment:
@@ -128,7 +128,7 @@ services:
       start_period: 30s
 
   redis:
-    image: redis:7-alpine
+    image: ${REDIS_IMAGE:-registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-redis:7-alpine}
     container_name: xianyu-redis
     restart: unless-stopped
     command: >
@@ -339,6 +339,10 @@ SCHEDULER_PORT=8091
 # 镜像配置
 IMAGE_REGISTRY=registry.cn-shanghai.aliyuncs.com/zhinian-software
 IMAGE_TAG=latest
+
+# 基础镜像（MySQL / Redis，从阿里云仓库拉取，由 sync_base_images.sh 同步上传）
+MYSQL_IMAGE=registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-mysql:8.0
+REDIS_IMAGE=registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-redis:7-alpine
 
 # 日志级别
 LOG_LEVEL=INFO
