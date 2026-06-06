@@ -3,12 +3,12 @@
 
 功能：
 1. 每10分钟执行一次
-2. 查询数据库中status='disabled'的账号
+2. 查询数据库中status='disabled'且更新时间在10天之前的账号
 3. 删除对应的browser_data/user_{account_id}目录
-4. 只清理被禁用账号的数据，启用状态的数据不删除
+4. 只清理被禁用且超过10天未变更的账号数据，启用状态或近期变更的数据不删除
 """
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from loguru import logger
@@ -16,6 +16,10 @@ from sqlalchemy import select
 
 from common.db.session import async_session_maker
 from common.models.xy_account import XYAccount
+from common.utils.time_utils import get_beijing_now_naive
+
+# 禁用账号超过该天数（基于更新时间）后才清理其浏览器数据
+DISABLED_RETENTION_DAYS = 10
 
 
 class CleanupBrowserDataTaskService:
@@ -40,10 +44,13 @@ class CleanupBrowserDataTaskService:
                 logger.info(f"【{self.task_name}】browser_data目录不存在，跳过清理")
                 return
             
-            # 2. 查询所有被禁用的账号
+            # 2. 查询所有被禁用且超过保留天数未变更的账号
             disabled_accounts = await self._get_disabled_accounts()
             
-            logger.info(f"【{self.task_name}】查询到 {len(disabled_accounts)} 个被禁用的账号")
+            logger.info(
+                f"【{self.task_name}】查询到 {len(disabled_accounts)} 个"
+                f"被禁用且超过{DISABLED_RETENTION_DAYS}天未变更的账号"
+            )
             
             if not disabled_accounts:
                 logger.info(f"【{self.task_name}】没有需要清理的账号，任务结束")
@@ -86,21 +93,31 @@ class CleanupBrowserDataTaskService:
     
     async def _get_disabled_accounts(self) -> list[str]:
         """
-        获取所有被禁用的账号ID列表
+        获取所有被禁用且超过保留天数未变更的账号ID列表
+        
+        判断条件：status='disabled' 且 updated_at <= (当前北京时间 - 保留天数)
+        即账号已被禁用，且更新日期已超过 DISABLED_RETENTION_DAYS 天没有变化
         
         Returns:
-            被禁用的账号ID列表
+            符合条件的账号ID列表
         """
         try:
+            # 计算截止时间：早于该时间的禁用账号才需要清理
+            cutoff_time = get_beijing_now_naive() - timedelta(days=DISABLED_RETENTION_DAYS)
+            
             async with async_session_maker() as session:
-                # 查询status='disabled'的账号
+                # 查询status='disabled'且更新时间在截止时间之前的账号
                 stmt = select(XYAccount.account_id).where(
-                    XYAccount.status == "disabled"
+                    XYAccount.status == "disabled",
+                    XYAccount.updated_at <= cutoff_time,
                 )
                 result = await session.execute(stmt)
                 account_ids = [row[0] for row in result.fetchall()]
                 
-                logger.debug(f"【{self.task_name}】查询到 {len(account_ids)} 个被禁用的账号")
+                logger.debug(
+                    f"【{self.task_name}】截止时间 {cutoff_time}，"
+                    f"查询到 {len(account_ids)} 个符合清理条件的被禁用账号"
+                )
                 return account_ids
                 
         except Exception as e:
