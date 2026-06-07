@@ -9,7 +9,8 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
+from urllib.parse import quote
 
 from app.api import deps
 from app.services.db_backup_log_service import DbBackupLogService
@@ -70,8 +71,16 @@ async def download_db_backup_file(
             "data": None,
         }
 
-    return FileResponse(
-        path=str(file_path),
-        filename=file_name,
+    # 使用 StreamingResponse 分块读取发送，避免大文件一次性载入内存或下载卡住
+    def iter_file():
+        with file_path.open("rb") as f:
+            while chunk := f.read(64 * 1024):
+                yield chunk
+
+    # 文件名按 RFC 5987 编码，兼容中文/特殊字符
+    disposition = f"attachment; filename*=UTF-8''{quote(file_name)}"
+    return StreamingResponse(
+        iter_file(),
         media_type="application/gzip",
+        headers={"Content-Disposition": disposition},
     )
