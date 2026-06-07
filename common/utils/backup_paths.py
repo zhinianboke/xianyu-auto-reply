@@ -8,27 +8,45 @@
 
 说明：
 - Docker 环境通过共享卷把同一目录挂载到 scheduler（读写）与 backend-web（读）
-- 禁止写死绝对路径，路径统一由 BACKUP_DIR 环境变量管理
+- 路径统一由配置项 backup_dir（环境变量 BACKUP_DIR 或 .env 文件）管理，禁止写死
 """
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
+from common.core.config import get_settings
+
+# 项目根目录：common/utils/backup_paths.py -> common/utils -> common -> 项目根
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 def get_backup_root() -> Path:
     """获取数据库备份文件根目录。
 
-    优先使用环境变量 BACKUP_DIR；为相对路径时基于当前工作目录解析。
-    未配置时回退到当前工作目录下的 backups 目录。
+    优先级：
+    1. 配置项 backup_dir（由 pydantic 从环境变量或 .env 文件加载，二者都能覆盖）
+    2. 环境变量 BACKUP_DIR（兜底，防止个别进程未走配置系统）
+    3. 未配置时回退到 backups
+
+    相对路径统一基于「项目根目录」解析，而非当前工作目录（cwd）。
+    原因：源码运行时 scheduler 与 backend-web 的 cwd 不同，若基于 cwd 解析相对路径，
+    两个服务会指向不同目录，导致 scheduler 写入的备份文件 backend-web 无法读取下载。
+    基于项目根解析可保证两服务始终指向同一目录。
     """
-    backup_env = os.environ.get("BACKUP_DIR", "").strip()
-    if backup_env:
-        root = Path(backup_env)
-        if not root.is_absolute():
-            root = Path.cwd() / root
-    else:
-        root = Path.cwd() / "backups"
+    backup_value = ""
+    try:
+        backup_value = (get_settings().backup_dir or "").strip()
+    except Exception:
+        backup_value = ""
+    if not backup_value:
+        backup_value = os.environ.get("BACKUP_DIR", "").strip()
+    if not backup_value:
+        backup_value = "backups"
+
+    root = Path(backup_value)
+    if not root.is_absolute():
+        root = _PROJECT_ROOT / root
     return root
 
 
