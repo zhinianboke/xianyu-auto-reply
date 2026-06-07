@@ -32,6 +32,7 @@ TASK_CODE_COOKIES_REFRESH = "cookies_refresh"
 TASK_CODE_API_COOKIE_RENEW = "api_cookie_renew"
 TASK_CODE_CLOSE_NOTICE = "close_notice"
 TASK_CODE_RED_FLOWER = "red_flower"
+TASK_CODE_DB_BACKUP = "db_backup"
 
 # 默认配置（数据库无配置时使用）
 DEFAULT_CONFIGS = {
@@ -48,6 +49,7 @@ DEFAULT_CONFIGS = {
     TASK_CODE_API_COOKIE_RENEW: {"interval_seconds": 3600, "enabled": True},
     TASK_CODE_CLOSE_NOTICE: {"interval_seconds": 600, "enabled": False},
     TASK_CODE_RED_FLOWER: {"interval_seconds": 300, "enabled": True},
+    TASK_CODE_DB_BACKUP: {"interval_seconds": 3600, "enabled": True},
 }
 
 

@@ -30,6 +30,7 @@ from app.services.scheduler.cookies_refresh_task import cookies_refresh_task_ser
 from app.services.scheduler.api_cookie_renew_task import api_cookie_renew_task_service
 from app.services.scheduler.close_notice_task import close_notice_task_service
 from app.services.scheduler.red_flower_task import RedFlowerTask
+from app.services.scheduler.db_backup_task import db_backup_task_service
 from app.services.scheduled_task_service import (
     ScheduledTaskService,
     TASK_CODE_REDELIVERY,
@@ -45,6 +46,7 @@ from app.services.scheduled_task_service import (
     TASK_CODE_API_COOKIE_RENEW,
     TASK_CODE_CLOSE_NOTICE,
     TASK_CODE_RED_FLOWER,
+    TASK_CODE_DB_BACKUP,
 )
 from common.db.session import async_session_maker
 
@@ -69,6 +71,7 @@ class SchedulerService:
         self._api_cookie_renew_task_handle: Optional[asyncio.Task] = None
         self._close_notice_task_handle: Optional[asyncio.Task] = None
         self._red_flower_task_handle: Optional[asyncio.Task] = None
+        self._db_backup_task_handle: Optional[asyncio.Task] = None
         self._redelivery_task = RedeliveryTask()
         self._rate_task = RateTask()
         self._polish_task = polish_task_service
@@ -82,6 +85,7 @@ class SchedulerService:
         self._api_cookie_renew_task = api_cookie_renew_task_service
         self._close_notice_task = close_notice_task_service
         self._red_flower_task = RedFlowerTask()
+        self._db_backup_task = db_backup_task_service
     
     @classmethod
     def get_instance(cls) -> "SchedulerService":
@@ -110,7 +114,7 @@ class SchedulerService:
     
     async def reload_all_configs(self) -> None:
         """重新加载所有任务配置"""
-        for task_code in [TASK_CODE_REDELIVERY, TASK_CODE_RATE, TASK_CODE_POLISH, TASK_CODE_DAY_SWITCH, TASK_CODE_CLEANUP_BROWSER_DATA, TASK_CODE_FETCH_ORDERS, TASK_CODE_FETCH_PENDING_ORDERS, TASK_CODE_FETCH_ITEMS, TASK_CODE_LOGIN_RENEW, TASK_CODE_COOKIES_REFRESH, TASK_CODE_API_COOKIE_RENEW, TASK_CODE_CLOSE_NOTICE, TASK_CODE_RED_FLOWER]:
+        for task_code in [TASK_CODE_REDELIVERY, TASK_CODE_RATE, TASK_CODE_POLISH, TASK_CODE_DAY_SWITCH, TASK_CODE_CLEANUP_BROWSER_DATA, TASK_CODE_FETCH_ORDERS, TASK_CODE_FETCH_PENDING_ORDERS, TASK_CODE_FETCH_ITEMS, TASK_CODE_LOGIN_RENEW, TASK_CODE_COOKIES_REFRESH, TASK_CODE_API_COOKIE_RENEW, TASK_CODE_CLOSE_NOTICE, TASK_CODE_RED_FLOWER, TASK_CODE_DB_BACKUP]:
             await self.reload_task_config(task_code)
     
     def start(self) -> None:
@@ -134,6 +138,7 @@ class SchedulerService:
         self._api_cookie_renew_task_handle = asyncio.create_task(self._run_api_cookie_renew_loop())
         self._close_notice_task_handle = asyncio.create_task(self._run_close_notice_loop())
         self._red_flower_task_handle = asyncio.create_task(self._run_red_flower_loop())
+        self._db_backup_task_handle = asyncio.create_task(self._run_db_backup_loop())
         logger.info("[定时任务调度] 已启动")
     
     def stop(self) -> None:
@@ -182,6 +187,9 @@ class SchedulerService:
         if self._red_flower_task_handle:
             self._red_flower_task_handle.cancel()
             self._red_flower_task_handle = None
+        if self._db_backup_task_handle:
+            self._db_backup_task_handle.cancel()
+            self._db_backup_task_handle = None
         logger.info("[定时任务调度] 已停止")
     
     def get_task_status(self) -> dict:
@@ -199,6 +207,7 @@ class SchedulerService:
         api_cookie_renew_config = ScheduledTaskService.get_cached_config(TASK_CODE_API_COOKIE_RENEW)
         close_notice_config = ScheduledTaskService.get_cached_config(TASK_CODE_CLOSE_NOTICE)
         red_flower_config = ScheduledTaskService.get_cached_config(TASK_CODE_RED_FLOWER)
+        db_backup_config = ScheduledTaskService.get_cached_config(TASK_CODE_DB_BACKUP)
         
         return {
             "running": self._running,
@@ -294,6 +303,13 @@ class SchedulerService:
                         and not self._red_flower_task_handle.done()
                     ),
                 },
+                TASK_CODE_DB_BACKUP: {
+                    "config": db_backup_config or {"interval_seconds": 3600, "enabled": True},
+                    "task_running": (
+                        self._db_backup_task_handle is not None
+                        and not self._db_backup_task_handle.done()
+                    ),
+                },
             }
         }
     
@@ -343,6 +359,9 @@ class SchedulerService:
         elif task_code == TASK_CODE_RED_FLOWER:
             logger.info("[定时任务调度] 手动触发求小红花任务")
             await self._red_flower_task.execute()
+        elif task_code == TASK_CODE_DB_BACKUP:
+            logger.info("[定时任务调度] 手动触发数据库备份任务")
+            await self._db_backup_task.execute()
         else:
             logger.warning(f"[定时任务调度] 未知的任务代码: {task_code}")
     
@@ -772,6 +791,40 @@ class SchedulerService:
                 break
         
         logger.info("[定时任务调度] 求小红花任务循环结束")
+
+
+    async def _run_db_backup_loop(self) -> None:
+        """数据库备份任务执行循环"""
+        logger.info("[定时任务调度] 数据库备份任务循环开始")
+
+        # 初始加载配置
+        await self.reload_task_config(TASK_CODE_DB_BACKUP)
+
+        while self._running:
+            config = ScheduledTaskService.get_cached_config(TASK_CODE_DB_BACKUP)
+            if not config:
+                config = {"interval_seconds": 3600, "enabled": True}
+
+            interval = config.get("interval_seconds", 3600)
+            enabled = config.get("enabled", True)
+
+            if enabled:
+                try:
+                    await self._db_backup_task.execute()
+                except asyncio.CancelledError:
+                    logger.info("[定时任务调度] 数据库备份任务被取消")
+                    break
+                except Exception as e:
+                    logger.error(f"[定时任务调度] 数据库备份任务执行异常: {e}")
+
+            # 等待下一次执行
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                logger.info("[定时任务调度] 数据库备份任务等待被取消")
+                break
+
+        logger.info("[定时任务调度] 数据库备份任务循环结束")
 
 
 # 全局实例获取函数

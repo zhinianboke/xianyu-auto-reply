@@ -248,6 +248,13 @@ class DatabaseInitializer:
             True,
             "定时自动求小红花",
         ),
+        (
+            "db_backup",
+            "数据库备份任务",
+            3600,
+            True,
+            "定时备份数据库所有表结构与数据到文件",
+        ),
     )
     
     # ========== 所有数据表的DDL定义 ==========
@@ -1155,6 +1162,26 @@ class DatabaseInitializer:
                 INDEX `idx_account_id` (`account_id`),
                 INDEX `idx_created_at` (`created_at`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='账号消息通知关闭执行日志表';
+        """,
+
+        # 38.3 数据库备份日志表（记录每次数据库备份任务的结果与备份文件信息）
+        "xy_db_backup_log": """
+            CREATE TABLE IF NOT EXISTS `xy_db_backup_log` (
+                `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+                `status` VARCHAR(20) NOT NULL COMMENT '状态：success/failed',
+                `file_name` VARCHAR(255) DEFAULT NULL COMMENT '备份文件名',
+                `file_path` VARCHAR(500) DEFAULT NULL COMMENT '备份文件绝对路径',
+                `file_size` BIGINT DEFAULT NULL COMMENT '备份文件大小(字节)',
+                `table_count` INT DEFAULT NULL COMMENT '备份的数据表数量',
+                `total_rows` BIGINT DEFAULT NULL COMMENT '备份的数据总行数',
+                `duration_ms` INT DEFAULT NULL COMMENT '备份耗时(毫秒)',
+                `error_message` VARCHAR(1000) DEFAULT NULL COMMENT '错误信息',
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                PRIMARY KEY (`id`),
+                INDEX `idx_status` (`status`),
+                INDEX `idx_created_at` (`created_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='数据库备份日志表';
         """,
 
         "xy_auto_reply_message_logs": """

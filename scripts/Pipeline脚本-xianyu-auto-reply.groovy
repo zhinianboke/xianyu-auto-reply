@@ -345,6 +345,7 @@ services:
       - WEBSOCKET_SERVICE_URL=http://websocket:8090
       - SCHEDULER_SERVICE_URL=http://scheduler:8091
       - STATIC_DIR=/app/static
+      - BACKUP_DIR=/app/backups
       - BACKEND_WEB_PUBLIC_URL=\${BACKEND_WEB_PUBLIC_URL:-}
       - BROWSER_HEADLESS=true
       - LOG_LEVEL=\${LOG_LEVEL:-INFO}
@@ -352,6 +353,7 @@ services:
     volumes:
       - backend_web_logs:/app/backend-web/logs
       - static-files:/app/static
+      - backup-files:/app/backups
     ports:
       - "\${BACKEND_WEB_PORT:-8089}:8089"
     networks:
@@ -392,11 +394,13 @@ services:
       - WEBSOCKET_SERVICE_URL=http://websocket:8090
       - BACKEND_WEB_SERVICE_URL=http://backend-web:8089
       - STATIC_DIR=/app/static
+      - BACKUP_DIR=/app/backups
       - LOG_LEVEL=\${LOG_LEVEL:-INFO}
       - TZ=Asia/Shanghai
     volumes:
       - scheduler_logs:/app/scheduler/logs
       - static-files:/app/static:ro
+      - backup-files:/app/backups
     ports:
       - "\${SCHEDULER_PORT:-8091}:8091"
     networks:
@@ -433,6 +437,8 @@ volumes:
   scheduler_logs:
     driver: local
   static-files:
+    driver: local
+  backup-files:
     driver: local
 COMPOSE_EOF
                         

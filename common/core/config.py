@@ -64,6 +64,10 @@ class BaseConfig(BaseSettings):
     # 服务地址配置
     websocket_service_url: str = Field(default="http://127.0.0.1:8001")
 
+    # 数据库备份文件目录（Docker 环境通过共享卷挂载，本地回退到 backups）
+    # 通过环境变量 BACKUP_DIR 配置，禁止写死 localhost / 绝对路径
+    backup_dir: str = Field(default="backups", alias="BACKUP_DIR")
+
     @property
     def database_url(self) -> str:
         """同步数据库连接URL"""

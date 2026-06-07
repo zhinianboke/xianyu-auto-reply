@@ -245,6 +245,77 @@ export const clearAccountLoginLogs = async (params?: {
   return del(`${ADMIN_PREFIX}/account-login-logs${qs ? `?${qs}` : ''}`)
 }
 
+// ========== 数据库备份日志 ==========
+
+export interface DbBackupLog {
+  id: number
+  status: string
+  file_name: string | null
+  file_path: string | null
+  file_size: number | null
+  table_count: number | null
+  total_rows: number | null
+  duration_ms: number | null
+  error_message: string | null
+  downloadable: boolean
+  created_at: string
+}
+
+// 获取数据库备份日志
+export const getDbBackupLogs = async (params?: {
+  page?: number
+  pageSize?: number
+  status?: string
+  start_date?: string
+  end_date?: string
+}): Promise<{ success: boolean; data?: DbBackupLog[]; total?: number; message?: string }> => {
+  const query = new URLSearchParams()
+  const page = params?.page || 1
+  const pageSize = params?.pageSize || 20
+  const offset = (page - 1) * pageSize
+  query.set('limit', String(pageSize))
+  query.set('offset', String(offset))
+  if (params?.status) query.set('status', params.status)
+  if (params?.start_date) query.set('start_date', params.start_date)
+  if (params?.end_date) query.set('end_date', params.end_date)
+  const result = await get<{
+    success: boolean
+    message?: string
+    data?: DbBackupLog[]
+    total?: number
+  }>(`${API_PREFIX}/db-backup-logs?${query.toString()}`)
+  return {
+    success: Boolean(result.success),
+    data: result.data || [],
+    total: result.total,
+    message: result.message,
+  }
+}
+
+// 下载数据库备份文件（通过 fetch 获取 Blob，便于携带鉴权头并处理错误）
+export const downloadDbBackupFile = async (
+  logId: number,
+): Promise<{ success: boolean; blob?: Blob; filename?: string; message?: string }> => {
+  const token = localStorage.getItem('auth_token')
+  const response = await fetch(`${API_PREFIX}/db-backup-logs/${logId}/download`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  })
+
+  const contentType = response.headers.get('content-type') || ''
+  // 文件不存在时后端返回 JSON（success=false），否则返回二进制文件流
+  if (contentType.includes('application/json')) {
+    const data = await response.json()
+    return { success: false, message: data?.message || '下载失败' }
+  }
+
+  const blob = await response.blob()
+  // 从响应头解析文件名
+  const disposition = response.headers.get('content-disposition') || ''
+  const match = disposition.match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)["']?/i)
+  const filename = match ? decodeURIComponent(match[1]) : `backup_${logId}.sql.gz`
+  return { success: true, blob, filename }
+}
+
 // ========== 数据管理 ==========
 
 // 获取表数据

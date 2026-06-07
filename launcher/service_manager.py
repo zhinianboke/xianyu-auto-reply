@@ -184,6 +184,10 @@ class ServiceManager:
                 - mysql_host, mysql_port, mysql_user, mysql_password, mysql_database
                 - redis_host, redis_port, redis_password, redis_db
         """
+        # 数据库备份目录：backend-web 与 scheduler 必须指向同一绝对路径，
+        # 否则 scheduler 写入的备份文件 backend-web 无法读取下载（本地源码模式各服务 cwd 不同）
+        backup_dir = (self.project_root / "backups").as_posix()
+
         # backend-web .env
         backend_env = (
             f"ENVIRONMENT=production\n"
@@ -205,6 +209,7 @@ class ServiceManager:
             f"WEBSOCKET_SERVICE_URL=http://127.0.0.1:8090\n"
             f"SCHEDULER_SERVICE_URL=http://127.0.0.1:8091\n"
             f"STATIC_DIR=static\n"
+            f"BACKUP_DIR={backup_dir}\n"
             f"FRONTEND_PUBLIC_URL=http://127.0.0.1:9000\n"
             f"BACKEND_WEB_PUBLIC_URL=http://127.0.0.1:8089\n"
         )
@@ -250,6 +255,7 @@ class ServiceManager:
             f"WEBSOCKET_SERVICE_URL=http://127.0.0.1:8090\n"
             f"BACKEND_WEB_SERVICE_URL=http://127.0.0.1:8089\n"
             f"STATIC_DIR=static\n"
+            f"BACKUP_DIR={backup_dir}\n"
         )
         
         env_map = {

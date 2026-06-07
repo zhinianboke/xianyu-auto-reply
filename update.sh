@@ -173,6 +173,7 @@ services:
       - WEBSOCKET_SERVICE_URL=http://websocket:8090
       - SCHEDULER_SERVICE_URL=http://scheduler:8091
       - STATIC_DIR=/app/static
+      - BACKUP_DIR=/app/backups
       - BACKEND_WEB_PUBLIC_URL=${BACKEND_WEB_PUBLIC_URL:-}
       - BROWSER_HEADLESS=true
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -181,6 +182,7 @@ services:
     volumes:
       - ./xianyu_auto_reply/logs/backend_web:/app/backend-web/logs
       - ./xianyu_auto_reply/static:/app/static
+      - ./xianyu_auto_reply/backups:/app/backups
     ports:
       - "${BACKEND_WEB_PORT:-8089}:8089"
     networks:
@@ -263,12 +265,14 @@ services:
       - WEBSOCKET_SERVICE_URL=http://websocket:8090
       - BACKEND_WEB_SERVICE_URL=http://backend-web:8089
       - STATIC_DIR=/app/static
+      - BACKUP_DIR=/app/backups
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SQL_ECHO=${SQL_ECHO:-true}
       - TZ=Asia/Shanghai
     volumes:
       - ./xianyu_auto_reply/logs/scheduler:/app/scheduler/logs
       - ./xianyu_auto_reply/static:/app/static:ro
+      - ./xianyu_auto_reply/backups:/app/backups
     ports:
       - "${SCHEDULER_PORT:-8091}:8091"
     networks:
@@ -383,6 +387,7 @@ create_mount_dirs() {
         "$WORK_DIR/xianyu_auto_reply/logs/websocket" \
         "$WORK_DIR/xianyu_auto_reply/logs/scheduler" \
         "$WORK_DIR/xianyu_auto_reply/static" \
+        "$WORK_DIR/xianyu_auto_reply/backups" \
         "$WORK_DIR/xianyu_auto_reply/browser_data"
 }
 
