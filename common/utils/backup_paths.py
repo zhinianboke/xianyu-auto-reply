@@ -83,8 +83,38 @@ def resolve_backup_file(file_name: str) -> Path | None:
     return target
 
 
+def locate_backup_file(file_name: str | None, file_path: str | None) -> Path | None:
+    """定位可下载的备份文件，兼容多种路径来源。
+
+    解析顺序：
+    1. 按文件名在「当前备份目录」中查找（最稳，且带路径穿越防护）
+    2. 回退到日志记录中保存的绝对路径 file_path（兼容备份目录配置变化、
+       或 scheduler 与 backend-web 目录解析存在差异的情况）
+
+    Args:
+        file_name: 备份文件名（仅文件名）。
+        file_path: 备份记录中保存的绝对路径。
+
+    Returns:
+        文件存在时返回路径，否则返回 None。
+    """
+    # 1. 优先按文件名在当前备份目录解析（安全、可控）
+    resolved = resolve_backup_file(file_name) if file_name else None
+    if resolved:
+        return resolved
+
+    # 2. 回退到记录中保存的绝对路径（同机/同共享卷下依然有效）
+    if file_path:
+        candidate = Path(file_path)
+        if candidate.is_file():
+            return candidate
+
+    return None
+
+
 __all__ = [
     "get_backup_root",
     "ensure_backup_root",
     "resolve_backup_file",
+    "locate_backup_file",
 ]
