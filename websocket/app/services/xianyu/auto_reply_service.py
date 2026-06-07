@@ -1,4 +1,4 @@
-﻿"""
+"""
 自动回复服务
 
 功能:
@@ -880,8 +880,19 @@ class AutoReplyService:
                 logger.debug(f"【{self.cookie_id}】未配置消息通知，跳过通知发送")
                 return
             
+            # 获取账号备注
+            remark = ""
+            try:
+                account_details = db_manager.get_cookie_details(self.cookie_id)
+                if account_details:
+                    remark = account_details.get("remark") or ""
+            except Exception as e:
+                logger.warning(f"获取账号详情失败: {e}")
+
             # 构建通知内容
+            account_desc = f"{self.cookie_id}({remark})" if remark else self.cookie_id
             notification_content = f"【闲鱼消息】\n"
+            notification_content += f"闲鱼账号: {account_desc}\n"
             notification_content += f"发送者: {send_user_name}\n"
             notification_content += f"消息: {send_message}\n"
             if item_id:

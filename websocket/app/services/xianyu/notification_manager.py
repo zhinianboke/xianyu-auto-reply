@@ -109,9 +109,19 @@ class NotificationManager:
                 logger.warning(f"📱 账号 {self.cookie_id} 未配置消息通知，跳过通知发送")
                 return
 
+            # 获取账号备注
+            remark = ""
+            try:
+                account_details = db_manager.get_cookie_details(self.cookie_id)
+                if account_details:
+                    remark = account_details.get("remark") or ""
+            except Exception as e:
+                logger.warning(f"获取账号详情失败: {e}")
+
             # 构建通知内容（与旧框架保持一致）
+            account_desc = f"{self.cookie_id}({remark})" if remark else self.cookie_id
             notification_msg = f"🚨 接收消息通知\n\n" \
-                             f"账号: {self.cookie_id}\n" \
+                             f"闲鱼账号: {account_desc}\n" \
                              f"买家: {send_user_name} (ID: {send_user_id})\n" \
                              f"商品ID: {item_id or '未知'}\n" \
                              f"聊天ID: {chat_id or '未知'}\n" \
@@ -136,9 +146,19 @@ class NotificationManager:
                 logger.warning("未配置消息通知，跳过自动发货通知")
                 return
 
+            # 获取账号备注
+            remark = ""
+            try:
+                account_details = db_manager.get_cookie_details(self.cookie_id)
+                if account_details:
+                    remark = account_details.get("remark") or ""
+            except Exception as e:
+                logger.warning(f"获取账号详情失败: {e}")
+
             # 构建通知内容（与旧框架保持一致）
+            account_desc = f"{self.cookie_id}({remark})" if remark else self.cookie_id
             notification_message = f"🚨 自动发货通知\n\n" \
-                                 f"账号: {self.cookie_id}\n" \
+                                 f"闲鱼账号: {account_desc}\n" \
                                  f"买家: {send_user_name} (ID: {send_user_id})\n" \
                                  f"商品ID: {item_id}\n" \
                                  f"聊天ID: {chat_id or '未知'}\n" \
@@ -223,15 +243,26 @@ class NotificationManager:
             # 获取通知标题
             notification_title = notification_title_map.get(notification_type, "🔔 系统通知")
             
+            # 获取账号备注
+            remark = ""
+            try:
+                account_details = db_manager.get_cookie_details(self.cookie_id)
+                if account_details:
+                    remark = account_details.get("remark") or ""
+            except Exception as e:
+                logger.warning(f"获取账号详情失败: {e}")
+
+            account_desc = f"{self.cookie_id}({remark})" if remark else self.cookie_id
+
             # 根据不同情况构建通知消息
             if "滑块验证成功" in error_message:
-                notification_msg = f"{notification_title}\n\n{error_message}\n\n账号: {self.cookie_id}\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                notification_msg = f"{notification_title}\n\n{error_message}\n\n闲鱼账号: {account_desc}\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
             elif "登录成功" in error_message or notification_type == "password_login_success":
-                notification_msg = f"{notification_title}\n\n{error_message}\n\n账号: {self.cookie_id}\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                notification_msg = f"{notification_title}\n\n{error_message}\n\n闲鱼账号: {account_desc}\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
             elif verification_url:
-                notification_msg = f"{notification_title}\n\n{error_message}\n\n账号: {self.cookie_id}\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n验证链接: {verification_url}\n"
+                notification_msg = f"{notification_title}\n\n{error_message}\n\n闲鱼账号: {account_desc}\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n验证链接: {verification_url}\n"
             else:
-                notification_msg = f"{notification_title}\n\n账号ID: {self.cookie_id}\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n详情: {error_message}\n\n请检查账号状态。\n"
+                notification_msg = f"{notification_title}\n\n闲鱼账号: {account_desc}\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n详情: {error_message}\n\n请检查账号状态。\n"
 
             notification_sent = await self._send_to_channels(notifications, notification_msg, attachment_path)
 

@@ -158,6 +158,20 @@ class DBManagerCompat:
                 account = result.scalars().first()
                 if not account:
                     return None
+                
+                # 尝试获取账号昵称，若为空则从 cookie 中解析 tracknick，若仍为空则回退使用备注
+                display_name = account.display_name
+                if not display_name:
+                    try:
+                        from common.utils.xianyu_utils import trans_cookies
+                        from urllib.parse import unquote
+                        cookie_dict = trans_cookies(account.cookie)
+                        tracknick = cookie_dict.get("tracknick")
+                        if tracknick:
+                            display_name = unquote(tracknick)
+                    except Exception:
+                        pass
+
                 return {
                     'id': account.id,
                     'cookie_id': account.account_id,
@@ -165,6 +179,7 @@ class DBManagerCompat:
                     'user_id': account.owner_id,
                     'auto_confirm': account.auto_confirm,
                     'remark': account.remark,
+                    'display_name': display_name or account.remark,
                     'pause_duration': account.pause_duration,
                     'username': account.username,
                     'password': account.login_password,
