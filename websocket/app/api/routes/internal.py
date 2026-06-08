@@ -872,6 +872,11 @@ async def deliver_order(request: DeliverOrderRequest):
             _seller_info = db_manager.get_cookie_by_id(account_id)
             if _seller_info:
                 _order_context['seller_name'] = _seller_info.get('remark') or account_id or ''
+            # 买家明文昵称：复用自动发货同一套逻辑（pre_check 阶段已获取 _current_buyer_fish_nick，
+            # 缺失则用 chat_id 实时查 mtop user.query），手动发货无推送昵称，兜底传空
+            _order_context['buyer_name'] = await xianyu_live.auto_delivery_handler._resolve_buyer_name_for_variable(
+                card.description or '', request.chat_id, ''
+            )
         except Exception:
             pass
 
@@ -923,7 +928,8 @@ async def deliver_order(request: DeliverOrderRequest):
                     rule=rule,
                     order_id=request.order_no,
                     item_id=request.item_id,
-                    buyer_id=request.buyer_id
+                    buyer_id=request.buyer_id,
+                    chat_id=request.chat_id
                 )
                 if not content:
                     if not raw_contents:

@@ -22,6 +22,7 @@ from app.services.xianyu.delivery_utils import (
     recursive_replace_params
 )
 from app.services.xianyu.yifan_api_handler import YifanApiHandler
+from common.utils.fish_nick_utils import get_buyer_fish_nick
 
 
 class AutoDeliveryHandler:
@@ -39,6 +40,8 @@ class AutoDeliveryHandler:
         self._yifan_api_handler = YifanApiHandler(self)
         # 最近一次发货失败原因（用于记录到数据库）
         self._last_delivery_fail_reason = None
+        # 最近一次获取的买家闲鱼明文昵称（pre_check 阶段获取，供写库及备注/API 变量复用）
+        self._current_buyer_fish_nick = None
         # 最近一次匹配到的卡券来源/类型（供多数量循环判断是否退化为单张）
         # - card_source: own / dock_l1 / dock_l2，对接卡券类需在多数量场景退化为 1 张避免代理订单结算 bug
         # - card_type:   text / data / image / api / yifan_api，固定内容类（text/image）需退化为 1 张避免重复发同样内容
@@ -1467,6 +1470,87 @@ class AutoDeliveryHandler:
 
     # ==================== 自动发货核心逻辑 ====================
 
+    async def _resolve_buyer_name_for_variable(
+        self,
+        card_description: str,
+        chat_id: str,
+        send_user_name: str,
+    ) -> str:
+        """解析备注变量 {buyer_name} 应使用的买家昵称
+
+        仅当卡券备注中确实包含 {buyer_name} 变量时，才尝试获取买家闲鱼明文昵称
+        （复用订单 buyer_fish_nick 的 mtop user.query 逻辑），避免无谓的接口请求。
+
+        取值优先级：
+          1. 预检查阶段已获取的 self._current_buyer_fish_nick（命中则直接复用）
+          2. 备注含变量且上面为空时，用 chat_id 实时调用 get_buyer_fish_nick 获取明文昵称
+          3. 仍取不到则回退到推送消息携带的昵称 send_user_name；
+             但自动发货多由「我已付款，等待你发货」等系统提醒消息触发，此时
+             send_user_name 实为系统提醒标题（reminderTitle）而非真实昵称，
+             这类系统占位文案不能当作买家昵称，需过滤为空。
+
+        Args:
+            card_description: 卡券备注内容
+            chat_id: 聊天会话ID（user.query 的 sessionId）
+            send_user_name: 推送消息携带的买家昵称（兜底）
+
+        Returns:
+            用于替换 {buyer_name} 的昵称字符串
+        """
+        # 推送昵称兜底：过滤掉系统提醒标题等占位文案
+        fallback = send_user_name or ''
+        if self._is_system_placeholder_name(fallback):
+            fallback = ''
+
+        # 备注无 {buyer_name} 变量，无需额外获取，直接返回兜底值
+        if not card_description or '{buyer_name}' not in card_description:
+            return fallback
+
+        # 优先复用预检查阶段已获取的明文昵称
+        cached_nick = getattr(self, '_current_buyer_fish_nick', None)
+        if cached_nick:
+            return cached_nick
+
+        # 备注需要变量但缓存为空，用 chat_id 实时获取明文昵称
+        if chat_id:
+            try:
+                fish_nick = await get_buyer_fish_nick(
+                    self.cookies_str, chat_id, self.cookie_id
+                )
+                if fish_nick:
+                    # 回写实例属性，供后续写库等复用
+                    self._current_buyer_fish_nick = fish_nick
+                    return fish_nick
+            except Exception as e:
+                logger.warning(
+                    f"【{self.cookie_id}】备注变量获取买家明文昵称失败，"
+                    f"回退推送昵称: {self._safe_str(e)}"
+                )
+
+        return fallback
+
+    # 自动发货常由系统提醒消息触发，reminderTitle 会落到这些系统占位文案上，
+    # 它们不是真实买家昵称，替换 {buyer_name} 时需排除
+    _SYSTEM_PLACEHOLDER_NAMES = {
+        '系统',
+        '等待你发货',
+        '等待您发货',
+        '我已付款，等待你发货',
+        '我已付款，等待您发货',
+        '已付款，待发货',
+        '记得及时发货',
+        '我已拍下，待付款',
+        '买家已付款',
+        '付款完成',
+    }
+
+    def _is_system_placeholder_name(self, name: str) -> bool:
+        """判断昵称是否为系统提醒占位文案（非真实买家昵称）"""
+        if not name:
+            return True
+        cleaned = name.strip().strip('[]【】')
+        return cleaned in self._SYSTEM_PLACEHOLDER_NAMES
+
     async def _auto_delivery(self, item_id: str, item_title: str = None, order_id: str = None, send_user_id: str = None, chat_id: str = None, send_user_name: str = None, skip_confirm: bool = False):
         """自动发货功能 - 根据商品ID获取卡券，执行延时，确认发货，发送内容
 
@@ -1745,7 +1829,7 @@ class AutoDeliveryHandler:
                 # 根据卡券类型处理发货内容
                 if rule['card_type'] == 'api':
                     # API类型：调用API获取内容，传入订单和商品信息用于动态参数替换
-                    text_content = await self._get_api_card_content(rule, order_id, item_id, send_user_id, spec_name, spec_value)
+                    text_content = await self._get_api_card_content(rule, order_id, item_id, send_user_id, spec_name, spec_value, chat_id=chat_id, send_user_name=send_user_name)
                     if text_content is None:
                         self._last_delivery_fail_reason = f"获取API卡券内容失败: 卡券ID={rule['card_id']}, 名称={rule['card_name']}"
                         logger.warning(self._last_delivery_fail_reason)
@@ -1798,11 +1882,17 @@ class AutoDeliveryHandler:
                         seller_name = seller_info.get('remark') or self.cookie_id or ''
                 except Exception:
                     seller_name = self.cookie_id or ''
+                # 买家昵称：备注中含 {buyer_name} 变量时，优先取闲鱼明文昵称
+                # （与订单 buyer_fish_nick 同一套 mtop user.query 逻辑），
+                # 取不到再回退到推送消息携带的昵称 send_user_name
+                buyer_name = await self._resolve_buyer_name_for_variable(
+                    card_description, chat_id, send_user_name
+                )
                 order_context = {
                     'order_id': order_id or '',
                     'item_id': item_id or '',
                     'item_title': real_item_title,
-                    'buyer_name': send_user_name or '',
+                    'buyer_name': buyer_name,
                     'buyer_id': send_user_id or '',
                     'seller_name': seller_name,
                 }
@@ -2311,7 +2401,7 @@ class AutoDeliveryHandler:
 
     # ==================== API卡券获取 ====================
 
-    async def _get_api_card_content(self, rule, order_id=None, item_id=None, buyer_id=None, spec_name=None, spec_value=None, retry_count=0):
+    async def _get_api_card_content(self, rule, order_id=None, item_id=None, buyer_id=None, spec_name=None, spec_value=None, retry_count=0, chat_id=None, send_user_name=None):
         """调用API获取卡券内容，支持动态参数替换和重试机制"""
         max_retries = 4
 
@@ -2351,7 +2441,7 @@ class AutoDeliveryHandler:
 
             # 如果是POST请求且有动态参数，进行参数替换
             if method == 'POST' and params:
-                params = await self._replace_api_dynamic_params(params, order_id, item_id, buyer_id, spec_name, spec_value)
+                params = await self._replace_api_dynamic_params(params, order_id, item_id, buyer_id, spec_name, spec_value, chat_id=chat_id, send_user_name=send_user_name)
 
             retry_info = f" (重试 {retry_count + 1}/{max_retries})" if retry_count > 0 else ""
             logger.info(f"调用API获取卡券: {method} {url}{retry_info}")
@@ -2398,7 +2488,7 @@ class AutoDeliveryHandler:
                         wait_time = (retry_count + 1) * 2  # 递增等待时间: 2s, 4s, 6s
                         logger.info(f"等待 {wait_time} 秒后重试...")
                         await asyncio.sleep(wait_time)
-                        return await self._get_api_card_content(rule, order_id, item_id, buyer_id, spec_name, spec_value, retry_count + 1)
+                        return await self._get_api_card_content(rule, order_id, item_id, buyer_id, spec_name, spec_value, retry_count + 1, chat_id=chat_id, send_user_name=send_user_name)
 
                 return None
 
@@ -2410,7 +2500,7 @@ class AutoDeliveryHandler:
                 wait_time = (retry_count + 1) * 2  # 递增等待时间
                 logger.info(f"等待 {wait_time} 秒后重试...")
                 await asyncio.sleep(wait_time)
-                return await self._get_api_card_content(rule, order_id, item_id, buyer_id, spec_name, spec_value, retry_count + 1)
+                return await self._get_api_card_content(rule, order_id, item_id, buyer_id, spec_name, spec_value, retry_count + 1, chat_id=chat_id, send_user_name=send_user_name)
             else:
                 logger.error(f"API调用网络异常，已达到最大重试次数: {self._safe_str(e)}")
                 return None
@@ -2436,7 +2526,7 @@ class AutoDeliveryHandler:
 
     # ==================== API参数替换 ====================
 
-    async def _replace_api_dynamic_params(self, params, order_id=None, item_id=None, buyer_id=None, spec_name=None, spec_value=None):
+    async def _replace_api_dynamic_params(self, params, order_id=None, item_id=None, buyer_id=None, spec_name=None, spec_value=None, chat_id=None, send_user_name=None):
         """替换API请求参数中的动态参数"""
         try:
             if not params or not isinstance(params, dict):
@@ -2487,6 +2577,15 @@ class AutoDeliveryHandler:
                 'spec_value': spec_value or '',
                 'timestamp': str(int(time.time())),
             }
+
+            # 买家明文昵称：仅当参数中含 {buyer_name} 时才解析（避免无谓的接口请求）
+            # 复用备注变量同一套逻辑：优先已获取的明文昵称，再用 chat_id 实时查询，
+            # 最后过滤系统提醒占位文案后回退到推送昵称
+            params_text = json.dumps(params, ensure_ascii=False)
+            if '{buyer_name}' in params_text:
+                param_mapping['buyer_name'] = await self._resolve_buyer_name_for_variable(
+                    params_text, chat_id, send_user_name
+                )
 
             # 从订单信息中提取参数
             if order_info:
