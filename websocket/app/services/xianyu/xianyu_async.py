@@ -1688,11 +1688,16 @@ class XianyuAsync:
             return None
     
     async def send_msg(self, websocket, chat_id: str, send_user_id: str, content: str):
-        """发送文本消息（参照旧框架实现）"""
+        """发送文本消息（参照旧框架实现）
+
+        消息通过 WebSocket 发出后立即返回成功（不阻塞自动回复）。
+        同时注册 mid 等待队列，返回结果中携带 mid，供上层在写入日志后
+        异步等待服务端响应、回写发送状态（识别 CSI_FORBID 安全拦截等失败）。
+        """
         try:
             import base64
             from common.utils.xianyu_utils import generate_mid, generate_uuid
-            
+
             # 构建消息内容（参照旧框架）
             msg_content = {
                 "contentType": 1,
@@ -1700,10 +1705,11 @@ class XianyuAsync:
             }
             content_json = json.dumps(msg_content, ensure_ascii=False)
             content_base64 = base64.b64encode(content_json.encode("utf-8")).decode("utf-8")
-            
+
+            mid = generate_mid()
             msg = {
                 "lwp": "/r/MessageSend/sendByReceiverScope",
-                "headers": {"mid": generate_mid()},
+                "headers": {"mid": mid},
                 "body": [
                     {
                         "uuid": generate_uuid(),
@@ -1730,19 +1736,33 @@ class XianyuAsync:
             
             # 打印发送参数用于调试
             logger.info(f"【{self.cookie_id}】发送文本消息: chat_id={chat_id}, to={send_user_id}, myid={self.myid}")
-            logger.debug(f"【{self.cookie_id}】文本消息内容: {content_json}")
             
             # 打印完整的WebSocket消息用于调试
             msg_str = json.dumps(msg)
             logger.info(f"【{self.cookie_id}】WebSocket发送数据长度: {len(msg_str)} 字节")
-            logger.debug(f"【{self.cookie_id}】WebSocket完整消息: {msg_str}")
-            
+
+            # 注册 mid 等待队列（供上层写日志后异步检测发送结果），注册失败不影响发送
+            registered_mid = None
+            send_future = None
+            try:
+                loop = asyncio.get_running_loop()
+                send_future = loop.create_future()
+                self._pending_mid_futures[mid] = send_future
+                registered_mid = mid
+            except Exception as reg_e:
+                logger.warning(f"【{self.cookie_id}】注册发送结果检测失败（不影响发送）: {self._safe_str(reg_e)}")
+
             await websocket.send(msg_str)
             logger.info(f"【{self.cookie_id}】发送消息成功: {content[:50]}...")
             return {
                 "success": True,
                 "mode": "text",
                 "content": content,
+                "mid": registered_mid,
+                # 直接携带 Future 引用：即使服务端响应在上层 await 之前到达
+                # （_dispatch_mid_response 已 set_result 并从字典移除），
+                # 持有引用仍能拿到结果，避免漏判拦截
+                "send_future": send_future,
             }
         except Exception as e:
             logger.error(f"【{self.cookie_id}】发送消息失败: {e}")
@@ -1754,6 +1774,65 @@ class XianyuAsync:
                 "content": content,
                 "error_message": str(e),
             }
+
+    async def wait_send_reject_reason(
+        self,
+        send_future: "asyncio.Future",
+        mid: Optional[str] = None,
+        timeout: float = 10.0,
+    ) -> Optional[str]:
+        """等待发送响应 Future，返回拦截原因（未被拦截或超时返回 None）
+
+        闲鱼对违规内容会异步返回带 reason 的响应（如 CSI_FORBID 安全拦截）。
+        正常消息服务端不一定回带相同 mid 的响应，因此超时按"未拦截"处理，
+        不视为失败，避免误判。
+
+        直接接收 send_msg 返回的 Future 引用（而非从字典查 mid），
+        避免响应早于本方法 await 到达、Future 已被分派移除导致漏判。
+        传入 mid 用于超时（服务端无响应）时清理等待队列，防止内存堆积。
+
+        Args:
+            send_future: send_msg 返回结果中的 send_future
+            mid: send_msg 返回结果中的 mid（用于超时清理）
+            timeout: 等待响应超时时间（秒）
+
+        Returns:
+            拦截原因明文（含 moreInfo 类型），未被拦截/超时/异常返回 None
+        """
+        if send_future is None:
+            return None
+        try:
+            response = await asyncio.wait_for(send_future, timeout=timeout)
+            return self._extract_send_reject_reason(response)
+        except asyncio.TimeoutError:
+            return None
+        except Exception as e:
+            logger.warning(f"【{self.cookie_id}】检测发送结果异常: {self._safe_str(e)}")
+            return None
+        finally:
+            # 已被 _dispatch_mid_response 分派的 mid 已从字典移除（pop 安全幂等）；
+            # 超时未响应的 mid 在此清理，防止 _pending_mid_futures 堆积
+            if mid:
+                self._pending_mid_futures.pop(mid, None)
+
+    @staticmethod
+    def _extract_send_reject_reason(response: dict) -> Optional[str]:
+        """从发送响应中提取拦截原因，未被拦截返回 None
+
+        Args:
+            response: 服务端返回的完整响应（含 headers/code/body）
+
+        Returns:
+            拦截原因明文（含 moreInfo 类型），未拦截返回 None
+        """
+        if not isinstance(response, dict):
+            return None
+        body = response.get("body", {})
+        if isinstance(body, dict) and body.get("reason"):
+            reason = body.get("reason", "")
+            more_info = body.get("moreInfo", "")
+            return f"{reason}（{more_info}）" if more_info else reason
+        return None
 
     # ==================== LWP 请求-响应关联 ====================
 

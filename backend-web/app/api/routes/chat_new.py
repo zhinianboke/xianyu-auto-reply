@@ -423,8 +423,10 @@ async def send_message(
         return ApiResponse(success=True, message="发送成功")
 
     except Exception as e:
-        logger.error(f"【{account_id}】发送消息失败: {e}")
-        return ApiResponse(success=False, message=f"发送消息失败: {str(e)}")
+        # send_text_message 在被 IM 安全拦截等业务错误时会抛出明文原因，
+        # 直接透传给前端展示（如"内容存在不当信息..."），便于用户调整后重发。
+        logger.warning(f"【{account_id}】发送消息失败: {e}")
+        return ApiResponse(success=False, message=f"发送失败：{str(e)}")
 
 
 @router.post("/avatars/{account_id}")

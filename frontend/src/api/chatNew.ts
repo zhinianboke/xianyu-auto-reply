@@ -43,6 +43,10 @@ export interface ChatMessage {
   text: string
   images: string[]
   time: number
+  /** 发送是否失败（仅本地发送的消息可能为 true） */
+  failed?: boolean
+  /** 发送失败原因（如被安全拦截的明文文案），用于点击感叹号查看 */
+  failReason?: string
 }
 
 // ==================== 接口方法 ====================

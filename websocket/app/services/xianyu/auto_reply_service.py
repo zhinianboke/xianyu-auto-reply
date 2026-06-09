@@ -242,9 +242,9 @@ class AutoReplyService:
             return None
         return "；".join(errors[:3])
     
-    async def _record_auto_reply_log(self, log_payload: Dict[str, Any]) -> None:
-        """写入自动回复日志"""
-        await self.auto_reply_log_service.record_message(log_payload)
+    async def _record_auto_reply_log(self, log_payload: Dict[str, Any]) -> int | None:
+        """写入自动回复日志，返回日志主键ID（供异步回写发送状态）"""
+        return await self.auto_reply_log_service.record_message(log_payload)
     
     # ==================== 消息去重功能(参照旧框架reply_scheduler.py) ====================
     
@@ -759,9 +759,20 @@ class AutoReplyService:
                 if not failed_results:
                     log_payload["process_status"] = "success"
                     log_payload["decision_reason"] = "reply_sent"
+                    # 消息已发出 WebSocket，但是否被服务端接收需异步等待响应确认，
+                    # 先置为 unknown，由后台任务在拿到响应后回写 success/failed
+                    log_payload["send_status"] = "unknown"
+                    # 收集本次发出消息的 (future, mid)，供异步检测发送结果
+                    log_payload["_pending_send_waiters"] = [
+                        (result.get("send_future"), result.get("mid"))
+                        for result in send_results
+                        if result.get("send_future") is not None
+                    ]
                 else:
                     log_payload["process_status"] = "failed"
                     log_payload["decision_reason"] = "send_failed"
+                    # 发送层（WebSocket 发送）就失败，直接判定发送失败
+                    log_payload["send_status"] = "failed"
                     error_messages = [
                         str(result.get("error_message") or "").strip()
                         for result in failed_results
@@ -769,6 +780,7 @@ class AutoReplyService:
                     ]
                     if error_messages:
                         log_payload["error_message"] = "；".join(error_messages)
+                        log_payload["send_fail_reason"] = "；".join(error_messages)
             elif not should_skip and log_payload.get("process_status") == "processing":
                 log_payload["process_status"] = "skipped"
                 log_payload["decision_reason"] = "no_rule_matched"
@@ -799,9 +811,66 @@ class AutoReplyService:
             log_payload["error_message"] = str(e)
         finally:
             try:
-                await self._record_auto_reply_log(log_payload)
+                # 取出待检测的发送 (future, mid)（临时键，不写入数据库）
+                pending_send_waiters = log_payload.pop("_pending_send_waiters", None)
+                log_id = await self._record_auto_reply_log(log_payload)
+                # 若消息已发出且日志写入成功，起后台任务异步等待发送结果并回写状态
+                if log_id and pending_send_waiters:
+                    self._spawn_send_status_writeback(log_id, pending_send_waiters)
             finally:
                 self._reply_trace_var.reset(reply_trace_token)
+
+    def _spawn_send_status_writeback(self, log_id: int, waiters: list) -> None:
+        """起后台任务：异步等待发送结果并回写日志的发送状态
+
+        不阻塞自动回复主流程。优先用实例的任务追踪器创建任务，
+        不可用时回退到 asyncio.create_task。
+
+        Args:
+            log_id: 日志主键ID
+            waiters: 本次发出消息的 (send_future, mid) 列表
+        """
+        try:
+            coro = self._writeback_send_status(log_id, waiters)
+            tracker = getattr(self.xianyu_instance, "_create_tracked_task", None)
+            if callable(tracker):
+                tracker(coro)
+            else:
+                import asyncio
+                asyncio.create_task(coro)
+        except Exception as e:
+            logger.warning(f"【{self.cookie_id}】启动发送状态回写任务失败 log_id={log_id}: {e}")
+
+    async def _writeback_send_status(self, log_id: int, waiters: list) -> None:
+        """等待各发送响应，按结果回写日志发送状态
+
+        - 任一消息被服务端拦截（返回 reason）→ send_status=failed，记录失败原因
+        - 全部无拦截响应（含正常发送、超时）→ send_status=success
+
+        Args:
+            log_id: 日志主键ID
+            waiters: 本次发出消息的 (send_future, mid) 列表
+        """
+        try:
+            wait_fn = getattr(self.xianyu_instance, "wait_send_reject_reason", None)
+            if not callable(wait_fn):
+                return
+            reasons: List[str] = []
+            for send_future, mid in waiters:
+                reason = await wait_fn(send_future, mid)
+                if reason:
+                    reasons.append(reason)
+            if reasons:
+                await self.auto_reply_log_service.safe_update_send_status(
+                    log_id, "failed", "；".join(reasons)
+                )
+                logger.warning(
+                    f"【{self.cookie_id}】自动回复发送被拦截 log_id={log_id}: {'；'.join(reasons)}"
+                )
+            else:
+                await self.auto_reply_log_service.safe_update_send_status(log_id, "success", None)
+        except Exception as e:
+            logger.warning(f"【{self.cookie_id}】回写发送状态异常 log_id={log_id}: {e}")
 
     async def _send_text_with_separator(
         self,

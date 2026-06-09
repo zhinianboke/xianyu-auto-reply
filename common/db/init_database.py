@@ -1214,6 +1214,8 @@ class DatabaseInitializer:
                 reply_image_url VARCHAR(1000) DEFAULT NULL COMMENT '回复图片URL',
                 reply_segments JSON DEFAULT NULL COMMENT '拆分后的回复分段',
                 error_message TEXT COMMENT '错误信息',
+                send_status VARCHAR(20) NOT NULL DEFAULT 'unknown' COMMENT '发送状态：success-发送成功/failed-发送失败/unknown-未知(无响应)',
+                send_fail_reason TEXT COMMENT '发送失败原因（如被安全拦截的明文文案）',
                 raw_message_json JSON DEFAULT NULL COMMENT '原始消息JSON',
                 context_snapshot JSON DEFAULT NULL COMMENT '上下文快照',
                 send_result_json JSON DEFAULT NULL COMMENT '发送结果快照',
@@ -1384,6 +1386,10 @@ class DatabaseInitializer:
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
     COLUMN_MIGRATIONS = {
+        "xy_auto_reply_message_logs": [
+            ("send_status", "VARCHAR(20) NOT NULL DEFAULT 'unknown' COMMENT '发送状态：success-发送成功/failed-发送失败/unknown-未知(无响应)'", "error_message"),
+            ("send_fail_reason", "TEXT COMMENT '发送失败原因（如被安全拦截的明文文案）'", "send_status"),
+        ],
         "xy_accounts": [
             ("proxy_type", "VARCHAR(20) DEFAULT 'none' COMMENT '代理类型'", "last_refresh_at"),
             ("proxy_host", "VARCHAR(255) COMMENT '代理主机'", "proxy_type"),

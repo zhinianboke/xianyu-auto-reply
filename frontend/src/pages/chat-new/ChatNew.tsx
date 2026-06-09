@@ -5,7 +5,7 @@
  * 支持多账号切换，基于WebSocket API获取数据
  */
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { Loader2, LogIn, LogOut, MessageCircle, RefreshCw, User, ChevronUp, X, Send } from 'lucide-react'
+import { Loader2, LogIn, LogOut, MessageCircle, RefreshCw, User, ChevronUp, X, Send, AlertCircle } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import {
   getChatAccounts,
@@ -517,20 +517,23 @@ export function ChatNew() {
     setSending(true)
     try {
       const res = await sendTextMessage(activeAccountId, activeCid, conv.otherUserId, text)
+      // 无论成功失败，都把这条消息展示在聊天记录中；
+      // 失败时标记 failed + failReason，气泡前显示红色感叹号，点击查看原因
+      const sentMsg: ChatMessage = {
+        senderId: activeAccountId,
+        senderName: '',
+        isSelf: true,
+        type: 'text',
+        text,
+        images: [],
+        time: Date.now(),
+        failed: !res.success,
+        failReason: res.success ? undefined : (res.message || '发送失败'),
+      }
+      setInputText('')
+      setMessages((prev) => [...prev, sentMsg])
       if (res.success) {
-        setInputText('')
-        // 立即将发送的消息追加到本地列表
-        const sentMsg: ChatMessage = {
-          senderId: activeAccountId,
-          senderName: '',
-          isSelf: true,
-          type: 'text',
-          text,
-          images: [],
-          time: Date.now(),
-        }
-        setMessages((prev) => [...prev, sentMsg])
-        // 更新会话列表摘要
+        // 成功才更新会话列表摘要
         setConversations((prev) =>
           prev.map((c) =>
             c.cid === activeCid
@@ -542,7 +545,22 @@ export function ChatNew() {
         addToast({ message: res.message || '发送失败', type: 'error' })
       }
     } catch (e: any) {
-      addToast({ message: e.message || '发送失败', type: 'error' })
+      // 网络等异常：同样以失败态展示该条消息
+      const failReason = e?.message || '发送失败'
+      const sentMsg: ChatMessage = {
+        senderId: activeAccountId,
+        senderName: '',
+        isSelf: true,
+        type: 'text',
+        text,
+        images: [],
+        time: Date.now(),
+        failed: true,
+        failReason,
+      }
+      setInputText('')
+      setMessages((prev) => [...prev, sentMsg])
+      addToast({ message: failReason, type: 'error' })
     } finally {
       setSending(false)
     }
@@ -827,28 +845,42 @@ export function ChatNew() {
                       {msg.senderName}
                       <span className="ml-2">{formatTime(msg.time)}</span>
                     </div>
-                    {/* 消息气泡 */}
-                    <div
-                      className={`rounded-lg px-3 py-2 text-sm break-words ${
-                        msg.isSelf
-                          ? 'bg-blue-500 text-white'
-                          : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
-                      } ${msg.type === 'system' ? '!bg-gray-200 dark:!bg-gray-600 text-center text-gray-500 dark:text-gray-400 text-xs' : ''}`}
-                    >
-                      {msg.type === 'image' && msg.images.length > 0 ? (
-                        <div className="space-y-1">
-                          {msg.images.map((url, i) => (
-                            <img
-                              key={i}
-                              src={url}
-                              className="max-w-full rounded max-h-48 object-contain cursor-pointer hover:opacity-80 transition-opacity"
-                              alt="图片消息"
-                              onClick={() => setPreviewImage(url)}
-                            />
-                          ))}
-                        </div>
-                      ) : (
-                        <span className="whitespace-pre-wrap">{msg.text}</span>
+                    {/* 消息气泡（失败的本地消息在气泡前显示红色感叹号，点击查看原因） */}
+                    <div className={`flex items-center gap-1.5 ${msg.isSelf ? 'flex-row-reverse' : ''}`}>
+                      <div
+                        className={`rounded-lg px-3 py-2 text-sm break-words ${
+                          msg.isSelf
+                            ? 'bg-blue-500 text-white'
+                            : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
+                        } ${msg.type === 'system' ? '!bg-gray-200 dark:!bg-gray-600 text-center text-gray-500 dark:text-gray-400 text-xs' : ''}`}
+                      >
+                        {msg.type === 'image' && msg.images.length > 0 ? (
+                          <div className="space-y-1">
+                            {msg.images.map((url, i) => (
+                              <img
+                                key={i}
+                                src={url}
+                                className="max-w-full rounded max-h-48 object-contain cursor-pointer hover:opacity-80 transition-opacity"
+                                alt="图片消息"
+                                onClick={() => setPreviewImage(url)}
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="whitespace-pre-wrap">{msg.text}</span>
+                        )}
+                      </div>
+                      {msg.isSelf && msg.failed && (
+                        <button
+                          type="button"
+                          title="发送失败，点击查看原因"
+                          onClick={() =>
+                            addToast({ message: msg.failReason || '发送失败', type: 'error' })
+                          }
+                          className="flex-shrink-0 text-red-500 hover:text-red-600 transition-colors"
+                        >
+                          <AlertCircle className="w-4 h-4" />
+                        </button>
                       )}
                     </div>
                   </div>

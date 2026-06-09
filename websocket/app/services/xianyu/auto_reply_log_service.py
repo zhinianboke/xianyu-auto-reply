@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any
 
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.db.retry import with_db_retry
@@ -30,23 +30,30 @@ class AutoReplyLogService:
         """初始化日志服务"""
         self.cookie_id = cookie_id
 
-    async def record_message(self, payload: dict[str, Any]) -> None:
+    async def record_message(self, payload: dict[str, Any]) -> int | None:
         """写入自动回复消息日志（外层错误兜底，避免影响主流程）
 
         实际写库逻辑在 ``_persist_message_record`` 中执行，并由 ``@with_db_retry``
         装饰器处理"连接断开类"错误的自动重试（如 ``Lost connection``、``WinError 64`` 等）。
         重试 3 次后仍失败则抛出，由本方法捕获并记录错误日志，避免日志写入失败导致主流程中断。
+
+        Returns:
+            写入成功返回日志主键ID（供异步回写发送状态使用），失败返回 None
         """
         try:
-            await self._persist_message_record(payload)
+            return await self._persist_message_record(payload)
         except Exception as e:
             logger.error(f"【{self.cookie_id}】写入自动回复消息日志失败（已重试）: {e}")
+            return None
 
     @with_db_retry(max_retries=3, initial_delay=1.0)
-    async def _persist_message_record(self, payload: dict[str, Any]) -> None:
+    async def _persist_message_record(self, payload: dict[str, Any]) -> int | None:
         """实际写入消息日志（带数据库连接断开自动重试）
 
         @with_db_retry 仅对连接断开类错误重试，业务错误（如 IntegrityError）会立即抛出。
+
+        Returns:
+            写入记录的主键ID
         """
         async with async_session_maker() as session:
             account_context = await self._load_account_context(session, payload.get("item_id"))
@@ -78,12 +85,46 @@ class AutoReplyLogService:
                 reply_image_url=self._normalize_optional_str(payload.get("reply_image_url")),
                 reply_segments=self._normalize_json_value(payload.get("reply_segments")),
                 error_message=self._normalize_optional_str(payload.get("error_message")),
+                send_status=str(payload.get("send_status") or "unknown"),
+                send_fail_reason=self._normalize_optional_str(payload.get("send_fail_reason")),
                 raw_message_json=self._normalize_json_value(payload.get("raw_message_json")),
                 context_snapshot=self._normalize_json_value(payload.get("context_snapshot")),
                 send_result_json=self._normalize_json_value(payload.get("send_result_json")),
             )
             session.add(record)
             await session.commit()
+            return record.id
+
+    @with_db_retry(max_retries=3, initial_delay=1.0)
+    async def update_send_status(
+        self, log_id: int, send_status: str, send_fail_reason: str | None = None
+    ) -> None:
+        """按日志主键回写发送状态（供异步检测发送结果后调用）
+
+        Args:
+            log_id: 日志记录主键ID
+            send_status: 发送状态 success / failed / unknown
+            send_fail_reason: 发送失败原因（success 时传 None）
+        """
+        async with async_session_maker() as session:
+            await session.execute(
+                update(XYAutoReplyMessageLog)
+                .where(XYAutoReplyMessageLog.id == log_id)
+                .values(
+                    send_status=send_status,
+                    send_fail_reason=self._normalize_optional_str(send_fail_reason),
+                )
+            )
+            await session.commit()
+
+    async def safe_update_send_status(
+        self, log_id: int, send_status: str, send_fail_reason: str | None = None
+    ) -> None:
+        """update_send_status 的错误兜底封装，避免回写失败影响主流程"""
+        try:
+            await self.update_send_status(log_id, send_status, send_fail_reason)
+        except Exception as e:
+            logger.error(f"【{self.cookie_id}】回写发送状态失败 log_id={log_id}: {e}")
 
     async def _load_account_context(self, session: AsyncSession, item_id: Any) -> dict[str, Any]:
         """加载账号、所属用户和商品标题信息"""
@@ -150,9 +191,23 @@ class AutoReplyLogService:
         return normalized or None
 
     def _normalize_json_value(self, value: Any) -> Any:
-        """规范化JSON字段值"""
+        """规范化JSON字段值
+
+        递归处理 dict/list，确保不可 JSON 序列化的对象（如 asyncio.Future、
+        send_result_json 中携带的 send_future）被剔除/转字符串，避免写库失败。
+        """
         if value is None:
             return None
-        if isinstance(value, (dict, list, str, int, float, bool)):
+        if isinstance(value, (str, int, float, bool)):
             return value
+        if isinstance(value, dict):
+            result = {}
+            for k, v in value.items():
+                # 跳过用于异步检测的 Future 引用，不入库
+                if k == "send_future":
+                    continue
+                result[str(k)] = self._normalize_json_value(v)
+            return result
+        if isinstance(value, list):
+            return [self._normalize_json_value(item) for item in value]
         return str(value)

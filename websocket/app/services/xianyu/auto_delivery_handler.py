@@ -396,7 +396,18 @@ class AutoDeliveryHandler:
             if any_send_failed:
                 errors = [r.get("error_message", "发送失败") for r in send_results if not r.get("success")]
                 error_message = "；".join(errors[:3]) if errors else "部分消息发送失败"
-            
+
+            # 发送状态：发送层（WebSocket 发送）失败直接判定 failed；
+            # 全部发出成功则先置 unknown，由后台任务等服务端响应后回写 success/failed
+            send_status = "failed" if any_send_failed else "unknown"
+            send_fail_reason = error_message if any_send_failed else None
+            # 收集本次发出文本消息的 (future, mid)，供异步检测是否被安全拦截
+            pending_send_waiters = [
+                (r.get("send_future"), r.get("mid"))
+                for r in send_results
+                if r.get("send_future") is not None
+            ]
+
             log_payload = {
                 "sender_user_id": sender_user_id,
                 "sender_user_name": sender_user_name,
@@ -410,6 +421,8 @@ class AutoDeliveryHandler:
                 "reply_mode": "text",
                 "reply_text": "\n---\n".join(display_contents),
                 "error_message": error_message,
+                "send_status": send_status,
+                "send_fail_reason": send_fail_reason,
                 "send_result_json": send_results,
                 "context_snapshot": {
                     "order_id": order_id,
@@ -418,12 +431,68 @@ class AutoDeliveryHandler:
                     "send_fail": fail_count,
                 },
             }
-            
+
             log_service = AutoReplyLogService(self.cookie_id)
-            await log_service.record_message(log_payload)
+            log_id = await log_service.record_message(log_payload)
             logger.info(f"【{self.cookie_id}】自动发货消息日志已记录: 成功{success_count}/失败{fail_count}")
+
+            # 发出成功且日志写入成功时，起后台任务异步等待发送结果并回写发送状态
+            if log_id and not any_send_failed and pending_send_waiters:
+                self._spawn_delivery_send_status_writeback(log_service, log_id, pending_send_waiters)
         except Exception as e:
             logger.error(f"【{self.cookie_id}】写入自动发货消息日志失败: {self._safe_str(e)}")
+
+    def _spawn_delivery_send_status_writeback(
+        self, log_service, log_id: int, waiters: list
+    ) -> None:
+        """起后台任务：异步等待自动发货的发送结果并回写日志发送状态
+
+        不阻塞发货主流程。复用实例的任务追踪器创建后台任务。
+
+        Args:
+            log_service: 日志服务实例（复用同一个，避免重复构造）
+            log_id: 日志主键ID
+            waiters: 本次发出消息的 (send_future, mid) 列表
+        """
+        try:
+            # handler 自身无任务追踪器，复用 parent（XianyuAsync）的追踪任务创建方法
+            self.parent._create_tracked_task(
+                self._writeback_delivery_send_status(log_service, log_id, waiters)
+            )
+        except Exception as e:
+            logger.warning(f"【{self.cookie_id}】启动发货发送状态回写任务失败 log_id={log_id}: {self._safe_str(e)}")
+
+    async def _writeback_delivery_send_status(
+        self, log_service, log_id: int, waiters: list
+    ) -> None:
+        """等待各发送响应，按结果回写自动发货日志的发送状态
+
+        - 任一消息被服务端拦截（返回 reason）→ send_status=failed，记录失败原因
+        - 全部无拦截响应（含正常发送、超时）→ send_status=success
+
+        Args:
+            log_service: 日志服务实例
+            log_id: 日志主键ID
+            waiters: 本次发出消息的 (send_future, mid) 列表
+        """
+        try:
+            wait_fn = getattr(self.parent, "wait_send_reject_reason", None)
+            if not callable(wait_fn):
+                return
+            reasons = []
+            for send_future, mid in waiters:
+                reason = await wait_fn(send_future, mid)
+                if reason:
+                    reasons.append(reason)
+            if reasons:
+                await log_service.safe_update_send_status(log_id, "failed", "；".join(reasons))
+                logger.warning(
+                    f"【{self.cookie_id}】自动发货发送被拦截 log_id={log_id}: {'；'.join(reasons)}"
+                )
+            else:
+                await log_service.safe_update_send_status(log_id, "success", None)
+        except Exception as e:
+            logger.warning(f"【{self.cookie_id}】回写发货发送状态异常 log_id={log_id}: {self._safe_str(e)}")
     
     def is_lock_held(self, lock_key: str) -> bool:
         return self.parent.is_lock_held(lock_key)

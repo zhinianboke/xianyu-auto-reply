@@ -44,9 +44,34 @@ class AutoReplyLogService:
             "reply_text": row["reply_text"],
             "reply_image_url": row["reply_image_url"],
             "error_message": row["error_message"],
+            "send_status": row["send_status"],
+            "send_fail_reason": row["send_fail_reason"],
             "created_at": safe_isoformat(row["created_at"]),
             "updated_at": safe_isoformat(row["updated_at"]),
         }
+
+    @staticmethod
+    def _build_auto_delivery_conditions(
+        *,
+        owner_id: int | None = None,
+        account_id: str | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> list:
+        """构建自动发货明细查询条件（reply_strategy == 'auto_delivery'）
+
+        与自动回复不同：成功/失败均展示，不限制 process_status。
+        """
+        conditions = [XYAutoReplyMessageLog.reply_strategy == "auto_delivery"]
+        if owner_id is not None:
+            conditions.append(XYAutoReplyMessageLog.owner_id == owner_id)
+        if account_id and account_id.strip():
+            conditions.append(XYAutoReplyMessageLog.account_id == account_id.strip())
+        if start_time is not None:
+            conditions.append(XYAutoReplyMessageLog.created_at >= start_time)
+        if end_time is not None:
+            conditions.append(XYAutoReplyMessageLog.created_at < end_time)
+        return conditions
 
     def _parse_start_time(self, start_date: str | None) -> datetime | None:
         if not start_date:
@@ -72,6 +97,7 @@ class AutoReplyLogService:
         start_date: str | None = None,
         end_date: str | None = None,
         matched_rule_type: str | None = None,
+        message_type: str = "auto_reply",
         limit: int = 20,
         offset: int = 0,
     ) -> tuple[list[dict], int]:
@@ -80,19 +106,30 @@ class AutoReplyLogService:
         if start_time is not None and end_time is not None and start_time >= end_time:
             raise ValueError("开始日期不能大于结束日期")
 
-        branch_conditions = AutoReplyStatsService.build_success_reply_branch_conditions(
-            owner_id=owner_id,
-            account_ids=[account_id] if account_id else None,
-            start_time=start_time,
-            end_time=end_time,
-        )
-
-        # 追加 matched_rule_type 筛选条件
-        if matched_rule_type:
+        if message_type == "auto_delivery":
+            # 自动发货明细：reply_strategy == 'auto_delivery'，成功/失败都展示
             branch_conditions = [
-                [*conds, XYAutoReplyMessageLog.matched_rule_type == matched_rule_type]
-                for conds in branch_conditions
+                self._build_auto_delivery_conditions(
+                    owner_id=owner_id,
+                    account_id=account_id,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
             ]
+        else:
+            branch_conditions = AutoReplyStatsService.build_success_reply_branch_conditions(
+                owner_id=owner_id,
+                account_ids=[account_id] if account_id else None,
+                start_time=start_time,
+                end_time=end_time,
+            )
+
+            # 追加 matched_rule_type 筛选条件（仅自动回复支持规则类型筛选）
+            if matched_rule_type:
+                branch_conditions = [
+                    [*conds, XYAutoReplyMessageLog.matched_rule_type == matched_rule_type]
+                    for conds in branch_conditions
+                ]
 
         total = 0
         for current_conditions in branch_conditions:
@@ -152,6 +189,8 @@ class AutoReplyLogService:
                 XYAutoReplyMessageLog.reply_text.label("reply_text"),
                 XYAutoReplyMessageLog.reply_image_url.label("reply_image_url"),
                 XYAutoReplyMessageLog.error_message.label("error_message"),
+                XYAutoReplyMessageLog.send_status.label("send_status"),
+                XYAutoReplyMessageLog.send_fail_reason.label("send_fail_reason"),
                 XYAutoReplyMessageLog.created_at.label("created_at"),
                 XYAutoReplyMessageLog.updated_at.label("updated_at"),
             )

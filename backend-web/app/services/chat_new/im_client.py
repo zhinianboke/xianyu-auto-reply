@@ -322,7 +322,31 @@ class GoofishImClient:
             ],
         }
         response = await self._send_and_wait(mid, msg)
+        # IM 服务端对违规内容会返回带 reason 的 body（如 CSI_FORBID 安全拦截），
+        # 此时虽然响应携带 body 不会在 _send_and_wait 抛错，但消息实际未送达，
+        # 需在此识别为发送失败并抛出明文原因，供上层反馈给前端。
+        self._raise_if_send_rejected(response)
         return response
+
+    @staticmethod
+    def _raise_if_send_rejected(response: Dict[str, Any]) -> None:
+        """检查发送响应是否被 IM 服务端拒绝（如安全拦截），是则抛出明文原因
+
+        Args:
+            response: IM 服务器返回的完整响应
+
+        Raises:
+            Exception: 当响应 body 含 reason（业务错误）时抛出，message 为服务端原因文案
+        """
+        if not isinstance(response, dict):
+            return
+        body = response.get("body", {})
+        if isinstance(body, dict) and body.get("reason"):
+            reason = body.get("reason", "")
+            more_info = body.get("moreInfo", "")
+            # moreInfo 形如 "CSI_FORBID||安全拦截"，附在原因后便于定位拦截类型
+            detail = f"{reason}（{more_info}）" if more_info else reason
+            raise Exception(detail)
 
     # ==================== Token缓存（数据库） ====================
     # 缓存键使用 chat_{myid} 前缀，与自动回复WebSocket的缓存隔离，
