@@ -140,6 +140,20 @@ class NotificationManager:
         try:
             from common.db.compat import db_manager
 
+            # 检查消息过滤规则（跳过消息通知）
+            # 自动发货通知此前不走过滤，导致"发货成功"等结果无法被消息过滤屏蔽，此处补齐。
+            # 匹配对象为发货结果文本 error_message（即通知中的"结果"字段），
+            # 这样配置"发货成功"只屏蔽成功通知，失败通知的错误信息不含该关键词，仍正常发送。
+            try:
+                filter_keywords = db_manager.get_message_filter_keywords(self.cookie_id, 'skip_notify')
+                if filter_keywords:
+                    for keyword in filter_keywords:
+                        if keyword and keyword in (error_message or ''):
+                            logger.info(f"📱 【消息过滤】自动发货通知包含过滤关键词「{keyword}」，跳过通知")
+                            return
+            except Exception as e:
+                logger.warning(f"📱 检查自动发货通知过滤规则失败: {self._safe_str(e)}")
+
             # 获取账号的通知配置
             notifications = db_manager.get_account_notifications(self.cookie_id)
             if not notifications:
