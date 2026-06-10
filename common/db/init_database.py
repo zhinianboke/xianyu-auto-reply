@@ -1382,6 +1382,20 @@ class DatabaseInitializer:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='闲鱼黑名单表';
         """,
 
+        # 51. 在线聊天快捷短语表
+        "xy_chat_quick_phrases": """
+            CREATE TABLE IF NOT EXISTS xy_chat_quick_phrases (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                owner_id BIGINT NOT NULL COMMENT '归属用户（本系统用户ID）',
+                title VARCHAR(80) NOT NULL COMMENT '短语标题',
+                content TEXT NOT NULL COMMENT '短语内容（发送的文本）',
+                sort_order INT NOT NULL DEFAULT 0 COMMENT '排序值，越小越靠前',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX ix_xy_chat_quick_phrases_owner_id (owner_id),
+                INDEX idx_chat_quick_phrase_owner_sort (owner_id, sort_order)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='在线聊天快捷短语';
+        """,
     }
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]

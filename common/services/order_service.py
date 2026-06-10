@@ -479,6 +479,16 @@ class OrderService:
             if existing_order:
                 # 订单已存在，准备更新字段
                 update_values = {}
+                stale_statuses = {"pending_payment", "pending_ship", "pending", "paid"}
+                terminal_statuses = {"shipped", "completed", "cancelled", "closed"}
+                is_stale_downgrade = (
+                    existing_order.status in terminal_statuses and status in stale_statuses
+                ) or (
+                    existing_order.status in {"pending_ship", "pending", "paid"}
+                    and status == "pending_payment"
+                )
+                if status and status != existing_order.status and not is_stale_downgrade:
+                    update_values['status'] = status
                 
                 # 如果要更新item_id，需要验证商品归属
                 if item_id and not existing_order.item_id:

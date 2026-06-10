@@ -128,6 +128,7 @@ class PushMessageParser:
                 "event": "new_message",
                 "cid": cid,
                 "message": {
+                    "messageId": str(msg_1.get("3", "") or ""),
                     "senderId": sender_id,
                     "senderName": sender_name,
                     "isSelf": is_self,
@@ -166,6 +167,7 @@ class PushMessageParser:
                 "event": "new_message",
                 "cid": cid,
                 "message": {
+                    "messageId": str(msg_1.get("3", "") or ""),
                     "senderId": sender_id,
                     "senderName": "系统",
                     "isSelf": sender_id == self.myid,
@@ -200,6 +202,7 @@ class PushMessageParser:
                 "event": "new_message",
                 "cid": cid,
                 "message": {
+                    "messageId": str(msg.get("3", "") or ""),
                     "senderId": sender_id,
                     "senderName": sender_name,
                     "isSelf": sender_id == self.myid,

@@ -97,12 +97,30 @@ async def get_user_info(
     return user_info
 
 
+async def get_owner_user_info(
+    account_id: str,
+    cid: str,
+    cookies_str: str,
+    db: AsyncSession,
+) -> Optional[dict]:
+    """Query the seller profile for a conversation without using buyer cache."""
+    return await _fetch_user_info_from_api(
+        account_id=account_id,
+        cid=cid,
+        cookies_str=cookies_str,
+        db=db,
+        retry_count=0,
+        is_owner=True,
+    )
+
+
 async def _fetch_user_info_from_api(
     account_id: str,
     cid: str,
     cookies_str: str,
     db: AsyncSession,
     retry_count: int = 0,
+    is_owner: bool = False,
 ) -> Optional[dict]:
     """
     调用 mtop.taobao.idlemessage.pc.user.query 获取对方用户信息
@@ -126,7 +144,7 @@ async def _fetch_user_info_from_api(
             "type": 0,
             "sessionType": 1,
             "sessionId": str(cid),
-            "isOwner": False,
+            "isOwner": is_owner,
         }, separators=(",", ":"))
 
         # 从cookie获取token并生成签名
@@ -214,6 +232,7 @@ async def _fetch_user_info_from_api(
                         cookies_str=cookies_str,
                         db=db,
                         retry_count=retry_count + 1,
+                        is_owner=is_owner,
                     )
 
                 # Session过期等其他错误

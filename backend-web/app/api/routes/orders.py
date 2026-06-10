@@ -14,6 +14,10 @@ from common.utils.auth_scope import resolve_owner_scope
 from app.services.account_service import AccountService
 from app.services.order_service import OrderService
 from app.services.card_service import CardService
+from app.services.websocket_client import websocket_client
+from common.services.order_service import OrderDetailService
+from common.models.xy_account import XYAccount
+from sqlalchemy import select as order_select
 
 from common.utils.time_utils import safe_isoformat
 router = APIRouter(tags=["orders"])
@@ -22,6 +26,14 @@ router = APIRouter(tags=["orders"])
 class ManualDeliveryRequest(BaseModel):
     """手动发货请求"""
     order_no: str  # 订单号
+
+
+class NoLogisticsDeliveryRequest(BaseModel):
+    order_no: str
+
+
+class CancelOrderRequest(BaseModel):
+    order_no: str
 
 
 class FetchXianyuOrdersRequest(BaseModel):
@@ -218,6 +230,7 @@ async def fetch_xianyu_orders(
 @router.get("/{order_no}")
 async def get_order_detail(
     order_no: str,
+    refresh: bool = Query(default=False),
     current_user: User = Depends(deps.get_current_active_user),
     order_service: OrderService = Depends(deps.get_order_service),
 ):
@@ -231,6 +244,23 @@ async def get_order_detail(
     if not is_admin and order.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权查看此订单")
     
+    if refresh and order.account_id:
+        try:
+            account_result = await order_service.session.execute(
+                order_select(XYAccount).where(XYAccount.account_id == order.account_id)
+            )
+            account = account_result.scalar_one_or_none()
+            if account and account.cookie:
+                await OrderDetailService(order.account_id, account.cookie).fetch_and_update_order_detail(
+                    order_id=order.order_no,
+                    item_id=order.item_id,
+                    buyer_id=order.buyer_id,
+                )
+                order_service.session.expire_all()
+                order = await order_service.get_order_by_id(order_no)
+        except Exception as e:
+            logger.warning(f"刷新订单详情失败，返回本地数据: order_no={order_no}, error={e}")
+
     spec_parts = [part for part in [order.spec_name, order.spec_value] if part]
     sku_info = " / ".join(spec_parts) if spec_parts else None
     
@@ -310,6 +340,76 @@ async def delete_order(
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="订单不存在或无权删除")
     return ApiResponse(success=True, message="删除成功")
+
+
+@router.post("/no-logistics-delivery")
+async def no_logistics_delivery(
+    request: NoLogisticsDeliveryRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    order_service: OrderService = Depends(deps.get_order_service),
+    account_service: AccountService = Depends(deps.get_account_service),
+):
+    """无物流发货：仅在闲鱼确认发货，不发送任何卡券或聊天内容"""
+    order = await order_service.get_order_by_no(request.order_no)
+    if not order:
+        return ApiResponse(success=False, message="订单不存在")
+
+    owner_id, is_admin = resolve_owner_scope(current_user)
+    if not is_admin and order.owner_id != current_user.id:
+        return ApiResponse(success=False, message="无权操作此订单")
+    if order.status not in {"pending_ship", "pending", "paid", "待发货"}:
+        return ApiResponse(success=False, message="只有待发货订单可以发货")
+    if not order.account_id or not order.item_id or not order.buyer_id:
+        return ApiResponse(success=False, message="订单缺少账号、商品或买家信息")
+
+    account = await account_service.get_account_for_user(owner_id, order.account_id)
+    if not account:
+        return ApiResponse(success=False, message="账号不存在")
+
+    status_result = await websocket_client.get_account_status(order.account_id)
+    if not status_result.get("success") or not status_result.get("data", {}).get("is_connected"):
+        return ApiResponse(success=False, message="账号未连接，请先启动账号")
+
+    result = await websocket_client.confirm_no_logistics(
+        account_id=order.account_id,
+        order_no=order.order_no,
+        item_id=order.item_id,
+        buyer_id=order.buyer_id,
+        is_bargain=bool(order.is_bargain),
+    )
+    if not result.get("success"):
+        return ApiResponse(success=False, message=result.get("message", "无物流发货失败"))
+    return ApiResponse(success=True, message="无物流发货成功", data=result.get("data"))
+
+
+@router.post("/cancel")
+async def cancel_order(
+    request: CancelOrderRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    order_service: OrderService = Depends(deps.get_order_service),
+    account_service: AccountService = Depends(deps.get_account_service),
+):
+    """卖家关闭（取消）一笔待处理订单"""
+    order = await order_service.get_order_by_no(request.order_no)
+    if not order:
+        return ApiResponse(success=False, message="订单不存在")
+    owner_id, is_admin = resolve_owner_scope(current_user)
+    if not is_admin and order.owner_id != current_user.id:
+        return ApiResponse(success=False, message="无权操作此订单")
+    if order.status not in {"pending_payment", "pending_ship", "pending", "paid", "待付款", "待发货"}:
+        return ApiResponse(success=False, message="当前订单状态不可取消")
+    if not order.account_id:
+        return ApiResponse(success=False, message="订单缺少账号信息")
+    if not await account_service.get_account_for_user(owner_id, order.account_id):
+        return ApiResponse(success=False, message="账号不存在")
+
+    status_result = await websocket_client.get_account_status(order.account_id)
+    if not status_result.get("success") or not status_result.get("data", {}).get("is_connected"):
+        return ApiResponse(success=False, message="账号未连接，请先启动账号")
+    result = await websocket_client.cancel_order(order.account_id, order.order_no)
+    if not result.get("success"):
+        return ApiResponse(success=False, message=result.get("message", "取消订单失败"))
+    return ApiResponse(success=True, message="订单已取消", data=result.get("data"))
 
 
 @router.post("/manual-delivery")

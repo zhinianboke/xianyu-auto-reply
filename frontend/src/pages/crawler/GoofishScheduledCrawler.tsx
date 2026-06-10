@@ -15,6 +15,7 @@ import {
 } from '@/api/goofishCrawler'
 import { PageLoading } from '@/components/common/Loading'
 import { Select } from '@/components/common/Select'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { useUIStore } from '@/store/uiStore'
 import type { AccountDetail } from '@/types'
 import { cn } from '@/utils/cn'
@@ -77,6 +78,7 @@ export function GoofishScheduledCrawler() {
   const [itemsJob, setItemsJob] = useState<GoofishCrawlJob | null>(null)
   const [itemsLoading, setItemsLoading] = useState(false)
   const [items, setItems] = useState<GoofishCrawlItem[]>([])
+  const [deleteJob, setDeleteJob] = useState<GoofishCrawlJob | null>(null)
 
   const loadAccountsAndJobs = async () => {
     try {
@@ -224,8 +226,6 @@ export function GoofishScheduledCrawler() {
   }
 
   const remove = async (job: GoofishCrawlJob) => {
-    const ok = window.confirm(`确认删除任务 #${job.id} 吗？（同时删除采集结果）`)
-    if (!ok) return
     try {
       setLoadingAction(true)
       await deleteGoofishCrawlJob(job.id)
@@ -430,7 +430,7 @@ export function GoofishScheduledCrawler() {
                           )}
                           <button
                             className="btn-ios-danger !px-2 !py-1.5"
-                            onClick={() => remove(job)}
+                            onClick={() => setDeleteJob(job)}
                             disabled={loadingAction}
                             title="删除"
                           >
@@ -537,6 +537,16 @@ export function GoofishScheduledCrawler() {
           </div>
         </div>
       )}
+      <ConfirmModal
+        isOpen={!!deleteJob}
+        title="删除采集任务"
+        message={`确认删除任务 #${deleteJob?.id || ''} 吗？同时会删除采集结果。`}
+        confirmText="删除"
+        type="danger"
+        loading={loadingAction}
+        onConfirm={() => deleteJob && remove(deleteJob).finally(() => setDeleteJob(null))}
+        onCancel={() => setDeleteJob(null)}
+      />
     </div>
   )
 }

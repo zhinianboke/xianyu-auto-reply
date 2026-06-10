@@ -97,6 +97,7 @@ class AutoReplyLogService:
         start_date: str | None = None,
         end_date: str | None = None,
         matched_rule_type: str | None = None,
+        send_status: str | None = None,
         message_type: str = "auto_reply",
         limit: int = 20,
         offset: int = 0,
@@ -130,6 +131,13 @@ class AutoReplyLogService:
                     [*conds, XYAutoReplyMessageLog.matched_rule_type == matched_rule_type]
                     for conds in branch_conditions
                 ]
+
+        # 追加发送状态筛选条件（自动回复、自动发货均支持）
+        if send_status and send_status.strip():
+            branch_conditions = [
+                [*conds, XYAutoReplyMessageLog.send_status == send_status.strip()]
+                for conds in branch_conditions
+            ]
 
         total = 0
         for current_conditions in branch_conditions:

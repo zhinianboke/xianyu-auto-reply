@@ -54,6 +54,7 @@ from common.models.fy_delete_rule import FYDeleteRule
 from common.models.xy_delivery_block_rule import XYDeliveryBlockRule
 from common.models.xy_personal_blacklist import XYPersonalBlacklist
 from common.models.xy_platform_blacklist import XYPlatformBlacklist
+from common.models.chat_quick_phrase import ChatQuickPhrase
 
 __all__ = [
     "User",
@@ -113,4 +114,5 @@ __all__ = [
     "XYDeliveryBlockRule",
     "XYPersonalBlacklist",
     "XYPlatformBlacklist",
+    "ChatQuickPhrase",
 ]

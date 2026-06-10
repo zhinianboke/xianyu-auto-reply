@@ -300,12 +300,13 @@ class GoofishImClient:
         ).decode("utf-8")
 
         mid = generate_mid()
+        message_uuid = generate_uuid()
         msg = {
             "lwp": "/r/MessageSend/sendByReceiverScope",
             "headers": {"mid": mid},
             "body": [
                 {
-                    "uuid": generate_uuid(),
+                    "uuid": message_uuid,
                     "cid": full_cid,
                     "conversationType": 1,
                     "content": {
@@ -326,6 +327,29 @@ class GoofishImClient:
         # 此时虽然响应携带 body 不会在 _send_and_wait 抛错，但消息实际未送达，
         # 需在此识别为发送失败并抛出明文原因，供上层反馈给前端。
         self._raise_if_send_rejected(response)
+        # 解析服务端返回的 messageId，供消息撤回功能使用
+        body = response.get("body", {})
+        message_id = ""
+        if isinstance(body, dict):
+            raw_message_id = body.get("messageId") or body.get("1")
+            if isinstance(raw_message_id, dict):
+                raw_message_id = raw_message_id.get("messageId") or raw_message_id.get("1")
+            if isinstance(raw_message_id, str):
+                message_id = raw_message_id
+        return {"response": response, "messageId": message_id, "uuid": message_uuid}
+
+    async def recall_message(self, message_id: str) -> Dict[str, Any]:
+        """通过闲鱼官方 IM 协议撤回一条消息"""
+        mid = generate_mid()
+        response = await self._send_and_wait(mid, {
+            "lwp": "/r/MessageManager/recallMessage",
+            "headers": {"mid": mid},
+            "body": [message_id],
+        })
+        if response.get("code") != 200:
+            body = response.get("body", {})
+            reason = body.get("reason") if isinstance(body, dict) else ""
+            raise RuntimeError(reason or "闲鱼未确认撤回成功")
         return response
 
     @staticmethod

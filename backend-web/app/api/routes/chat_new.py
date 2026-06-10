@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
+from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends
 from loguru import logger
@@ -23,11 +25,13 @@ from pydantic import BaseModel
 
 from app.api.deps import get_current_active_user, get_db_session
 from app.services.chat_new import get_im_session_manager
-from app.services.chat_new.avatar_service import get_user_info, AVATAR_CACHE_PREFIX, AVATAR_CACHE_TTL
+from app.services.chat_new.avatar_service import get_owner_user_info, get_user_info, AVATAR_CACHE_PREFIX, AVATAR_CACHE_TTL
+from app.services.chat_new.official_blacklist_service import official_blacklist_request
 from common.db.redis_client import get_redis_client
 from common.models import User, XYAccount
 from common.schemas.common import ApiResponse
 from common.utils.auth_scope import is_admin_user
+from common.utils.xianyu_utils import trans_cookies
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -120,9 +124,21 @@ async def list_accounts(
         connected_ids = manager.get_connected_account_ids()
 
         items = []
+        display_names_updated = False
         for acc in accounts:
+            display_name = acc.display_name or ""
+            if not display_name and acc.cookie:
+                try:
+                    tracknick = trans_cookies(acc.cookie).get("tracknick")
+                    if tracknick:
+                        display_name = unquote(tracknick)
+                        acc.display_name = display_name
+                        display_names_updated = True
+                except Exception as e:
+                    logger.warning(f"账号 {acc.account_id} 解析昵称失败: {e}")
             item = {
                 "account_id": acc.account_id,
+                "display_name": display_name,
                 "remark": acc.remark or "",
                 "connected": acc.account_id in connected_ids,
                 "status": acc.status or "active",
@@ -130,6 +146,8 @@ async def list_accounts(
             if is_admin:
                 item["owner"] = owner_map.get(acc.owner_id, str(acc.owner_id))
             items.append(item)
+        if display_names_updated:
+            await db.commit()
 
         return {
             "success": True,
@@ -379,6 +397,11 @@ class SendMessageRequest(BaseModel):
     text: str
 
 
+class RecallMessageRequest(BaseModel):
+    messageId: str
+    messageTime: int
+
+
 class AvatarQueryItem(BaseModel):
     """单条头像查询项"""
     userId: str
@@ -412,7 +435,7 @@ async def send_message(
         if not req.text.strip():
             return ApiResponse(success=False, message="消息内容不能为空")
 
-        await client.send_text_message(
+        send_result = await client.send_text_message(
             cid=req.cid,
             to_user_id=req.toUserId,
             text=req.text,
@@ -420,13 +443,92 @@ async def send_message(
         logger.info(
             f"【{account_id}】发送消息到 {req.toUserId}: {req.text[:50]}"
         )
-        return ApiResponse(success=True, message="发送成功")
+        return ApiResponse(
+            success=True,
+            message="发送成功",
+            data={"messageId": send_result.get("messageId", "")},
+        )
 
     except Exception as e:
         # send_text_message 在被 IM 安全拦截等业务错误时会抛出明文原因，
         # 直接透传给前端展示（如"内容存在不当信息..."），便于用户调整后重发。
         logger.warning(f"【{account_id}】发送消息失败: {e}")
         return ApiResponse(success=False, message=f"发送失败：{str(e)}")
+
+
+@router.post("/recall-message/{account_id}")
+async def recall_message(
+    account_id: str,
+    req: RecallMessageRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    if not await _get_owned_chat_account(account_id, current_user, db):
+        return ApiResponse(success=False, message="账号不存在或无权操作")
+    client = get_im_session_manager().clients.get(account_id)
+    if not client or not client.is_connected:
+        return ApiResponse(success=False, message="账号未连接")
+    if not req.messageId:
+        return ApiResponse(success=False, message="缺少消息ID，无法撤回")
+    message_time_ms = req.messageTime * 1000 if req.messageTime < 1_000_000_000_000 else req.messageTime
+    elapsed_ms = int(time.time() * 1000) - message_time_ms
+    if elapsed_ms < -10_000 or elapsed_ms > 120_000:
+        return ApiResponse(success=False, message="消息发送超过两分钟，无法撤回")
+    try:
+        await client.recall_message(req.messageId)
+        return ApiResponse(success=True, message="消息已撤回")
+    except Exception as e:
+        logger.error(f"【{account_id}】撤回消息失败: {e}")
+        return ApiResponse(success=False, message=f"撤回失败: {e}")
+
+
+async def _get_owned_chat_account(account_id: str, current_user: User, db: AsyncSession) -> XYAccount | None:
+    query = select(XYAccount).where(XYAccount.account_id == account_id)
+    if not is_admin_user(current_user):
+        query = query.where(XYAccount.owner_id == current_user.id)
+    return (await db.execute(query)).scalar_one_or_none()
+
+
+@router.get("/official-blacklist/{account_id}/{cid}")
+async def query_official_blacklist(
+    account_id: str,
+    cid: str,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    account = await _get_owned_chat_account(account_id, current_user, db)
+    if not account or not account.cookie:
+        return ApiResponse(success=False, message="账号不存在或Cookie为空")
+    try:
+        data = await official_blacklist_request(account.cookie, cid, "query")
+        return ApiResponse(success=True, data={"blocked": bool(data.get("isInBlack"))})
+    except Exception as e:
+        return ApiResponse(success=False, message=f"查询黑名单状态失败: {e}")
+
+
+@router.post("/official-blacklist/{account_id}/{cid}/{action}")
+async def change_official_blacklist(
+    account_id: str,
+    cid: str,
+    action: str,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    if action not in {"add", "remove"}:
+        return ApiResponse(success=False, message="无效操作")
+    account = await _get_owned_chat_account(account_id, current_user, db)
+    if not account or not account.cookie:
+        return ApiResponse(success=False, message="账号不存在或Cookie为空")
+    try:
+        await official_blacklist_request(account.cookie, cid, action)
+        blocked = action == "add"
+        return ApiResponse(
+            success=True,
+            message="已加入闲鱼官方黑名单" if blocked else "已解除闲鱼官方黑名单",
+            data={"blocked": blocked},
+        )
+    except Exception as e:
+        return ApiResponse(success=False, message=f"黑名单操作失败: {e}")
 
 
 @router.post("/avatars/{account_id}")
@@ -477,6 +579,28 @@ async def query_avatars(
 
 
 # ==================== 消息解析辅助函数 ====================
+
+
+@router.get("/account-profile/{account_id}")
+async def get_account_profile(
+    account_id: str,
+    cid: str,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """查询并持久化卖家在闲鱼的真实昵称"""
+    query = select(XYAccount).where(XYAccount.account_id == account_id)
+    if not is_admin_user(current_user):
+        query = query.where(XYAccount.owner_id == current_user.id)
+    account = (await db.execute(query)).scalar_one_or_none()
+    if not account or not account.cookie:
+        return ApiResponse(success=False, message="账号不存在或Cookie为空")
+
+    info = await get_owner_user_info(account_id, cid, account.cookie, db)
+    if info and _is_valid_nick(info.get("nick", "")):
+        account.display_name = info["nick"]
+        await db.commit()
+    return ApiResponse(success=True, data=info or {})
 
 
 def _parse_conversation(conv: dict, myid: str) -> dict | None:
@@ -693,6 +817,7 @@ def _parse_message(model: dict, myid: str) -> dict | None:
         msg_time = message.get("createAt", 0) or message.get("time", 0)
 
         return {
+            "messageId": str(message.get("messageId", "") or ""),
             "senderId": sender_id,
             "senderName": sender_name,
             "isSelf": is_self,

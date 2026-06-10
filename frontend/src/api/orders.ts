@@ -95,8 +95,8 @@ export const getOrders = (
 }
 
 // 获取订单详情
-export const getOrderDetail = (orderNo: string): Promise<{ success: boolean; data: OrderDetail }> => {
-  return get(`${ORDER_PREFIX}/${orderNo}`)
+export const getOrderDetail = (orderNo: string, refresh = false): Promise<{ success: boolean; data: OrderDetail }> => {
+  return get(`${ORDER_PREFIX}/${orderNo}?refresh=${refresh}`)
 }
 
 // 删除订单
@@ -110,6 +110,14 @@ export const manualDelivery = (orderNo: string): Promise<ManualDeliveryResponse>
 }
 
 // 获取闲鱼订单并同步到数据库（单独设置10分钟超时）
+export const noLogisticsDelivery = (orderNo: string): Promise<ManualDeliveryResponse> => {
+  return post(`${ORDER_PREFIX}/no-logistics-delivery`, { order_no: orderNo })
+}
+
+export const cancelOrder = (orderNo: string): Promise<ApiResponse> => {
+  return post(`${ORDER_PREFIX}/cancel`, { order_no: orderNo })
+}
+
 export const fetchXianyuOrders = (cookieId?: string): Promise<FetchXianyuOrdersResponse> => {
   return post(`${ORDER_PREFIX}/fetch-xianyu`, { cookie_id: cookieId || null }, { timeout: 600000 })
 }

@@ -206,5 +206,39 @@ class WebSocketServiceClient:
             return {"success": False, "message": f"订单发货失败: {str(e)}"}
 
 
+    async def confirm_no_logistics(
+        self,
+        account_id: str,
+        order_no: str,
+        item_id: str,
+        buyer_id: str,
+        is_bargain: bool = False,
+    ) -> dict:
+        """无物流发货：在闲鱼确认发货但不发送卡券内容"""
+        url = f"{self.base_url}/internal/orders/confirm-no-logistics"
+        try:
+            return await self.http_client.post(url, json={
+                "account_id": account_id,
+                "order_no": order_no,
+                "item_id": item_id,
+                "buyer_id": buyer_id,
+                "is_bargain": is_bargain,
+            })
+        except Exception as e:
+            logger.error(f"无物流发货失败: {order_no}, 错误: {e}")
+            return {"success": False, "message": f"无物流发货失败: {str(e)}"}
+
+    async def cancel_order(self, account_id: str, order_no: str) -> dict:
+        """卖家关闭（取消）一笔闲鱼订单"""
+        try:
+            return await self.http_client.post(
+                f"{self.base_url}/internal/orders/cancel",
+                json={"account_id": account_id, "order_no": order_no},
+            )
+        except Exception as e:
+            logger.error(f"取消订单失败: {order_no}, 错误: {e}")
+            return {"success": False, "message": f"取消订单失败: {str(e)}"}
+
+
 # 全局客户端实例
 websocket_client = WebSocketServiceClient()

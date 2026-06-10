@@ -5,7 +5,7 @@
  * 支持多账号切换，基于WebSocket API获取数据
  */
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { Loader2, LogIn, LogOut, MessageCircle, RefreshCw, User, ChevronUp, X, Send, AlertCircle } from 'lucide-react'
+import { Loader2, LogIn, LogOut, MessageCircle, RefreshCw, User, ChevronUp, X, Send, AlertCircle, Ban } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import {
   getChatAccounts,
@@ -15,14 +15,40 @@ import {
   getMessages,
   sendTextMessage,
   queryUserInfos,
+  getAccountProfile,
+  getCustomerOrders,
+  getQuickPhrases,
+  createQuickPhrase,
+  updateQuickPhrase,
+  deleteQuickPhrase,
+  recallMessage,
+  getOfficialBlacklistStatus,
+  changeOfficialBlacklist,
   type ChatAccount,
   type Conversation,
   type ChatMessage,
+  type CustomerOrder,
+  type QuickPhrase,
 } from '@/api/chatNew'
+import { cancelOrder, fetchXianyuOrders, getOrderDetail, manualDelivery, noLogisticsDelivery, type OrderDetail } from '@/api/orders'
 import { useChatNewWs } from './useChatNewWs'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
+import { CustomerOrdersPanel } from './CustomerOrdersPanel'
+import { QuickPhrasesPanel } from './QuickPhrasesPanel'
+import { OrderDetailModal } from './OrderDetailModal'
 
 /** 检查昵称是否为纯数字（如用户ID），纯数字视为无效昵称 */
 const isPureDigits = (name: string) => /^\d+$/.test(name)
+
+const toTimestampMs = (timestamp: number) =>
+  timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp
+
+const canRecallMessage = (message: ChatMessage) =>
+  message.isSelf &&
+  !!message.messageId &&
+  message.type !== 'system' &&
+  Date.now() - toTimestampMs(message.time) >= 0 &&
+  Date.now() - toTimestampMs(message.time) <= 120_000
 
 export function ChatNew() {
   const { addToast } = useUIStore()
@@ -60,14 +86,61 @@ export function ChatNew() {
   const [inputText, setInputText] = useState('')
   const [sending, setSending] = useState(false)
 
+  // 当前客户订单与快捷短语
+  const [customerOrders, setCustomerOrders] = useState<CustomerOrder[]>([])
+  const [loadingOrders, setLoadingOrders] = useState(false)
+  const [deliveringOrderNo, setDeliveringOrderNo] = useState('')
+  const [confirmingOrderNo, setConfirmingOrderNo] = useState('')
+  const [cancellingOrderNo, setCancellingOrderNo] = useState('')
+  const [orderDetail, setOrderDetail] = useState<OrderDetail | null>(null)
+  const [loadingOrderDetail, setLoadingOrderDetail] = useState(false)
+  const [blacklisting, setBlacklisting] = useState(false)
+  const [isOfficiallyBlocked, setIsOfficiallyBlocked] = useState(false)
+  const [recallingMessageId, setRecallingMessageId] = useState('')
+  const [confirmDialog, setConfirmDialog] = useState<{
+    title: string
+    message: string
+    confirmText: string
+    type: 'warning' | 'danger' | 'info'
+  } | null>(null)
+  const confirmResolverRef = useRef<((confirmed: boolean) => void) | null>(null)
+  const [quickPhrases, setQuickPhrases] = useState<QuickPhrase[]>([])
+  const [editingPhraseId, setEditingPhraseId] = useState<number | null>(null)
+  const [phraseTitle, setPhraseTitle] = useState('')
+  const [phraseContent, setPhraseContent] = useState('')
+  const [savingPhrase, setSavingPhrase] = useState(false)
+
   // 手动管理 WebSocket 连接的账号列表（仅用户显式操作时加入，页面刷新不自动重连）
   const [wsAccountIds, setWsAccountIds] = useState<string[]>([])
+
+  const requestConfirm = useCallback((options: {
+    title?: string
+    message: string
+    confirmText?: string
+    type?: 'warning' | 'danger' | 'info'
+  }) => new Promise<boolean>((resolve) => {
+    confirmResolverRef.current?.(false)
+    confirmResolverRef.current = resolve
+    setConfirmDialog({
+      title: options.title || '确认操作',
+      message: options.message,
+      confirmText: options.confirmText || '确定',
+      type: options.type || 'warning',
+    })
+  }), [])
+
+  const closeConfirm = (confirmed: boolean) => {
+    confirmResolverRef.current?.(confirmed)
+    confirmResolverRef.current = null
+    setConfirmDialog(null)
+  }
 
   // 用 ref 保存当前选中的账号和会话，供 WebSocket 回调使用（避免闭包问题）
   const activeAccountIdRef = useRef(activeAccountId)
   useEffect(() => { activeAccountIdRef.current = activeAccountId }, [activeAccountId])
   const activeCidRef = useRef(activeCid)
   useEffect(() => { activeCidRef.current = activeCid }, [activeCid])
+  const reloadOrdersRef = useRef<() => void>(() => {})
 
   // ==================== 按账号缓存：切换账号时保留数据 ====================
   /** 每个账号的会话列表缓存 */
@@ -161,6 +234,7 @@ export function ChatNew() {
       setConversations((prev) => updateConvList(prev, cid, summary, msg, isViewingConv))
       if (isViewingConv) {
         setMessages((prev) => appendMsg(prev, msg))
+        window.setTimeout(() => reloadOrdersRef.current(), 900)
       }
     } else {
       // 后台账号 → 更新缓存（不触发渲染）
@@ -299,6 +373,15 @@ export function ChatNew() {
         }
         setConvHasMore(res.hasMore)
         setConvCursor(res.nextCursor)
+        if (!append && withCachedAvatar[0]?.cid) {
+          getAccountProfile(accountId, withCachedAvatar[0].cid).then((profile) => {
+            if (profile.nick) {
+              setAccounts((prev) => prev.map((account) => (
+                account.account_id === accountId ? { ...account, display_name: profile.nick } : account
+              )))
+            }
+          }).catch(() => {})
+        }
       } catch (e: any) {
         // 首次加载和翻页都提示错误
         addToast({ message: e.message || '获取会话列表失败', type: 'error' })
@@ -489,8 +572,218 @@ export function ChatNew() {
     }
   }
 
+  const activeConversation = conversations.find((c) => c.cid === activeCid)
+
+  useEffect(() => {
+    let cancelled = false
+    setIsOfficiallyBlocked(false)
+    if (!activeAccountId || !activeCid) return
+    getOfficialBlacklistStatus(activeAccountId, activeCid)
+      .then((blocked) => { if (!cancelled) setIsOfficiallyBlocked(blocked) })
+      .catch(() => { if (!cancelled) setIsOfficiallyBlocked(false) })
+    return () => { cancelled = true }
+  }, [activeAccountId, activeCid])
+
+  const loadCustomerOrders = useCallback(async (silent = false) => {
+    if (!activeAccountId || !activeConversation?.otherUserId) {
+      setCustomerOrders([])
+      return
+    }
+    if (!silent) setLoadingOrders(true)
+    try {
+      const data = await getCustomerOrders(activeAccountId, activeConversation.otherUserId, activeCid)
+      setCustomerOrders(data)
+    } catch (e: any) {
+      addToast({ message: e.message || '获取客户订单失败', type: 'error' })
+    } finally {
+      if (!silent) setLoadingOrders(false)
+    }
+  }, [activeAccountId, activeCid, activeConversation?.otherUserId, addToast])
+
+  useEffect(() => {
+    loadCustomerOrders()
+  }, [loadCustomerOrders])
+
+  useEffect(() => {
+    reloadOrdersRef.current = () => { void loadCustomerOrders(true) }
+  }, [loadCustomerOrders])
+
+  useEffect(() => {
+    if (!activeCid) return
+    const timer = window.setInterval(() => { void loadCustomerOrders(true) }, 15000)
+    return () => window.clearInterval(timer)
+  }, [activeCid, loadCustomerOrders])
+
+  const loadQuickPhrases = useCallback(async () => {
+    try {
+      setQuickPhrases(await getQuickPhrases())
+    } catch (e: any) {
+      addToast({ message: e.message || '获取快捷短语失败', type: 'error' })
+    }
+  }, [addToast])
+
+  useEffect(() => {
+    loadQuickPhrases()
+  }, [loadQuickPhrases])
+
+  const resetPhraseForm = () => {
+    setEditingPhraseId(null)
+    setPhraseTitle('')
+    setPhraseContent('')
+  }
+
+  const handleSavePhrase = async () => {
+    if (!phraseTitle.trim() || !phraseContent.trim() || savingPhrase) return
+    setSavingPhrase(true)
+    try {
+      const payload = { title: phraseTitle.trim(), content: phraseContent.trim(), sort_order: 0 }
+      if (editingPhraseId) {
+        await updateQuickPhrase(editingPhraseId, payload)
+      } else {
+        await createQuickPhrase(payload)
+      }
+      resetPhraseForm()
+      await loadQuickPhrases()
+      addToast({ message: editingPhraseId ? '快捷短语已更新' : '快捷短语已添加', type: 'success' })
+    } catch (e: any) {
+      addToast({ message: e.message || '保存快捷短语失败', type: 'error' })
+    } finally {
+      setSavingPhrase(false)
+    }
+  }
+
+  const handleDeletePhrase = async (id: number) => {
+    if (!(await requestConfirm({ message: '确认删除这条快捷短语吗？', confirmText: '删除', type: 'danger' }))) return
+    try {
+      await deleteQuickPhrase(id)
+      if (editingPhraseId === id) resetPhraseForm()
+      await loadQuickPhrases()
+    } catch (e: any) {
+      addToast({ message: e.message || '删除快捷短语失败', type: 'error' })
+    }
+  }
+
+  const handleSyncOrders = async () => {
+    if (!activeAccountId || loadingOrders) return
+    setLoadingOrders(true)
+    try {
+      const res = await fetchXianyuOrders(activeAccountId)
+      addToast({ message: res.message || '订单同步完成', type: res.success ? 'success' : 'error' })
+      await loadCustomerOrders()
+    } catch (e: any) {
+      addToast({ message: e.message || '同步订单失败', type: 'error' })
+    } finally {
+      setLoadingOrders(false)
+    }
+  }
+
+  const handleDeliverOrder = async (orderNo: string) => {
+    if (!(await requestConfirm({ message: `确认立即发货订单 ${orderNo} 吗？`, confirmText: '发货' }))) return
+    setDeliveringOrderNo(orderNo)
+    try {
+      const res = await manualDelivery(orderNo)
+      addToast({ message: res.message || (res.success ? '发货成功' : '发货失败'), type: res.success ? 'success' : 'error' })
+      await loadCustomerOrders()
+    } catch (e: any) {
+      addToast({ message: e.message || '发货失败', type: 'error' })
+    } finally {
+      setDeliveringOrderNo('')
+    }
+  }
+
 
   // 消息变化时自动滚动到底部
+  const handleNoLogisticsDelivery = async (orderNo: string) => {
+    if (!(await requestConfirm({ message: `确认将订单 ${orderNo} 标记为无物流发货吗？`, confirmText: '无物流发货' }))) return
+    setConfirmingOrderNo(orderNo)
+    try {
+      const res = await noLogisticsDelivery(orderNo)
+      addToast({ message: res.message || (res.success ? '无物流发货成功' : '无物流发货失败'), type: res.success ? 'success' : 'error' })
+      await loadCustomerOrders(true)
+    } catch (e: any) {
+      addToast({ message: e.message || '无物流发货失败', type: 'error' })
+    } finally {
+      setConfirmingOrderNo('')
+    }
+  }
+
+  const handleCancelOrder = async (orderNo: string) => {
+    if (!(await requestConfirm({ message: `确认取消客户订单 ${orderNo} 吗？取消后无法恢复。`, confirmText: '取消订单', type: 'danger' }))) return
+    setCancellingOrderNo(orderNo)
+    try {
+      const res = await cancelOrder(orderNo)
+      addToast({ message: res.message || (res.success ? '订单已取消' : '取消订单失败'), type: res.success ? 'success' : 'error' })
+      await loadCustomerOrders(true)
+    } catch (e: any) {
+      addToast({ message: e.message || '取消订单失败', type: 'error' })
+    } finally {
+      setCancellingOrderNo('')
+    }
+  }
+
+  const handleViewOrderDetail = async (orderNo: string) => {
+    setLoadingOrderDetail(true)
+    try {
+      const res = await getOrderDetail(orderNo, true)
+      setOrderDetail(res.data)
+      await loadCustomerOrders(true)
+    } catch (e: any) {
+      addToast({ message: e.message || '获取订单详情失败', type: 'error' })
+    } finally {
+      setLoadingOrderDetail(false)
+    }
+  }
+
+  const handleBlacklistCustomer = async () => {
+    if (!activeConversation || !activeAccountId || blacklisting) return
+    const action = isOfficiallyBlocked ? 'remove' : 'add'
+    const label = isOfficiallyBlocked ? '解除黑名单' : '加入黑名单'
+    if (!(await requestConfirm({
+      title: `确认${label}`,
+      message: `确认在闲鱼官方${label}客户 ${activeConversation.otherUserName || activeConversation.otherUserId} 吗？`,
+      confirmText: label,
+      type: isOfficiallyBlocked ? 'warning' : 'danger',
+    }))) return
+    setBlacklisting(true)
+    try {
+      const res = await changeOfficialBlacklist(activeAccountId, activeConversation.cid, action)
+      if (!res.success) throw new Error(res.message || '黑名单操作失败')
+      setIsOfficiallyBlocked(action === 'add')
+      addToast({ message: res.message || `${label}成功`, type: 'success' })
+    } catch (e: any) {
+      addToast({ message: e.message || '加入黑名单失败', type: 'error' })
+    } finally {
+      setBlacklisting(false)
+    }
+  }
+
+  const handleRecallMessage = async (msg: ChatMessage) => {
+    if (!activeAccountId || !msg.messageId || recallingMessageId) return
+    if (!canRecallMessage(msg)) {
+      addToast({ message: '消息发送超过两分钟，无法撤回', type: 'error' })
+      return
+    }
+    if (!(await requestConfirm({
+      title: '撤回消息',
+      message: '确认撤回这条消息吗？撤回仅支持发送后两分钟内操作。',
+      confirmText: '撤回',
+      type: 'danger',
+    }))) return
+    setRecallingMessageId(msg.messageId)
+    try {
+      const res = await recallMessage(activeAccountId, msg.messageId, msg.time)
+      if (!res.success) throw new Error(res.message || '撤回失败')
+      setMessages((prev) => prev.map((item) => item.messageId === msg.messageId
+        ? { ...item, type: 'system', text: '你撤回了一条消息', images: [] }
+        : item))
+      addToast({ message: res.message || '消息已撤回', type: 'success' })
+    } catch (e: any) {
+      addToast({ message: e.message || '撤回失败', type: 'error' })
+    } finally {
+      setRecallingMessageId('')
+    }
+  }
+
   const prevMsgCountRef = useRef(0)
   useEffect(() => {
     if (!msgContainerRef.current) return
@@ -503,8 +796,8 @@ export function ChatNew() {
   }, [messages])
 
   // ==================== 发送消息 ====================
-  const handleSendMessage = async () => {
-    if (!inputText.trim() || !activeAccountId || !activeCid || sending) return
+  const sendMessageText = async (rawText: string, clearInput = false) => {
+    if (!rawText.trim() || !activeAccountId || !activeCid || sending) return
 
     // 获取当前会话的对方用户ID
     const conv = conversations.find((c) => c.cid === activeCid)
@@ -513,13 +806,14 @@ export function ChatNew() {
       return
     }
 
-    const text = inputText.trim()
+    const text = rawText.trim()
     setSending(true)
     try {
       const res = await sendTextMessage(activeAccountId, activeCid, conv.otherUserId, text)
       // 无论成功失败，都把这条消息展示在聊天记录中；
       // 失败时标记 failed + failReason，气泡前显示红色感叹号，点击查看原因
       const sentMsg: ChatMessage = {
+        messageId: res.data?.messageId || '',
         senderId: activeAccountId,
         senderName: '',
         isSelf: true,
@@ -530,7 +824,7 @@ export function ChatNew() {
         failed: !res.success,
         failReason: res.success ? undefined : (res.message || '发送失败'),
       }
-      setInputText('')
+      if (clearInput) setInputText('')
       setMessages((prev) => [...prev, sentMsg])
       if (res.success) {
         // 成功才更新会话列表摘要
@@ -548,6 +842,7 @@ export function ChatNew() {
       // 网络等异常：同样以失败态展示该条消息
       const failReason = e?.message || '发送失败'
       const sentMsg: ChatMessage = {
+        messageId: '',
         senderId: activeAccountId,
         senderName: '',
         isSelf: true,
@@ -558,13 +853,15 @@ export function ChatNew() {
         failed: true,
         failReason,
       }
-      setInputText('')
+      if (clearInput) setInputText('')
       setMessages((prev) => [...prev, sentMsg])
       addToast({ message: failReason, type: 'error' })
     } finally {
       setSending(false)
     }
   }
+
+  const handleSendMessage = () => sendMessageText(inputText, true)
 
   // ==================== 时间格式化 ====================
   const formatTime = (ts: number) => {
@@ -625,18 +922,18 @@ export function ChatNew() {
                       : 'hover:bg-gray-50 dark:hover:bg-gray-700/50 border border-transparent'
                   }`}
                   onClick={() => handleSelectAccount(acc)}
-                  title={acc.remark ? `${acc.remark}\n(${acc.account_id})` : acc.account_id}
+                  title={`${acc.display_name || acc.remark || acc.account_id}\n(${acc.account_id})`}
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 min-w-0 flex-1">
                       <User className="w-4 h-4 flex-shrink-0 text-gray-400" />
                       <div className="min-w-0 flex-1">
                         <span className="block truncate text-gray-700 dark:text-gray-300">
-                          {acc.remark || acc.account_id}
+                          {acc.display_name || acc.remark || acc.account_id}
                         </span>
-                        {acc.remark && (
+                        {(acc.display_name || acc.remark) && (
                           <span className="block truncate text-xs text-gray-400 dark:text-gray-500">
-                            {acc.account_id}
+                            {acc.remark && acc.remark !== acc.display_name ? acc.remark : acc.account_id}
                           </span>
                         )}
                         {acc.owner && (
@@ -797,15 +1094,23 @@ export function ChatNew() {
       </div>
 
       {/* 右侧：聊天记录 */}
-      <div className="flex-1 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 flex flex-col">
+      <div className="flex-1 min-w-0 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 flex flex-col">
         {/* 聊天头部 */}
-        <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2">
+        <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
           <MessageCircle className="w-4 h-4 text-gray-500" />
           <span className="font-medium text-sm text-gray-700 dark:text-gray-300">
             {activeCid
               ? conversations.find((c) => c.cid === activeCid)?.otherUserName || '聊天记录'
               : '聊天记录'}
           </span>
+          </div>
+          {activeCid && (
+            <button onClick={handleBlacklistCustomer} disabled={blacklisting} className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-red-200 text-red-500 hover:bg-red-50 disabled:opacity-40" title={isOfficiallyBlocked ? '解除闲鱼官方黑名单' : '加入闲鱼官方黑名单'}>
+              {blacklisting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Ban className="w-3.5 h-3.5" />}
+              {isOfficiallyBlocked ? '解除黑名单' : '加入黑名单'}
+            </button>
+          )}
         </div>
         {/* 消息区域 */}
         <div ref={msgContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -832,7 +1137,7 @@ export function ChatNew() {
               )}
               {messages.map((msg, idx) => (
                 <div
-                  key={idx}
+                  key={msg.messageId || idx}
                   className={`flex ${msg.isSelf ? 'justify-end' : 'justify-start'}`}
                 >
                   <div className={`max-w-[70%] ${msg.isSelf ? 'order-1' : ''}`}>
@@ -883,6 +1188,17 @@ export function ChatNew() {
                         </button>
                       )}
                     </div>
+                    {canRecallMessage(msg) && (
+                      <div className="mt-1 text-right">
+                        <button
+                          onClick={() => handleRecallMessage(msg)}
+                          disabled={!!recallingMessageId}
+                          className="text-xs text-gray-400 hover:text-red-500 disabled:opacity-40"
+                        >
+                          {recallingMessageId === msg.messageId ? '撤回中...' : '撤回'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -922,6 +1238,44 @@ export function ChatNew() {
         )}
       </div>
       {/* 图片预览弹窗 */}
+      {/* 右侧工作区：客户订单 + 快捷短语 */}
+      <div className="w-80 flex-shrink-0 flex flex-col gap-3">
+        <CustomerOrdersPanel
+          activeCid={activeCid}
+          orders={customerOrders}
+          loading={loadingOrders}
+          deliveringOrderNo={deliveringOrderNo}
+          confirmingOrderNo={confirmingOrderNo}
+          cancellingOrderNo={cancellingOrderNo}
+          loadingOrderDetail={loadingOrderDetail}
+          onSync={handleSyncOrders}
+          onViewDetail={handleViewOrderDetail}
+          onCancel={handleCancelOrder}
+          onNoLogistics={handleNoLogisticsDelivery}
+          onDeliver={handleDeliverOrder}
+        />
+        <QuickPhrasesPanel
+          phrases={quickPhrases}
+          activeCid={activeCid}
+          sending={sending}
+          editingPhraseId={editingPhraseId}
+          phraseTitle={phraseTitle}
+          phraseContent={phraseContent}
+          savingPhrase={savingPhrase}
+          onSend={(content) => sendMessageText(content)}
+          onEdit={(phrase) => { setEditingPhraseId(phrase.id); setPhraseTitle(phrase.title); setPhraseContent(phrase.content) }}
+          onDelete={handleDeletePhrase}
+          onReset={resetPhraseForm}
+          onTitleChange={setPhraseTitle}
+          onContentChange={setPhraseContent}
+          onSave={handleSavePhrase}
+        />
+      </div>
+      <OrderDetailModal
+        order={orderDetail}
+        fallbackBuyerNick={activeConversation?.otherUserName}
+        onClose={() => setOrderDetail(null)}
+      />
       {previewImage && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
@@ -941,6 +1295,15 @@ export function ChatNew() {
           />
         </div>
       )}
+      <ConfirmModal
+        isOpen={!!confirmDialog}
+        title={confirmDialog?.title}
+        message={confirmDialog?.message || ''}
+        confirmText={confirmDialog?.confirmText}
+        type={confirmDialog?.type}
+        onConfirm={() => closeConfirm(true)}
+        onCancel={() => closeConfirm(false)}
+      />
     </div>
   )
 }

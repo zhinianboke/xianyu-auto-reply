@@ -4,7 +4,7 @@
  * 提供账号连接管理、会话列表、聊天记录等接口，
  * 以及 WebSocket 实时消息推送连接
  */
-import { get, post } from '@/utils/request'
+import { del, get, post, put } from '@/utils/request'
 
 const PREFIX = '/api/v1/chat-new'
 
@@ -14,11 +14,32 @@ const PREFIX = '/api/v1/chat-new'
 /** 可用账号 */
 export interface ChatAccount {
   account_id: string
+  display_name: string
   remark: string
   connected: boolean
   status: string
   /** 所属用户（管理员查看时返回） */
   owner?: string
+}
+
+export interface CustomerOrder {
+  order_no: string
+  item_id: string
+  item_title: string
+  buyer_id: string
+  quantity: number
+  amount: string
+  status: string
+  delivery_method: string
+  delivery_fail_reason: string
+  placed_at: string
+}
+
+export interface QuickPhrase {
+  id: number
+  title: string
+  content: string
+  sort_order: number
 }
 
 /** 会话 */
@@ -36,6 +57,7 @@ export interface Conversation {
 
 /** 聊天消息 */
 export interface ChatMessage {
+  messageId: string
   senderId: string
   senderName: string
   isSelf: boolean
@@ -104,8 +126,8 @@ export const sendTextMessage = async (
   cid: string,
   toUserId: string,
   text: string,
-): Promise<{ success: boolean; message: string }> => {
-  return post<{ success: boolean; message: string }>(`${PREFIX}/send-message/${accountId}`, {
+): Promise<{ success: boolean; message: string; data?: { messageId: string } }> => {
+  return post<{ success: boolean; message: string; data?: { messageId: string } }>(`${PREFIX}/send-message/${accountId}`, {
     cid,
     toUserId,
     text,
@@ -130,6 +152,47 @@ export const queryUserInfos = async (
   return res.data || {}
 }
 
+export const recallMessage = (
+  accountId: string,
+  messageId: string,
+  messageTime: number,
+): Promise<{ success: boolean; message: string }> => {
+  return post(`${PREFIX}/recall-message/${accountId}`, { messageId, messageTime })
+}
+
+export const getOfficialBlacklistStatus = async (
+  accountId: string,
+  cid: string,
+): Promise<boolean> => {
+  const res = await get<{ success: boolean; message?: string; data?: { blocked: boolean } }>(
+    `${PREFIX}/official-blacklist/${accountId}/${encodeURIComponent(cid)}`,
+  )
+  if (!res.success) throw new Error(res.message || '查询黑名单状态失败')
+  return !!res.data?.blocked
+}
+
+export const changeOfficialBlacklist = async (
+  accountId: string,
+  cid: string,
+  action: 'add' | 'remove',
+): Promise<{ success: boolean; message: string; data?: { blocked: boolean } }> => {
+  const res = await post<{ success: boolean; message: string; data?: { blocked: boolean } }>(
+    `${PREFIX}/official-blacklist/${accountId}/${encodeURIComponent(cid)}/${action}`,
+  )
+  if (!res.success) throw new Error(res.message || '操作失败')
+  return res
+}
+
+export const getAccountProfile = async (
+  accountId: string,
+  cid: string,
+): Promise<UserInfoResult> => {
+  const res = await get<{ success: boolean; data: UserInfoResult }>(
+    `${PREFIX}/account-profile/${accountId}?cid=${encodeURIComponent(cid)}`,
+  )
+  return res.data || { avatar: '', nick: '' }
+}
+
 /** 获取聊天记录 */
 export const getMessages = async (
   accountId: string,
@@ -148,6 +211,47 @@ export const getMessages = async (
   }>(`${PREFIX}/messages/${accountId}/${cid}?${params.toString()}`)
   if (!res.success) throw new Error(res.message || '获取聊天记录失败')
   return res.data || { messages: [], hasMore: false, nextCursor: null }
+}
+
+export const getCustomerOrders = async (
+  accountId: string,
+  buyerId: string,
+  chatId?: string,
+): Promise<CustomerOrder[]> => {
+  const params = new URLSearchParams()
+  if (chatId) params.append('chat_id', chatId)
+  const res = await get<{ success: boolean; data: CustomerOrder[] }>(
+    `${PREFIX}/customer-orders/${accountId}/${buyerId}?${params.toString()}`,
+  )
+  return res.data || []
+}
+
+export const getQuickPhrases = async (): Promise<QuickPhrase[]> => {
+  const res = await get<{ success: boolean; data: QuickPhrase[] }>(`${PREFIX}/quick-phrases`)
+  return res.data || []
+}
+
+export const createQuickPhrase = async (
+  phrase: Omit<QuickPhrase, 'id'>,
+): Promise<{ success: boolean; data: QuickPhrase; message: string }> => {
+  const res = await post<{ success: boolean; data: QuickPhrase; message: string }>(`${PREFIX}/quick-phrases`, phrase)
+  if (!res.success) throw new Error(res.message || '添加快捷短语失败')
+  return res
+}
+
+export const updateQuickPhrase = async (
+  id: number,
+  phrase: Omit<QuickPhrase, 'id'>,
+): Promise<{ success: boolean; data: QuickPhrase; message: string }> => {
+  const res = await put<{ success: boolean; data: QuickPhrase; message: string }>(`${PREFIX}/quick-phrases/${id}`, phrase)
+  if (!res.success) throw new Error(res.message || '更新快捷短语失败')
+  return res
+}
+
+export const deleteQuickPhrase = async (id: number): Promise<{ success: boolean; message: string }> => {
+  const res = await del<{ success: boolean; message: string }>(`${PREFIX}/quick-phrases/${id}`)
+  if (!res.success) throw new Error(res.message || '删除快捷短语失败')
+  return res
 }
 
 // ==================== WebSocket 实时推送 ====================

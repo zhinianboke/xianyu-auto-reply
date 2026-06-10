@@ -136,6 +136,7 @@ export function AutoReplyLogs() {
   const [accounts, setAccounts] = useState<AccountDetail[]>([])
   const [selectedAccount, setSelectedAccount] = useState('')
   const [selectedRuleType, setSelectedRuleType] = useState('')
+  const [selectedSendStatus, setSelectedSendStatus] = useState('')
   const [messageType, setMessageType] = useState('auto_reply')
   const [startDate, setStartDate] = useState(today)
   const [endDate, setEndDate] = useState(today)
@@ -176,6 +177,7 @@ export function AutoReplyLogs() {
         start_date: startDate || undefined,
         end_date: endDate || undefined,
         matched_rule_type: messageType === 'auto_delivery' ? undefined : (selectedRuleType || undefined),
+        send_status: selectedSendStatus || undefined,
         message_type: messageType,
         page: nextPage,
         page_size: nextPageSize,
@@ -300,6 +302,19 @@ export function AutoReplyLogs() {
                 </select>
               </div>
             )}
+            <div className="input-group min-w-[160px]">
+              <label className="input-label">发送状态</label>
+              <select
+                value={selectedSendStatus}
+                onChange={(e) => setSelectedSendStatus(e.target.value)}
+                className="input-ios"
+              >
+                <option value="">全部状态</option>
+                <option value="success">发送成功</option>
+                <option value="failed">发送失败</option>
+                <option value="unknown">待确认</option>
+              </select>
+            </div>
             <button onClick={handleSearch} className="btn-ios-primary">
               <Calendar className="w-4 h-4" />
               查询
