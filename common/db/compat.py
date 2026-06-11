@@ -42,11 +42,12 @@ def _get_thread_local_session_maker():
         engine = create_async_engine(
             settings.async_database_url,
             echo=False,
-            pool_pre_ping=False,  # 关闭 pre_ping（asyncmy 新版本不兼容）
+            pool_pre_ping=settings.db_pool_pre_ping,  # 取连接前 ping，剔除失效连接（asyncmy ping 已在 session 层做兼容修补）
             pool_size=1,   # 兼容层线程为一次性，单协程只需 1 条连接（原 3，避免连接累积）
             max_overflow=2,  # 仅留少量溢出余量（原 5），降低单引擎最大连接数 8 -> 3
-            pool_timeout=30,  # 获取连接超时时间
-            pool_recycle=600,  # 连接回收时间（10分钟），防止MySQL断开
+            pool_timeout=settings.db_pool_timeout,  # 获取连接超时时间
+            pool_recycle=settings.db_pool_recycle,  # 连接回收时间，防止MySQL断开陈旧连接
+            connect_args={"connect_timeout": settings.db_connect_timeout},  # TCP 建连超时，远程库不可达时快速失败
         )
         _thread_local.engine = engine
         _thread_local.session_maker = async_sessionmaker(engine, expire_on_commit=False)

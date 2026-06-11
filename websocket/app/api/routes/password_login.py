@@ -331,11 +331,7 @@ def _save_login_result(
         asyncio.set_event_loop(new_loop)
         
         try:
-            async def save_to_db():
-                config = BaseConfig()
-                engine = create_async_engine(config.async_database_url, echo=False)
-                session_maker = async_sessionmaker(engine, expire_on_commit=False)
-                
+            async def _do_save(session_maker):
                 async with session_maker() as session:
                     # 检查账号是否已存在
                     stmt = select(XYAccount).where(
@@ -402,8 +398,26 @@ def _save_login_result(
                     await session.commit()
                     
                     return is_new_account
-                
-                await engine.dispose()
+            
+            async def save_to_db():
+                # 一次性事件循环内的临时引擎：仅需极小连接池，并加连接超时；
+                # 用 try/finally 确保引擎及其连接池始终被释放，避免每次密码登录泄漏连接。
+                config = BaseConfig()
+                engine = create_async_engine(
+                    config.async_database_url,
+                    echo=False,
+                    pool_pre_ping=config.db_pool_pre_ping,
+                    pool_size=1,
+                    max_overflow=2,
+                    pool_timeout=config.db_pool_timeout,
+                    pool_recycle=config.db_pool_recycle,
+                    connect_args={"connect_timeout": config.db_connect_timeout},
+                )
+                session_maker = async_sessionmaker(engine, expire_on_commit=False)
+                try:
+                    return await _do_save(session_maker)
+                finally:
+                    await engine.dispose()
             
             is_new_account = new_loop.run_until_complete(save_to_db())
             

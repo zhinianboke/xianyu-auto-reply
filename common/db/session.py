@@ -105,15 +105,23 @@ def _compile_sql_with_params(statement, parameters):
 
 
 # 创建异步引擎
+# 连接池参数全部来自配置（可通过环境变量调优），适配上千账号同时运行的场景：
+# - pool_pre_ping：取连接前先 ping，自动剔除被远程 MySQL 断开的失效连接，避免拿到坏连接卡住；
+# - pool_use_lifo：优先复用最近使用的连接，让多余的空闲连接尽快被 pool_recycle 回收，
+#   降低对远程库的常驻连接数（上千账号大多时间空闲时尤其有用）；
+# - connect_args.connect_timeout：限制 TCP 建连耗时，远程库不可达时快速失败而不是无限阻塞，
+#   从而让连接尽快归还连接池，缓解 "QueuePool limit ... reached" 连接池打满问题。
 async_engine = create_async_engine(
     settings.async_database_url,
     echo=False,  # 关闭SQL输出
     echo_pool=False,  # 不输出连接池日志
-    pool_pre_ping=False,  # 关闭 pre_ping（asyncmy 新版本不兼容）
-    pool_size=50,  # 连接池大小（增大以支持大量后台任务+前端API请求）
-    max_overflow=100,  # 最大溢出连接数
-    pool_timeout=60,  # 获取连接超时时间
-    pool_recycle=600,  # 连接回收时间（10分钟），防止MySQL断开
+    pool_pre_ping=settings.db_pool_pre_ping,
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
+    pool_timeout=settings.db_pool_timeout,
+    pool_recycle=settings.db_pool_recycle,
+    pool_use_lifo=settings.db_pool_use_lifo,
+    connect_args={"connect_timeout": settings.db_connect_timeout},
 )
 
 
