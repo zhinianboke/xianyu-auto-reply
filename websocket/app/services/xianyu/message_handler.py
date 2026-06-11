@@ -106,6 +106,47 @@ class MessageHandler:
         except Exception:
             return False
     
+    def is_system_tip_message(self, message: dict) -> bool:
+        """判断是否为平台系统提示 / 营销活动类消息（如"队友喊你来打气"任务提醒）
+
+        这类消息不是买卖双方的真实聊天，不应触发自动回复，也不写入消息日志。
+
+        识别依据（唯一且最可靠的标记）：
+            extJson 中 msgArg1 == "MsgTips"
+            —— 这是闲鱼平台对"营销/运营提示类消息"的明确分类标记。
+
+        为什么只用这一个条件（确保不误杀正常消息 / 发货消息）：
+        - 正常文本、图片、卡片消息不属于该营销分类，不会带 msgArg1=="MsgTips"。
+        - 交易类消息（[我已拍下，待付款]、[我已付款，等待你发货]、评价请求、
+          确认收货等）是靠 reminderContent 文本识别并触发发货 / 评价流程的，
+          它们同样不属于营销提示分类，不会带 msgArg1=="MsgTips"。
+        - 不使用 message["1"]["6"]["1"]==101 判断：101 是"自定义消息类型"，
+          正常卡片消息（小刀、评价、确认收货）也是 101，会误杀。
+        - 不使用 contentType=="14" 判断：缺乏交易类消息的内容类型样本佐证，
+          为避免任何潜在误杀，宁可放过个别提示消息，也不拦截真实业务消息。
+        """
+        try:
+            if not isinstance(message, dict):
+                return False
+            inner = message.get("1")
+            if not isinstance(inner, dict):
+                return False
+            meta = inner.get("10")
+            if not isinstance(meta, dict):
+                return False
+            ext_json = meta.get("extJson", "")
+            if not isinstance(ext_json, str) or not ext_json:
+                return False
+            try:
+                ext = json.loads(ext_json)
+            except (json.JSONDecodeError, TypeError):
+                return False
+            if isinstance(ext, dict) and ext.get("msgArg1") == "MsgTips":
+                return True
+        except Exception:
+            return False
+        return False
+
     def is_chat_message(self, message: dict) -> bool:
         """判断是否为用户聊天消息"""
         try:
@@ -501,7 +542,7 @@ class MessageHandler:
                     return None
                 # 过滤不需要打印的消息类型（如商品定价失败通知）
                 biz_type = parsed_data.get('bizType', '') if isinstance(parsed_data, dict) else ''
-                if biz_type not in ('IDLE_SPACE_PRICING',):
+                if biz_type not in ('IDLE_SPACE_PRICING',) and not self.is_system_tip_message(parsed_data):
                     logger.warning(f"【{self.cookie_id}】解密消息: {json.dumps(parsed_data, ensure_ascii=False)[:1000]}")
                 return parsed_data
             except Exception:
@@ -509,7 +550,7 @@ class MessageHandler:
                 decrypted = json.loads(decrypt(data))
                 # 过滤不需要打印的消息类型
                 biz_type = decrypted.get('bizType', '') if isinstance(decrypted, dict) else ''
-                if biz_type not in ('IDLE_SPACE_PRICING',):
+                if biz_type not in ('IDLE_SPACE_PRICING',) and not self.is_system_tip_message(decrypted):
                     logger.warning(f"【{self.cookie_id}】解密消息: {json.dumps(decrypted, ensure_ascii=False)[:1000]}")
                 return decrypted
         except Exception as e:
@@ -526,6 +567,13 @@ class MessageHandler:
                     logger.debug(f"【{self.cookie_id}】消息已处理，跳过: {message_id[:20]}...")
                     return True
                 await self.mark_message_processed(message_id)
+            
+            # 过滤平台系统提示 / 营销活动类消息（如"打气"任务提醒）：
+            # 这类消息会命中 is_chat_message（含 reminderContent），但并非真实聊天，
+            # 不触发自动回复，也不记录消息日志，直接跳过。
+            if self.is_system_tip_message(message):
+                logger.debug(f"【{self.cookie_id}】跳过系统提示/营销活动消息")
+                return True
             
             # 判断消息类型并分发
             if self.is_chat_message(message):
