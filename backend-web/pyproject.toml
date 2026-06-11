@@ -35,6 +35,7 @@ dependencies = [
     "idna>=3.6",
     "certifi>=2023.11.0",
     "qrcode[pil]>=7.4.0",
+    "pillow>=10.0.0",
 ]
 
 [build-system]

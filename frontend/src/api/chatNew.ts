@@ -134,6 +134,23 @@ export const sendTextMessage = async (
   })
 }
 
+/** 发送图片消息（上传图片文件，后端转存闲鱼CDN后发送） */
+export const sendImageMessage = async (
+  accountId: string,
+  cid: string,
+  toUserId: string,
+  file: File,
+): Promise<{ success: boolean; message: string; data?: { messageId: string; imageUrl: string } }> => {
+  const formData = new FormData()
+  formData.append('cid', cid)
+  formData.append('toUserId', toUserId)
+  formData.append('image', file)
+  return post<{ success: boolean; message: string; data?: { messageId: string; imageUrl: string } }>(
+    `${PREFIX}/send-image/${accountId}`,
+    formData,
+  )
+}
+
 /** 用户信息查询结果 */
 export interface UserInfoResult {
   avatar: string

@@ -25,6 +25,7 @@ from . import (
     distribution,
     chat_new,
     chat_new_ws,
+    chat_new_image,
     chat_quick_phrase,
     chat_customer_order,
     payment,
@@ -161,6 +162,7 @@ api_router.include_router(search.router, tags=["商品搜索"])  # 已定义pref
 # 在线聊天
 api_router.include_router(chat_new.router, tags=["在线聊天(新)"])  # 已定义prefix="/chat-new"
 api_router.include_router(chat_new_ws.router, tags=["在线聊天(新)WebSocket"])  # 已定义prefix="/chat-new"
+api_router.include_router(chat_new_image.router, tags=["在线聊天(新)图片发送"])  # 已定义prefix="/chat-new"
 api_router.include_router(chat_quick_phrase.router, tags=["在线聊天(新)快捷短语"])  # 已定义prefix="/chat-new"
 api_router.include_router(chat_customer_order.router, tags=["在线聊天(新)客户订单"])  # 已定义prefix="/chat-new"
 # 版本检测（公开接口，无需登录即可查询版本信息）

@@ -5,7 +5,7 @@
  * 支持多账号切换，基于WebSocket API获取数据
  */
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { Loader2, LogIn, LogOut, MessageCircle, RefreshCw, User, ChevronUp, X, Send, AlertCircle, Ban } from 'lucide-react'
+import { Loader2, LogIn, LogOut, MessageCircle, RefreshCw, User, ChevronUp, X, Send, AlertCircle, Ban, ImagePlus } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import {
   getChatAccounts,
@@ -14,6 +14,7 @@ import {
   getConversations,
   getMessages,
   sendTextMessage,
+  sendImageMessage,
   queryUserInfos,
   getAccountProfile,
   getCustomerOrders,
@@ -85,6 +86,8 @@ export function ChatNew() {
   // 发送消息
   const [inputText, setInputText] = useState('')
   const [sending, setSending] = useState(false)
+  // 发送图片：隐藏的文件选择框引用
+  const imageInputRef = useRef<HTMLInputElement>(null)
 
   // 当前客户订单与快捷短语
   const [customerOrders, setCustomerOrders] = useState<CustomerOrder[]>([])
@@ -863,6 +866,65 @@ export function ChatNew() {
 
   const handleSendMessage = () => sendMessageText(inputText, true)
 
+  // ==================== 发送图片 ====================
+  const handlePickImage = () => {
+    if (sending) return
+    imageInputRef.current?.click()
+  }
+
+  const handleImageSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    // 选完即清空 value，保证同一张图片可重复选择触发 onChange
+    e.target.value = ''
+    if (!file || !activeAccountId || !activeCid || sending) return
+
+    if (!file.type.startsWith('image/')) {
+      addToast({ message: '请选择图片文件', type: 'error' })
+      return
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      addToast({ message: '图片大小不能超过10MB', type: 'error' })
+      return
+    }
+
+    const conv = conversations.find((c) => c.cid === activeCid)
+    if (!conv) {
+      addToast({ message: '未找到当前会话信息', type: 'error' })
+      return
+    }
+
+    setSending(true)
+    const res = await sendImageMessage(activeAccountId, activeCid, conv.otherUserId, file)
+    // 成功用CDN地址；失败则用本地预览地址，保证用户都能看到所发图片
+    const displayUrl = res.success && res.data?.imageUrl ? res.data.imageUrl : URL.createObjectURL(file)
+    // 无论成功失败，都把这条图片消息展示在聊天记录中
+    const sentMsg: ChatMessage = {
+      messageId: res.data?.messageId || '',
+      senderId: activeAccountId,
+      senderName: '',
+      isSelf: true,
+      type: 'image',
+      text: '',
+      images: [displayUrl],
+      time: Date.now(),
+      failed: !res.success,
+      failReason: res.success ? undefined : (res.message || '发送失败'),
+    }
+    setMessages((prev) => [...prev, sentMsg])
+    if (res.success) {
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.cid === activeCid
+            ? { ...c, lastMessageSummary: '[图片]', lastMessageTime: sentMsg.time }
+            : c,
+        ),
+      )
+    } else {
+      addToast({ message: res.message || '发送失败', type: 'error' })
+    }
+    setSending(false)
+  }
+
   // ==================== 时间格式化 ====================
   const formatTime = (ts: number) => {
     if (!ts) return ''
@@ -1208,6 +1270,22 @@ export function ChatNew() {
         {/* 底部输入框 */}
         {activeCid && (
           <div className="p-3 border-t border-gray-200 dark:border-gray-700 flex items-center gap-2">
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleImageSelected}
+            />
+            <button
+              type="button"
+              onClick={handlePickImage}
+              disabled={sending}
+              title="发送图片"
+              className="flex-shrink-0 flex items-center justify-center w-9 h-9 text-gray-500 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              <ImagePlus className="w-4 h-4" />
+            </button>
             <input
               type="text"
               value={inputText}
