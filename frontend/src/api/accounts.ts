@@ -77,6 +77,7 @@ export const getAccountDetailsPaginated = async (
     remark?: string
     pause_duration?: number
     message_expire_time?: number
+    reply_delay_seconds?: number
     username?: string
     login_password?: string
     show_browser?: boolean
@@ -146,6 +147,7 @@ export const getAccountDetailsPaginated = async (
       note: item.remark,
       pause_duration: item.pause_duration,
       message_expire_time: item.message_expire_time,
+      reply_delay_seconds: item.reply_delay_seconds,
       username: item.username,
       login_password: item.login_password,
       show_browser: item.show_browser,
@@ -227,6 +229,11 @@ export const updateAccountPauseDuration = (id: string, pauseDuration: number): P
 // 更新相同消息等待时间
 export const updateAccountMessageExpireTime = (id: string, messageExpireTime: number): Promise<ApiResponse> => {
   return put(`${COOKIE_PREFIX}/${id}/message-expire-time`, { message_expire_time: messageExpireTime })
+}
+
+// 更新自动回复延迟时间
+export const updateAccountReplyDelay = (id: string, replyDelaySeconds: number): Promise<ApiResponse> => {
+  return put(`${COOKIE_PREFIX}/${id}/reply-delay`, { reply_delay_seconds: replyDelaySeconds })
 }
 
 // 更新定时补发货开关

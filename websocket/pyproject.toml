@@ -15,6 +15,7 @@ dependencies = [
     "aiohttp>=3.9.0",
     "aiohttp-socks>=0.8.0",
     "playwright>=1.40.0",
+    "DrissionPage>=4.0.0",
     "python-multipart>=0.0.6",
     "websockets==12.0",
     "python-socks[asyncio]>=2.0.0",

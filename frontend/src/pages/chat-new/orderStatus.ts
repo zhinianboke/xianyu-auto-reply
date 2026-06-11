@@ -26,3 +26,14 @@ export const SHIPPABLE_STATUSES = ['pending_ship', 'pending', 'paid', '待发货
 
 /** 可执行取消的状态集合（含待付款） */
 export const CANCELLABLE_STATUSES = ['pending_payment', 'pending_ship', 'pending', 'paid', '待付款', '待发货']
+
+/** 发货方式 -> 中文标签 */
+export const DELIVERY_METHOD_LABELS: Record<string, string> = {
+  manual: '手动发货',
+  auto: '自动发货',
+  scheduled: '定时发货',
+}
+
+/** 取发货方式中文标签；未查询到发货方式时返回空字符串（不显示「未发货」） */
+export const getDeliveryMethodLabel = (method?: string | null): string =>
+  method ? (DELIVERY_METHOD_LABELS[method] || method) : ''

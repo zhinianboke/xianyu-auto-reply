@@ -8,13 +8,14 @@
 4. 检查商品是否属于指定账号
 """
 import asyncio
-import hashlib
 import json
 import time
 from typing import Optional, Dict, Any
 
 import aiohttp
 from loguru import logger
+
+from common.utils.xianyu_utils import generate_sign
 
 
 async def check_item_belongs_to_account(account_id: str, item_id: str) -> bool:
@@ -94,14 +95,6 @@ class RateService:
                 cookies[key.strip()] = value.strip()
         return cookies
     
-    def _generate_sign(self, t: str, token: str, data: str) -> str:
-        """生成签名"""
-        app_key = "34839810"
-        msg = f"{token}&{t}&{app_key}&{data}"
-        md5_hash = hashlib.md5()
-        md5_hash.update(msg.encode('utf-8'))
-        return md5_hash.hexdigest()
-    
     async def rate_buyer(self, trade_id: str, feedback: str = "不错的买家", retry_count: int = 0) -> Dict[str, Any]:
         """评价买家
         
@@ -131,7 +124,7 @@ class RateService:
                 "createOrAppend": 0
             }
             data_val = json.dumps(data_obj, separators=(',', ':'), ensure_ascii=False)
-            sign = self._generate_sign(timestamp, token, data_val)
+            sign = generate_sign(timestamp, token, data_val)
             
             params = {
                 "jsv": "2.7.2",

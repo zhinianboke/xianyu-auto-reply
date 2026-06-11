@@ -234,6 +234,7 @@ export function RiskLogs() {
                 <th>事件描述</th>
                 <th>处理结果</th>
                 <th>处理状态</th>
+                <th>验证引擎</th>
                 <th>创建时间</th>
                 <th>更新时间</th>
               </tr>
@@ -241,7 +242,7 @@ export function RiskLogs() {
             <tbody>
               {logs.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="text-center py-8 text-slate-500 dark:text-slate-400">
+                  <td colSpan={7} className="text-center py-8 text-slate-500 dark:text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <ShieldAlert className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>暂无风控日志</p>
@@ -285,6 +286,19 @@ export function RiskLogs() {
                          log.processing_status === 'processing' ? '处理中' :
                          log.processing_status || '-'}
                       </span>
+                    </td>
+                    <td>
+                      {log.captcha_engine === 'drissionpage' ? (
+                        <span className="text-xs px-2 py-1 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">
+                          兜底引擎
+                        </span>
+                      ) : log.captcha_engine === 'playwright' ? (
+                        <span className="text-xs px-2 py-1 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                          主引擎
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 dark:text-slate-500">-</span>
+                      )}
                     </td>
                     <td className="text-slate-500 dark:text-slate-400 text-sm whitespace-nowrap">
                       {new Date(log.created_at).toLocaleString()}

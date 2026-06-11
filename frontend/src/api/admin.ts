@@ -123,6 +123,7 @@ export interface RiskLog {
   message: string
   processing_result: string
   processing_status: string
+  captcha_engine: string | null
   error_message: string | null
   created_at: string
   updated_at: string
@@ -154,6 +155,7 @@ export const getRiskLogs = async (params?: {
     event_description: string
     processing_result: string
     processing_status: string
+    captcha_engine: string | null
     error_message: string | null
     created_at: string
     updated_at: string
@@ -167,6 +169,7 @@ export const getRiskLogs = async (params?: {
     message: item.event_description || '',
     processing_result: item.processing_result || '',
     processing_status: item.processing_status || '',
+    captcha_engine: item.captcha_engine ?? null,
     error_message: item.error_message,
     created_at: item.created_at,
     updated_at: item.updated_at,

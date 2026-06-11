@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 import traceback
@@ -269,6 +270,25 @@ class AutoReplyService:
             self._message_expire_time = 3600
             self._message_expire_time_loaded = True
             return 3600
+    
+    async def _load_reply_delay(self) -> int:
+        """实时从数据库加载自动回复延迟时间配置(秒)，0表示立即回复
+        
+        每次发送前都重新查库，保证账号管理中修改延迟时间后实时生效，无需重启账号。
+        """
+        try:
+            async with async_session_maker() as session:
+                stmt = select(XYAccount.reply_delay_seconds).where(
+                    XYAccount.account_id == self.cookie_id
+                )
+                result = await session.execute(stmt)
+                delay = result.scalar_one_or_none()
+                if delay is not None and delay > 0:
+                    return delay
+                return 0
+        except Exception as e:
+            logger.warning(f"【{self.cookie_id}】加载自动回复延迟配置失败: {e}，使用默认值0秒")
+            return 0
     
     async def _check_chat_processed(self, chat_id: str, send_message: str) -> bool:
         """检查该会话的该消息是否在等待时间内已处理过(参照旧框架)
@@ -667,6 +687,12 @@ class AutoReplyService:
                 if reply:
                     # 标记该消息已处理(在发送回复前标记，参照旧框架)
                     await self._mark_chat_processed(chat_id, send_message)
+                    
+                    # 自动回复延迟：按账号配置在发送前等待指定秒数
+                    reply_delay = await self._load_reply_delay()
+                    if reply_delay > 0:
+                        logger.info(f"【{self.cookie_id}】自动回复延迟 {reply_delay} 秒后发送")
+                        await asyncio.sleep(reply_delay)
                     
                     # 检查是否是图片发送指令
                     # 格式：__IMAGE_SEND__|类型标识|image_url

@@ -335,6 +335,7 @@ class DatabaseInitializer:
                 proxy_user VARCHAR(120) COMMENT '代理用户名',
                 proxy_pass VARCHAR(255) COMMENT '代理密码',
                 message_expire_time INT DEFAULT 3600 COMMENT '相同消息等待时间(秒)',
+                reply_delay_seconds INT DEFAULT 0 COMMENT '自动回复延迟时间(秒)，0表示立即回复',
                 disable_reason VARCHAR(255) COMMENT '禁用原因',
                 scheduled_redelivery TINYINT(1) NOT NULL DEFAULT 0 COMMENT '定时补发货开关',
                 scheduled_rate TINYINT(1) NOT NULL DEFAULT 0 COMMENT '定时补评价开关',
@@ -534,6 +535,7 @@ class DatabaseInitializer:
                 event_description TEXT COMMENT '事件描述',
                 processing_result TEXT COMMENT '处理结果',
                 processing_status VARCHAR(32) DEFAULT 'processing' COMMENT '处理状态',
+                captcha_engine VARCHAR(32) DEFAULT NULL COMMENT '验证通过引擎：playwright-主引擎/drissionpage-兜底引擎',
                 error_message TEXT COMMENT '错误信息',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -1404,6 +1406,9 @@ class DatabaseInitializer:
             ("send_status", "VARCHAR(20) NOT NULL DEFAULT 'unknown' COMMENT '发送状态：success-发送成功/failed-发送失败/unknown-未知(无响应)'", "error_message"),
             ("send_fail_reason", "TEXT COMMENT '发送失败原因（如被安全拦截的明文文案）'", "send_status"),
         ],
+        "xy_risk_control_logs": [
+            ("captcha_engine", "VARCHAR(32) DEFAULT NULL COMMENT '验证通过引擎：playwright-主引擎/drissionpage-兜底引擎'", "processing_status"),
+        ],
         "xy_accounts": [
             ("proxy_type", "VARCHAR(20) DEFAULT 'none' COMMENT '代理类型'", "last_refresh_at"),
             ("proxy_host", "VARCHAR(255) COMMENT '代理主机'", "proxy_type"),
@@ -1411,6 +1416,7 @@ class DatabaseInitializer:
             ("proxy_user", "VARCHAR(120) COMMENT '代理用户名'", "proxy_port"),
             ("proxy_pass", "VARCHAR(255) COMMENT '代理密码'", "proxy_user"),
             ("message_expire_time", "INT DEFAULT 3600 COMMENT '相同消息等待时间(秒)'", "proxy_pass"),
+            ("reply_delay_seconds", "INT DEFAULT 0 COMMENT '自动回复延迟时间(秒)，0表示立即回复'", "message_expire_time"),
             ("disable_reason", "VARCHAR(255) COMMENT '禁用原因'", "message_expire_time"),
             ("scheduled_redelivery", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '定时补发货开关'", "disable_reason"),
             ("scheduled_rate", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '定时补评价开关'", "scheduled_redelivery"),

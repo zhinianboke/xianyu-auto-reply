@@ -29,6 +29,12 @@ from common.services.captcha.slider_stealth import (
     get_slider_stats,
     run_slider_verification,
 )
+from common.services.captcha.drissionpage_slider import (
+    DrissionPageSliderService,
+    run_drissionpage_verification,
+    DRISSIONPAGE_AVAILABLE,
+)
+from common.services.captcha.orchestrator import run_slider_verification_with_fallback
 
 # 别名，兼容旧代码
 SliderStealth = PlaywrightSliderService
@@ -61,4 +67,9 @@ __all__ = [
     "SliderStealth",  # 别名
     "get_slider_stats",
     "run_slider_verification",
+    # DrissionPage 兜底引擎
+    "DrissionPageSliderService",
+    "run_drissionpage_verification",
+    "DRISSIONPAGE_AVAILABLE",
+    "run_slider_verification_with_fallback",
 ]

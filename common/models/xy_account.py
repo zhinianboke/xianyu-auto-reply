@@ -54,6 +54,9 @@ class XYAccount(TimestampMixin, Base):
     # 相同消息等待时间(秒)
     message_expire_time: Mapped[int] = mapped_column(Integer, default=3600)
     
+    # 自动回复延迟时间(秒)，0表示不延迟立即回复
+    reply_delay_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    
     # 禁用原因
     disable_reason: Mapped[str | None] = mapped_column(String(255))
     

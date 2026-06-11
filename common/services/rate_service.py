@@ -10,7 +10,6 @@
 说明：
 此模块放在common目录下，供scheduler和websocket共同使用
 """
-import hashlib
 import json
 import time
 import asyncio
@@ -18,6 +17,8 @@ from typing import Optional, Dict, Any
 
 import aiohttp
 from loguru import logger
+
+from common.utils.xianyu_utils import generate_sign
 
 
 class RateService:
@@ -47,14 +48,6 @@ class RateService:
                 key, value = cookie.split("=", 1)
                 cookies[key.strip()] = value.strip()
         return cookies
-    
-    def _generate_sign(self, t: str, token: str, data: str) -> str:
-        """生成签名"""
-        app_key = "34839810"
-        msg = f"{token}&{t}&{app_key}&{data}"
-        md5_hash = hashlib.md5()
-        md5_hash.update(msg.encode('utf-8'))
-        return md5_hash.hexdigest()
     
     async def rate_buyer(self, trade_id: str, feedback: str = "不错的买家", is_retry: bool = False) -> Dict[str, Any]:
         """评价买家
@@ -89,7 +82,7 @@ class RateService:
                 "createOrAppend": 0
             }
             data_val = json.dumps(data_obj, separators=(',', ':'), ensure_ascii=False)
-            sign = self._generate_sign(timestamp, token, data_val)
+            sign = generate_sign(timestamp, token, data_val)
             
             params = {
                 "jsv": "2.7.2",
@@ -227,8 +220,7 @@ async def fetch_merchant_rate_list(cookie_string: str, account_id: str = None, p
             
             # 生成签名
             app_key = "34839810"
-            msg = f"{token}&{timestamp}&{app_key}&{data_val}"
-            sign = hashlib.md5(msg.encode('utf-8')).hexdigest()
+            sign = generate_sign(timestamp, token, data_val)
             
             params = {
                 "jsv": "2.7.2",

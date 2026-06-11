@@ -75,6 +75,7 @@ export interface AccountDetail extends Account {
   keywordCount?: number
   aiEnabled?: boolean
   message_expire_time?: number
+  reply_delay_seconds?: number
   filter_count?: number  // 消息过滤规则数量
   today_reply_count?: number
 }

@@ -6,7 +6,7 @@
  */
 import { X } from 'lucide-react'
 import type { OrderDetail } from '@/api/orders'
-import { getOrderStatusMeta } from './orderStatus'
+import { getOrderStatusMeta, getDeliveryMethodLabel } from './orderStatus'
 
 interface OrderDetailModalProps {
   /** 订单详情，为 null 时不渲染 */
@@ -46,7 +46,7 @@ export function OrderDetailModal({ order, fallbackBuyerNick, onClose }: OrderDet
             <span className="text-gray-400">收货人</span><span>{order.receiver_name || '未获取'}</span>
             <span className="text-gray-400">联系电话</span><span>{order.receiver_phone || '未获取'}</span>
             <span className="text-gray-400">收货地址</span><span className="break-words">{order.receiver_address || '未获取'}</span>
-            <span className="text-gray-400">发货方式</span><span>{order.delivery_method || '未发货'}</span>
+            <span className="text-gray-400">发货方式</span><span>{getDeliveryMethodLabel(order.delivery_method)}</span>
           </div>
         </div>
       </div>

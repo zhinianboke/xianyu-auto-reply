@@ -37,6 +37,7 @@ class AccountDetail(BaseModel):
     remark: str | None = None
     pause_duration: int | None = None
     message_expire_time: int | None = None
+    reply_delay_seconds: int | None = None
     username: str | None = None
     login_password: str | None = None
     show_browser: bool = False
@@ -98,6 +99,11 @@ class AccountLoginInfoUpdate(BaseModel):
 class AccountMessageExpireTimeUpdate(BaseModel):
     """相同消息等待时间更新"""
     message_expire_time: int = Field(..., ge=0, le=86400, description="相同消息等待时间(秒)，范围0-86400，0表示不限制")
+
+
+class AccountReplyDelayUpdate(BaseModel):
+    """自动回复延迟时间更新"""
+    reply_delay_seconds: int = Field(..., ge=0, le=3600, description="自动回复延迟时间(秒)，范围0-3600，0表示立即回复")
 
 
 class AccountScheduledRedeliveryUpdate(BaseModel):

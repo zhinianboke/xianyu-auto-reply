@@ -37,6 +37,8 @@ class XYRiskControlLog(Base):
     event_description: Mapped[str | None] = mapped_column(Text)
     processing_result: Mapped[str | None] = mapped_column(Text)
     processing_status: Mapped[str] = mapped_column(String(32), default="processing")
+    # 验证通过的引擎：playwright-主引擎 / drissionpage-兜底引擎；未涉及验证或失败时为 NULL
+    captcha_engine: Mapped[str | None] = mapped_column(String(32))
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

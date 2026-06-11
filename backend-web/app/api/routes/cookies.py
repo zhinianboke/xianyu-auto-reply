@@ -34,6 +34,7 @@ from common.schemas.account import (
     AccountMessageExpireTimeUpdate,
     AccountPauseDurationUpdate,
     AccountRemarkUpdate,
+    AccountReplyDelayUpdate,
     AccountScheduledRedeliveryUpdate,
     AccountScheduledRateUpdate,
     AccountSendBeforeConfirmUpdate,
@@ -211,6 +212,7 @@ async def list_cookie_details(
                 remark=account.remark or "",
                 pause_duration=account.pause_duration if account.pause_duration is not None else 10,
                 message_expire_time=account.message_expire_time if account.message_expire_time is not None else 3600,
+                reply_delay_seconds=account.reply_delay_seconds if account.reply_delay_seconds is not None else 0,
                 username=account.username or "",
                 login_password=account.login_password or "",
                 show_browser=bool(account.show_browser),
@@ -331,6 +333,7 @@ async def list_cookie_details_paginated(
             "remark": account.remark or "",
             "pause_duration": account.pause_duration if account.pause_duration is not None else 10,
             "message_expire_time": account.message_expire_time if account.message_expire_time is not None else 3600,
+            "reply_delay_seconds": account.reply_delay_seconds if account.reply_delay_seconds is not None else 0,
             "username": account.username or "",
             "login_password": account.login_password or "",
             "show_browser": bool(account.show_browser),
@@ -680,6 +683,19 @@ async def update_account_message_expire_time(
     account = await _get_account_or_404(current_user, account_id, account_service)
     await account_service.update_message_expire_time(account, payload.message_expire_time)
     return ApiResponse(success=True, message="相同消息等待时间已更新")
+
+
+@router.put("/{account_id}/reply-delay", response_model=ApiResponse)
+async def update_account_reply_delay(
+    account_id: str,
+    payload: AccountReplyDelayUpdate,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+) -> ApiResponse:
+    """更新自动回复延迟时间"""
+    account = await _get_account_or_404(current_user, account_id, account_service)
+    await account_service.update_reply_delay(account, payload.reply_delay_seconds)
+    return ApiResponse(success=True, message="自动回复延迟时间已更新")
 
 
 @router.put("/{account_id}/login-info", response_model=ApiResponse)

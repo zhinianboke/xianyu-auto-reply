@@ -469,6 +469,8 @@ class DBManagerCompat:
                     values['processing_result'] = kwargs['processing_result']
                 if 'processing_status' in kwargs:
                     values['processing_status'] = kwargs['processing_status']
+                if 'captcha_engine' in kwargs:
+                    values['captcha_engine'] = kwargs['captcha_engine']
                 if 'error_message' in kwargs:
                     values['error_message'] = kwargs['error_message']
                 if not values:
@@ -602,6 +604,7 @@ class DBManagerCompat:
                         'event_description': log.event_description,
                         'processing_status': log.processing_status,
                         'processing_result': log.processing_result,
+                        'captcha_engine': log.captcha_engine,
                         'error_message': log.error_message,
                         'created_at': log.created_at.strftime('%Y-%m-%d %H:%M:%S') if log.created_at else None
                     }

@@ -100,6 +100,7 @@ class RiskControlLogService:
                 "event_description": log.event_description,
                 "processing_result": log.processing_result,
                 "processing_status": log.processing_status,
+                "captcha_engine": log.captcha_engine,
                 "error_message": log.error_message,
                 "created_at": safe_isoformat(log.created_at),
                 "updated_at": safe_isoformat(log.updated_at),

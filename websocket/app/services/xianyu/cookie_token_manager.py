@@ -395,16 +395,20 @@ class CookieTokenManager:
                 logger.error(f"【{self.cookie_id}】记录风控日志失败: {log_e}")
 
             try:
-                from app.services.captcha.slider_stealth import run_slider_verification
+                from app.services.captcha.slider_stealth import run_slider_verification_with_fallback
 
                 # 使用 asyncio.to_thread 在独立线程中运行同步的 Playwright 代码
                 # 这样可以避免 greenlet 的线程切换问题
-                success, cookies = await asyncio.to_thread(
-                    run_slider_verification,
+                # run_slider_verification_with_fallback: 主引擎(Playwright)失败后自动用 DrissionPage 兜底
+                # 返回 (是否成功, cookies, 通过引擎: playwright/drissionpage/None)
+                success, cookies, captcha_engine = await asyncio.to_thread(
+                    run_slider_verification_with_fallback,
                     f"{self.cookie_id}",
                     verification_url,
-                    True,  # enable_learning
-                    False  # headless
+                    True,   # enable_learning
+                    False,  # headless（主引擎）
+                    20,     # browser_timeout（主引擎）
+                    self.cookies_str,  # existing_cookies_str，供 DrissionPage 兜底注入
                 )
 
                 if success and cookies:
@@ -417,10 +421,12 @@ class CookieTokenManager:
                     if log_id:
                         try:
                             from common.db.compat import db_manager
+                            engine_label = '兜底引擎(DrissionPage)' if captcha_engine == 'drissionpage' else '主引擎(Playwright)'
                             db_manager.update_risk_control_log(
                                 log_id=log_id,
                                 processing_status='success',
-                                processing_result=f'滑块验证成功，耗时: {captcha_duration:.2f}秒'
+                                captcha_engine=captcha_engine,
+                                processing_result=f'滑块验证成功（{engine_label}），耗时: {captcha_duration:.2f}秒'
                             )
                         except Exception as update_e:
                             logger.error(f"【{self.cookie_id}】更新风控日志失败: {update_e}")

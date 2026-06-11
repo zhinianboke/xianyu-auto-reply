@@ -355,6 +355,12 @@ class AccountService:
         self.session.add(account)
         await self.session.commit()
 
+    async def update_reply_delay(self, account: XYAccount, delay_seconds: int) -> None:
+        """更新自动回复延迟时间(秒)"""
+        account.reply_delay_seconds = delay_seconds
+        self.session.add(account)
+        await self.session.commit()
+
     async def update_login_info(
         self,
         account: XYAccount,
