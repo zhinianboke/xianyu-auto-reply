@@ -12,6 +12,7 @@ export interface AutoReplyLogItem {
   chat_id: string
   item_id: string | null
   item_title: string | null
+  order_no: string | null
   source_message_id: string | null
   sender_user_id: string
   sender_user_name: string | null

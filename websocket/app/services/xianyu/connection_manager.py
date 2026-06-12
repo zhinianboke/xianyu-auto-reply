@@ -344,7 +344,7 @@ class ConnectionManager:
                 return False
             if message_data.get("code") == 200:
                 self.last_heartbeat_response = time.time()
-                logger.warning(f"【{self.cookie_id}】心跳响应正常")
+                logger.info(f"【{self.cookie_id}】心跳响应正常")
                 return True
         except Exception as e:
             logger.error(f"处理心跳响应出错: {str(e)}")

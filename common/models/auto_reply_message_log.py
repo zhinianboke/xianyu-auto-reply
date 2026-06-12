@@ -39,6 +39,7 @@ class XYAutoReplyMessageLog(Base):
     chat_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True, comment="聊天会话ID")
     item_id: Mapped[str | None] = mapped_column(String(64), index=True, comment="商品ID")
     item_title: Mapped[str | None] = mapped_column(String(255), comment="商品标题")
+    order_no: Mapped[str | None] = mapped_column(String(64), index=True, comment="订单号（自动发货等场景关联订单）")
     source_message_id: Mapped[str | None] = mapped_column(String(128), index=True, comment="源消息ID")
     sender_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True, comment="发送方闲鱼用户ID")
     sender_user_name: Mapped[str | None] = mapped_column(String(120), comment="发送方昵称")

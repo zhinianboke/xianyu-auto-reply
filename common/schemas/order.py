@@ -29,6 +29,9 @@ class OrderOut(BaseModel):
     delivery_method: str | None = None  # 发货方式：manual-手动发货, auto-自动发货, scheduled-定时发货
     delivery_content: str | None = None  # 发货内容（卡券内容）
     delivery_fail_reason: str | None = None  # 发货失败原因
+    # 关联自动发货消息日志的发送状态
+    delivery_send_status: str | None = None  # 消息日志发送状态：success/failed/unknown
+    delivery_send_fail_reason: str | None = None  # 消息日志发送失败原因
     is_agent_order: bool = False  # 是否是代销订单
     source: str | None = None  # 数据来源
     placed_at: datetime | None = None  # 订单时间（下单时间）

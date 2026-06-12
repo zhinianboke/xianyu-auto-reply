@@ -62,6 +62,7 @@ async def list_orders(
     is_rated: bool | None = Query(default=None, description="是否已评价筛选"),
     start_date: str | None = Query(default=None, description="开始日期，格式：YYYY-MM-DD"),
     end_date: str | None = Query(default=None, description="结束日期，格式：YYYY-MM-DD"),
+    delivery_send_status: str | None = Query(default=None, description="关联消息日志发送状态筛选：success/failed/unknown"),
     page: int = Query(default=1, ge=1, description="页码"),
     page_size: int = Query(default=20, ge=1, le=100, description="每页数量"),
     current_user: User = Depends(deps.get_current_active_user),
@@ -97,6 +98,7 @@ async def list_orders(
         is_rated=is_rated,
         start_date=start_date,
         end_date=end_date,
+        delivery_send_status=delivery_send_status,
         page=page,
         page_size=page_size,
     )
@@ -112,12 +114,16 @@ async def list_orders(
         agent_result = await order_service.session.execute(agent_stmt)
         agent_order_nos = {row[0] for row in agent_result.all()}
 
+    # 关联自动发货消息日志，取每个订单最新发送状态与失败原因
+    delivery_log_map = await order_service.get_delivery_log_status_map(order_nos)
+
     payload = []
     for order in orders:
         spec_parts = [part for part in [order.spec_name, order.spec_value] if part]
         sku_info = " / ".join(spec_parts) if spec_parts else None
         # 从关联查询结果获取商品标题
         item_title = item_titles.get(order.item_id, "") if order.item_id else ""
+        delivery_log = delivery_log_map.get(order.order_no) if order.order_no else None
         payload.append(
             OrderOut(
                 id=str(order.id),
@@ -141,6 +147,8 @@ async def list_orders(
                 delivery_method=order.delivery_method or "",
                 delivery_content=order.delivery_content or "",
                 delivery_fail_reason=order.delivery_fail_reason or "",
+                delivery_send_status=(delivery_log or {}).get("send_status"),
+                delivery_send_fail_reason=(delivery_log or {}).get("send_fail_reason"),
                 is_agent_order=order.order_no in agent_order_nos,
                 source=order.source or "",
                 placed_at=order.placed_at,
@@ -273,7 +281,11 @@ async def get_order_detail(
     agent_stmt = sa_select(sa_func.count(AgentOrder.id)).where(AgentOrder.order_no == order_no)
     agent_result = await order_service.session.execute(agent_stmt)
     is_agent_order = (agent_result.scalar() or 0) > 0
-    
+
+    # 关联自动发货消息日志，取最新发送状态与失败原因
+    delivery_log_map = await order_service.get_delivery_log_status_map([order.order_no] if order.order_no else [])
+    delivery_log = delivery_log_map.get(order.order_no) if order.order_no else None
+
     return {
         "success": True,
         "data": {
@@ -300,6 +312,8 @@ async def get_order_detail(
             "delivery_method": order.delivery_method or "",
             "delivery_content": order.delivery_content or "",
             "delivery_fail_reason": order.delivery_fail_reason or "",
+            "delivery_send_status": (delivery_log or {}).get("send_status"),
+            "delivery_send_fail_reason": (delivery_log or {}).get("send_fail_reason"),
             "is_agent_order": is_agent_order,
             "source": order.source or "",
             "placed_at": safe_isoformat(order.placed_at),

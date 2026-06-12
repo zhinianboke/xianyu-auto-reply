@@ -66,6 +66,7 @@ class AutoReplyLogService:
                 chat_id=str(payload.get("chat_id") or ""),
                 item_id=self._normalize_optional_str(payload.get("item_id")),
                 item_title=account_context.get("item_title"),
+                order_no=self._normalize_optional_str(payload.get("order_no")),
                 source_message_id=self._normalize_optional_str(payload.get("source_message_id")),
                 sender_user_id=str(payload.get("sender_user_id") or "unknown"),
                 sender_user_name=self._normalize_optional_str(payload.get("sender_user_name")),

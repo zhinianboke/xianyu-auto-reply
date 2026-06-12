@@ -12,7 +12,7 @@ import { BlacklistLevelModal } from './BlacklistLevelModal'
 import type { Order, Account } from '@/types'
 
 // 列配置类型
-type ColumnKey = 'cookie_id' | 'order_id' | 'receiver' | 'item_id' | 'sku_info' | 'buyer_id' | 'buyer_fish_nick' | 'chat_id' | 'quantity' | 'amount' | 'status' | 'delivery_method' | 'delivery_fail_reason' | 'is_bargain' | 'is_rated' | 'is_red_flower' | 'is_agent_order' | 'source' | 'placed_at' | 'created_at'
+type ColumnKey = 'cookie_id' | 'order_id' | 'receiver' | 'item_id' | 'sku_info' | 'buyer_id' | 'buyer_fish_nick' | 'chat_id' | 'quantity' | 'amount' | 'status' | 'delivery_method' | 'delivery_send_status' | 'delivery_fail_reason' | 'is_bargain' | 'is_rated' | 'is_red_flower' | 'is_agent_order' | 'source' | 'placed_at' | 'created_at'
 
 interface ColumnConfig {
   key: ColumnKey
@@ -35,6 +35,7 @@ const defaultColumns: ColumnConfig[] = [
   { key: 'amount', label: '金额', visible: true, fixed: true },
   { key: 'status', label: '状态', visible: true, fixed: true },
   { key: 'delivery_method', label: '发货方式', visible: true, fixed: true },
+  { key: 'delivery_send_status', label: '发送状态', visible: true },
   { key: 'delivery_fail_reason', label: '发货失败原因', visible: true },
   { key: 'is_bargain', label: '小刀', visible: true, fixed: true },
   { key: 'is_rated', label: '已评价', visible: true, fixed: true },
@@ -85,6 +86,7 @@ export function Orders() {
     is_rated: null,
     start_date: null,
     end_date: null,
+    delivery_send_status: null,
   })
 
   // 勾选状态
@@ -160,6 +162,7 @@ export function Orders() {
       is_rated: null,
       start_date: null,
       end_date: null,
+      delivery_send_status: null,
     }
     setFilters(emptyFilters)
     const hasAccountOrStatusFilter = Boolean(selectedAccount || selectedStatus)
@@ -497,6 +500,19 @@ export function Orders() {
                 </select>
               </div>
               <div className="input-group">
+                <label className="input-label">发送状态</label>
+                <select
+                  value={filters.delivery_send_status || ''}
+                  onChange={(e) => handleFilterChange('delivery_send_status', e.target.value || null)}
+                  className="input-ios"
+                >
+                  <option value="">全部</option>
+                  <option value="success">发送成功</option>
+                  <option value="failed">发送失败</option>
+                  <option value="unknown">待确认</option>
+                </select>
+              </div>
+              <div className="input-group">
                 <label className="input-label">小刀</label>
                 <select
                   value={filters.is_bargain === null ? '' : String(filters.is_bargain)}
@@ -671,6 +687,31 @@ export function Orders() {
                                      order.delivery_method === 'scheduled' ? '定时' :
                                      order.delivery_method}
                                   </span>
+                                ) : (
+                                  <span className="text-gray-400">-</span>
+                                )}
+                              </td>
+                            )
+                          case 'delivery_send_status':
+                            return (
+                              <td key={col.key} className="whitespace-nowrap text-sm">
+                                {order.delivery_send_status ? (
+                                  <div className="group relative cursor-pointer">
+                                    <span className={
+                                      order.delivery_send_status === 'success' ? 'badge-success' :
+                                      order.delivery_send_status === 'failed' ? 'badge-danger' :
+                                      'badge-gray'
+                                    }>
+                                      {order.delivery_send_status === 'success' ? '发送成功' :
+                                       order.delivery_send_status === 'failed' ? '发送失败' :
+                                       '待确认'}
+                                    </span>
+                                    {order.delivery_send_fail_reason ? (
+                                      <div className="absolute left-0 top-full mt-1 z-50 hidden group-hover:block bg-gray-800 text-white text-xs rounded-lg px-3 py-2 max-w-sm whitespace-normal shadow-lg break-words">
+                                        {order.delivery_send_fail_reason}
+                                      </div>
+                                    ) : null}
+                                  </div>
                                 ) : (
                                   <span className="text-gray-400">-</span>
                                 )}
@@ -997,6 +1038,32 @@ export function Orders() {
                         <pre className="whitespace-pre-wrap break-words text-red-700 dark:text-red-300">
                           {orderDetail.delivery_fail_reason}
                         </pre>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 关联消息日志：发送状态 */}
+                  {orderDetail.delivery_send_status && (
+                    <div>
+                      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">消息发送状态</h3>
+                      <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 text-sm space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-500">发送状态</span>
+                          <span className={
+                            orderDetail.delivery_send_status === 'success' ? 'badge-success' :
+                            orderDetail.delivery_send_status === 'failed' ? 'badge-danger' :
+                            'badge-gray'
+                          }>
+                            {orderDetail.delivery_send_status === 'success' ? '发送成功' :
+                             orderDetail.delivery_send_status === 'failed' ? '发送失败' :
+                             '待确认'}
+                          </span>
+                        </div>
+                        {orderDetail.delivery_send_fail_reason ? (
+                          <pre className="whitespace-pre-wrap break-words text-red-700 dark:text-red-300">
+                            {orderDetail.delivery_send_fail_reason}
+                          </pre>
+                        ) : null}
                       </div>
                     </div>
                   )}

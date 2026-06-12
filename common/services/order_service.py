@@ -22,6 +22,7 @@ from loguru import logger
 
 from common.models.xy_order import XYOrder
 from common.models.xy_catalog_item import XYCatalogItem
+from common.models.auto_reply_message_log import XYAutoReplyMessageLog
 
 
 class OrderService:
@@ -68,6 +69,7 @@ class OrderService:
         is_rated: bool | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
+        delivery_send_status: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[XYOrder], int, Dict[str, str]]:
@@ -83,6 +85,7 @@ class OrderService:
             is_rated: 是否已评价筛选
             start_date: 开始日期（YYYY-MM-DD）
             end_date: 结束日期（YYYY-MM-DD）
+            delivery_send_status: 关联自动发货消息日志的发送状态筛选（success/failed/unknown）
             page: 页码
             page_size: 每页数量
             
@@ -149,6 +152,29 @@ class OrderService:
             except ValueError:
                 logger.warning(f"无效的结束日期格式: {end_date}")
         
+        # 关联自动发货消息日志的发送状态筛选
+        # 取每个订单号最新一条自动发货日志（以 max(id) 近似最新，与发送状态展示口径一致），
+        # 再按发送状态过滤，使列表筛选结果与“发送状态”列显示保持一致。
+        if delivery_send_status and delivery_send_status.strip():
+            latest_log_subq = (
+                select(
+                    XYAutoReplyMessageLog.order_no.label("order_no"),
+                    func.max(XYAutoReplyMessageLog.id).label("max_id"),
+                )
+                .where(
+                    XYAutoReplyMessageLog.reply_strategy == "auto_delivery",
+                    XYAutoReplyMessageLog.order_no.isnot(None),
+                )
+                .group_by(XYAutoReplyMessageLog.order_no)
+                .subquery()
+            )
+            matched_order_nos = (
+                select(XYAutoReplyMessageLog.order_no)
+                .join(latest_log_subq, XYAutoReplyMessageLog.id == latest_log_subq.c.max_id)
+                .where(XYAutoReplyMessageLog.send_status == delivery_send_status.strip())
+            )
+            conditions.append(XYOrder.order_no.in_(matched_order_nos))
+        
         if conditions:
             base_stmt = base_stmt.where(and_(*conditions))
         
@@ -173,6 +199,58 @@ class OrderService:
         item_titles = await self._get_item_titles(owner_id, item_ids)
         
         return orders, total, item_titles
+
+    async def get_delivery_log_status_map(self, order_nos: list[str]) -> Dict[str, Dict[str, str | None]]:
+        """批量查询订单对应的自动发货消息日志发送状态
+
+        以订单号关联自动发货日志（reply_strategy == 'auto_delivery'），取每个订单号
+        最新一条日志的发送状态与发送失败原因，供订单列表关联展示。
+
+        Args:
+            order_nos: 订单号列表
+
+        Returns:
+            { 订单号: {"send_status": ..., "send_fail_reason": ...} }
+            没有对应日志的订单号不会出现在返回结果中。
+        """
+        result_map: Dict[str, Dict[str, str | None]] = {}
+        valid_order_nos = [no for no in order_nos if no]
+        if not valid_order_nos:
+            return result_map
+
+        try:
+            # 先取每个订单号最新一条自动发货日志的主键（max(id) 即最新插入），
+            # 再回查该日志的发送状态与失败原因，保证与"发送状态"筛选口径完全一致。
+            latest_log_subq = (
+                select(
+                    XYAutoReplyMessageLog.order_no.label("order_no"),
+                    func.max(XYAutoReplyMessageLog.id).label("max_id"),
+                )
+                .where(
+                    XYAutoReplyMessageLog.order_no.in_(valid_order_nos),
+                    XYAutoReplyMessageLog.reply_strategy == "auto_delivery",
+                )
+                .group_by(XYAutoReplyMessageLog.order_no)
+                .subquery()
+            )
+            stmt = (
+                select(
+                    XYAutoReplyMessageLog.order_no,
+                    XYAutoReplyMessageLog.send_status,
+                    XYAutoReplyMessageLog.send_fail_reason,
+                )
+                .join(latest_log_subq, XYAutoReplyMessageLog.id == latest_log_subq.c.max_id)
+            )
+            rows = (await self.session.execute(stmt)).all()
+            for order_no, send_status, send_fail_reason in rows:
+                result_map[order_no] = {
+                    "send_status": send_status,
+                    "send_fail_reason": send_fail_reason,
+                }
+        except Exception as e:
+            logger.error(f"查询订单自动发货日志发送状态失败: {e}")
+
+        return result_map
 
     async def get_order_by_id(self, order_no: str) -> Optional[XYOrder]:
         """根据订单号获取订单"""

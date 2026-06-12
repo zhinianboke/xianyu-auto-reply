@@ -54,6 +54,7 @@ export interface OrderFilterParams {
   is_rated?: boolean | null        // 是否已评价
   start_date?: string | null       // 开始日期：YYYY-MM-DD
   end_date?: string | null         // 结束日期：YYYY-MM-DD
+  delivery_send_status?: string | null  // 关联消息日志发送状态：success/failed/unknown
 }
 
 // 获取订单列表（分页）
@@ -88,6 +89,9 @@ export const getOrders = (
     }
     if (filters.end_date) {
       params.append('end_date', filters.end_date)
+    }
+    if (filters.delivery_send_status !== null && filters.delivery_send_status !== undefined && filters.delivery_send_status !== '') {
+      params.append('delivery_send_status', filters.delivery_send_status)
     }
   }
   

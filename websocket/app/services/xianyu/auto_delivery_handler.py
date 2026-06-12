@@ -414,6 +414,7 @@ class AutoDeliveryHandler:
                 "source_message": f"[自动发货] 订单: {order_id}",
                 "chat_id": chat_id,
                 "item_id": item_id or None,
+                "order_no": order_id or None,
                 "msg_time": msg_time,
                 "process_status": "failed" if any_send_failed else "success",
                 "decision_reason": "auto_delivery",

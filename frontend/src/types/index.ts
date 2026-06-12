@@ -147,6 +147,8 @@ export interface Order {
   delivery_method?: 'manual' | 'auto' | 'scheduled'  // 发货方式：manual-手动发货, auto-自动发货, scheduled-定时发货
   delivery_content?: string  // 发货内容（卡券内容）
   delivery_fail_reason?: string  // 发货失败原因
+  delivery_send_status?: 'success' | 'failed' | 'unknown' | null  // 关联消息日志：发送状态
+  delivery_send_fail_reason?: string | null  // 关联消息日志：发送失败原因
   is_agent_order?: boolean  // 是否是代销订单
   source?: string  // 数据来源
   placed_at?: string  // 订单时间（下单时间）

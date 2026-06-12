@@ -1197,6 +1197,7 @@ class DatabaseInitializer:
                 chat_id VARCHAR(128) NOT NULL COMMENT '聊天会话ID',
                 item_id VARCHAR(64) DEFAULT NULL COMMENT '商品ID',
                 item_title VARCHAR(255) DEFAULT NULL COMMENT '商品标题',
+                order_no VARCHAR(64) DEFAULT NULL COMMENT '订单号（自动发货等场景关联订单）',
                 source_message_id VARCHAR(128) DEFAULT NULL COMMENT '源消息ID',
                 sender_user_id VARCHAR(64) NOT NULL COMMENT '发送方闲鱼用户ID',
                 sender_user_name VARCHAR(120) DEFAULT NULL COMMENT '发送方昵称',
@@ -1228,6 +1229,7 @@ class DatabaseInitializer:
                 INDEX idx_account_id (account_id),
                 INDEX idx_chat_id (chat_id),
                 INDEX idx_item_id (item_id),
+                INDEX idx_order_no (order_no),
                 INDEX idx_source_message_id (source_message_id),
                 INDEX idx_sender_user_id (sender_user_id),
                 INDEX idx_process_status (process_status),
@@ -1405,6 +1407,7 @@ class DatabaseInitializer:
         "xy_auto_reply_message_logs": [
             ("send_status", "VARCHAR(20) NOT NULL DEFAULT 'unknown' COMMENT '发送状态：success-发送成功/failed-发送失败/unknown-未知(无响应)'", "error_message"),
             ("send_fail_reason", "TEXT COMMENT '发送失败原因（如被安全拦截的明文文案）'", "send_status"),
+            ("order_no", "VARCHAR(64) DEFAULT NULL COMMENT '订单号（自动发货等场景关联订单）'", "item_title"),
         ],
         "xy_risk_control_logs": [
             ("captcha_engine", "VARCHAR(32) DEFAULT NULL COMMENT '验证通过引擎：playwright-主引擎/drissionpage-兜底引擎'", "processing_status"),
@@ -2548,6 +2551,22 @@ class DatabaseInitializer:
                         logger.info("✓ xy_auto_reply_message_logs: 创建 idx_arml_status_created 复合索引")
                 except Exception as e:
                     logger.warning(f"✗ xy_auto_reply_message_logs idx_arml_status_created 创建失败: {e}")
+
+                try:
+                    check = text("""
+                        SELECT COUNT(*) FROM information_schema.STATISTICS
+                        WHERE TABLE_SCHEMA = DATABASE()
+                        AND TABLE_NAME = 'xy_auto_reply_message_logs'
+                        AND INDEX_NAME = 'idx_order_no'
+                    """)
+                    result = await conn.execute(check)
+                    if result.scalar() == 0:
+                        await conn.execute(text(
+                            "ALTER TABLE xy_auto_reply_message_logs ADD INDEX idx_order_no (order_no)"
+                        ))
+                        logger.info("✓ xy_auto_reply_message_logs: 创建 idx_order_no 索引")
+                except Exception as e:
+                    logger.warning(f"✗ xy_auto_reply_message_logs idx_order_no 创建失败: {e}")
 
             # 为 xy_dock_records 补建 (source_user_id, level) 复合索引 —— 加速二级分销商列表查询
             try:
