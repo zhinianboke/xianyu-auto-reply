@@ -64,6 +64,6 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    assetsDir: 'static',
+    assetsDir: 'assets',
   },
 })
