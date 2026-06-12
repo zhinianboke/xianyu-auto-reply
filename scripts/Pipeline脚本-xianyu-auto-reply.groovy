@@ -1,10 +1,12 @@
-pipeline {
+﻿pipeline {
     agent any
     
     environment {
-        // GitHub 私有仓库配置
+        // GitHub 仓库配置（通过国内 GitHub 加速镜像拉取，公开仓库无需凭据）
         GITHUB_REPO = 'https://github.com/zhinianboke/xianyu-auto-reply.git'
-        GITHUB_CREDENTIALS = 'github-token'  // 需要在 Jenkins 中配置
+        // 注：已改为多加速镜像拉取（ghfast.top 等），不再使用 github-token 凭据；
+        //     若仓库为私有需走凭据，请改回 git 步骤并配置 GITHUB_CREDENTIALS
+        GITHUB_CREDENTIALS = 'github-token'
         
         // 阿里云镜像仓库配置
         ALIYUN_REGISTRY = 'registry.cn-shanghai.aliyuncs.com'
@@ -16,7 +18,14 @@ pipeline {
         WEBSOCKET_IMAGE_NAME = 'xianyu-websocket'
         BACKEND_WEB_IMAGE_NAME = 'xianyu-backend-web'
         SCHEDULER_IMAGE_NAME = 'xianyu-scheduler'
-        
+
+        // 基础设施镜像 - 从国内加速源同步多架构镜像到阿里云（amd64 + arm64）
+        // 镜像名与 docker-compose.yml 保持一致（xianyu- 前缀）
+        MYSQL_SOURCE_IMAGE = 'docker.1ms.run/library/mysql:8.0'
+        MYSQL_TARGET_TAG = 'xianyu-mysql:8.0'
+        REDIS_SOURCE_IMAGE = 'docker.1ms.run/library/redis:7-alpine'
+        REDIS_TARGET_TAG = 'xianyu-redis:7-alpine'
+
         // 支持的平台
         PLATFORMS = 'linux/amd64,linux/arm64'
     }
@@ -25,16 +34,38 @@ pipeline {
         stage('拉取代码') {
             steps {
                 echo '开始拉取代码...'
-                
-                // 配置 Git 使用 HTTP/1.1 避免 HTTP2 问题
-                sh 'git config --global http.version HTTP/1.1'
-                sh 'git config --global http.postBuffer 524288000'
-                
-                // 从私有仓库拉取代码（需要凭据）
-                git branch: 'main',
-                    credentialsId: "${GITHUB_CREDENTIALS}",
-                    url: "${GITHUB_REPO}"
-                
+
+                // 多 GitHub 加速镜像优先 + 直连兜底（参照 jenkins/安装Buildx插件.sh、修复DockerCLI.sh）
+                // 加速镜像优先级：ghfast.top → gh-proxy.com → ghproxy.net → mirror.ghproxy.com → github.com 直连
+                sh '''
+                    git config --global http.version HTTP/1.1
+                    git config --global http.postBuffer 524288000
+
+                    rm -rf src_checkout
+                    CLONED=0
+                    for PREFIX in \
+                        "https://ghfast.top/" \
+                        "https://gh-proxy.com/" \
+                        "https://ghproxy.net/" \
+                        "https://mirror.ghproxy.com/" \
+                        ""; do
+                        URL="${PREFIX}${GITHUB_REPO}"
+                        echo "尝试拉取: ${URL}"
+                        if git clone --branch main --depth 1 "${URL}" src_checkout; then
+                            echo "✓ 拉取成功: ${URL}"
+                            CLONED=1
+                            break
+                        fi
+                        echo "✗ 拉取失败，切换下一个加速镜像..."
+                        rm -rf src_checkout
+                    done
+                    [ "${CLONED}" = "1" ] || { echo "所有镜像均拉取失败"; exit 1; }
+
+                    # 将检出的代码（含隐藏文件）平铺到工作区根目录
+                    cp -a src_checkout/. .
+                    rm -rf src_checkout
+                '''
+
                 echo "代码拉取完成"
             }
         }
@@ -193,416 +224,50 @@ pipeline {
                 echo '✓ Scheduler 镜像推送完成！'
             }
         }
-        
-        stage('生成部署文件') {
+
+        stage('同步MySQL/Redis多架构镜像到阿里云') {
             steps {
-                echo '生成生产环境部署文件...'
-                script {
-                    sh """
-                        # 创建部署文件目录
-                        mkdir -p deploy-artifacts
-                        
-                        # 生成分发版 docker-compose.yml（使用阿里云镜像地址）
-                        cat > deploy-artifacts/docker-compose.yml << 'COMPOSE_EOF'
-# Docker Compose配置 - 闲鱼自动回复系统
-# 分发版 - 使用预构建的Docker镜像，开箱即用
-# 包含MySQL和Redis容器
+                echo "开始同步基础设施镜像（MySQL/Redis）多架构镜像到阿里云..."
+                echo "目标平台: ${PLATFORMS}"
+                // 官方 mysql:8.0 / redis:7-alpine 本身即多架构镜像；
+                // 使用 buildx imagetools create 直接复制整个 manifest list（含 amd64 + arm64），无需 pull/rebuild
+                retry(5) {
+                    script {
+                        withCredentials([usernamePassword(
+                            credentialsId: "${ALIYUN_CREDENTIALS}",
+                            usernameVariable: 'REGISTRY_USER',
+                            passwordVariable: 'REGISTRY_PASS'
+                        )]) {
+                            sh """
+                                # 登录阿里云镜像仓库
+                                echo "\${REGISTRY_PASS}" | docker login ${ALIYUN_REGISTRY} -u "\${REGISTRY_USER}" --password-stdin
 
-services:
-  # ====== 基础设施 ======
+                                # 复制 MySQL 多架构镜像（保留 amd64 + arm64）
+                                docker buildx imagetools create \\
+                                    -t ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${MYSQL_TARGET_TAG} \\
+                                    ${MYSQL_SOURCE_IMAGE}
 
-  # MySQL数据库
-  mysql:
-    image: mysql:8.0
-    container_name: xianyu-mysql
-    restart: unless-stopped
-    environment:
-      - MYSQL_ROOT_PASSWORD=\${MYSQL_ROOT_PASSWORD:-xianyu@2026}
-      - MYSQL_DATABASE=\${MYSQL_DATABASE:-xianyu_data}
-      - MYSQL_USER=\${MYSQL_USER:-xianyu}
-      - MYSQL_PASSWORD=\${MYSQL_PASSWORD:-xianyu@2026}
-      - TZ=Asia/Shanghai
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --max-connections=500
-      - --default-time-zone=+08:00
-    volumes:
-      - mysql_data:/var/lib/mysql
-    networks:
-      - xianyu-network
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p\${MYSQL_ROOT_PASSWORD:-xianyu@2026}"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
+                                # 复制 Redis 多架构镜像（保留 amd64 + arm64）
+                                docker buildx imagetools create \\
+                                    -t ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${REDIS_TARGET_TAG} \\
+                                    ${REDIS_SOURCE_IMAGE}
 
-  # Redis缓存
-  redis:
-    image: redis:7-alpine
-    container_name: xianyu-redis
-    restart: unless-stopped
-    command: >
-      redis-server
-      --requirepass \${REDIS_PASSWORD:-xianyu@2026}
-      --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
-      --appendonly yes
-    environment:
-      - TZ=Asia/Shanghai
-    volumes:
-      - redis_data:/data
-    networks:
-      - xianyu-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "\${REDIS_PASSWORD:-xianyu@2026}", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+                                # 校验目标镜像架构
+                                echo "MySQL 镜像架构:"
+                                docker buildx imagetools inspect ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${MYSQL_TARGET_TAG} | grep -E 'Platform|MediaType' || true
+                                echo "Redis 镜像架构:"
+                                docker buildx imagetools inspect ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${REDIS_TARGET_TAG} | grep -E 'Platform|MediaType' || true
 
-  # ====== 应用服务 ======
-
-  # 前端服务
-  frontend:
-    image: \${IMAGE_REGISTRY:-registry.cn-shanghai.aliyuncs.com/zhinian-software}/xianyu-frontend:\${IMAGE_TAG:-latest}
-    container_name: xianyu-frontend
-    restart: unless-stopped
-    ports:
-      - "\${FRONTEND_PORT:-9000}:80"
-    networks:
-      - xianyu-network
-    depends_on:
-      backend-web:
-        condition: service_healthy
-    environment:
-      - TZ=Asia/Shanghai
-
-  # WebSocket服务
-  websocket:
-    image: \${IMAGE_REGISTRY:-registry.cn-shanghai.aliyuncs.com/zhinian-software}/xianyu-websocket:\${IMAGE_TAG:-latest}
-    container_name: xianyu-websocket
-    restart: unless-stopped
-    environment:
-      - ENVIRONMENT=production
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
-      - MYSQL_USER=\${MYSQL_USER:-xianyu}
-      - MYSQL_PASSWORD=\${MYSQL_PASSWORD:-xianyu@2026}
-      - MYSQL_DATABASE=\${MYSQL_DATABASE:-xianyu_data}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=\${REDIS_PASSWORD:-xianyu@2026}
-      - REDIS_DB=\${REDIS_DB:-0}
-      - WEBSOCKET_PORT=8090
-      - MAX_CAPTCHA_CONCURRENT=\${MAX_CAPTCHA_CONCURRENT:-3}
-      - BROWSER_HEADLESS=true
-      - BACKEND_WEB_SERVICE_URL=http://backend-web:8089
-      - STATIC_DIR=/app/static
-      - LOG_LEVEL=\${LOG_LEVEL:-INFO}
-      - TZ=Asia/Shanghai
-    volumes:
-      - websocket_logs:/app/websocket/logs
-      - static-files:/app/static
-    ports:
-      - "\${WEBSOCKET_PORT:-8090}:8090"
-    networks:
-      - xianyu-network
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # Backend-Web服务
-  backend-web:
-    image: \${IMAGE_REGISTRY:-registry.cn-shanghai.aliyuncs.com/zhinian-software}/xianyu-backend-web:\${IMAGE_TAG:-latest}
-    container_name: xianyu-backend-web
-    restart: unless-stopped
-    environment:
-      - ENVIRONMENT=production
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
-      - MYSQL_USER=\${MYSQL_USER:-xianyu}
-      - MYSQL_PASSWORD=\${MYSQL_PASSWORD:-xianyu@2026}
-      - MYSQL_DATABASE=\${MYSQL_DATABASE:-xianyu_data}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=\${REDIS_PASSWORD:-xianyu@2026}
-      - REDIS_DB=\${REDIS_DB:-0}
-      - BACKEND_WEB_PORT=8089
-      - JWT_ALGORITHM=HS256
-      - ACCESS_TOKEN_EXPIRE_MINUTES=\${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
-      - REFRESH_TOKEN_EXPIRE_MINUTES=\${REFRESH_TOKEN_EXPIRE_MINUTES:-10080}
-      - CORS_ORIGINS=*
-      - WEBSOCKET_SERVICE_URL=http://websocket:8090
-      - SCHEDULER_SERVICE_URL=http://scheduler:8091
-      - STATIC_DIR=/app/static
-      - BACKUP_DIR=/app/backups
-      - BACKEND_WEB_PUBLIC_URL=\${BACKEND_WEB_PUBLIC_URL:-}
-      - BROWSER_HEADLESS=true
-      - LOG_LEVEL=\${LOG_LEVEL:-INFO}
-      - TZ=Asia/Shanghai
-    volumes:
-      - backend_web_logs:/app/backend-web/logs
-      - static-files:/app/static
-      - backup-files:/app/backups
-    ports:
-      - "\${BACKEND_WEB_PORT:-8089}:8089"
-    networks:
-      - xianyu-network
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      websocket:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8089/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # Scheduler服务
-  scheduler:
-    image: \${IMAGE_REGISTRY:-registry.cn-shanghai.aliyuncs.com/zhinian-software}/xianyu-scheduler:\${IMAGE_TAG:-latest}
-    container_name: xianyu-scheduler
-    restart: unless-stopped
-    environment:
-      - ENVIRONMENT=production
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
-      - MYSQL_USER=\${MYSQL_USER:-xianyu}
-      - MYSQL_PASSWORD=\${MYSQL_PASSWORD:-xianyu@2026}
-      - MYSQL_DATABASE=\${MYSQL_DATABASE:-xianyu_data}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=\${REDIS_PASSWORD:-xianyu@2026}
-      - REDIS_DB=\${REDIS_DB:-0}
-      - SCHEDULER_PORT=8091
-      - REDELIVERY_INTERVAL=\${REDELIVERY_INTERVAL:-5}
-      - RATE_INTERVAL=\${RATE_INTERVAL:-20}
-      - WEBSOCKET_SERVICE_URL=http://websocket:8090
-      - BACKEND_WEB_SERVICE_URL=http://backend-web:8089
-      - STATIC_DIR=/app/static
-      - BACKUP_DIR=/app/backups
-      - LOG_LEVEL=\${LOG_LEVEL:-INFO}
-      - TZ=Asia/Shanghai
-    volumes:
-      - scheduler_logs:/app/scheduler/logs
-      - static-files:/app/static:ro
-      - backup-files:/app/backups
-    ports:
-      - "\${SCHEDULER_PORT:-8091}:8091"
-    networks:
-      - xianyu-network
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      websocket:
-        condition: service_healthy
-      backend-web:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8091/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-networks:
-  xianyu-network:
-    driver: bridge
-
-volumes:
-  mysql_data:
-    driver: local
-  redis_data:
-    driver: local
-  websocket_logs:
-    driver: local
-  backend_web_logs:
-    driver: local
-  scheduler_logs:
-    driver: local
-  static-files:
-    driver: local
-  backup-files:
-    driver: local
-COMPOSE_EOF
-                        
-                        # 生成环境变量模板
-                        cat > deploy-artifacts/.env.template << 'ENV_EOF'
-# ==========================================
-# 闲鱼自动回复系统 - 环境变量配置
-# ==========================================
-
-# MySQL数据库配置（Docker内置，自动创建）
-MYSQL_ROOT_PASSWORD=xianyu@2026
-MYSQL_DATABASE=xianyu_data
-MYSQL_USER=xianyu
-MYSQL_PASSWORD=xianyu@2026
-
-# Redis缓存配置（Docker内置）
-REDIS_PASSWORD=xianyu@2026
-REDIS_DB=0
-
-# 说明：JWT 密钥由数据库统一托管（首次启动自动生成并持久化），无需在此配置
-
-# 端口配置
-FRONTEND_PORT=9000
-BACKEND_WEB_PORT=8089
-WEBSOCKET_PORT=8090
-SCHEDULER_PORT=8091
-
-# 镜像配置
-IMAGE_REGISTRY=registry.cn-shanghai.aliyuncs.com/zhinian-software
-IMAGE_TAG=latest
-
-# 日志级别
-LOG_LEVEL=INFO
-
-# Token过期时间（分钟）
-ACCESS_TOKEN_EXPIRE_MINUTES=1440
-REFRESH_TOKEN_EXPIRE_MINUTES=10080
-
-# 定时任务间隔（分钟）
-REDELIVERY_INTERVAL=5
-RATE_INTERVAL=20
-
-# 验证码并发数
-MAX_CAPTCHA_CONCURRENT=3
-ENV_EOF
-                        
-                        # 创建部署脚本
-                        cat > deploy-artifacts/deploy.sh << 'DEPLOY_EOF'
-#!/bin/bash
-# 闲鱼自动回复系统 - 部署脚本
-# 
-# 使用方法:
-# 1. 上传部署文件到服务器
-# 2. 配置 .env 文件
-# 3. 运行: bash deploy.sh
-
-set -e
-
-echo "=========================================="
-echo "闲鱼自动回复系统 - 部署"
-echo "=========================================="
-
-# 检查环境变量文件
-if [ ! -f ".env" ]; then
-    if [ -f ".env.template" ]; then
-        cp .env.template .env
-        echo "[提示] 已从模板创建.env文件，请根据需要修改配置后重新运行"
-        exit 1
-    else
-        echo "[错误] 未找到 .env 文件"
-        exit 1
-    fi
-fi
-
-# 检查 Docker 和 Docker Compose
-if ! command -v docker &> /dev/null; then
-    echo "[错误] 未安装 Docker"
-    exit 1
-fi
-
-if docker compose version &> /dev/null; then
-    DOCKER_COMPOSE="docker compose"
-elif command -v docker-compose &> /dev/null; then
-    DOCKER_COMPOSE="docker-compose"
-else
-    echo "[错误] 未安装 Docker Compose"
-    exit 1
-fi
-
-# 拉取最新镜像
-echo "[信息] 拉取最新镜像..."
-\$DOCKER_COMPOSE pull
-
-# 停止旧服务（如果存在）
-echo "[信息] 停止旧服务..."
-\$DOCKER_COMPOSE down 2>/dev/null || true
-
-# 启动服务
-echo "[信息] 启动服务..."
-\$DOCKER_COMPOSE up -d
-
-# 检查服务状态
-echo "[信息] 等待服务启动..."
-sleep 15
-\$DOCKER_COMPOSE ps
-
-echo ""
-echo "=========================================="
-echo "部署完成！"
-echo "=========================================="
-echo "前端访问地址: http://localhost:9000"
-echo "MySQL/Redis: 仅内部网络，不暴露到公网"
-echo ""
-echo "查看日志: \$DOCKER_COMPOSE logs -f"
-echo "停止服务: \$DOCKER_COMPOSE down"
-echo "重启服务: \$DOCKER_COMPOSE restart"
-echo "更新服务: bash update.sh"
-echo "=========================================="
-DEPLOY_EOF
-
-                        # 创建更新脚本
-                        cat > deploy-artifacts/update.sh << 'UPDATE_EOF'
-#!/bin/bash
-# 闲鱼自动回复系统 - 更新脚本
-
-set -e
-
-echo "=========================================="
-echo "闲鱼自动回复系统 - 更新"
-echo "=========================================="
-
-if docker compose version &> /dev/null; then
-    DOCKER_COMPOSE="docker compose"
-else
-    DOCKER_COMPOSE="docker-compose"
-fi
-
-# 拉取最新镜像
-echo "[信息] 拉取最新镜像..."
-\$DOCKER_COMPOSE pull
-
-# 重启服务（MySQL/Redis数据不受影响）
-echo "[信息] 重启服务..."
-\$DOCKER_COMPOSE up -d
-
-echo "[完成] 更新完成！"
-UPDATE_EOF
-
-                        # 设置脚本执行权限
-                        chmod +x deploy-artifacts/*.sh
-                        
-                        echo "部署文件生成完成！"
-                        ls -la deploy-artifacts/
-                    """
+                                # 登出
+                                docker logout ${ALIYUN_REGISTRY}
+                            """
+                        }
+                    }
                 }
-                
-                // 归档部署文件
-                archiveArtifacts artifacts: 'deploy-artifacts/**', 
-                                 fingerprint: true,
-                                 allowEmptyArchive: false
-                
-                echo '✓ 部署文件生成完成！'
+                echo '✓ MySQL/Redis 多架构镜像同步完成！'
             }
         }
+
         
         stage('清理 Builder 缓存') {
             steps {
@@ -642,34 +307,20 @@ UPDATE_EOF
             Scheduler镜像:
               ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${SCHEDULER_IMAGE_NAME}:latest
               ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${SCHEDULER_IMAGE_NAME}:build-${BUILD_NUMBER}
+
+            基础设施镜像（多架构，已同步到阿里云）:
+              ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${MYSQL_TARGET_TAG}
+              ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${REDIS_TARGET_TAG}
             
             支持的架构：
               linux/amd64  (x86_64 - Intel/AMD 处理器)
               linux/arm64  (aarch64 - ARM 64位处理器)
             
-            部署文件已生成：
-            ────────────────────────────────────────
-              docker-compose.yml (生产环境配置，含MySQL/Redis)
-              .env.template (环境变量模板)
-              deploy.sh (一键部署脚本)
-              update.sh (一键更新脚本)
-              
-              下载方式：
-              1. 打开此构建页面
-              2. 点击左侧 "Build Artifacts"
-              3. 下载 deploy-artifacts 文件夹
-              
-              或使用命令行：
-              wget ${BUILD_URL}artifact/deploy-artifacts.zip
-            
             ========================================
             部署方法：
             ========================================
             
-            【快速部署】:
-              1. 下载部署文件到服务器
-              2. 配置 .env 文件
-              3. 运行: bash deploy.sh
+            使用仓库根目录的 docker-compose.yml 部署（已内置阿里云镜像地址）：
             
             【手动部署】:
               1. 拉取镜像:
