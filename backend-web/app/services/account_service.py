@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.services.account_limit_service import AccountLimitService
@@ -250,7 +250,7 @@ class AccountService:
         Returns:
             账号对象，如果不存在则返回 None
         """
-        # 先按 account_id 精确查询（走 idx_account_id 索引），避免 OR 导致索引失效
+        # 先按 account_id 精确查询（account_id 全局唯一，走 uk_account_id 索引），避免 OR 导致索引失效
         stmt = select(XYAccount).where(XYAccount.account_id == account_identifier)
         if owner_id is not None:
             stmt = stmt.where(XYAccount.owner_id == owner_id)
@@ -282,6 +282,22 @@ class AccountService:
         result = await self.session.execute(stmt)
         return result.scalars().first()
 
+    async def account_id_exists(self, account_id: str, exclude_pk: int | None = None) -> bool:
+        """检查 account_id 是否已存在（全局，不区分所属用户）
+
+        Args:
+            account_id: 待校验的账号ID
+            exclude_pk: 需排除的账号主键（用于更新场景，排除自身）
+
+        Returns:
+            True 表示已存在，False 表示不存在
+        """
+        stmt = select(func.count(XYAccount.id)).where(XYAccount.account_id == account_id)
+        if exclude_pk is not None:
+            stmt = stmt.where(XYAccount.id != exclude_pk)
+        result = await self.session.execute(stmt)
+        return (result.scalar() or 0) > 0
+
     async def create_account(
         self,
         owner_id: int,
@@ -291,9 +307,9 @@ class AccountService:
         unb: str | None = None,
         login_method: str = "manual",
     ) -> XYAccount:
-        existing = await self.get_account_for_user(owner_id, account_id)
-        if existing:
-            raise ValueError("账户已存在")
+        # 全局唯一校验：account_id 不允许与任何用户的账号重复
+        if await self.account_id_exists(account_id):
+            raise ValueError("账号ID已存在")
 
         await AccountLimitService(self.session).ensure_can_add_account(owner_id)
 
@@ -403,8 +419,9 @@ class AccountService:
         return result.scalars().first()
 
     async def _generate_unique_account_id(self, owner_id: int, base: str) -> str:
+        # 全局唯一：account_id 在整个系统内不允许重复，生成候选时不区分 owner_id
         normalized = base or f"qr_{int(datetime.utcnow().timestamp())}"
-        stmt = select(XYAccount.account_id).where(XYAccount.owner_id == owner_id)
+        stmt = select(XYAccount.account_id)
         result = await self.session.execute(stmt)
         existing_ids = set(result.scalars().all())
         candidate = normalized

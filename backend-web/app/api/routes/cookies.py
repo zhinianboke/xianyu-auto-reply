@@ -277,6 +277,14 @@ async def list_cookie_details_paginated(
     filter_counts = {}
     keyword_counts = {}
     today_reply_counts = {}
+    # 批量查询账号所属用户名（管理员查看全量时需展示账号属于哪个用户）
+    owner_username_map: dict[int, str] = {}
+    owner_ids = list({acc.owner_id for acc in accounts if acc.owner_id is not None})
+    if owner_ids:
+        user_result = await session.execute(
+            select(User.id, User.username).where(User.id.in_(owner_ids))
+        )
+        owner_username_map = {row.id: row.username for row in user_result.all()}
     if account_ids:
         placeholders = ", ".join([f":acc_{i}" for i in range(len(account_ids))])
         params = {f"acc_{i}": acc_id for i, acc_id in enumerate(account_ids)}
@@ -342,6 +350,8 @@ async def list_cookie_details_paginated(
             "today_reply_count": today_reply_counts.get(account.account_id, 0),
             "keyword_count": keyword_counts.get(account.id, 0),
             "ai_enabled": read_ai_enabled(ai_settings),
+            "owner_id": account.owner_id,
+            "owner_username": owner_username_map.get(account.owner_id, ""),
             "created_at": safe_isoformat(account.created_at),
             "updated_at": safe_isoformat(account.updated_at),
         })

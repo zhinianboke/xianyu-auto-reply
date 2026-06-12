@@ -218,6 +218,13 @@ class AccountImportService:
                 self._account_id_to_pk[account_id] = existing.id
                 self.updated += 1
             else:
+                # 全局唯一校验：account_id 若已被其他用户占用，跳过并记录错误（不插入，避免触发唯一约束）
+                dup_stmt = select(XYAccount.id).where(XYAccount.account_id == account_id)
+                dup_result = await self.session.execute(dup_stmt)
+                if dup_result.scalars().first() is not None:
+                    self.errors.append(f"账号 {account_id}: 账号ID已被其他用户占用，跳过")
+                    self.failed += 1
+                    continue
                 # 新增
                 account = XYAccount(
                     owner_id=self.owner_id,

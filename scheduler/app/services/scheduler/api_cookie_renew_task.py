@@ -8,6 +8,7 @@
 4. 如有差异，覆盖更新数据库中的 cookies 字符串
 5. 详细记录每次执行的批次日志
 6. 失败时不重试当次（按定时间隔下次重试）
+7. 续期成功后若账号已被并发改为禁用状态，则自动重新启用并通知 WebSocket 服务
 """
 from __future__ import annotations
 
@@ -94,6 +95,12 @@ class ApiCookieRenewTaskService:
                             failed_count += 1
 
                         await self._log_result(session, batch_id, account.account_id, result)
+
+                        # 续期成功后重新读取账号最新状态，若期间被并发改为禁用则自动启用
+                        if result.status in ("success", "cookie_updated", "browser_renewed"):
+                            await session.refresh(account)
+                            if self._is_disabled_account(account):
+                                await self._enable_account_after_renew(session, account)
                     except Exception as exc:
                         await session.rollback()
                         failed_count += 1

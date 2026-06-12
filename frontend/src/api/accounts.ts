@@ -86,6 +86,8 @@ export const getAccountDetailsPaginated = async (
     today_reply_count?: number
     keyword_count?: number
     ai_enabled?: boolean
+    owner_id?: number
+    owner_username?: string
     created_at?: string
     updated_at?: string
   }
@@ -156,6 +158,8 @@ export const getAccountDetailsPaginated = async (
       today_reply_count: item.today_reply_count || 0,
       keywordCount: item.keyword_count || 0,
       aiEnabled: item.ai_enabled || false,
+      owner_id: item.owner_id,
+      owner_username: item.owner_username || '',
       use_ai_reply: false,
       use_default_reply: false,
       created_at: item.created_at,

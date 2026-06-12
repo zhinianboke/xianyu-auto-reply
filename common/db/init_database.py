@@ -344,7 +344,7 @@ class DatabaseInitializer:
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_owner_id (owner_id),
-                INDEX idx_account_id (account_id),
+                UNIQUE KEY uk_account_id (account_id),
                 INDEX idx_unb (unb),
                 INDEX idx_account_created (created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='闲鱼账号表';
@@ -2671,6 +2671,45 @@ class DatabaseInitializer:
                         logger.info("✓ xy_orders: 创建 uk_order_account_no 唯一约束")
             except Exception as e:
                 logger.warning(f"✗ xy_orders uk_order_account_no 创建失败: {e}")
+
+            # 为 xy_accounts 补建 account_id 全局唯一约束 —— 闲鱼账号ID全局唯一，
+            # 杜绝不同用户绑定同一账号、以及并发创建导致的重复（业务大量代码仅按
+            # account_id 查询并取 first，依赖其全局唯一）。
+            # 注意：项目硬性规范禁止删除数据，存在历史重复数据时不自动清理，
+            # 仅打印警告并跳过创建，待人工合并后下次启动自检再补建。
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_accounts'
+                    AND INDEX_NAME = 'uk_account_id'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    # 先检测是否存在 account_id 重复数据（全局，不区分 owner_id）
+                    dup_check = text("""
+                        SELECT COUNT(*) FROM (
+                            SELECT account_id
+                            FROM xy_accounts
+                            GROUP BY account_id
+                            HAVING COUNT(*) > 1
+                        ) AS dup
+                    """)
+                    dup_result = await conn.execute(dup_check)
+                    dup_groups = dup_result.scalar() or 0
+                    if dup_groups > 0:
+                        logger.warning(
+                            f"✗ xy_accounts 存在 {dup_groups} 组 account_id 重复数据，"
+                            f"为遵守禁止删除数据规范，暂不创建 uk_account_id 唯一约束。"
+                            f"请人工合并/处理重复账号后，重启服务自动补建"
+                        )
+                    else:
+                        await conn.execute(text(
+                            "ALTER TABLE xy_accounts ADD UNIQUE KEY uk_account_id (account_id)"
+                        ))
+                        logger.info("✓ xy_accounts: 创建 uk_account_id 全局唯一约束")
+            except Exception as e:
+                logger.warning(f"✗ xy_accounts uk_account_id 创建失败: {e}")
 
 
     async def create_default_admin(self):

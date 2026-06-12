@@ -238,6 +238,8 @@ export function Accounts() {
   const selectedCount = selectedAccountIds.length
   const batchOperating = batchAction !== null
   const allVisibleSelected = accounts.length > 0 && accounts.every(account => selectedAccountIds.includes(account.id))
+  // 是否管理员：管理员可查看全量账号，需展示账号所属用户列
+  const isAdmin = Boolean(user?.is_admin)
 
   const loadAccounts = async (page: number = pagination.page, pageSize: number = pagination.pageSize, currentFilters: AccountFilters = filters) => {
     if (!_hasHydrated || !isAuthenticated || !token) return
@@ -2100,6 +2102,7 @@ export function Accounts() {
                     />
                   </th>
                   <th className="whitespace-nowrap min-w-[180px]">账号ID</th>
+                  {isAdmin && <th className="whitespace-nowrap min-w-[120px]">所属用户</th>}
                   <th className="whitespace-nowrap min-w-[80px]">关键词</th>
                   <th className="whitespace-nowrap min-w-[80px]">过滤词</th>
                   <th className="whitespace-nowrap min-w-[80px]">今日回复</th>
@@ -2113,7 +2116,7 @@ export function Accounts() {
               <tbody>
                 {accounts.length === 0 ? (
                   <tr>
-                    <td colSpan={10}>
+                    <td colSpan={isAdmin ? 11 : 10}>
                       <div className="empty-state py-8">
                         <p className="text-slate-500 dark:text-slate-400">暂无账号，请添加新账号</p>
                       </div>
@@ -2133,6 +2136,11 @@ export function Accounts() {
                     <td className="font-medium text-blue-600 dark:text-blue-400">
                       {account.note ? `${account.id} (${account.note})` : account.id}
                     </td>
+                    {isAdmin && (
+                      <td className="text-sm text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                        {account.owner_username || '-'}
+                      </td>
+                    )}
                     <td>
                       <span className="inline-flex items-center gap-1.5 text-sm">
                         <MessageSquare className="w-3.5 h-3.5 text-blue-500" />

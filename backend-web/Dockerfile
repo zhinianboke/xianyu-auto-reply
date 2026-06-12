@@ -1,8 +1,8 @@
 # Backend-Web 服务 Dockerfile
 # 单阶段构建，直接使用Python源码
 
-# 基础镜像使用国内加速源（与 jenkins/优化Buildx网络.sh 一致，buildx 按路径直接拉取）
-FROM docker.1ms.run/library/python:3.11-slim
+# 基础镜像走 docker.io 官方名（由 buildx 的 buildkitd 镜像加速配置拉取，见流水线 BUILDKIT 配置）
+FROM python:3.11-slim
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 # Playwright 浏览器下载使用 npmmirror 国内源

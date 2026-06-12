@@ -78,6 +78,7 @@ export interface AccountDetail extends Account {
   reply_delay_seconds?: number
   filter_count?: number  // 消息过滤规则数量
   today_reply_count?: number
+  owner_username?: string  // 账号所属用户名（管理员查看全量时展示）
 }
 
 // 关键词相关类型

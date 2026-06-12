@@ -3,8 +3,8 @@
 # 前端编译后为混淆压缩的JS，天然不含可读源码
 
 # ====== 第一阶段：构建 ======
-# 基础镜像使用国内加速源（与 jenkins/优化Buildx网络.sh 一致）
-FROM docker.1ms.run/library/node:18-alpine AS builder
+# 基础镜像走 docker.io 官方名（由 buildx 的 buildkitd 镜像加速配置拉取，见流水线 BUILDKIT 配置）
+FROM node:18-alpine AS builder
 
 # 配置国内镜像源
 RUN npm config set registry https://registry.npmmirror.com
@@ -24,8 +24,8 @@ COPY frontend/ .
 RUN npm run build
 
 # ====== 第二阶段：运行 ======
-# 基础镜像使用国内加速源（与 jenkins/优化Buildx网络.sh 一致）
-FROM docker.1ms.run/library/nginx:alpine
+# 基础镜像走 docker.io 官方名（由 buildx 的 buildkitd 镜像加速配置拉取，见流水线 BUILDKIT 配置）
+FROM nginx:alpine
 
 # 配置国内镜像源
 RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories

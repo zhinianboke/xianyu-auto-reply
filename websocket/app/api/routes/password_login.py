@@ -333,13 +333,16 @@ def _save_login_result(
         try:
             async def _do_save(session_maker):
                 async with session_maker() as session:
-                    # 检查账号是否已存在
+                    # 检查账号是否已存在（全局唯一：account_id 不区分 owner_id）
                     stmt = select(XYAccount).where(
-                        XYAccount.owner_id == user_id,
                         XYAccount.account_id == account_id
                     )
                     result = await session.execute(stmt)
                     existing_account = result.scalars().first()
+
+                    # 账号ID已被其他用户占用时，禁止覆盖，直接报错
+                    if existing_account and existing_account.owner_id != user_id:
+                        raise ValueError(f"账号ID {account_id} 已被其他用户占用，无法登录")
                     
                     # 从cookie中提取unb
                     parsed_cookies = trans_cookies(cookies_str)

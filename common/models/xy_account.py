@@ -23,12 +23,14 @@ class XYAccount(TimestampMixin, Base):
 
     __tablename__ = "xy_accounts"
     __table_args__ = (
+        # account_id 全局唯一：闲鱼账号ID不允许重复（业务大量代码仅按 account_id 查询）
+        Index("uk_account_id", "account_id", unique=True),
         Index("idx_account_created", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
-    account_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(String(80), nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(120))
     unb: Mapped[str | None] = mapped_column(String(64), index=True)
     cookie: Mapped[str] = mapped_column(Text, nullable=False)
