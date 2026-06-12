@@ -349,6 +349,7 @@ export interface AdminStats {
   today_reply_count: number
   yesterday_reply_count: number
   active_cookies: number
+  online_cookies: number  // 真实 WebSocket 在线账号数
   password_configured: number  // 已配置账号密码数
   current_user_account_limit: number | null
   current_user_used_account_count: number

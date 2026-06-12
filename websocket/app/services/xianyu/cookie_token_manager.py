@@ -912,13 +912,13 @@ class CookieTokenManager:
             logger.error(f"【{self.cookie_id}】Token刷新API请求超时（30秒）")
             self.current_token = None
             self.last_token_refresh_status = "failed_timeout"
-            await self._delete_cached_token()
+            # 超时属于网络问题，不代表 token 失效，保留数据库缓存 token 供下次重试，避免误删后被迫走滑块
             return None
         except aiohttp.ClientError as e:
             logger.error(f"【{self.cookie_id}】Token刷新网络错误: {type(e).__name__}: {e}")
             self.current_token = None
             self.last_token_refresh_status = "failed_network"
-            await self._delete_cached_token()
+            # 网络错误同样不删数据库缓存 token，保留供下次重试
             return None
         except Exception as e:
             logger.error(f"【{self.cookie_id}】Token刷新异常: {type(e).__name__}: {self._safe_str(e)}")

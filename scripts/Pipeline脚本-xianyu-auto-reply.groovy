@@ -69,6 +69,8 @@
                     done
                     [ "${CLONED}" = "1" ] || { echo "所有镜像均拉取失败"; exit 1; }
 
+                    # 先清理工作区旧内容（含上次遗留的只读 .git pack 文件），避免 cp 覆盖失败
+                    find . -mindepth 1 -maxdepth 1 ! -name src_checkout -exec rm -rf {} +
                     # 将检出的代码（含隐藏文件）平铺到工作区根目录
                     cp -a src_checkout/. .
                     rm -rf src_checkout

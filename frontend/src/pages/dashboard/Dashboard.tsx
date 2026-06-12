@@ -451,6 +451,10 @@ export function Dashboard() {
                   <p className="text-sm text-slate-500">活跃账号</p>
                 </div>
                 <div className="text-center p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                  <p className="text-2xl font-bold text-emerald-600">{adminStats.online_cookies ?? 0}</p>
+                  <p className="text-sm text-slate-500">在线账号</p>
+                </div>
+                <div className="text-center p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
                   <p className="text-2xl font-bold text-teal-600">{adminStats.password_configured}</p>
                   <p className="text-sm text-slate-500">已配置密码</p>
                 </div>

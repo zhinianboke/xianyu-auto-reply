@@ -304,11 +304,35 @@ async def restart_account(account_id: str, request: StartAccountRequest):
         }
 
 
+@router.get("/accounts/connection-stats")
+async def get_connection_stats():
+    """统计真实 WebSocket 连接状态（已连接账号数量等）"""
+    try:
+        from app.services.xianyu.cookie_manager import get_manager
+
+        manager = get_manager()
+        stats = manager.get_connection_stats()
+
+        return {
+            "success": True,
+            "code": 200,
+            "message": "查询成功",
+            "data": stats,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "code": 500,
+            "message": f"查询连接统计失败: {str(e)}",
+            "data": None,
+        }
+
+
 @router.get("/accounts/{account_id}/status")
 async def get_account_status(account_id: str):
     """
     查询账号任务状态
-    
+
     Args:
         account_id: 账号ID
         

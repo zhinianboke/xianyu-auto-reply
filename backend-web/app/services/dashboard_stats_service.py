@@ -8,11 +8,14 @@
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
+from app.core.http_client import get_http_client
 from app.services.auto_reply_stats_service import AutoReplyStatsService
 from app.services.dashboard_stats_cache_service import DashboardStatsCacheService
 from common.models.agent_order import AgentOrder
@@ -22,6 +25,8 @@ from common.models.xy_account import XYAccount
 from common.models.xy_keyword_rule import XYKeywordRule
 from common.models.xy_order import XYOrder
 from common.services.account_limit_service import AccountLimitService
+
+logger = logging.getLogger(__name__)
 
 BEIJING_TZ = timezone(timedelta(hours=8))
 
@@ -278,16 +283,33 @@ class DashboardStatsService:
             "remaining_account_count": limit_status["remaining_count"],
         }
 
+    async def _get_online_cookies_count(self) -> int:
+        """实时获取真实 WebSocket 在线账号数（调用 websocket 服务的连接统计接口）。
+
+        失败时返回 0，不影响其它统计展示。
+        """
+        try:
+            settings = get_settings()
+            url = f"{settings.websocket_service_url.rstrip('/')}/internal/accounts/connection-stats"
+            response = await get_http_client().get(url)
+            if isinstance(response, dict) and response.get("success"):
+                return int((response.get("data") or {}).get("connected", 0) or 0)
+        except Exception as e:
+            logger.warning(f"获取在线账号数失败: {e}")
+        return 0
+
     async def get_admin_dashboard_stats(self, *, current_user_id: int) -> dict[str, int | None]:
         """获取管理员首页全局统计。"""
         bundle = await self._get_admin_dashboard_bundle()
         limit_status = await self._get_limit_status(current_user_id)
         admin_stats = bundle["admin_stats"]
+        online_cookies = await self._get_online_cookies_count()
 
         return {
             "total_users": int(admin_stats["total_users"]),
             "total_cookies": int(admin_stats["total_cookies"]),
             "active_cookies": int(admin_stats["active_cookies"]),
+            "online_cookies": online_cookies,
             "total_keywords": int(admin_stats["total_keywords"]),
             "total_orders": int(admin_stats["total_orders"]),
             "today_reply_count": int(admin_stats["today_reply_count"]),

@@ -379,6 +379,36 @@ class CookieManager:
             "is_connected": is_connected,
         }
 
+    def get_connection_stats(self) -> dict:
+        """统计真实 WebSocket 连接状态
+
+        遍历所有运行中的账号实例，按 connection_manager 的连接状态分类计数。
+        其中 connected 表示真正建立了 WebSocket 连接的账号数量。
+
+        Returns:
+            包含总实例数、各状态计数、已连接账号ID列表的字典
+        """
+        by_state: dict = {}
+        connected_ids = []
+        total = 0
+        for cookie_id, instance in list(self.instances.items()):
+            total += 1
+            conn_mgr = getattr(instance, 'connection_manager', None)
+            if conn_mgr and getattr(conn_mgr, 'connection_state', None):
+                state = conn_mgr.connection_state.value
+            else:
+                state = "unknown"
+            by_state[state] = by_state.get(state, 0) + 1
+            if state == "connected":
+                connected_ids.append(cookie_id)
+
+        return {
+            "total_instances": total,           # 运行中的账号实例总数
+            "connected": by_state.get("connected", 0),  # 真实 WebSocket 已连接数
+            "by_state": by_state,               # 各连接状态明细
+            "connected_account_ids": connected_ids,
+        }
+
     async def start_all_tasks(self):
         """启动所有启用的账号任务"""
         for cookie_id, enabled in self.cookie_status.items():
