@@ -28,6 +28,11 @@
 
         // 支持的平台
         PLATFORMS = 'linux/amd64,linux/arm64'
+
+        // 构建资源限制（作用于 buildx 的 buildkit 容器）—— 已按 2核/2G 服务器调小
+        BUILD_MEMORY = '1536m'       // buildkit 容器内存上限（总内存 2G，留 ~0.5G 给系统/守护进程）
+        BUILD_CPU_QUOTA = '150000'   // CPU 配额(微秒/100ms)：100000=1核，150000=1.5核，留点给系统
+        BUILD_PARALLELISM = '1'      // 低内存下串行构建，避免并发步骤叠加内存导致 OOM
     }
     
     stages {
@@ -77,15 +82,32 @@
                     sh '''
                         # 检查 buildx 是否可用
                         docker buildx version
-                        
-                        # 确保使用正确的 builder
-                        docker buildx use multiarch-builder || \
-                        (docker buildx create --name multiarch-builder --driver docker-container --use && \
-                         docker buildx inspect --bootstrap)
-                        
-                        # 显示支持的平台
+
+                        # buildkitd 配置：限制并发构建步骤，降低峰值 CPU/内存
+                        BUILDKIT_CFG="$(pwd)/buildkitd.toml"
+                        cat > "${BUILDKIT_CFG}" <<EOF
+[worker.oci]
+  max-parallelism = ${BUILD_PARALLELISM}
+EOF
+
+                        # 兼容不同 buildx 版本的配置文件参数名（新版 --buildkitd-config，旧版 --config）
+                        CFG_FLAG="--config"
+                        if docker buildx create --help 2>/dev/null | grep -q -- '--buildkitd-config'; then
+                            CFG_FLAG="--buildkitd-config"
+                        fi
+
+                        # 重建带资源限制的 builder
+                        # docker-container driver 支持 memory / cpu-quota 等资源限制，作用于整个构建容器
+                        docker buildx rm multiarch-builder 2>/dev/null || true
+                        docker buildx create --name multiarch-builder --driver docker-container --use \
+                            --driver-opt memory=${BUILD_MEMORY} \
+                            --driver-opt cpu-quota=${BUILD_CPU_QUOTA} \
+                            ${CFG_FLAG} "${BUILDKIT_CFG}"
+                        docker buildx inspect --bootstrap
+
+                        echo "资源限制: 内存=${BUILD_MEMORY} CPU配额=${BUILD_CPU_QUOTA}(100000=1核) 并发=${BUILD_PARALLELISM}"
                         echo "支持的平台:"
-                        docker buildx inspect --bootstrap | grep Platforms
+                        docker buildx inspect | grep Platforms
                     '''
                 }
                 echo '✓ Buildx 环境验证通过！'
