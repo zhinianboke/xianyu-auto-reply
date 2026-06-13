@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, case, func, or_, select
@@ -33,6 +34,10 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 
 class DashboardStatsService:
     """仪表盘统计聚合服务。"""
+
+    # Online cookies cache: (timestamp, count)
+    _online_cookies_cache: tuple[float, int] | None = None
+    _ONLINE_COOKIES_CACHE_TTL = 10  # seconds
 
     INACTIVE_ACCOUNT_STATUSES = ("inactive", "disabled", "suspended", "deleted")
     CLOSED_ORDER_STATUSES = ("cancelled", "已关闭")
@@ -284,16 +289,24 @@ class DashboardStatsService:
         }
 
     async def _get_online_cookies_count(self) -> int:
-        """实时获取真实 WebSocket 在线账号数（调用 websocket 服务的连接统计接口）。
+        """实时获取真实 WebSocket 在线账号数（10 秒 TTL 缓存）。
 
         失败时返回 0，不影响其它统计展示。
         """
+        now = time.time()
+        if self.__class__._online_cookies_cache is not None:
+            ts, count = self.__class__._online_cookies_cache
+            if now - ts < self._ONLINE_COOKIES_CACHE_TTL:
+                return count
+
         try:
             settings = get_settings()
             url = f"{settings.websocket_service_url.rstrip('/')}/internal/accounts/connection-stats"
             response = await get_http_client().get(url)
             if isinstance(response, dict) and response.get("success"):
-                return int((response.get("data") or {}).get("connected", 0) or 0)
+                count = int((response.get("data") or {}).get("connected", 0) or 0)
+                self.__class__._online_cookies_cache = (now, count)
+                return count
         except Exception as e:
             logger.warning(f"获取在线账号数失败: {e}")
         return 0

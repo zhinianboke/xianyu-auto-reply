@@ -28,6 +28,7 @@ class XYAutoReplyMessageLog(Base):
         Index("idx_arml_status_created", "process_status", "created_at"),
         Index("idx_arml_status_strategy_created", "process_status", "reply_strategy", "created_at"),
         Index("idx_arml_strategy_created", "reply_strategy", "created_at"),
+        Index("idx_arml_order_strategy_id", "order_no", "reply_strategy", "id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
