@@ -259,8 +259,8 @@ async def reset_password(
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="该邮箱未注册")
 
-    # 更新密码
+    # 更新密码（直接操作 ORM 对象后 commit，UserUpdate 不含 password 字段）
     user.password_hash = get_password_hash(payload.new_password)
-    await user_service.update(user, UserUpdate())
+    await session.commit()
 
     return ApiResponse(success=True, message="密码重置成功")
