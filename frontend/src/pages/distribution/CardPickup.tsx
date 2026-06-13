@@ -244,6 +244,11 @@ export function CardPickup() {
 
   return (
     <div className="space-y-4">
+      {/* 顶部红色加粗提醒 */}
+      <div className="text-red-600 font-bold text-center">
+        以下商品均为对接商品，无售后，请谨慎对接或购买
+      </div>
+
       {/* 页头 */}
       <div className="page-header flex-between flex-wrap gap-4">
         <div>
