@@ -165,7 +165,7 @@ def run_server():
         logger.warning("Windows环境已自动关闭reload，避免Playwright因SelectorEventLoop无法启动浏览器子进程")
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
+        host=settings.host,  # 默认 "::" 双栈监听，可通过 HOST 环境变量覆盖
         port=settings.service_port,
         reload=reload_enabled,
     )

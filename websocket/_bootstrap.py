@@ -182,7 +182,7 @@ def run_server():
     
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
+        host=settings.host,  # 默认 "::" 双栈监听，可通过 HOST 环境变量覆盖
         port=settings.service_port,
         reload=False,
         log_level=settings.log_level.lower(),
