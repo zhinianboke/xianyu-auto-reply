@@ -40,7 +40,8 @@ class DashboardStatsService:
     _ONLINE_COOKIES_CACHE_TTL = 10  # seconds
 
     INACTIVE_ACCOUNT_STATUSES = ("inactive", "disabled", "suspended", "deleted")
-    CLOSED_ORDER_STATUSES = ("cancelled", "已关闭")
+    # 已关闭/已退款订单：不计入营收、有效订单与待处理统计
+    CLOSED_ORDER_STATUSES = ("cancelled", "已关闭", "refunded", "退款成功", "已退款")
     SHIPPED_ORDER_STATUSES = ("shipped", "completed", "已发货", "已完成")
     PENDING_EXCLUDED_ORDER_STATUSES = (*CLOSED_ORDER_STATUSES, *SHIPPED_ORDER_STATUSES)
 

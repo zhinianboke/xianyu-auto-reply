@@ -15,6 +15,7 @@ export const ORDER_STATUS_META: Record<string, { label: string; className: strin
   cancelled: { label: '交易关闭', className: 'bg-gray-100 text-gray-500' },
   closed: { label: '交易关闭', className: 'bg-gray-100 text-gray-500' },
   refunding: { label: '退款中', className: 'bg-orange-50 text-orange-600' },
+  refunded: { label: '已退款', className: 'bg-gray-100 text-gray-500' },
 }
 
 /** 取订单状态的展示信息，未知状态回退为灰色标签 */

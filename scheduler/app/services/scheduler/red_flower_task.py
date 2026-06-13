@@ -138,8 +138,8 @@ class RedFlowerTask:
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
-    # 不需要求小红花的订单状态（已取消、待付款）
-    EXCLUDED_ORDER_STATUSES = ("cancelled", "processing")
+    # 不需要求小红花的订单状态（已取消、处理中、退款中/已退款）
+    EXCLUDED_ORDER_STATUSES = ("cancelled", "processing", "refunding", "refunded")
 
     async def _get_pending_orders(
         self,

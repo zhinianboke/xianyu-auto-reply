@@ -558,7 +558,7 @@ class OrderService:
                 # 订单已存在，准备更新字段
                 update_values = {}
                 stale_statuses = {"pending_payment", "pending_ship", "pending", "paid"}
-                terminal_statuses = {"shipped", "completed", "cancelled", "closed"}
+                terminal_statuses = {"shipped", "completed", "cancelled", "closed", "refunded"}
                 is_stale_downgrade = (
                     existing_order.status in terminal_statuses and status in stale_statuses
                 ) or (

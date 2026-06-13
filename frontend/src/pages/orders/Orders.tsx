@@ -54,6 +54,7 @@ const statusMap: Record<string, { label: string; class: string }> = {
   shipped: { label: '已发货', class: 'badge-success' },
   completed: { label: '已完成', class: 'badge-success' },
   refunding: { label: '退款中', class: 'badge-warning' },
+  refunded: { label: '已退款', class: 'badge-danger' },
   cancelled: { label: '已关闭', class: 'badge-danger' },
   unknown: { label: '未知', class: 'badge-gray' },
 }
@@ -480,6 +481,7 @@ export function Orders() {
                     { value: 'shipped', label: '已发货' },
                     { value: 'completed', label: '已完成' },
                     { value: 'refunding', label: '退款中' },
+                    { value: 'refunded', label: '已退款' },
                     { value: 'cancelled', label: '已关闭' },
                   ]}
                   placeholder="所有状态"

@@ -157,10 +157,14 @@ export interface Order {
 }
 
 export type OrderStatus = 
+  | 'pending_payment'
   | 'processing' 
   | 'processed' 
+  | 'pending_ship'
   | 'shipped' 
   | 'completed' 
+  | 'refunding'
+  | 'refunded'
   | 'cancelled' 
   | 'unknown'
 
