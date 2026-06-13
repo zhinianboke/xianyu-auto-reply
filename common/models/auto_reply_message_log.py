@@ -60,7 +60,7 @@ class XYAutoReplyMessageLog(Base):
     reply_image_url: Mapped[str | None] = mapped_column(String(1000), comment="回复图片URL")
     reply_segments: Mapped[list | None] = mapped_column(JSON, comment="拆分后的回复分段")
     error_message: Mapped[str | None] = mapped_column(Text, comment="错误信息")
-    send_status: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown", comment="发送状态：success-发送成功/failed-发送失败/unknown-未知(无响应)")
+    send_status: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown", comment="发送状态：success-发送成功/failed-发送失败/unknown-未知(无响应)/timeout-超时(无响应超过阈值)")
     send_fail_reason: Mapped[str | None] = mapped_column(Text, comment="发送失败原因（如被安全拦截的明文文案）")
     raw_message_json: Mapped[dict | None] = mapped_column(JSON, comment="原始消息JSON")
     context_snapshot: Mapped[dict | None] = mapped_column(JSON, comment="上下文快照")

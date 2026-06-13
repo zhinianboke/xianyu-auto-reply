@@ -105,12 +105,14 @@ const SEND_STATUS_LABELS: Record<string, string> = {
   success: '发送成功',
   failed: '发送失败',
   unknown: '待确认',
+  timeout: '超时',
 }
 
 const SEND_STATUS_CLASSES: Record<string, string> = {
   success: 'text-green-600 dark:text-green-400',
   failed: 'text-red-600 dark:text-red-400',
   unknown: 'text-slate-500 dark:text-slate-400',
+  timeout: 'text-amber-600 dark:text-amber-400',
 }
 
 function buildSendStatusLabel(value?: string | null) {
@@ -313,6 +315,7 @@ export function AutoReplyLogs() {
                 <option value="success">发送成功</option>
                 <option value="failed">发送失败</option>
                 <option value="unknown">待确认</option>
+                <option value="timeout">超时</option>
               </select>
             </div>
             <button onClick={handleSearch} className="btn-ios-primary">

@@ -13,6 +13,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from app.services.card_dock_service import CARD_SECRET_KEY_SETTING, CardDockService
 from common.models.user import User
 from common.models.user_setting import UserSetting
 from common.schemas.common import ApiResponse
@@ -109,6 +110,11 @@ async def update_user_setting(
         session.add(setting)
     
     await session.commit()
+
+    # 对接卡密秘钥更新后立即失效缓存，避免最长 5 分钟内仍使用旧秘钥（含首次配置由空串变为有效值的场景）
+    if key == CARD_SECRET_KEY_SETTING:
+        CardDockService.invalidate_secret_key_cache(current_user.id)
+
     return ApiResponse(success=True, message="设置已保存")
 
 
@@ -125,7 +131,11 @@ async def delete_user_setting(
     )
     result = await session.execute(stmt)
     await session.commit()
-    
+
+    # 对接卡密秘钥删除后同步失效缓存
+    if key == CARD_SECRET_KEY_SETTING:
+        CardDockService.invalidate_secret_key_cache(current_user.id)
+
     return ApiResponse(success=True, message="设置已删除")
 
 

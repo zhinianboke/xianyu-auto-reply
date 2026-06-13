@@ -85,7 +85,7 @@ class OrderService:
             is_rated: 是否已评价筛选
             start_date: 开始日期（YYYY-MM-DD）
             end_date: 结束日期（YYYY-MM-DD）
-            delivery_send_status: 关联自动发货消息日志的发送状态筛选（success/failed/unknown）
+            delivery_send_status: 关联自动发货消息日志的发送状态筛选（success/failed/unknown/timeout）
             page: 页码
             page_size: 每页数量
             

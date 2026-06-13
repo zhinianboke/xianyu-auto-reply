@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from loguru import logger
 from sqlalchemy import update
@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.db.session import async_session_maker
 from common.models.auto_reply_message_log import XYAutoReplyMessageLog
+from common.utils.time_utils import get_beijing_now
 
 
 class DeliveryTimeoutTask:
@@ -54,7 +55,9 @@ class DeliveryTimeoutTask:
         Returns:
             更新的记录数
         """
-        threshold = datetime.now(timezone.utc) - timedelta(minutes=self.TIMEOUT_MINUTES)
+        # created_at 全链路按北京时间存储（server_default=func.now()，MySQL 会话时区为 +08:00），
+        # 因此阈值也必须用北京时间（naive），否则与 UTC 比较会相差 8 小时导致超时判定严重滞后。
+        threshold = get_beijing_now().replace(tzinfo=None) - timedelta(minutes=self.TIMEOUT_MINUTES)
 
         stmt = (
             update(XYAutoReplyMessageLog)

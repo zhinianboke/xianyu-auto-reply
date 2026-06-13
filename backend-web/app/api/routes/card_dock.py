@@ -15,8 +15,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app.api import deps
@@ -109,11 +108,9 @@ async def purchase_card(
     service: CardDockService = Depends(deps.get_card_dock_service),
 ) -> Dict[str, Any]:
     """提货：通过上游卡券系统购买并返回卡密"""
+    # 限流命中同样以 HTTP 200 返回，由前端根据 success/code 字段弹窗提示（统一返回规范）
     if not _check_purchase_rate_limit(current_user.id):
-        return JSONResponse(
-            status_code=429,
-            content={"success": False, "code": 429, "message": "请求过于频繁，请稍后再试", "data": None},
-        )
+        return {"success": False, "code": 429, "message": "请求过于频繁，请稍后再试", "data": None}
     if not payload.source_code.strip():
         return {"success": False, "code": 400, "message": "请先选择卡券商", "data": None}
     if payload.quantity < 1:

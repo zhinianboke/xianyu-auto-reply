@@ -62,7 +62,7 @@ async def list_orders(
     is_rated: bool | None = Query(default=None, description="是否已评价筛选"),
     start_date: str | None = Query(default=None, description="开始日期，格式：YYYY-MM-DD"),
     end_date: str | None = Query(default=None, description="结束日期，格式：YYYY-MM-DD"),
-    delivery_send_status: str | None = Query(default=None, description="关联消息日志发送状态筛选：success/failed/unknown"),
+    delivery_send_status: str | None = Query(default=None, description="关联消息日志发送状态筛选：success/failed/unknown/timeout"),
     page: int = Query(default=1, ge=1, description="页码"),
     page_size: int = Query(default=20, ge=1, le=100, description="每页数量"),
     current_user: User = Depends(deps.get_current_active_user),
