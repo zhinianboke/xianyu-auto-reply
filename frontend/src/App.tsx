@@ -14,11 +14,11 @@ import type { DisclaimerSettings } from '@/types'
 // 登录/注册/激活码页面保持同步导入（首屏必需）
 import { Login } from '@/pages/auth/Login'
 import { Register } from '@/pages/auth/Register'
+import { ForgotPassword } from '@/pages/auth/ForgotPassword'
 import { GetActivation } from '@/pages/auth/GetActivation'
 import { RenewActivation } from '@/pages/auth/RenewActivation'
 import { GetLocalVersion } from '@/pages/auth/GetLocalVersion'
 import { GetSourceCode } from '@/pages/auth/GetSourceCode'
-import { ForgotPassword } from '@/pages/auth/ForgotPassword'
 
 // 页面组件懒加载，按需加载提升首屏速度
 const Dashboard = React.lazy(() => import('@/pages/dashboard/Dashboard').then(m => ({ default: m.Dashboard })))

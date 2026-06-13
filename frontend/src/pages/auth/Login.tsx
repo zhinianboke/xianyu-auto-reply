@@ -550,21 +550,17 @@ export function Login() {
               </button>
             </form>
 
-            {/* Register link */}
-            <p className="text-center mt-6 text-slate-500 dark:text-slate-400 text-sm">
+            {/* Forgot password + Register links */}
+            <div className="flex items-center justify-between mt-6 text-sm">
+              <Link to="/forgot-password" className="text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400">
+                忘记密码?
+              </Link>
               {registrationEnabled && (
-                <>
-                还没有账号？{' '}
                 <Link to="/register" className="text-blue-600 dark:text-blue-400 font-medium hover:text-blue-700 dark:hover:text-blue-300">
                   立即注册
                 </Link>
-                </>
               )}
-              {registrationEnabled && ' | '}
-              <Link to="/forgot-password" className="text-blue-600 dark:text-blue-400 font-medium hover:text-blue-700 dark:hover:text-blue-300">
-                忘记密码
-              </Link>
-            </p>
+            </div>
 
             {/* Default credentials */}
             {showDefaultLogin && (

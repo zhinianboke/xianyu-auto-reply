@@ -8,27 +8,24 @@
 4. 用户登出
 """
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
-from app.core.config import get_settings
 from app.core.security import decode_token
 from common.models.user import User, UserRole, UserStatus
-from common.schemas.auth import LoginRequest, LoginResponse, Token, VerifyResponse
+from common.schemas.auth import LoginRequest, LoginResponse, VerifyResponse
 from common.schemas.common import ApiResponse
-from common.schemas.user import UserCreate, UserPublic
+from common.schemas.user import UserCreate, UserPublic, UserUpdate
 from app.services.auth import AuthService
 from app.services.user_service import UserService
-from pydantic import BaseModel, EmailStr
-from typing import Optional
 
 router = APIRouter(tags=["auth"])
 
 
 class ResetPasswordRequest(BaseModel):
     """重置密码请求"""
-    email: EmailStr
+    email: str
     verification_code: str
     new_password: str
 
@@ -191,25 +188,6 @@ async def refresh_token(
     )
 
 
-@router.post("/token", response_model=Token)
-async def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    auth_service: AuthService = Depends(deps.get_auth_service),
-) -> Token:
-    """OAuth2兼容的令牌获取接口"""
-    user, error_message = await auth_service.authenticate_by_username(form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=error_message or "Incorrect username or password",
-        )
-    settings = get_settings()
-    return Token(
-        access_token=auth_service.create_access_token(user),
-        expires_in=settings.access_token_expire_minutes * 60,
-    )
-
-
 @router.get("/check-default-password", response_model=ApiResponse)
 async def check_default_password(
     current_user: User = Depends(deps.get_current_admin_user),
@@ -264,11 +242,16 @@ async def reset_password(
 ) -> ApiResponse:
     """重置密码（通过邮箱验证码）"""
     from app.api.routes.captcha import check_email_code
+    from app.core.security import get_password_hash
 
     # 验证邮箱验证码
     code_valid, code_msg = check_email_code(payload.email, payload.verification_code, "reset_password")
     if not code_valid:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=code_msg)
+
+    # 验证新密码长度
+    if len(payload.new_password) < 6:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码长度不能少于6位")
 
     # 查找用户
     user_service = UserService(session)
@@ -277,9 +260,7 @@ async def reset_password(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="该邮箱未注册")
 
     # 更新密码
-    from app.core import security
-    user.password_hash = security.get_password_hash(payload.new_password)
-    await session.flush()
-    await session.commit()
+    user.password_hash = get_password_hash(payload.new_password)
+    await user_service.update(user, UserUpdate())
 
     return ApiResponse(success=True, message="密码重置成功")

@@ -38,7 +38,7 @@ class SendCodeRequest(BaseModel):
     """发送邮箱验证码请求"""
     email: EmailStr
     session_id: Optional[str] = None
-    type: str = "register"  # register 或 login
+    type: str = "register"  # register, login 或 reset_password
 
 
 # ==================== 工具函数 ====================
