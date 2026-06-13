@@ -258,6 +258,13 @@ async def send_email_verification_code(
                     success=False,
                     message="该邮箱未注册"
                 )
+        elif request.type == "reset_password":
+            existing_user = await user_service.get_by_email(request.email)
+            if not existing_user:
+                return ApiResponse(
+                    success=False,
+                    message="该邮箱未注册"
+                )
         
         # 检查发送频率（1分钟内只能发送一次）
         stored = email_code_store.get(request.email)

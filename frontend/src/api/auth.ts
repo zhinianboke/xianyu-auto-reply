@@ -168,3 +168,17 @@ export const geetestValidate = (data: {
 export const checkAdminDefaultPassword = (): Promise<ApiResponse<{ is_default: boolean }>> => {
   return get(`${AUTH_PREFIX}/check-default-password`)
 }
+
+// 发送重置密码验证码
+export const sendResetPasswordCode = async (email: string, sessionId: string): Promise<ApiResponse> => {
+  return post(`${CAPTCHA_PREFIX}/send-email-code`, { email, type: 'reset_password', session_id: sessionId })
+}
+
+// 重置密码
+export const resetPassword = (data: {
+  email: string
+  verification_code: string
+  new_password: string
+}): Promise<ApiResponse> => {
+  return post(`${AUTH_PREFIX}/reset-password`, data)
+}

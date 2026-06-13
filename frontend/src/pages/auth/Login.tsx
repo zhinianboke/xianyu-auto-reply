@@ -551,14 +551,20 @@ export function Login() {
             </form>
 
             {/* Register link */}
-            {registrationEnabled && (
-              <p className="text-center mt-6 text-slate-500 dark:text-slate-400 text-sm">
+            <p className="text-center mt-6 text-slate-500 dark:text-slate-400 text-sm">
+              {registrationEnabled && (
+                <>
                 还没有账号？{' '}
                 <Link to="/register" className="text-blue-600 dark:text-blue-400 font-medium hover:text-blue-700 dark:hover:text-blue-300">
                   立即注册
                 </Link>
-              </p>
-            )}
+                </>
+              )}
+              {registrationEnabled && ' | '}
+              <Link to="/forgot-password" className="text-blue-600 dark:text-blue-400 font-medium hover:text-blue-700 dark:hover:text-blue-300">
+                忘记密码
+              </Link>
+            </p>
 
             {/* Default credentials */}
             {showDefaultLogin && (

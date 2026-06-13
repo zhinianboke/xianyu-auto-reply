@@ -20,8 +20,17 @@ from common.schemas.common import ApiResponse
 from common.schemas.user import UserCreate, UserPublic
 from app.services.auth import AuthService
 from app.services.user_service import UserService
+from pydantic import BaseModel, EmailStr
+from typing import Optional
 
 router = APIRouter(tags=["auth"])
+
+
+class ResetPasswordRequest(BaseModel):
+    """重置密码请求"""
+    email: EmailStr
+    verification_code: str
+    new_password: str
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -246,3 +255,31 @@ async def register_user(
     
     await user_service.create(payload)
     return ApiResponse(success=True, message="注册成功")
+
+
+@router.post("/reset-password", response_model=ApiResponse)
+async def reset_password(
+    payload: ResetPasswordRequest,
+    session: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """重置密码（通过邮箱验证码）"""
+    from app.api.routes.captcha import check_email_code
+
+    # 验证邮箱验证码
+    code_valid, code_msg = check_email_code(payload.email, payload.verification_code, "reset_password")
+    if not code_valid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=code_msg)
+
+    # 查找用户
+    user_service = UserService(session)
+    user = await user_service.get_by_email(payload.email)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="该邮箱未注册")
+
+    # 更新密码
+    from app.core import security
+    user.password_hash = security.get_password_hash(payload.new_password)
+    await session.flush()
+    await session.commit()
+
+    return ApiResponse(success=True, message="密码重置成功")

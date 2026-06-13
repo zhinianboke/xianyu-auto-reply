@@ -18,6 +18,7 @@ import { GetActivation } from '@/pages/auth/GetActivation'
 import { RenewActivation } from '@/pages/auth/RenewActivation'
 import { GetLocalVersion } from '@/pages/auth/GetLocalVersion'
 import { GetSourceCode } from '@/pages/auth/GetSourceCode'
+import { ForgotPassword } from '@/pages/auth/ForgotPassword'
 
 // 页面组件懒加载，按需加载提升首屏速度
 const Dashboard = React.lazy(() => import('@/pages/dashboard/Dashboard').then(m => ({ default: m.Dashboard })))
@@ -304,6 +305,7 @@ function App() {
           {/* Public routes */}
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/get-activation" element={<GetActivation />} />
           <Route path="/renew-activation" element={<RenewActivation />} />
           <Route path="/get-local-version" element={<GetLocalVersion />} />
