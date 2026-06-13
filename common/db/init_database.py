@@ -1242,7 +1242,8 @@ class DatabaseInitializer:
                 INDEX idx_arml_owner_status_created (owner_id, process_status, created_at),
                 INDEX idx_arml_status_created (process_status, created_at),
                 INDEX idx_arml_status_strategy_created (process_status, reply_strategy, created_at),
-                INDEX idx_arml_strategy_created (reply_strategy, created_at)
+                INDEX idx_arml_strategy_created (reply_strategy, created_at),
+                INDEX idx_arml_order_strategy_id (order_no, reply_strategy, id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='自动回复消息日志表';
         """,
 
@@ -2569,6 +2570,24 @@ class DatabaseInitializer:
                         logger.info("✓ xy_auto_reply_message_logs: 创建 idx_order_no 索引")
                 except Exception as e:
                     logger.warning(f"✗ xy_auto_reply_message_logs idx_order_no 创建失败: {e}")
+
+                # 补建 (order_no, reply_strategy, id) 复合索引 —— 加速「按订单号+回复策略取最新一条日志」的查询
+                # （订单列表关联自动发货发送状态：WHERE reply_strategy='auto_delivery' AND order_no IN (...) GROUP BY order_no, MAX(id)）
+                try:
+                    check = text("""
+                        SELECT COUNT(*) FROM information_schema.STATISTICS
+                        WHERE TABLE_SCHEMA = DATABASE()
+                        AND TABLE_NAME = 'xy_auto_reply_message_logs'
+                        AND INDEX_NAME = 'idx_arml_order_strategy_id'
+                    """)
+                    result = await conn.execute(check)
+                    if result.scalar() == 0:
+                        await conn.execute(text(
+                            "ALTER TABLE xy_auto_reply_message_logs ADD INDEX idx_arml_order_strategy_id (order_no, reply_strategy, id)"
+                        ))
+                        logger.info("✓ xy_auto_reply_message_logs: 创建 idx_arml_order_strategy_id 复合索引")
+                except Exception as e:
+                    logger.warning(f"✗ xy_auto_reply_message_logs idx_arml_order_strategy_id 创建失败: {e}")
 
             # 为 xy_dock_records 补建 (source_user_id, level) 复合索引 —— 加速二级分销商列表查询
             try:
