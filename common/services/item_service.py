@@ -236,7 +236,7 @@ class ItemService:
         count = result.get("current_count") or len(items)
 
         try:
-            saved_count = await self.save_fetched_items(account, items)
+            saved_count, _ = await self.save_fetched_items(account, items)
         except Exception as exc:
             await self.session.rollback()
             return {"success": False, "message": f"保存商品失败: {exc}"}
@@ -370,7 +370,7 @@ class ItemService:
                 )
 
                 try:
-                    saved_count = await self.save_fetched_items(
+                    saved_count, page_changed_count = await self.save_fetched_items(
                         account,
                         items,
                     )
@@ -387,15 +387,18 @@ class ItemService:
                     f"命中目标商品={page_matches_required_title}"
                 )
 
+                # 仅当本页全部商品已存在且无实际字段变更（如价格/标题变化）时才停止翻页；
+                # 若有商品被更新（如卖家在闲鱼改价），需继续翻页以免遗漏更早商品的变更。
                 if (
                     stop_when_page_all_existing
                     and page_all_existing
+                    and page_changed_count == 0
                     and (
                         not normalized_required_title_keyword
                         or matched_required_title_keyword
                     )
                 ):
-                    logger.info(f"账号[{account.account_id}]商品同步命中整页已存在，停止继续获取后续页面")
+                    logger.info(f"账号[{account.account_id}]商品同步命中整页已存在且无字段变更，停止继续获取后续页面")
                     break
 
                 if len(items) < page_size:
@@ -507,78 +510,75 @@ class ItemService:
         self,
         account: XYAccount,
         items: list[dict],
-    ) -> int:
+    ) -> tuple[int, int]:
         """保存抓取到的商品数据到本地库（逐个商品独立提交）
 
-        采用"一个商品一次提交"的方式：每个商品单独 commit，单个商品保存失败只
-        回滚并跳过它自己，不影响同一页其他商品入库。
-
-        并发兜底：当 Redis 锁不可用、多个同步流程同时为同一账号入库时，依赖
-        xy_catalog_items 的 (account_id, item_id) 唯一约束防止重复插入；若插入
-        命中唯一约束（IntegrityError），回滚后改为"更新已存在记录"重试一次，
-        确保该商品数据不丢失也不重复。
+        返回 (保存成功的商品数, 有实际字段变更的商品数)。
         """
         valid_items, _ = self._collect_valid_item_entries(items)
         if not valid_items:
-            return 0
+            return 0, 0
 
         saved_count = 0
+        changed_count = 0
         for item_id, item in valid_items:
-            if await self._save_single_item(account, item_id, item):
+            success, has_changes = await self._save_single_item(account, item_id, item)
+            if success:
                 saved_count += 1
+            if has_changes:
+                changed_count += 1
 
-        return saved_count
+        return saved_count, changed_count
 
     async def _save_single_item(
         self,
         account: XYAccount,
         item_id: str,
         item: dict,
-    ) -> bool:
+    ) -> tuple[bool, bool]:
         """保存单个商品并独立提交（更新或新增）。
 
-        返回是否保存成功；单个商品失败只回滚自身，不抛出异常，由调用方继续处理
-        其余商品。命中唯一约束时回滚并转为更新重试一次。
-
-        说明：每个商品在自己的事务内先实时查询是否已存在，再决定更新或新增，
-        避免跨事务复用可能被 rollback 失效（expired）的 ORM 对象引发异步懒加载问题。
+        返回 (是否保存成功, 是否有实际字段变更)；
+        单个商品失败只回滚自身，不抛出异常，由调用方继续处理其余商品。
         """
         try:
-            await self._apply_single_item(account, item_id, item)
-            await self.session.commit()
-            return True
+            has_changes = await self._apply_single_item(account, item_id, item)
+            if has_changes:
+                await self.session.commit()
+            return True, has_changes
         except IntegrityError:
-            # 并发兜底：另一个同步流程已抢先插入同一商品，回滚后重查并转为更新
             await self.session.rollback()
             logger.info(
                 f"账号[{account.account_id}]商品 {item_id} 保存命中唯一约束，转为更新已存在记录后重试"
             )
             try:
-                await self._apply_single_item(account, item_id, item)
-                await self.session.commit()
-                return True
+                has_changes = await self._apply_single_item(account, item_id, item)
+                if has_changes:
+                    await self.session.commit()
+                return True, has_changes
             except Exception as exc:
                 await self.session.rollback()
                 logger.warning(
                     f"账号[{account.account_id}]商品 {item_id} 重试更新仍失败，跳过该商品: {exc}"
                 )
-                return False
+                return False, False
         except Exception as exc:
             await self.session.rollback()
             logger.warning(
                 f"账号[{account.account_id}]商品 {item_id} 保存失败，跳过该商品: {exc}"
             )
-            return False
+            return False, False
 
     async def _apply_single_item(
         self,
         account: XYAccount,
         item_id: str,
         item: dict,
-    ) -> None:
+    ) -> bool:
         """将单个商品写入会话（更新或新增），不提交。
 
         每次都在当前事务内实时查询已存在记录，保证拿到的是当前事务可用的对象。
+        返回 True 表示有实际变更（新增或字段值变化），False 表示无需更新。
         """
         category = str(item.get("category_id", ""))
 
@@ -590,13 +590,22 @@ class ItemService:
         existing_item = (await self.session.execute(stmt)).scalars().first()
 
         if existing_item:
-            existing_item.title = item.get("title", "")
-            existing_item.price = item.get("price_text", "")
+            new_title = item.get("title", "")
+            new_price = item.get("price_text", "")
+            changed = False
+            if existing_item.title != new_title:
+                existing_item.title = new_title
+                changed = True
+            if existing_item.price != new_price:
+                existing_item.price = new_price
+                changed = True
             metadata_json = existing_item.metadata_json or {}
-            metadata_json["category"] = category
-            existing_item.metadata_json = metadata_json
-            flag_modified(existing_item, "metadata_json")
-            return
+            if metadata_json.get("category") != category:
+                metadata_json["category"] = category
+                existing_item.metadata_json = metadata_json
+                flag_modified(existing_item, "metadata_json")
+                changed = True
+            return changed
 
         new_item = XYCatalogItem(
             owner_id=account.owner_id,
@@ -613,6 +622,7 @@ class ItemService:
             created_at=datetime.now(timezone.utc),
         )
         self.session.add(new_item)
+        return True
     
     async def _get_default_reply_status_batch(self, items_data: list) -> Dict[tuple, dict]:
         """批量获取商品默认回复状态

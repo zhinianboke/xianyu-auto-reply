@@ -698,6 +698,9 @@ class OrderService:
         '交易成功': 'completed',
         '交易关闭': 'cancelled',
         '退款中': 'refunding',
+        '退款成功': 'refunded',
+        '已退款': 'refunded',
+        '退款关闭': 'cancelled',
     }
     _XIANYU_ORDER_PAGE_SIZE = 30
 
@@ -897,6 +900,7 @@ class OrderService:
                 and len(existing_orders_map) == len(unique_order_nos)
             )
 
+            page_updated = 0
             for parsed in parsed_items:
                 try:
                     result = await self._upsert_order(
@@ -909,6 +913,7 @@ class OrderService:
                         new_inserted += 1
                     elif result == 'updated':
                         updated += 1
+                        page_updated += 1
                 except Exception as e:
                     await self.session.rollback()
                     failed += 1
@@ -919,8 +924,10 @@ class OrderService:
                 f"累计{total_fetched}条, 总数{total_count}, 全页已存在={page_all_existing}"
             )
 
-            if page_all_existing:
-                logger.info(f"获取闲鱼订单: 第{page}页订单已全部存在，停止继续获取更早页")
+            # 仅当本页全部订单已存在且无状态变更时才停止翻页；
+            # 若有订单被更新（如退款导致状态变更），需继续翻页以免遗漏更早订单的状态变化。
+            if page_all_existing and page_updated == 0:
+                logger.info(f"获取闲鱼订单: 第{page}页订单已全部存在且无状态变更，停止继续获取更早页")
                 break
 
             if not next_page or page >= total_pages:
