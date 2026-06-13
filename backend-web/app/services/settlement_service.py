@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 from decimal import Decimal
 from typing import Any, Dict
@@ -14,6 +16,7 @@ from typing import Any, Dict
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from common.models.fund_flow import FundFlow
 from common.models.settlement_record import SettlementRecord
 from common.models.user_setting import UserSetting
@@ -257,35 +260,38 @@ async def get_withdraw_notify_email() -> str:
 
 
 def generate_review_token(record_id: int, action: str) -> str:
-    """生成审核令牌，用于验证邮件中的审核链接
-    
+    """生成提现审核令牌，用于校验邮件中的审核链接
+
+    安全设计：
+    - 使用运行期 JWT 密钥（security.jwt_secret_key，由数据库统一托管的强随机值，
+      不存在于源码中）作为 HMAC 密钥，避免硬编码密钥被任何能读到源码的人伪造令牌；
+    - 采用 HMAC-SHA256 签名，取前 32 个十六进制字符。
+
     Args:
         record_id: 结算记录ID
         action: 审核动作（approve/reject）
-    
+
     Returns:
         令牌字符串
     """
-    import hashlib
-    # 使用简单的哈希作为签名，包含记录ID和动作
-    secret = "xianyu_withdraw_review_2024"
-    data = f"{record_id}:{action}:{secret}"
-    return hashlib.sha256(data.encode()).hexdigest()[:32]
+    secret = get_settings().jwt_secret_key.encode()
+    data = f"{record_id}:{action}".encode()
+    return hmac.new(secret, data, hashlib.sha256).hexdigest()[:32]
 
 
 def verify_review_token(record_id: int, action: str, token: str) -> bool:
-    """验证审核令牌
-    
+    """校验提现审核令牌（使用常量时间比较，防止时序攻击）
+
     Args:
         record_id: 结算记录ID
         action: 审核动作
-        token: 待验证的令牌
-    
+        token: 待校验的令牌
+
     Returns:
-        是否验证通过
+        是否校验通过
     """
     expected = generate_review_token(record_id, action)
-    return token == expected
+    return hmac.compare_digest(expected, token or "")
 
 
 async def review_withdraw_record(record_id: int, action: str, token: str, reject_reason: str = '') -> Dict[str, Any]:

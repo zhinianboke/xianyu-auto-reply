@@ -119,23 +119,94 @@ async def review_withdraw(
     reject：显示填写拒绝原因的 HTML 表单页面。
     """
     from fastapi.responses import HTMLResponse
-    from app.services.settlement_service import review_withdraw_record, verify_review_token
+    from app.services.settlement_service import verify_review_token
 
     if action == 'approve':
-        result = await review_withdraw_record(id, action, token)
-        # 返回简单的 HTML 结果页
-        color = '#10b981' if result.get('success') else '#ef4444'
-        msg = result.get('message', '')
-        html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>审核结果</title></head>
+        # 安全：GET 请求不直接变更审核状态，避免邮件预取/链接扫描器误触发通过审批。
+        # 先校验令牌，再展示二次确认页面，由管理员点击按钮以 POST 方式真正执行通过。
+        if not verify_review_token(id, 'approve', token):
+            html = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>错误</title></head>
+<body style="font-family:sans-serif;text-align:center;padding:60px;color:#ef4444">
+<h2>无效的审核令牌</h2></body></html>"""
+            return HTMLResponse(content=html, status_code=400)
+
+        html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>通过提现申请</title></head>
 <body style="font-family:sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f4f7fa;">
-<div style="background:#fff;border-radius:16px;padding:40px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.08);max-width:400px;width:90%">
-<div style="width:64px;height:64px;border-radius:50%;background:{color};margin:0 auto 20px;display:flex;align-items:center;justify-content:center">
-<span style="color:#fff;font-size:28px">{'✓' if result.get('success') else '✗'}</span></div>
-<h2 style="margin:0 0 12px;color:#1a1a2e">{msg}</h2>
-<p style="color:#6b7280;font-size:14px">可关闭此页面</p>
-</div></body></html>"""
+<div style="background:#fff;border-radius:16px;padding:40px;box-shadow:0 4px 24px rgba(0,0,0,.08);max-width:440px;width:90%">
+  <div style="width:64px;height:64px;border-radius:50%;background:#10b981;margin:0 auto 20px;display:flex;align-items:center;justify-content:center">
+    <span style="color:#fff;font-size:28px">✓</span>
+  </div>
+  <h2 style="text-align:center;margin:0 0 24px;color:#1a1a2e">通过提现申请 #{id}</h2>
+  <div id="form-area">
+    <p style="color:#374151;font-size:14px;text-align:center;margin-bottom:20px">请确认通过该提现申请，确认后将进入打款流程。</p>
+    <div id="err-msg" style="display:none;color:#ef4444;font-size:13px;margin-bottom:12px;text-align:center"></div>
+    <div style="display:flex;gap:12px">
+      <button id="cancelBtn" type="button" onclick="history.back()"
+        style="flex:1;padding:12px;background:#f3f4f6;border:none;border-radius:8px;font-size:15px;cursor:pointer;color:#374151">取消</button>
+      <button id="submitBtn" type="button" onclick="doApprove()"
+        style="flex:1;padding:12px;background:#10b981;border:none;border-radius:8px;font-size:15px;cursor:pointer;color:#fff;font-weight:600">确认通过</button>
+    </div>
+  </div>
+  <div id="result-area" style="display:none;text-align:center">
+    <div id="result-icon" style="font-size:48px;margin-bottom:16px"></div>
+    <h3 id="result-msg" style="margin:0 0 8px;color:#1a1a2e"></h3>
+    <p style="color:#6b7280;font-size:14px">可关闭此页面</p>
+  </div>
+</div>
+<script>
+function doApprove() {{
+  var btn = document.getElementById('submitBtn');
+  var cancelBtn = document.getElementById('cancelBtn');
+  var errEl = document.getElementById('err-msg');
+  errEl.style.display = 'none';
+  btn.disabled = true;
+  btn.textContent = '处理中...';
+  btn.style.opacity = '0.6';
+  btn.style.cursor = 'not-allowed';
+  cancelBtn.disabled = true;
+  cancelBtn.style.opacity = '0.4';
+  cancelBtn.style.cursor = 'not-allowed';
+  var body = new URLSearchParams();
+  body.append('id', '{id}');
+  body.append('token', '{token}');
+  fetch('/api/v1/payment/withdraw/approve', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+    body: body.toString()
+  }})
+  .then(function(r) {{ return r.json(); }})
+  .then(function(data) {{
+    document.getElementById('form-area').style.display = 'none';
+    var ra = document.getElementById('result-area');
+    ra.style.display = 'block';
+    var icon = document.getElementById('result-icon');
+    var msg = document.getElementById('result-msg');
+    if (data.success) {{
+      icon.textContent = '✅';
+      msg.textContent = data.message || '操作成功';
+      msg.style.color = '#10b981';
+    }} else {{
+      icon.textContent = '❌';
+      msg.textContent = data.message || '操作失败';
+      msg.style.color = '#ef4444';
+    }}
+  }})
+  .catch(function(e) {{
+    btn.disabled = false;
+    btn.textContent = '确认通过';
+    btn.style.opacity = '1';
+    btn.style.cursor = 'pointer';
+    cancelBtn.disabled = false;
+    cancelBtn.style.opacity = '1';
+    cancelBtn.style.cursor = 'pointer';
+    errEl.textContent = '网络错误，请重试';
+    errEl.style.display = 'block';
+  }});
+}}
+</script>
+</body></html>"""
         return HTMLResponse(content=html)
 
     # reject：先验证 token，再展示填写原因的表单
@@ -229,6 +300,23 @@ function doReject() {{
 </script>
 </div></body></html>"""
     return HTMLResponse(content=html)
+
+
+@router.post("/withdraw/approve")
+async def do_approve_withdraw(request: Request):
+    """处理通过提现的二次确认提交（POST），返回 JSON 供前端 fetch 使用
+
+    安全：通过审批必须经由 POST 执行，配合令牌校验，避免 GET 链接被预取/扫描误触发。
+    """
+    from app.services.settlement_service import review_withdraw_record
+    from fastapi.responses import JSONResponse
+
+    form = await request.form()
+    record_id = int(form.get('id', 0))
+    token = str(form.get('token', ''))
+
+    result = await review_withdraw_record(record_id, 'approve', token)
+    return JSONResponse(content=result)
 
 
 @router.post("/withdraw/reject")

@@ -5,7 +5,7 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { X } from 'lucide-react'
-import { getSubDealerDetails, disableSubDealer } from '@/api/distribution'
+import { getSubDealerDetails, disableSubDealer, enableSubDealer } from '@/api/distribution'
 import type { DockRecord, Dealer } from '@/api/distribution'
 import { useUIStore } from '@/store/uiStore'
 import { PageLoading } from '@/components/common/Loading'
@@ -72,6 +72,22 @@ export function SubDealerDetailModal({ isOpen, onClose, dealer, onDataChange }: 
       const result = await disableSubDealer(record.id, '一级分销商禁用')
       if (result.success) {
         addToast({ type: 'success', message: '已禁用' })
+        loadData(page, pageSize)
+        onDataChange?.()
+      } else {
+        addToast({ type: 'error', message: result.message || '操作失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '操作失败' })
+    }
+  }
+
+  // 启用（恢复）对接记录
+  const handleEnable = async (record: DockRecord) => {
+    try {
+      const result = await enableSubDealer(record.id)
+      if (result.success) {
+        addToast({ type: 'success', message: '已启用' })
         loadData(page, pageSize)
         onDataChange?.()
       } else {
@@ -214,13 +230,21 @@ export function SubDealerDetailModal({ isOpen, onClose, dealer, onDataChange }: 
                           {record.created_at ? new Date(record.created_at).toLocaleString('zh-CN') : '-'}
                         </td>
                         <td>
-                          {record.status && (
+                          {record.status ? (
                             <button
                               onClick={() => handleDisable(record)}
                               className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
                               title="禁用此对接记录"
                             >
                               禁用
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleEnable(record)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/40 transition-colors"
+                              title="启用此对接记录"
+                            >
+                              启用
                             </button>
                           )}
                         </td>

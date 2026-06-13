@@ -74,17 +74,22 @@ class DockRecordService:
         user_id: int,
         is_admin: bool = False,
         **kwargs,
-    ) -> bool:
-        """更新对接记录
-        
+    ) -> tuple[bool, str]:
+        """更新对接记录（分销商自助更新 / 管理员更新）
+
         Args:
             record_id: 记录ID
             user_id: 用户ID（权限校验）
             is_admin: 是否管理员，管理员可操作任意用户的对接记录
             **kwargs: 要更新的字段
-            
+
         Returns:
-            是否更新成功
+            (是否成功, 提示信息)
+
+        说明：
+        - owner_disabled 为上级锁定标记，分销商无法通过本方法修改它，
+          且被上级禁用（owner_disabled=True）的记录，分销商不能自行启用；
+        - 仅管理员启用时可解除上级锁定。
         """
         # 非管理员仅能操作本人记录；管理员不限制归属
         conditions = [DockRecord.id == record_id]
@@ -94,14 +99,26 @@ class DockRecordService:
         result = await self.session.execute(stmt)
         record = result.scalar_one_or_none()
         if not record:
-            return False
+            return False, "对接记录不存在或无权限"
 
+        # 上级锁定保护：被上级禁用的记录，分销商不能自行启用
+        if 'status' in kwargs and bool(kwargs['status']):
+            if record.owner_disabled and not is_admin:
+                return False, "该对接记录已被上级禁用，无法自行启用，请联系上级分销商"
+            # 管理员启用时解除上级锁定
+            if is_admin:
+                record.owner_disabled = False
+
+        # owner_disabled 只能由上级/管理员逻辑控制，禁止经普通更新被篡改
+        protected_fields = {'owner_disabled'}
         for key, value in kwargs.items():
+            if key in protected_fields:
+                continue
             if hasattr(record, key):
                 setattr(record, key, value)
 
         await self.session.commit()
-        return True
+        return True, "更新成功"
 
     async def update_dock_record_by_owner(
         self,
@@ -140,6 +157,10 @@ class DockRecordService:
         for key, value in kwargs.items():
             if key in allowed_fields and hasattr(record, key):
                 setattr(record, key, value)
+
+        # 同步上级锁定标记：上级禁用 → 锁定；上级启用 → 解除锁定
+        if 'status' in kwargs:
+            record.owner_disabled = not bool(kwargs['status'])
 
         await self.session.commit()
         return True
@@ -314,6 +335,7 @@ class DockRecordService:
             "delivery_count": record.delivery_count,
             "status": record.status,
             "disable_reason": record.disable_reason,
+            "owner_disabled": record.owner_disabled,
             "level": record.level,
             "parent_dock_id": record.parent_dock_id,
             "source_user_id": record.source_user_id,
@@ -886,6 +908,8 @@ class DockRecordService:
         # 更新目标记录状态
         record.status = status
         record.disable_reason = disable_reason if not status else None
+        # 同步上级锁定标记：上级禁用 → 锁定，分销商不可自行启用；上级启用 → 解除锁定
+        record.owner_disabled = not status
 
         cascade_count = 0
 
@@ -901,6 +925,7 @@ class DockRecordService:
             for sub in sub_records:
                 sub.status = False
                 sub.disable_reason = "上级分销商被禁用"
+                sub.owner_disabled = True
                 cascade_count += 1
 
         await self.session.commit()
@@ -1015,7 +1040,42 @@ class DockRecordService:
 
         record.status = False
         record.disable_reason = disable_reason or "一级分销商禁用"
+        record.owner_disabled = True
         await self.session.commit()
         logger.info(f"一级分销商 {source_user_id} 禁用下级对接记录 {record_id}")
+        return True
+
+    async def enable_sub_dealer_record(
+        self,
+        record_id: int,
+        source_user_id: int,
+    ) -> bool:
+        """一级分销商启用（恢复）下级分销商的对接记录
+
+        与 disable_sub_dealer_record 对称：作为上级解除对该二级记录的禁用锁定，
+        使下级可正常使用。仅记录所属的一级分销商可操作。
+
+        Args:
+            record_id: 二级对接记录ID
+            source_user_id: 一级分销商用户ID（权限校验）
+
+        Returns:
+            是否操作成功
+        """
+        stmt = select(DockRecord).where(
+            DockRecord.id == record_id,
+            DockRecord.level == 2,
+            DockRecord.source_user_id == source_user_id,
+        )
+        result = await self.session.execute(stmt)
+        record = result.scalar_one_or_none()
+        if not record:
+            return False
+
+        record.status = True
+        record.disable_reason = None
+        record.owner_disabled = False
+        await self.session.commit()
+        logger.info(f"一级分销商 {source_user_id} 启用下级对接记录 {record_id}")
         return True
 

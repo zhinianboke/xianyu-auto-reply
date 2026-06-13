@@ -137,9 +137,9 @@ async def update_dock_record(
     """更新对接记录"""
     _, is_admin = resolve_owner_scope(current_user)
     update_data = data.model_dump(exclude_unset=True)
-    success = await service.update_dock_record(record_id, current_user.id, is_admin=is_admin, **update_data)
+    success, message = await service.update_dock_record(record_id, current_user.id, is_admin=is_admin, **update_data)
     if not success:
-        return ApiResponse(success=False, message="对接记录不存在或无权限")
+        return ApiResponse(success=False, message=message)
     return ApiResponse(success=True, message="更新成功")
 
 
@@ -422,6 +422,22 @@ async def disable_sub_dealer(
     if not success:
         return ApiResponse(success=False, message="对接记录不存在或无权限")
     return ApiResponse(success=True, message="禁用成功")
+
+
+@router.put("/sub-dealers/{record_id}/enable", response_model=ApiResponse)
+async def enable_sub_dealer(
+    record_id: int,
+    current_user: User = Depends(deps.get_current_active_user),
+    service: DockRecordService = Depends(get_dock_record_service),
+) -> ApiResponse:
+    """一级分销商启用（恢复）下级分销商的对接记录"""
+    success = await service.enable_sub_dealer_record(
+        record_id=record_id,
+        source_user_id=current_user.id,
+    )
+    if not success:
+        return ApiResponse(success=False, message="对接记录不存在或无权限")
+    return ApiResponse(success=True, message="启用成功")
 
 
 @router.get("/sub-dealers/{dealer_user_id}/details")

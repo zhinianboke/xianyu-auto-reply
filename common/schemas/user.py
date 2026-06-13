@@ -29,10 +29,10 @@ class AdminUserCreate(UserBase):
 
 
 class UserUpdate(BaseModel):
+    # 用户自助更新模型：禁止包含 role / status 等提权敏感字段。
+    # 角色、状态等只能由管理员通过 AdminUserUpdate 修改。
     email: Optional[EmailStr] = None
     phone: Optional[str] = Field(default=None, max_length=32)
-    status: Optional[UserStatus] = None
-    role: Optional[UserRole] = None
 
 
 class AdminUserUpdate(BaseModel):

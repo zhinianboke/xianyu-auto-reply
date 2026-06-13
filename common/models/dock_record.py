@@ -29,6 +29,9 @@ class DockRecord(Base):
     delivery_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment='发货次数')
     status: Mapped[bool] = mapped_column(Boolean, default=True, comment='对接状态：启用/停用')
     disable_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment='禁用原因')
+    # 上级锁定标记：由卡券拥有者/上级分销主禁用时置为 True，分销商自身无法将其重新启用，
+    # 仅上级（owner-update / cascade-status）或管理员可解除。用于防止下级覆盖上级的禁用决定。
+    owner_disabled: Mapped[bool] = mapped_column(Boolean, default=False, comment='是否被上级禁用锁定：1是 0否')
     
     # 二级分销字段
     level: Mapped[int] = mapped_column(Integer, default=1, nullable=False, comment='分销层级：1=一级分销，2=二级分销')

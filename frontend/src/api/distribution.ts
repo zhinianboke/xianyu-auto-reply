@@ -52,6 +52,7 @@ export interface DockRecord {
   delivery_count?: number  // 发货次数
   status: boolean
   disable_reason?: string  // 禁用原因
+  owner_disabled?: boolean // 是否被上级禁用锁定（true 时分销商不可自行启用）
   level?: number           // 分销层级：1=一级分销，2=二级分销
   parent_dock_id?: number  // 上级对接记录ID
   source_user_id?: number  // 上级分销商用户ID
@@ -354,6 +355,13 @@ export const disableSubDealer = (
   const params = new URLSearchParams()
   if (disableReason) params.append('disable_reason', disableReason)
   return put(`/api/v1/distribution/sub-dealers/${recordId}/disable?${params.toString()}`)
+}
+
+// 一级分销商启用（恢复）下级对接记录
+export const enableSubDealer = (
+  recordId: number,
+): Promise<ApiResponse> => {
+  return put(`/api/v1/distribution/sub-dealers/${recordId}/enable`)
 }
 
 

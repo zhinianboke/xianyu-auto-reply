@@ -34,28 +34,9 @@ async def read_current_user(current_user: User = Depends(deps.get_current_active
     return UserPublic.model_validate(current_user)
 
 
-@router.get("/", response_model=list[UserPublic])
-async def list_users(
-    user_service: UserService = Depends(deps.get_user_service),
-    limit: int = 50,
-    offset: int = 0,
-) -> list[UserPublic]:
-    safe_limit = max(1, min(limit, 100))
-    users = await user_service.list(limit=safe_limit, offset=max(offset, 0))
-    return [UserPublic.model_validate(user) for user in users]
-
-
-@router.patch("/{user_id}", response_model=UserPublic)
-async def update_user(
-    user_id: int,
-    payload: UserUpdate,
-    user_service: UserService = Depends(deps.get_user_service),
-) -> UserPublic:
-    user = await user_service.get(user_id)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    updated_user = await user_service.update(user, payload)
-    return UserPublic.model_validate(updated_user)
+# 说明：用户列表查询与用户信息（角色/状态等）修改，统一收口到带管理员鉴权的
+# /api/v1/admin/users 接口（见 app/api/routes/admin.py）。
+# 此处不再暴露无鉴权的 GET / 与 PATCH /{user_id}，避免越权枚举用户及提权风险。
 
 
 @router.post("/change-password", response_model=ApiResponse)

@@ -8,14 +8,12 @@
 4. 用户登出
 """
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
-from app.core.config import get_settings
 from app.core.security import decode_token
 from common.models.user import User, UserRole, UserStatus
-from common.schemas.auth import LoginRequest, LoginResponse, Token, VerifyResponse
+from common.schemas.auth import LoginRequest, LoginResponse, VerifyResponse
 from common.schemas.common import ApiResponse
 from common.schemas.user import UserCreate, UserPublic
 from app.services.auth import AuthService
@@ -179,25 +177,6 @@ async def refresh_token(
         username=user.username,
         is_admin=user.role == UserRole.ADMIN,
         account_limit=user.account_limit,
-    )
-
-
-@router.post("/token", response_model=Token)
-async def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    auth_service: AuthService = Depends(deps.get_auth_service),
-) -> Token:
-    """OAuth2兼容的令牌获取接口"""
-    user, error_message = await auth_service.authenticate_by_username(form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=error_message or "Incorrect username or password",
-        )
-    settings = get_settings()
-    return Token(
-        access_token=auth_service.create_access_token(user),
-        expires_in=settings.access_token_expire_minutes * 60,
     )
 
 
