@@ -17,6 +17,11 @@ from common.utils.image_utils import ImageManager, image_manager
 from common.utils.image_uploader import ImageUploader
 from common.utils.item_info_manager import ItemInfoManager
 from common.utils.logging_utils import InterceptHandler, setup_logging
+from common.utils.network_utils import (
+    resolve_listen_host,
+    DUAL_STACK_HOST,
+    IPV4_FALLBACK_HOST,
+)
 
 __all__ = [
     # xianyu_utils
@@ -36,4 +41,8 @@ __all__ = [
     # logging_utils
     "InterceptHandler",
     "setup_logging",
+    # network_utils
+    "resolve_listen_host",
+    "DUAL_STACK_HOST",
+    "IPV4_FALLBACK_HOST",
 ]

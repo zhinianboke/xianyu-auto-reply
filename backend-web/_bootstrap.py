@@ -27,6 +27,7 @@ from loguru import logger
 
 from app.core.config import get_settings
 from common.utils.logging_utils import setup_logging
+from common.utils.network_utils import resolve_listen_host
 
 faulthandler.enable()
 
@@ -309,10 +310,13 @@ async def global_exception_handler(request, exc):
 def run_server():
     """启动HTTP服务（供 main.py 的 __main__ 块调用）"""
     import uvicorn
-    
+
+    # 解析监听地址：默认 :: 双栈，Windows 或 IPv6 不可用时自动回退到 0.0.0.0
+    listen_host = resolve_listen_host(settings.host, settings.service_port)
+
     uvicorn.run(
         "main:app",
-        host=settings.host,  # 默认 "::" 双栈监听，可通过 HOST 环境变量覆盖
+        host=listen_host,
         port=settings.service_port,
         reload=False,
         log_level=settings.log_level.lower(),
