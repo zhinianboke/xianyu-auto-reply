@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, Optional
 from urllib.parse import quote, urlencode
 
@@ -25,6 +26,10 @@ from common.models.user_setting import UserSetting
 
 # 对接卡密秘钥在用户设置中的键名（迁移到个人设置后按用户存储）
 CARD_SECRET_KEY_SETTING = "distribution.card_secret_key"
+
+# Secret key cache: {user_id: (timestamp, secret_key)}
+_secret_key_cache: Dict[int, tuple[float, str]] = {}
+_SECRET_KEY_CACHE_TTL = 300  # 5 minutes
 
 # 上游代理端接口路径前缀
 _AGENT_PREFIX = "/api/card-product/agent"
@@ -61,14 +66,31 @@ class CardDockService:
         return f"{self.base_url}{_AGENT_PREFIX}{path}"
 
     async def _get_secret_key(self, user_id: int) -> str:
-        """从当前用户的个人设置读取对接卡密秘钥"""
+        """从当前用户的个人设置读取对接卡密秘钥（带 5 分钟 TTL 缓存）"""
+        now = time.time()
+        cached = _secret_key_cache.get(user_id)
+        if cached is not None:
+            ts, value = cached
+            if now - ts < _SECRET_KEY_CACHE_TTL:
+                return value
+
         stmt = select(UserSetting).where(
             UserSetting.user_id == user_id,
             UserSetting.key == CARD_SECRET_KEY_SETTING,
         )
         result = await self.session.execute(stmt)
         record = result.scalars().first()
-        return (record.value or "").strip() if record and record.value else ""
+        secret = (record.value or "").strip() if record and record.value else ""
+        _secret_key_cache[user_id] = (now, secret)
+        return secret
+
+    @staticmethod
+    def invalidate_secret_key_cache(user_id: int | None = None) -> None:
+        """清空秘钥缓存。传入 user_id 只清该用户，不传则清全部。"""
+        if user_id is not None:
+            _secret_key_cache.pop(user_id, None)
+        else:
+            _secret_key_cache.clear()
 
     @staticmethod
     def _fail(message: str, code: int = 400) -> Dict[str, Any]:
