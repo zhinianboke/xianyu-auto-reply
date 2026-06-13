@@ -20,6 +20,8 @@ from typing import Any, Dict, Optional
 
 import aiohttp
 from loguru import logger
+
+from common.utils.http_pool import http_pool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -121,18 +123,18 @@ async def get_api_card_content(
             params = _build_api_params(params, context or {})
 
         timeout_obj = aiohttp.ClientTimeout(total=timeout)
-        async with aiohttp.ClientSession() as http_session:
-            if method == 'GET':
-                async with http_session.get(url, headers=headers, params=params, timeout=timeout_obj) as response:
-                    status_code = response.status
-                    response_text = await response.text()
-            elif method == 'POST':
-                async with http_session.post(url, headers=headers, json=params, timeout=timeout_obj) as response:
-                    status_code = response.status
-                    response_text = await response.text()
-            else:
-                logger.error(f"不支持的HTTP方法: {method}")
-                return None
+        session = await http_pool.get_session()
+        if method == 'GET':
+            async with session.get(url, headers=headers, params=params, timeout=timeout_obj) as response:
+                status_code = response.status
+                response_text = await response.text()
+        elif method == 'POST':
+            async with session.post(url, headers=headers, json=params, timeout=timeout_obj) as response:
+                status_code = response.status
+                response_text = await response.text()
+        else:
+            logger.error(f"不支持的HTTP方法: {method}")
+            return None
 
         if status_code == 200:
             try:

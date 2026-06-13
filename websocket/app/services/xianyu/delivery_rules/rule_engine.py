@@ -2,12 +2,13 @@
 禁止发货规则引擎
 
 功能：
-1. 从数据库加载账号已启用的规则列表
+1. 从数据库加载账号已启用的规则列表（带 5 分钟 TTL 缓存）
 2. 按优先级顺序执行规则检查
 3. 首条命中即停，返回统一结果
 """
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from loguru import logger
@@ -18,6 +19,22 @@ from common.models.xy_delivery_block_rule import XYDeliveryBlockRule
 from app.services.xianyu.delivery_rules.base_rule import RuleCheckResult
 from app.services.xianyu.delivery_rules.context import DeliveryCheckContext
 from app.services.xianyu.delivery_rules.rule_registry import get_rule_instance
+
+# ---- TTL rule cache ----
+_RULE_CACHE_TTL = 300  # 5 minutes
+_rule_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+
+def clear_rule_cache(account_id: str | None = None) -> None:
+    """清除规则缓存
+
+    Args:
+        account_id: 指定账号则只清该账号缓存；None 清全部
+    """
+    if account_id is not None:
+        _rule_cache.pop(account_id, None)
+    else:
+        _rule_cache.clear()
 
 
 async def load_enabled_rules(account_id: str) -> list[dict[str, Any]]:
@@ -39,6 +56,13 @@ async def load_enabled_rules(account_id: str) -> list[dict[str, Any]]:
             'config': dict,
         }
     """
+    # Check cache first
+    cached = _rule_cache.get(account_id)
+    if cached is not None:
+        ts, rules = cached
+        if time.monotonic() - ts < _RULE_CACHE_TTL:
+            return rules
+
     try:
         async with async_session_maker() as session:
             stmt = (

@@ -58,14 +58,11 @@ class FetchOrdersTaskService:
 
             logger.info(f"【{self.task_name}】查询到 {len(accounts)} 个启用状态的账号")
 
-            # 2. 逐个账号获取订单
-            success_count = 0
-            failed_count = 0
-            total_fetched = 0
-            total_new = 0
-            total_updated = 0
+            # 2. 并发获取订单（最多 5 个账号同时进行）
+            semaphore = asyncio.Semaphore(5)
 
-            for account in accounts:
+            async def _process_account(account):
+                """处理单个账号（受信号量限制并发数）"""
                 # 检查账号是否处于Session过期冷却期内
                 from common.utils.cookie_refresh import is_account_session_cooled
                 if is_account_session_cooled(account.account_id):
@@ -73,42 +70,44 @@ class FetchOrdersTaskService:
                         f"【{self.task_name}】账号 {account.account_id} "
                         f"处于Session过期冷却期内，跳过"
                     )
-                    continue
+                    return {"success": True, "fetched": 0, "new": 0, "updated": 0, "skipped": True}
 
-                try:
-                    result = await self._fetch_orders_for_account(account)
-                    fetched = result.get("total_fetched", 0)
-                    new_inserted = result.get("new_inserted", 0)
-                    updated = result.get("updated", 0)
-                    errors = result.get("errors", [])
+                async with semaphore:
+                    try:
+                        result = await self._fetch_orders_for_account(account)
+                        fetched = result.get("total_fetched", 0)
+                        new_inserted = result.get("new_inserted", 0)
+                        updated = result.get("updated", 0)
+                        errors = result.get("errors", [])
 
-                    total_fetched += fetched
-                    total_new += new_inserted
-                    total_updated += updated
+                        if errors:
+                            logger.warning(
+                                f"【{self.task_name}】账号 {account.account_id} "
+                                f"获取订单有警告: {errors}"
+                            )
 
-                    if errors:
-                        logger.warning(
+                        logger.info(
                             f"【{self.task_name}】账号 {account.account_id} "
-                            f"获取订单有警告: {errors}"
+                            f"获取完成: 共{fetched}条, 新增{new_inserted}, 更新{updated}"
                         )
+                        return {"success": True, "fetched": fetched, "new": new_inserted, "updated": updated}
+                    except Exception as e:
+                        logger.error(
+                            f"【{self.task_name}】账号 {account.account_id} "
+                            f"获取订单失败: {e}"
+                        )
+                        return {"success": False, "fetched": 0, "new": 0, "updated": 0}
 
-                    success_count += 1
-                    logger.info(
-                        f"【{self.task_name}】账号 {account.account_id} "
-                        f"获取完成: 共{fetched}条, 新增{new_inserted}, 更新{updated}"
-                    )
-                except Exception as e:
-                    failed_count += 1
-                    logger.error(
-                        f"【{self.task_name}】账号 {account.account_id} "
-                        f"获取订单失败: {e}"
-                    )
+            results = await asyncio.gather(*[_process_account(a) for a in accounts])
 
-                # 账号间间隔2秒，避免请求过于密集
-                if account != accounts[-1]:
-                    await asyncio.sleep(2)
+            # 3. 汇总结果
+            success_count = sum(1 for r in results if r["success"])
+            failed_count = sum(1 for r in results if not r["success"])
+            total_fetched = sum(r["fetched"] for r in results)
+            total_new = sum(r["new"] for r in results)
+            total_updated = sum(r["updated"] for r in results)
 
-            # 3. 记录执行结果
+            # 4. 记录执行结果
             elapsed = (datetime.now() - start_time).total_seconds()
             logger.info(
                 f"【{self.task_name}】执行完成，"

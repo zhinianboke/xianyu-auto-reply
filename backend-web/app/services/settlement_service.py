@@ -33,6 +33,9 @@ PAYMENT_QRCODE_KEY = 'payment_qrcode'
 PAYMENT_TYPE_KEY = 'payment_type'
 WITHDRAW_NOTIFY_EMAIL_KEY = 'withdraw.notify_email'
 WITHDRAW_MIN_AMOUNT_KEY = 'withdraw.min_amount'
+WITHDRAW_REVIEW_SECRET_KEY = 'withdraw.review_secret'
+# Fallback secret for backward compatibility (used when DB setting is not configured)
+_DEFAULT_REVIEW_SECRET = "xianyu_withdraw_review_2024"
 
 
 class SettlementService:
@@ -256,36 +259,53 @@ async def get_withdraw_notify_email() -> str:
         return (setting.value if setting else '').strip()
 
 
-def generate_review_token(record_id: int, action: str) -> str:
+def generate_review_token(record_id: int, action: str, secret: str = _DEFAULT_REVIEW_SECRET) -> str:
     """生成审核令牌，用于验证邮件中的审核链接
     
     Args:
         record_id: 结算记录ID
         action: 审核动作（approve/reject）
+        secret: 签名密钥（默认使用内置值，建议通过 async_get_review_secret 从数据库读取后传入）
     
     Returns:
         令牌字符串
     """
     import hashlib
     # 使用简单的哈希作为签名，包含记录ID和动作
-    secret = "xianyu_withdraw_review_2024"
     data = f"{record_id}:{action}:{secret}"
     return hashlib.sha256(data.encode()).hexdigest()[:32]
-
-
-def verify_review_token(record_id: int, action: str, token: str) -> bool:
+def verify_review_token(record_id: int, action: str, token: str, secret: str = _DEFAULT_REVIEW_SECRET) -> bool:
     """验证审核令牌
     
     Args:
         record_id: 结算记录ID
         action: 审核动作
-        token: 待验证的令牌
+        token: 待验证的字符串
+        secret: 签名密钥
     
     Returns:
         是否验证通过
     """
-    expected = generate_review_token(record_id, action)
+    expected = generate_review_token(record_id, action, secret)
     return token == expected
+
+
+async def async_get_review_secret() -> str:
+    """从数据库读取审核令牌密钥，未配置时回退到内置默认值
+
+    优先级：system_settings 表 > 内置默认值
+    """
+    try:
+        from common.db.session import async_session_maker
+        async with async_session_maker() as session:
+            stmt = select(SystemSetting).where(SystemSetting.key == WITHDRAW_REVIEW_SECRET_KEY)
+            result = await session.execute(stmt)
+            setting = result.scalar_one_or_none()
+            if setting and setting.value and setting.value.strip():
+                return setting.value.strip()
+    except Exception:
+        pass
+    return _DEFAULT_REVIEW_SECRET
 
 
 async def review_withdraw_record(record_id: int, action: str, token: str, reject_reason: str = '') -> Dict[str, Any]:
@@ -300,9 +320,10 @@ async def review_withdraw_record(record_id: int, action: str, token: str, reject
         审核结果
     """
     from common.db.session import async_session_maker
-    
-    # 验证令牌
-    if not verify_review_token(record_id, action, token):
+
+    # 验证令牌（优先从数据库读取密钥）
+    secret = await async_get_review_secret()
+    if not verify_review_token(record_id, action, token, secret=secret):
         return {'success': False, 'message': '无效的审核令牌'}
     
     # 验证动作

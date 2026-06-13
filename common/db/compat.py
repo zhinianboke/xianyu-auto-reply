@@ -34,6 +34,9 @@ from common.utils.time_utils import get_beijing_now, get_beijing_now_naive
 # 线程本地存储，用于缓存每个线程的数据库引擎和会话工厂
 _thread_local = threading.local()
 
+# 缓存未命中哨兵对象
+_SENTINEL = object()
+
 
 def _get_thread_local_session_maker():
     """获取当前线程的数据库会话工厂（懒加载）"""
@@ -62,6 +65,26 @@ class DBManagerCompat:
     
     def __init__(self):
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # 实例级TTL缓存（5分钟）
+        self._cache: Dict[str, tuple] = {}  # key -> (value, timestamp)
+        self._cache_ttl: float = 300.0  # 5分钟
+    
+    def _get_cached(self, key: str):
+        """从缓存获取值，过期返回None"""
+        if key in self._cache:
+            value, ts = self._cache[key]
+            if time.time() - ts < self._cache_ttl:
+                return value
+            del self._cache[key]
+        return _SENTINEL
+    
+    def _set_cached(self, key: str, value) -> None:
+        """写入缓存"""
+        self._cache[key] = (value, time.time())
+    
+    def _invalidate_cache(self, key: str) -> None:
+        """使缓存失效"""
+        self._cache.pop(key, None)
     
     def _get_loop(self) -> asyncio.AbstractEventLoop:
         """获取事件循环"""
@@ -151,7 +174,12 @@ class DBManagerCompat:
             return result.scalar_one_or_none()
     
     def get_cookie_details(self, cookie_id: str) -> Optional[Dict[str, Any]]:
-        """获取账号详情"""
+        """获取账号详情（带5分钟TTL缓存）"""
+        cache_key = f"cookie_details:{cookie_id}"
+        cached = self._get_cached(cache_key)
+        if cached is not _SENTINEL:
+            return cached
+        
         async def _query(session_maker):
             async with session_maker() as session:
                 stmt = select(XYAccount).where(XYAccount.account_id == cookie_id)
@@ -191,7 +219,9 @@ class DBManagerCompat:
                     'proxy_user': account.proxy_user,
                     'proxy_pass': account.proxy_pass,
                 }
-        return self._run_async(_query)
+        result = self._run_async(_query)
+        self._set_cached(cache_key, result)
+        return result
     
     def get_cookie_proxy_config(self, cookie_id: str) -> Dict[str, Any]:
         """获取代理配置"""
@@ -338,7 +368,10 @@ class DBManagerCompat:
                 result = await session.execute(stmt)
                 await session.commit()
                 return result.rowcount > 0
-        return self._run_async(_update)
+        success = self._run_async(_update)
+        if success:
+            self._invalidate_cache(f"cookie_details:{cookie_id}")
+        return success
     
     def disable_account(self, cookie_id: str, reason: str = "") -> bool:
         """禁用账号
@@ -369,7 +402,7 @@ class DBManagerCompat:
         return self._run_async(_update)
     
     def get_system_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
-        """获取系统设置值
+        """获取系统设置值（带5分钟TTL缓存）
         
         Args:
             key: 设置键名
@@ -378,13 +411,20 @@ class DBManagerCompat:
         Returns:
             设置值，不存在时返回默认值
         """
+        cache_key = f"system_setting:{key}"
+        cached = self._get_cached(cache_key)
+        if cached is not _SENTINEL:
+            return cached
+        
         async def _query(session_maker):
             async with session_maker() as session:
                 stmt = select(SystemSetting.value).where(SystemSetting.key == key)
                 result = await session.execute(stmt)
                 value = result.scalar_one_or_none()
                 return value if value is not None else default
-        return self._run_async(_query)
+        result = self._run_async(_query)
+        self._set_cached(cache_key, result)
+        return result
     
     # ==================== 商品相关 ====================
     

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -29,6 +30,10 @@ from common.utils.time_utils import safe_isoformat
 class CardMatcher:
     """统一卡券匹配器"""
 
+    # TTL 缓存：{cache_key: (timestamp, data)}
+    _cache: Dict[tuple, tuple] = {}
+    _CACHE_TTL = 300  # 5 分钟
+
     def __init__(self, session: AsyncSession):
         """
         初始化卡券匹配器
@@ -37,6 +42,50 @@ class CardMatcher:
             session: 异步数据库会话
         """
         self.session = session
+
+    @classmethod
+    def _get_cache_key(cls, item_id: str, spec_name: Optional[str], spec_value: Optional[str]) -> tuple:
+        """生成缓存键"""
+        return (item_id, spec_name or '', spec_value or '')
+
+    @classmethod
+    def _get_cached(cls, key: tuple) -> Optional[List[Dict[str, Any]]]:
+        """从缓存获取数据（未过期时）"""
+        if key in cls._cache:
+            ts, data = cls._cache[key]
+            if time.monotonic() - ts < cls._CACHE_TTL:
+                logger.debug(f"卡券缓存命中: {key}")
+                return data
+            del cls._cache[key]
+        return None
+
+    @classmethod
+    def _set_cache(cls, key: tuple, data: List[Dict[str, Any]]) -> None:
+        """写入缓存"""
+        cls._cache[key] = (time.monotonic(), data)
+
+    @classmethod
+    def clear_cache_for_item(cls, item_id: str) -> int:
+        """清除指定商品ID的所有缓存条目
+        
+        Args:
+            item_id: 商品ID
+            
+        Returns:
+            清除的条目数
+        """
+        keys_to_remove = [k for k in cls._cache if k[0] == item_id]
+        for k in keys_to_remove:
+            del cls._cache[k]
+        if keys_to_remove:
+            logger.debug(f"卡券缓存已清除: item_id={item_id}, 条目数={len(keys_to_remove)}")
+        return len(keys_to_remove)
+
+    @classmethod
+    def clear_all_cache(cls) -> None:
+        """清除所有缓存"""
+        cls._cache.clear()
+        logger.debug("卡券缓存已全部清除")
 
     async def get_cards_by_item_id(
         self,
@@ -62,6 +111,12 @@ class CardMatcher:
         Returns:
             匹配的卡券字典列表（每条含 card_source 和 dock_record_id）
         """
+        # 检查缓存
+        cache_key = self._get_cache_key(item_id, spec_name, spec_value)
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+
         # 1. 优先从关联表查询（返回 Card+source+dock_record_id 元组，不去重）
         relation_rows = await self._query_cards_with_source(item_id)
         
@@ -75,7 +130,7 @@ class CardMatcher:
                 all_cards.append(card_dict)
             
             # 规格匹配过滤（对字典列表过滤）
-            matched = self._match_card_dicts_by_spec(all_cards, spec_name, spec_value)
+            matched = self._match_cards_by_spec(all_cards, spec_name, spec_value)
             # 按 card.id 去重（发货场景下同一张卡券视为一张）：
             # 关联表可能因历史数据冗余或对接关系存在多条同 card_id 记录
             matched = self._dedup_cards_by_id(matched)
@@ -84,15 +139,17 @@ class CardMatcher:
                 f"查询到={len(all_cards)}条, 规格过滤/去重后={len(matched)}张, "
                 f"spec_name={spec_name}, spec_value={spec_value}"
             )
+            self._set_cache(cache_key, matched)
             return matched
         
         # 2. 关联表无数据，回退到旧字段
         legacy_cards = await self._query_cards_from_legacy(item_id)
         if not legacy_cards:
             logger.info(f"卡券匹配: item_id={item_id}, 未找到任何卡券")
+            self._set_cache(cache_key, [])
             return []
         
-        matched = self._match_cards_by_spec(legacy_cards, spec_name, spec_value)
+        matched = self._match_cards_from_objects(legacy_cards, spec_name, spec_value)
         for card_dict in matched:
             card_dict["card_source"] = "own"
             card_dict["dock_record_id"] = None
@@ -104,6 +161,7 @@ class CardMatcher:
             f"查询到={len(legacy_cards)}张, 规格过滤/去重后={len(matched)}张, "
             f"spec_name={spec_name}, spec_value={spec_value}"
         )
+        self._set_cache(cache_key, matched)
         return matched
 
     @staticmethod
@@ -280,6 +338,9 @@ class CardMatcher:
             added += 1
         
         await self.session.flush()
+        # 清除受影响商品的缓存
+        for iid in item_ids:
+            self.clear_cache_for_item(iid)
         return {"added": added, "removed": removed}
 
     async def update_item_card_relations(
@@ -326,6 +387,8 @@ class CardMatcher:
             added += 1
         
         await self.session.flush()
+        # 清除受影响商品的缓存
+        self.clear_cache_for_item(item_id)
         return {"added": added, "removed": removed}
 
     async def batch_bind_cards_to_items(
@@ -368,6 +431,9 @@ class CardMatcher:
                     fail_count += 1
         
         await self.session.flush()
+        # 清除受影响商品的缓存
+        for iid in item_ids:
+            self.clear_cache_for_item(iid)
         return {"success_count": success_count, "fail_count": fail_count}
 
     async def delete_relations_by_card_id(self, card_id: int) -> int:
@@ -384,6 +450,7 @@ class CardMatcher:
             text("DELETE FROM xy_card_item_relations WHERE card_id = :card_id"),
             {"card_id": card_id}
         )
+        self.clear_all_cache()  # card_id 级别无法精确对应 item_id，清全量
         return result.rowcount
 
     async def delete_relations_by_item_id(self, item_id: str) -> int:
@@ -400,6 +467,7 @@ class CardMatcher:
             text("DELETE FROM xy_card_item_relations WHERE item_id = :item_id"),
             {"item_id": item_id}
         )
+        self.clear_cache_for_item(item_id)
         return result.rowcount
 
     async def delete_relation_by_card_and_item(self, card_id: int, item_id: str) -> bool:
@@ -420,6 +488,7 @@ class CardMatcher:
         removed = result.rowcount
         if removed > 0:
             logger.info(f"删除卡券-商品关联: card_id={card_id}, item_id={item_id}")
+        self.clear_cache_for_item(item_id)
         return removed > 0
 
     async def batch_delete_relations_by_item_ids(self, item_ids: List[str]) -> int:
@@ -449,6 +518,8 @@ class CardMatcher:
         
         await self.session.flush()
         logger.info(f"批量清空商品关联卡券: 商品数={len(item_ids)}, 删除关联记录={removed}")
+        for iid in item_ids:
+            self.clear_cache_for_item(iid)
         return removed
 
     # ==================== 内部方法 ====================
@@ -495,65 +566,18 @@ class CardMatcher:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    @staticmethod
     def _match_cards_by_spec(
-        self,
-        cards: List[Card],
-        spec_name: Optional[str],
-        spec_value: Optional[str],
-    ) -> List[Dict[str, Any]]:
-        """
-        根据规格信息过滤匹配的卡券
-        
-        匹配规则：
-        - 有规格信息时：多规格卡券需 spec_name+spec_value 完全匹配
-        - 无规格信息时：只返回非多规格卡券（通用卡券）
-        
-        Args:
-            cards: Card 对象列表
-            spec_name: 规格名称
-            spec_value: 规格值
-            
-        Returns:
-            匹配的卡券字典列表
-        """
-        matched = []
-        has_spec_info = bool(spec_name and spec_value)
-        
-        for card in cards:
-            if card.is_multi_spec:
-                if has_spec_info:
-                    card_sn = (card.spec_name or '').strip().lower()
-                    card_sv = (card.spec_value or '').strip().lower()
-                    input_sn = spec_name.strip().lower()
-                    input_sv = spec_value.strip().lower()
-                    
-                    if card_sn == input_sn and card_sv == input_sv:
-                        matched.append(self._card_to_dict(card))
-                        logger.info(f"多规格卡券匹配成功: {card.name} [{spec_name}:{spec_value}]")
-                    else:
-                        logger.debug(
-                            f"多规格卡券匹配失败: 卡券[{card.spec_name}:{card.spec_value}] "
-                            f"vs 订单[{spec_name}:{spec_value}]"
-                        )
-                # 多规格卡券但没有传入规格信息，跳过
-            else:
-                # 非多规格卡券：只有在没有传入规格信息时才添加
-                if not has_spec_info:
-                    matched.append(self._card_to_dict(card))
-        
-        return matched
-
-    def _match_card_dicts_by_spec(
-        self,
         card_dicts: List[Dict[str, Any]],
         spec_name: Optional[str],
         spec_value: Optional[str],
     ) -> List[Dict[str, Any]]:
         """
-        根据规格信息过滤匹配的卡券（字典版本）
+        根据规格信息过滤匹配的卡券（统一字典版）
         
-        与 _match_cards_by_spec 逻辑相同，但操作对象是字典列表而非 Card 对象列表。
-        用于关联表查询后已转为字典的场景。
+        匹配规则：
+        - 有规格信息时：多规格卡券需 spec_name+spec_value 完全匹配
+        - 无规格信息时：只返回非多规格卡券（通用卡券）
         
         Args:
             card_dicts: 卡券字典列表
@@ -587,6 +611,16 @@ class CardMatcher:
                     matched.append(cd)
         
         return matched
+
+    def _match_cards_from_objects(
+        self,
+        cards: List[Card],
+        spec_name: Optional[str],
+        spec_value: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """Card 对象版规格匹配：先转字典再统一过滤"""
+        card_dicts = [self._card_to_dict(c) for c in cards]
+        return self._match_cards_by_spec(card_dicts, spec_name, spec_value)
 
     @staticmethod
     def _card_to_dict(card: Card) -> Dict[str, Any]:

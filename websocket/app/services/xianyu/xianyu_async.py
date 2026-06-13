@@ -16,6 +16,7 @@ import sys
 import aiohttp
 from collections import defaultdict
 from typing import Dict, Optional
+import weakref
 from loguru import logger
 
 from common.utils.xianyu_utils import (
@@ -25,6 +26,7 @@ from common.utils.time_utils import get_beijing_now_naive
 from common.utils.text_utils import safe_str
 from app.services.xianyu.connection_manager import ConnectionManager, ConnectionState
 from app.services.xianyu.token_manager import TokenManager
+from app.services.xianyu.handlers.message_router import MessageRouter
 
 # 配置常量
 WEBSOCKET_URL = os.getenv('WEBSOCKET_URL', 'wss://wss-goofish.dingtalk.com/')
@@ -50,8 +52,8 @@ WEBSOCKET_HEADERS = {}
 class XianyuAsync:
     """闲鱼WebSocket客户端核心类"""
     
-    # 类级别的实例管理字典
-    _instances = {}
+    # 类级别的实例管理字典（WeakValueDictionary 防止内存泄漏）
+    _instances: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
     _instances_lock = asyncio.Lock()
     
     # 类级别的密码登录时间记录
@@ -128,7 +130,8 @@ class XianyuAsync:
         # LWP 请求-响应关联：按 mid 等待服务端响应
         # key: mid（客户端发送时生成），value: asyncio.Future（消息循环收到响应时 set_result）
         # 用于 /r/SingleChatConversation/create 等需要拿响应结果的请求
-        self._pending_mid_futures: Dict[str, asyncio.Future] = {}
+        from app.services.xianyu.future_manager import FutureManager
+        self._mid_future_manager = FutureManager(name=cookie_id, cleanup_interval=30.0)
         
         # Session
         self.session = None
@@ -169,6 +172,9 @@ class XianyuAsync:
         # 初始化自动发货处理器
         from app.services.xianyu.auto_delivery_handler import AutoDeliveryHandler
         self.auto_delivery_handler = AutoDeliveryHandler(self)
+
+        # 初始化消息路由器（延迟加载，首次消息时初始化回调）
+        self.message_router = MessageRouter(self)
         
         # 注册实例
         self._register_instance()
@@ -390,6 +396,15 @@ class XianyuAsync:
                 logger.info(f"【{self.cookie_id}】实例已从全局字典注销")
         except Exception as e:
             logger.error(f"【{self.cookie_id}】注销实例失败: {e}")
+
+    async def _start_pending_futures_cleanup(self):
+        """启动 mid future 超时清理任务（委托给 FutureManager）"""
+        await self._mid_future_manager.start()
+
+    async def _cleanup_pending_futures_loop(self):
+        """清理超时的 mid futures（已委托给 FutureManager，保留方法兼容性）"""
+        # FutureManager 内置清理循环，此方法保留以兼容外部调用
+        pass
     
     @classmethod
     def get_instance(cls, cookie_id: str):
@@ -679,260 +694,32 @@ class XianyuAsync:
     
     async def handle_message(self, message_data: dict, websocket):
         """
-        处理接收到的消息
+        处理接收到的消息（委托给 MessageRouter）
         
         Args:
             message_data: 消息数据
             websocket: WebSocket连接
         """
-        try:
-            # 使用 MessageHandler 处理消息
-            if not hasattr(self, 'message_handler'):
-                from app.services.xianyu.message_handler import MessageHandler
-                self.message_handler = MessageHandler(self.cookie_id, self.myid)
-                
-                # 设置消息处理回调
-                from app.services.xianyu.auto_reply_service import AutoReplyService
-                auto_reply_service = AutoReplyService(self.cookie_id, self)
-                
-                async def on_chat_message(parsed_message, ws):
-                    """处理聊天消息
-                    
-                    处理流程（参照旧框架message_handler_core.py）：
-                    0. 检查自己发出的消息是否包含重发货触发关键字 -> 提取订单号触发自动发货
-                    1. 处理订单状态（付款消息时异步获取订单详情）
-                    2. 检查评价请求消息 -> 触发自动评价流程（同时触发确认收货消息）
-                    3. 检查自动发货触发消息 -> 触发自动发货流程
-                    4. 其他消息 -> 交给auto_reply_service处理自动回复
-                    
-                    注意：确认收货消息不单独处理，由评价请求消息统一触发，避免重复发送
-                    """
-                    send_message = parsed_message.get("send_message", "")
-                    raw_message = parsed_message.get("raw_message", {})
-                    item_id = parsed_message.get("item_id", "")
-                    send_user_id = parsed_message.get("send_user_id", "")
-                    msg_time = parsed_message.get("msg_time", "")
-                    
-                    # 0. 检查是否是自己发出的消息，且包含重发货触发关键字
-                    myid = getattr(self, 'myid', self.cookie_id)
-                    if send_user_id == myid and send_message:
-                        try:
-                            from common.db.compat import db_manager
-                            redelivery_keyword = db_manager.get_user_setting_by_cookie_id(
-                                self.cookie_id, 'redelivery_trigger_keyword'
-                            )
-                            if redelivery_keyword:
-                                redelivery_keyword = redelivery_keyword.strip()
-                                if redelivery_keyword and redelivery_keyword in send_message:
-                                    # 去除关键词，剩余部分去除前后空格
-                                    remaining = send_message.replace(redelivery_keyword, '', 1).strip()
-                                    if remaining and remaining.isdigit():
-                                        order_no = remaining
-                                        logger.info(f"【{self.cookie_id}】✅ 检测到重发货触发: 关键词='{redelivery_keyword}', 订单号={order_no}")
-                                        
-                                        # 从数据库查询订单信息
-                                        order_info = db_manager.get_order_by_id(order_no)
-                                        if not order_info:
-                                            # 订单不在数据库中，先插入基本记录
-                                            logger.info(f"【{self.cookie_id}】重发货触发: 订单 {order_no} 不在数据库中，创建基本记录")
-                                            try:
-                                                current_chat_id = parsed_message.get('chat_id', '')
-                                                db_manager.insert_or_update_order(
-                                                    order_id=order_no,
-                                                    item_id=item_id,
-                                                    buyer_id='',
-                                                    cookie_id=self.cookie_id,
-                                                    chat_id=current_chat_id
-                                                )
-                                            except Exception as insert_e:
-                                                logger.warning(f"【{self.cookie_id}】重发货触发: 创建订单记录失败: {insert_e}")
-                                        
-                                        # 无论订单是否已存在，都通过API刷新订单详情（补充item_id/buyer_id/is_bargain等）
-                                        try:
-                                            from common.services.order_service import OrderDetailService
-                                            order_detail_service = OrderDetailService(self.cookie_id, self.cookies_str)
-                                            await order_detail_service.fetch_and_update_order_detail(order_id=order_no)
-                                        except Exception as fetch_e:
-                                            logger.warning(f"【{self.cookie_id}】重发货触发: API刷新订单 {order_no} 详情失败: {fetch_e}")
-                                        
-                                        # 重新获取最新的订单信息
-                                        order_info = db_manager.get_order_by_id(order_no)
-                                        logger.info(f"【{self.cookie_id}】重发货触发: 订单 {order_no} get_order_by_id 完整返回结果: {order_info}")
-                                        
-                                        if order_info:
-                                            order_item_id = order_info.get('item_id', '') or item_id
-                                            order_buyer_id = order_info.get('buyer_id', '')
-                                            order_chat_id = order_info.get('chat_id', '') or parsed_message.get('chat_id', '')
-                                            
-                                            if hasattr(self, 'auto_delivery_handler') and self.auto_delivery_handler:
-                                                # 关键防护：在调 pre_check 之前先做 item 归属检查
-                                                # 因为重发货关键字的 order_no 来自卖家手动输入，
-                                                # db_manager.get_order_by_id 不带 cookie 过滤，
-                                                # 卖家可能输入到别的账号的订单号，此时若直接进 pre_check
-                                                # 命中禁止发货会错误关闭别人的订单。
-                                                if order_item_id and order_item_id != "未知商品":
-                                                    try:
-                                                        item_info = db_manager.get_item_info(self.cookie_id, order_item_id)
-                                                        if not item_info:
-                                                            logger.warning(
-                                                                f"【{self.cookie_id}】重发货触发：商品 {order_item_id} 不属于当前账号，"
-                                                                f"跳过 pre_check / freeshipping / 自动发货"
-                                                            )
-                                                            return
-                                                    except Exception as e:
-                                                        logger.error(
-                                                            f"【{self.cookie_id}】重发货触发：检查商品归属失败，跳过: {e}"
-                                                        )
-                                                        return
+        await self.message_router.route(message_data, websocket)
+    
+    # ==================== 向后兼容的订单方法委托 ==========================
+    # 以下方法保留供外部模块直接调用，内部委托给 OrderStatusHandler
 
-                                                # 在调免拼/_handle_auto_delivery 之前先做禁止发货预检查：
-                                                #   - block：订单被关闭/拦截，不调免拼也不进自动发货
-                                                #   - card_only：订单已被卖家主动关闭，跳过免拼直接走卡券补发
-                                                #   - allow：小刀订单正常调免拼后再走 _handle_auto_delivery
-                                                # 预检查结果通过 pre_check_result 透传给 _handle_auto_delivery，避免内部重复执行
-                                                pre_check = await self.auto_delivery_handler.pre_delivery_check_and_close(
-                                                    websocket=ws,
-                                                    order_no=order_no,
-                                                    buyer_id=order_buyer_id,
-                                                    chat_id=order_chat_id,
-                                                    log_prefix=f"【{self.cookie_id}】重发货触发：",
-                                                    item_id=order_item_id,
-                                                )
-                                                pre_action = pre_check.get('action', 'allow')
-                                                if pre_action == 'block':
-                                                    logger.info(
-                                                        f"【{self.cookie_id}】重发货触发：禁止发货命中，订单 {order_no} 拦截结束"
-                                                    )
-                                                    return
-
-                                                # 小刀订单 + allow：先免拼再走自动发货流程（参照_handle_card_message的处理）
-                                                # card_only 时订单已被关闭，调免拼无意义
-                                                if order_info.get('is_bargain') and order_buyer_id and pre_action == 'allow':
-                                                    logger.info(f"【{self.cookie_id}】重发货触发: 检测到小刀订单，先调用免拼接口: order_id={order_no}, buyer_id={order_buyer_id}")
-                                                    freeshipping_result = await self.auto_delivery_handler.auto_freeshipping(
-                                                        order_no, order_item_id, order_buyer_id
-                                                    )
-                                                    if freeshipping_result and freeshipping_result.get('success'):
-                                                        success_msg = freeshipping_result.get('message', '')
-                                                        if 'ORDER_ALREADY_DELIVERY' in success_msg or '已发货成功' in success_msg:
-                                                            logger.info(f"【{self.cookie_id}】重发货触发: 订单 {order_no} 已发货过，只更新数据库状态")
-                                                            try:
-                                                                from common.services.order_service import OrderService
-                                                                from common.db.session import async_session_maker
-                                                                async with async_session_maker() as db_session:
-                                                                    order_service = OrderService(db_session)
-                                                                    await order_service.update_order_status(order_no, "shipped")
-                                                            except Exception as e:
-                                                                logger.error(f"【{self.cookie_id}】重发货触发: 更新订单状态失败: {e}")
-                                                            self.auto_delivery_handler.mark_delivery_sent(order_no)
-                                                            return
-                                                        logger.info(f"【{self.cookie_id}】重发货触发: 免拼发货成功，继续自动发货流程")
-                                                    else:
-                                                        error_msg = freeshipping_result.get('error', '未知错误') if freeshipping_result else '未知错误'
-                                                        logger.warning(f"【{self.cookie_id}】重发货触发: 免拼发货失败: {error_msg}，继续尝试自动发货")
-                                                elif order_info.get('is_bargain') and pre_action == 'card_only':
-                                                    logger.info(
-                                                        f"【{self.cookie_id}】重发货触发：小刀订单 + card_only 模式，"
-                                                        f"订单 {order_no} 已被关闭，跳过免拼接口，直接进入卡券补发流程"
-                                                    )
-
-                                                await self.auto_delivery_handler._handle_auto_delivery(
-                                                    websocket=ws,
-                                                    message=raw_message,
-                                                    send_user_name="重发货触发",
-                                                    send_user_id=order_buyer_id,
-                                                    item_id=order_item_id,
-                                                    chat_id=order_chat_id,
-                                                    msg_time=msg_time,
-                                                    override_order_id=order_no,
-                                                    pre_check_result=pre_check,
-                                                )
-                                            else:
-                                                logger.warning(f"【{self.cookie_id}】auto_delivery_handler未初始化，跳过重发货")
-                                        else:
-                                            logger.warning(f"【{self.cookie_id}】重发货触发: 订单 {order_no} 无法获取信息，跳过")
-                                        return
-                                    elif remaining:
-                                        logger.info(f"【{self.cookie_id}】重发货触发: 去除关键词后剩余内容'{remaining}'不是纯数字订单号，忽略")
-                        except Exception as e:
-                            logger.warning(f"【{self.cookie_id}】重发货触发关键字检查异常: {e}")
-                    
-                    # 处理订单状态（参照旧框架_process_order_status_handler）
-                    # 如果是付款相关消息，异步获取订单详情
-                    await self._process_order_status(raw_message, send_message, item_id, send_user_id, msg_time)
-                    
-                    # 检查是否是评价请求消息（参照旧框架）
-                    # 注意：评价消息优先级最高，必须先检查
-                    if auto_reply_service.is_rate_request_message(send_message):
-                        logger.info(f"【{self.cookie_id}】✅ 检测到评价请求消息: {send_message}")
-                        # 调用自动评价处理
-                        await self._handle_rate_request_message(parsed_message, ws)
-                        return
-                    
-                    # 检查是否是自动发货触发消息（参照旧框架）
-                    if auto_reply_service.is_auto_delivery_trigger(send_message):
-                        # 检查是否启用自动确认发货
-                        if self.is_auto_confirm_enabled():
-                            logger.info(f"【{self.cookie_id}】✅ 触发自动发货流程: {send_message}")
-                            # 调用自动发货处理
-                            await self._handle_auto_delivery_from_message(parsed_message, ws)
-                        else:
-                            logger.info(f"【{self.cookie_id}】⚠️ 自动确认发货已关闭，跳过自动发货")
-                        # 自动发货消息不进行自动回复，但仍然发送通知
-                        # auto_reply_service.handle_chat_message 中已经处理了通知发送
-                        return
-                    
-                    # 确认收货消息不单独处理，由评价请求消息统一触发确认收货回复
-                    # 因为系统会在确认收货后紧接着发送评价请求消息，避免重复触发
-                    
-                    # 其他消息交给auto_reply_service处理
-                    await auto_reply_service.handle_chat_message(parsed_message, ws)
-                
-                self.message_handler.set_chat_message_handler(on_chat_message)
-                
-                # 设置卡片消息处理回调（参照旧框架，用于检测小刀等）
-                async def on_card_message(parsed_message, ws):
-                    """处理卡片消息（小刀等）"""
-                    await self._handle_card_message(parsed_message, ws)
-                
-                self.message_handler.set_card_message_handler(on_card_message)
-                
-                # 设置卡片更新消息处理回调（如付款状态变更，message["1"]为字符串的特殊格式）
-                async def on_card_update_message(parsed_message, ws):
-                    """处理卡片更新消息（付款状态变更等）
-                    
-                    处理流程：
-                    1. 获取订单详情
-                    2. 检查是否触发自动发货
-                    """
-                    send_message = parsed_message.get("send_message", "")
-                    raw_message = parsed_message.get("raw_message", {})
-                    item_id = parsed_message.get("item_id", "")
-                    send_user_id = parsed_message.get("send_user_id", "")
-                    msg_time = parsed_message.get("msg_time", "")
-                    
-                    # 处理订单状态（获取订单详情）
-                    await self._process_order_status(raw_message, send_message, item_id, send_user_id, msg_time)
-                    
-                    # 检查是否是自动发货触发消息
-                    if auto_reply_service.is_auto_delivery_trigger(send_message):
-                        if self.is_auto_confirm_enabled():
-                            logger.info(f"【{self.cookie_id}】✅ 卡片更新消息触发自动发货流程: {send_message}")
-                            await self._handle_auto_delivery_from_message(parsed_message, ws)
-                        else:
-                            logger.info(f"【{self.cookie_id}】⚠️ 自动确认发货已关闭，跳过自动发货")
-                    else:
-                        # 非发货触发的卡片更新消息（如"买家已拍下，待付款"等），交给auto_reply_service处理自动回复
-                        logger.info(f"【{self.cookie_id}】卡片更新消息触发自动回复: {send_message}")
-                        await auto_reply_service.handle_chat_message(parsed_message, ws)
-                
-                self.message_handler.set_card_update_message_handler(on_card_update_message)
-            
-            # 处理消息
-            await self.message_handler.handle_message(message_data, websocket)
-            
-        except Exception as e:
-            logger.error(f"【{self.cookie_id}】处理消息异常: {e}")
+    def _extract_order_id(self, message: dict) -> str:
+        """从消息中提取订单ID（委托给 OrderStatusHandler）"""
+        return self.message_router.order_status_handler.extract_order_id(message)
+    
+    async def _process_order_status(self, message: dict, send_message: str, item_id: str, buyer_id: str, msg_time: str) -> None:
+        """处理订单状态（委托给 OrderStatusHandler）"""
+        await self.message_router.order_status_handler.process_order_status(
+            message, send_message, item_id, buyer_id, msg_time
+        )
+    
+    async def _fetch_order_detail_async(self, order_id: str, item_id: str = None, buyer_id: str = None) -> None:
+        """异步获取订单详情（委托给 OrderStatusHandler）"""
+        await self.message_router.order_status_handler._fetch_order_detail_async(
+            order_id, item_id, buyer_id
+        )
     
     async def pause_cleanup_loop(self):
         """定期清理过期的暂停记录、锁和缓存（防止内存泄漏）"""
@@ -1081,183 +868,8 @@ class XianyuAsync:
             return False
             return False
     
-    def _extract_order_id(self, message: dict) -> str:
-        """从消息中提取订单ID（参照旧框架utils.py的extract_order_id实现）"""
-        try:
-            import re
-            
-            order_id = None
-            
-            # 方法1: 从message['1']['6']中提取（参照旧框架）
-            message_1 = message.get('1', {})
-            if isinstance(message_1, dict):
-                message_1_6 = message_1.get('6', {})
-                if isinstance(message_1_6, dict):
-                    content_json_str = message_1_6.get('3', {}).get('5', '') if isinstance(message_1_6.get('3', {}), dict) else ''
-                    
-                    if content_json_str:
-                        try:
-                            content_data = json.loads(content_json_str)
-                            
-                            # 从button的targetUrl中提取orderId
-                            target_url = content_data.get('dxCard', {}).get('item', {}).get('main', {}).get('exContent', {}).get('button', {}).get('targetUrl', '')
-                            if target_url:
-                                order_match = re.search(r'orderId=(\d+)', target_url)
-                                if order_match:
-                                    order_id = order_match.group(1)
-                            
-                            # 从main的targetUrl中提取
-                            if not order_id:
-                                main_target_url = content_data.get('dxCard', {}).get('item', {}).get('main', {}).get('targetUrl', '')
-                                if main_target_url:
-                                    order_match = re.search(r'order_detail\?id=(\d+)', main_target_url)
-                                    if order_match:
-                                        order_id = order_match.group(1)
-                                        
-                        except Exception:
-                            pass
-            
-            # 方法2: 在整个消息中搜索订单ID模式（参照旧框架）
-            if not order_id:
-                message_str = str(message)
-                patterns = [
-                    r'orderId[=:](\d{10,})',
-                    r'order_detail\?id=(\d{10,})',
-                    r'"id"\s*:\s*"?(\d{10,})"?',
-                    r'bizOrderId[=:](\d{10,})',
-                ]
-                
-                for pattern in patterns:
-                    matches = re.findall(pattern, message_str)
-                    if matches:
-                        order_id = matches[0]
-                        break
-            
-            if order_id:
-                logger.info(f'【{self.cookie_id}】🎯 提取到订单ID: {order_id}')
-            
-            return order_id or ""
-        except Exception as e:
-            logger.error(f"【{self.cookie_id}】提取订单ID失败: {e}")
-            return ""
-    
-    async def _process_order_status(self, message: dict, send_message: str, item_id: str, buyer_id: str, msg_time: str) -> None:
-        """处理订单状态（参照旧框架_process_order_status_handler）
-        
-        当检测到付款相关消息时：
-        1. 先创建订单记录（如果不存在）
-        2. 异步获取订单详情（用于获取规格信息）
-        
-        Args:
-            message: 原始消息数据
-            send_message: 消息内容
-            item_id: 商品ID
-            buyer_id: 买家ID
-            msg_time: 消息时间
-        """
-        try:
-            # 付款相关消息列表（参照旧框架）
-            fetch_detail_messages = [
-                '[我已拍下，待付款]',
-                '[我已付款，等待你发货]',
-                '[买家已付款]',
-                '[付款完成]',
-                '[已付款，待发货]',
-            ]
-            
-            if send_message not in fetch_detail_messages:
-                return
-            
-            # 提取订单ID
-            order_id = self._extract_order_id(message)
-            logger.info(f"【{self.cookie_id}】付款消息检测: {send_message}, 提取订单ID: {order_id}")
-            
-            if not order_id:
-                logger.warning(f"【{self.cookie_id}】付款消息无法提取订单ID: {send_message}")
-                return
-            
-            logger.info(f"【{self.cookie_id}】提取到: item_id={item_id}, buyer_id={buyer_id}")
-            
-            # 提取chat_id
-            chat_id = ""
-            try:
-                msg_1 = message.get("1", {})
-                if isinstance(msg_1, dict):
-                    # 标准聊天消息：从message["1"]["2"]提取
-                    chat_id_raw = msg_1.get("2", "")
-                    chat_id = chat_id_raw.split('@')[0] if '@' in str(chat_id_raw) else str(chat_id_raw)
-                # 卡片更新消息：chat_id在message["2"]中
-                if not chat_id:
-                    chat_id_raw = message.get("2", "")
-                    if chat_id_raw:
-                        chat_id = str(chat_id_raw).split('@')[0] if '@' in str(chat_id_raw) else str(chat_id_raw)
-            except Exception:
-                pass
-            
-            # 根据消息类型确定订单状态
-            if send_message == '[我已拍下，待付款]':
-                order_status = "pending_payment"
-            else:
-                order_status = "pending_ship"  # 已付款，待发货
-            
-            # 先创建订单记录（参照旧框架order_status_handler.py）
-            try:
-                from common.services.order_service import OrderService
-                from common.db.session import async_session_maker
-                
-                async with async_session_maker() as session:
-                    order_service = OrderService(session)
-                    await order_service.create_order_from_message(
-                        order_no=order_id,
-                        account_id=self.cookie_id,
-                        status=order_status,
-                        item_id=item_id,
-                        buyer_id=buyer_id,
-                        chat_id=chat_id,
-                    )
-                    logger.info(f"【{self.cookie_id}】订单 {order_id} 创建/更新成功，状态: {order_status}")
-            except Exception as e:
-                logger.error(f"【{self.cookie_id}】创建订单失败: {e}")
-            
-            # 异步获取订单详情，不阻塞主流程
-            asyncio.create_task(self._fetch_order_detail_async(order_id, item_id, buyer_id))
-            
-        except Exception as e:
-            logger.error(f"【{self.cookie_id}】处理订单状态失败: {e}")
-    
-    async def _fetch_order_detail_async(self, order_id: str, item_id: str = None, buyer_id: str = None) -> None:
-        """异步获取订单详情（参照旧框架_fetch_order_detail_async）
-        
-        不阻塞主流程，用于获取订单的规格、数量、收货人等信息
-        
-        Args:
-            order_id: 订单ID
-            item_id: 商品ID
-            buyer_id: 买家ID
-        """
-        try:
-            # 延迟1秒再获取，确保订单数据已同步
-            await asyncio.sleep(1)
-            
-            logger.info(f"【{self.cookie_id}】开始异步获取订单详情: {order_id}, item_id={item_id}, buyer_id={buyer_id}")
-            
-            # 调用订单详情获取服务
-            from common.services.order_service import OrderDetailService
-            
-            order_detail_service = OrderDetailService(self.cookie_id, self.cookies_str)
-            result = await order_detail_service.fetch_and_update_order_detail(
-                order_id=order_id,
-                item_id=item_id,
-                buyer_id=buyer_id
-            )
-            
-            if result:
-                logger.info(f"【{self.cookie_id}】订单详情获取成功: {order_id}")
-            else:
-                logger.warning(f"【{self.cookie_id}】订单详情获取失败: {order_id}")
-                
-        except Exception as e:
-            logger.error(f"【{self.cookie_id}】异步获取订单详情失败: {e}")
+    # _extract_order_id, _process_order_status, _fetch_order_detail_async
+    # 已委托给 MessageRouter -> OrderStatusHandler（见上方 thin wrappers）
     
     async def _handle_auto_delivery_from_message(self, parsed_message: dict, websocket) -> None:
         """从解析后的消息触发自动发货（参照旧框架message_handler_core.py）
@@ -1396,7 +1008,7 @@ class XianyuAsync:
                                             logger.error(f"【{self.cookie_id}】更新订单状态失败: {e}")
 
                                         # 标记已发货，防止重复处理
-                                        self.auto_delivery_handler.mark_delivery_sent(order_id)
+                                        await self.auto_delivery_handler.mark_delivery_sent(order_id)
                                         return
                             else:
                                 logger.info(
@@ -1745,9 +1357,7 @@ class XianyuAsync:
             registered_mid = None
             send_future = None
             try:
-                loop = asyncio.get_running_loop()
-                send_future = loop.create_future()
-                self._pending_mid_futures[mid] = send_future
+                send_future = self._mid_future_manager.create_future(mid, timeout=60)
                 registered_mid = mid
             except Exception as reg_e:
                 logger.warning(f"【{self.cookie_id}】注册发送结果检测失败（不影响发送）: {self._safe_str(reg_e)}")
@@ -1811,9 +1421,9 @@ class XianyuAsync:
             return None
         finally:
             # 已被 _dispatch_mid_response 分派的 mid 已从字典移除（pop 安全幂等）；
-            # 超时未响应的 mid 在此清理，防止 _pending_mid_futures 堆积
+            # 超时未响应的 mid 在此清理，防止堆积
             if mid:
-                self._pending_mid_futures.pop(mid, None)
+                self._mid_future_manager.cancel_future(mid)
 
     @staticmethod
     def _extract_send_reject_reason(response: dict) -> Optional[str]:
@@ -1851,11 +1461,9 @@ class XianyuAsync:
                 return
             headers = message_data.get("headers") or {}
             mid = headers.get("mid") if isinstance(headers, dict) else None
-            if not mid or mid not in self._pending_mid_futures:
+            if not mid:
                 return
-            future = self._pending_mid_futures.pop(mid, None)
-            if future is not None and not future.done():
-                future.set_result(message_data)
+            self._mid_future_manager.resolve_future(mid, message_data)
         except Exception as e:
             logger.warning(f"【{self.cookie_id}】分派 mid 响应失败: {e}")
 
@@ -1909,9 +1517,7 @@ class XianyuAsync:
         }
 
         # 注册等待 Future 并发送请求
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future = loop.create_future()
-        self._pending_mid_futures[mid] = future
+        future = self._mid_future_manager.create_future(mid, timeout=60)
 
         try:
             logger.info(
@@ -1936,7 +1542,7 @@ class XianyuAsync:
             return chat_id
         except asyncio.TimeoutError:
             # 超时清理 pending
-            self._pending_mid_futures.pop(mid, None)
+            self._mid_future_manager.cancel_future(mid)
             logger.error(
                 f"【{self.cookie_id}】创建会话超时: to_user_id={to_user_id}, "
                 f"item_id={item_id}, timeout={timeout}s"
@@ -1944,7 +1550,7 @@ class XianyuAsync:
             raise TimeoutError(f"创建会话超时（{timeout}秒）")
         except Exception:
             # 其他异常也要清理
-            self._pending_mid_futures.pop(mid, None)
+            self._mid_future_manager.cancel_future(mid)
             raise
 
     @staticmethod
@@ -2407,6 +2013,8 @@ class XianyuAsync:
 
                             if not hasattr(self, '_token_fetch_failures'):
                                 self._token_fetch_failures = 0
+                            if not hasattr(self, '_token_fetch_failure_times'):
+                                self._token_fetch_failure_times = []  # 记录每次失败的时间戳
 
                             if refresh_status in non_counted_statuses:
                                 # 滑块/风控类失败：不累加计数，避免账号在风控期间被误禁用
@@ -2415,15 +2023,22 @@ class XianyuAsync:
                                     f"属于滑块/风控类场景，不计入禁用计数，等待重试..."
                                 )
                             else:
-                                # 真实故障：累加禁用计数
-                                self._token_fetch_failures += 1
+                                # 真实故障：记录时间戳，使用时间窗口计数
+                                now = time.time()
+                                self._token_fetch_failure_times.append(now)
+                                # 清理超出1小时窗口的记录
+                                window_start = now - 3600
+                                self._token_fetch_failure_times = [
+                                    t for t in self._token_fetch_failure_times if t > window_start
+                                ]
+                                self._token_fetch_failures = len(self._token_fetch_failure_times)
                                 logger.warning(
                                     f"【{self.cookie_id}】无法获取有效Token"
-                                    f"（原因: {refresh_status or '未知'}，第{self._token_fetch_failures}次失败），等待重试..."
+                                    f"（原因: {refresh_status or '未知'}，近1小时内第{self._token_fetch_failures}次失败），等待重试..."
                                 )
 
-                                # 连续失败100次后禁用账号
-                                if self._token_fetch_failures >= 100:
+                                # 1小时内失败达到20次后禁用账号（更合理的时间窗口阈值）
+                                if self._token_fetch_failures >= 20:
                                     logger.error(f"【{self.cookie_id}】Token获取连续失败{self._token_fetch_failures}次，禁用账号")
                                     try:
                                         from common.db.compat import db_manager
@@ -2447,6 +2062,8 @@ class XianyuAsync:
                         # Token获取成功，重置失败计数
                         if hasattr(self, '_token_fetch_failures'):
                             self._token_fetch_failures = 0
+                        if hasattr(self, '_token_fetch_failure_times'):
+                            self._token_fetch_failure_times = []
                     
                     # 更新连接状态
                     self.connection_manager.set_connection_state(

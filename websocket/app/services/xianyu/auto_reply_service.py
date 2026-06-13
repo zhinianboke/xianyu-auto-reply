@@ -35,6 +35,7 @@ from common.utils.default_reply_api import call_reply_api
 
 from app.services.xianyu.resource_manager import pause_manager
 from app.services.xianyu.auto_reply_log_service import AutoReplyLogService
+from app.services.xianyu.notification_dispatcher import NotificationDispatcher
 
 
 class AutoReplyService:
@@ -105,12 +106,17 @@ class AutoReplyService:
         self.cookie_id = cookie_id
         self.xianyu_instance = xianyu_instance
         self.auto_reply_log_service = AutoReplyLogService(cookie_id)
+        self.notification_dispatcher = NotificationDispatcher()
         self._account: Optional[XYAccount] = None
         # 消息过滤关键词缓存
         self._filter_keywords_cache: Dict[str, List[str]] = {}
         self._filter_cache_time: Dict[str, float] = {}  # 每个缓存键的时间
         self._filter_cache_ttl: float = 60  # 缓存有效期(秒)
         self._filter_cache_max_size: int = 1000  # 最大缓存条数
+        
+        # 关键词缓存（30秒TTL）
+        self._keyword_cache: Dict[str, tuple] = {}  # cache_key -> (keywords, timestamp)
+        self._keyword_cache_ttl: float = 30.0  # 缓存有效期(秒)
         
         # 消息去重(参照旧框架reply_scheduler.py)
         # 使用 chat_id + send_message 作为去重键，同一会话的同一消息内容在等待时间内不重复回复
@@ -956,7 +962,7 @@ class AutoReplyService:
         item_id: str,
         msg_time: str,
     ) -> None:
-        """发送消息通知
+        """发送消息通知（委托 NotificationDispatcher 进行渠道分发）
         
         Args:
             send_user_name: 发送者用户名
@@ -994,49 +1000,10 @@ class AutoReplyService:
                 notification_content += f"商品ID: {item_id}\n"
             notification_content += f"时间: {msg_time}"
             
-            # 发送通知到各渠道
-            for notification in notifications:
-                try:
-                    # 检查通知是否启用
-                    if not notification.get('enabled', True):
-                        continue
-                    
-                    channel_type = notification.get('channel_type', '')
-                    channel_config = notification.get('channel_config', {}) or {}
-                    
-                    # 使用公共通知工具函数
-                    from common.utils.notification_utils import (
-                        parse_notification_config,
-                        send_dingtalk_notification,
-                        send_feishu_notification,
-                        send_bark_notification,
-                        send_email_notification,
-                        send_webhook_notification,
-                        send_wechat_notification,
-                        send_telegram_notification
-                    )
-                    
-                    config_data = parse_notification_config(channel_config)
-                    
-                    if channel_type in ('dingtalk', 'ding_talk'):
-                        await send_dingtalk_notification(config_data, notification_content)
-                    elif channel_type in ('feishu', 'lark'):
-                        await send_feishu_notification(config_data, notification_content)
-                    elif channel_type == 'bark':
-                        await send_bark_notification(config_data, notification_content)
-                    elif channel_type == 'email':
-                        await send_email_notification(config_data, notification_content)
-                    elif channel_type == 'webhook':
-                        await send_webhook_notification(config_data, notification_content)
-                    elif channel_type in ('wechat', 'wechat_work'):
-                        await send_wechat_notification(config_data, notification_content)
-                    elif channel_type == 'telegram':
-                        await send_telegram_notification(config_data, notification_content)
-                    else:
-                        logger.warning(f"【{self.cookie_id}】不支持的通知渠道类型: {channel_type}")
-                        
-                except Exception as e:
-                    logger.error(f"【{self.cookie_id}】发送{channel_type}通知失败: {e}")
+            # 委托 NotificationDispatcher 并行发送到所有渠道（带错误隔离）
+            await self.notification_dispatcher.dispatch_all(
+                notifications, notification_content
+            )
                     
         except Exception as e:
             logger.error(f"【{self.cookie_id}】发送消息通知失败: {e}")
@@ -1272,7 +1239,16 @@ class AutoReplyService:
             return None
 
     async def _list_keywords(self, session: AsyncSession, account: XYAccount) -> list[dict]:
-        """获取关键词列表（参照旧框架，添加is_active条件）"""
+        """获取关键词列表（参照旧框架，添加is_active条件，带30秒TTL缓存）"""
+        cache_key = f"kw_{account.id}"
+        now = time.time()
+        
+        # 检查缓存
+        if cache_key in self._keyword_cache:
+            cached_keywords, cached_time = self._keyword_cache[cache_key]
+            if now - cached_time < self._keyword_cache_ttl:
+                return cached_keywords
+        
         stmt = (
             select(XYKeywordRule, XYCatalogItem.title)
             .outerjoin(
@@ -1300,6 +1276,9 @@ class AutoReplyService:
                     "item_title": item_title or "",
                 }
             )
+        
+        # 写入缓存
+        self._keyword_cache[cache_key] = (keywords, now)
         return keywords
     
     async def _handle_image_keyword(self, keyword: str, image_url: str) -> str:

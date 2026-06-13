@@ -7,22 +7,14 @@
 - 发货失败通知
 
 使用common/utils/notification_utils.py中的通知发送函数
+通过notification_dispatcher.NotificationDispatcher进行渠道分发
 """
 import time
 import asyncio
 import hashlib
 from loguru import logger
 
-from common.utils.notification_utils import (
-    parse_notification_config,
-    send_dingtalk_notification,
-    send_feishu_notification,
-    send_bark_notification,
-    send_email_notification,
-    send_webhook_notification,
-    send_wechat_notification,
-    send_telegram_notification
-)
+from app.services.xianyu.notification_dispatcher import dispatcher as notification_dispatcher
 from common.utils.text_utils import safe_str
 
 
@@ -34,6 +26,12 @@ class NotificationManager:
     # 与 XianyuSliderStealth._send_account_disabled_notification 临时新建实例），
     # 也共享同一份冷却记录，避免短时间内发送多条重复通知。
     _shared_last_notification_time: dict = {}
+    # 上次清理共享缓存的时间戳，用于周期性清理过期条目
+    _last_cleanup_ts: float = 0.0
+    # 缓存清理间隔（秒）：1 小时
+    _cleanup_interval: float = 3600.0
+    # 条目过期阈值（秒）：24 小时
+    _cleanup_max_age: float = 86400.0
     
     def __init__(self, cookie_id: str):
         """初始化通知管理器
@@ -100,6 +98,9 @@ class NotificationManager:
                 ]
                 for key in expired_keys:
                     del self.last_notification_time[key]
+
+            # 定期清理 _shared_last_notification_time 中所有 cookie_id 的过期条目
+            self._maybe_cleanup_shared_cache()
 
             logger.info(f"📱 开始发送消息通知 - 账号: {self.cookie_id}, 买家: {send_user_name}")
 
@@ -334,7 +335,7 @@ class NotificationManager:
         return False
 
     async def _send_to_channels(self, notifications: list, message: str, attachment_path: str = None) -> bool:
-        """发送通知到各个渠道
+        """发送通知到各个渠道（委托 NotificationDispatcher 并行发送）
         
         Args:
             notifications: 通知配置列表
@@ -344,46 +345,32 @@ class NotificationManager:
         Returns:
             是否成功发送
         """
-        notification_sent = False
-        
-        for notification in notifications:
-            if not notification.get('enabled', True):
-                continue
+        return await notification_dispatcher.dispatch_all(
+            notifications, message, attachment_path=attachment_path
+        )
 
-            channel_type = notification.get('channel_type')
-            channel_config = notification.get('channel_config')
-            
-            logger.info(f"📱 通知渠道: {channel_type}, 配置: {channel_config}")
+    def _maybe_cleanup_shared_cache(self):
+        """定期清理 _shared_last_notification_time 中超过 24 小时的过期条目"""
+        now = time.time()
+        if now - NotificationManager._last_cleanup_ts < NotificationManager._cleanup_interval:
+            return
 
-            try:
-                config_data = parse_notification_config(channel_config)
-                logger.info(f"📱 解析后配置: {config_data}")
+        NotificationManager._last_cleanup_ts = now
+        cutoff = now - NotificationManager._cleanup_max_age
+        total_removed = 0
 
-                if channel_type in ('ding_talk', 'dingtalk'):
-                    await send_dingtalk_notification(config_data, message)
-                    notification_sent = True
-                elif channel_type in ('feishu', 'lark'):
-                    await send_feishu_notification(config_data, message)
-                    notification_sent = True
-                elif channel_type == 'bark':
-                    await send_bark_notification(config_data, message)
-                    notification_sent = True
-                elif channel_type == 'email':
-                    await send_email_notification(config_data, message, attachment_path)
-                    notification_sent = True
-                elif channel_type == 'webhook':
-                    await send_webhook_notification(config_data, message)
-                    notification_sent = True
-                elif channel_type in ('wechat', 'wechat_work'):
-                    await send_wechat_notification(config_data, message)
-                    notification_sent = True
-                elif channel_type == 'telegram':
-                    await send_telegram_notification(config_data, message)
-                    notification_sent = True
-                else:
-                    logger.warning(f"不支持的通知渠道类型: {channel_type}")
+        for cid in list(NotificationManager._shared_last_notification_time.keys()):
+            sub = NotificationManager._shared_last_notification_time[cid]
+            expired = [k for k, ts in sub.items() if ts < cutoff]
+            for k in expired:
+                del sub[k]
+            total_removed += len(expired)
+            # 如果子字典为空，移除该 cookie_id 键
+            if not sub:
+                del NotificationManager._shared_last_notification_time[cid]
 
-            except Exception as notify_error:
-                logger.error(f"发送通知失败 ({notification.get('channel_name', 'Unknown')}): {self._safe_str(notify_error)}")
-
-        return notification_sent
+        if total_removed > 0:
+            logger.info(
+                f"📱 通知缓存清理完成：移除 {total_removed} 条过期记录 "
+                f"(>{NotificationManager._cleanup_max_age / 3600:.0f}h)"
+            )

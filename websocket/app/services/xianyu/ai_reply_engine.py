@@ -13,6 +13,7 @@ AI回复引擎模块
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from datetime import datetime, timezone, timedelta
@@ -26,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from common.db.session import async_session_maker
 from common.models.xy_account import XYAccount
 from common.models.ai_chat_message import AIChatMessage
+from common.services.ai_client_pool import get_ai_client_pool
 from common.services.ai_provider_service import (
     DEFAULT_AI_BASE_URL,
     build_anthropic_url,
@@ -59,6 +61,10 @@ class AIReplyEngine:
         self._chat_locks_lock = asyncio.Lock()
         self._chat_locks_max_size = 10000  # 最大锁数量
         self._chat_locks_expire_time = 7200  # 锁过期时间（2小时）
+        # 意图分类缓存 (message_hash -> (intent, timestamp))
+        self._intent_cache: Dict[str, tuple] = {}
+        self._intent_cache_ttl = 600  # 缓存10分钟
+        self._intent_cache_max_size = 5000
         logger.info("AI回复引擎初始化完成")
     
     @classmethod
@@ -314,6 +320,138 @@ class AIReplyEngine:
             logger.error(f"【{cookie_id}】本地意图检测失败: {e}")
             return "default"
     
+    async def detect_intent_with_llm(
+        self,
+        message: str,
+        cookie_id: str,
+        settings: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """增强版意图检测：关键词快速路径 + LLM分类回退 + 缓存
+        
+        对于关键词无法明确分类的消息，使用LLM进行意图分类。
+        结果会被缓存以避免重复调用。
+        
+        Args:
+            message: 用户消息
+            cookie_id: 账号ID
+            settings: AI设置（包含api_key、model_name等），为None时仅用关键词
+            
+        Returns:
+            意图类型: price/tech/default
+        """
+        # 快速路径：关键词匹配
+        msg_lower = message.lower()
+        
+        price_keywords = [
+            "便宜", "优惠", "刀", "降价", "价格", "多少钱",
+            "能少", "还能", "最低", "底价", "实诚价", "到100", "能到",
+            "包个邮"
+        ]
+        if any(kw in msg_lower for kw in price_keywords):
+            return "price"
+        
+        tech_keywords = [
+            "怎么用", "参数", "坏了", "故障", "设置", "说明书",
+            "功能", "用法", "教程", "驱动"
+        ]
+        if any(kw in msg_lower for kw in tech_keywords):
+            return "tech"
+        
+        # 短消息无需LLM分类
+        if len(message.strip()) <= 3:
+            return "default"
+        
+        # 检查缓存
+        msg_hash = hashlib.md5(message.strip().encode("utf-8")).hexdigest()
+        if msg_hash in self._intent_cache:
+            cached_intent, cached_ts = self._intent_cache[msg_hash]
+            if time.time() - cached_ts < self._intent_cache_ttl:
+                logger.debug(f"【{cookie_id}】意图缓存命中: {cached_intent}")
+                return cached_intent
+            else:
+                del self._intent_cache[msg_hash]
+        
+        # LLM分类回退（需要settings）
+        if not settings or not settings.get("api_key"):
+            return "default"
+        
+        try:
+            intent = await self._llm_classify_intent(message, settings, cookie_id)
+            
+            # 写入缓存（带大小限制）
+            if len(self._intent_cache) >= self._intent_cache_max_size:
+                # 淘汰最旧的20%
+                sorted_keys = sorted(
+                    self._intent_cache.keys(),
+                    key=lambda k: self._intent_cache[k][1],
+                )
+                for k in sorted_keys[: self._intent_cache_max_size // 5]:
+                    del self._intent_cache[k]
+            
+            self._intent_cache[msg_hash] = (intent, time.time())
+            return intent
+            
+        except Exception as e:
+            logger.warning(f"【{cookie_id}】LLM意图分类失败，回退到default: {e}")
+            return "default"
+    
+    async def _llm_classify_intent(
+        self, message: str, settings: Dict[str, Any], cookie_id: str
+    ) -> str:
+        """使用LLM对消息进行意图分类
+        
+        Args:
+            message: 用户消息
+            settings: AI设置
+            cookie_id: 账号ID
+            
+        Returns:
+            意图类型: price/tech/default
+        """
+        from common.services.ai_provider_service import normalize_ai_provider_type
+        
+        classify_messages = [
+            {
+                "role": "user",
+                "content": f"判断意图：price(议价)/tech(技术)/default(其他)，只输出一个词\n\n消息：{message}",
+            }
+        ]
+        
+        provider_type = normalize_ai_provider_type(
+            settings.get("provider_type"),
+            settings.get("base_url"),
+            settings.get("model_name"),
+        )
+        
+        result_text = ""
+        if provider_type == "dashscope_app":
+            # DashScope不支持短分类调用，跳过
+            return "default"
+        elif provider_type == "gemini":
+            result_text = await self._call_gemini_api(
+                settings, classify_messages, max_tokens=10, temperature=0.1
+            )
+        elif provider_type == "anthropic":
+            result_text = await self._call_anthropic_api(
+                settings, classify_messages, max_tokens=10, temperature=0.1
+            )
+        else:
+            result_text = await self._call_openai_api(
+                settings, classify_messages, max_tokens=10, temperature=0.1
+            )
+        
+        result_text = result_text.strip().lower()
+        
+        if "price" in result_text:
+            logger.debug(f"【{cookie_id}】LLM意图分类: price ({message[:20]}...)")
+            return "price"
+        elif "tech" in result_text:
+            logger.debug(f"【{cookie_id}】LLM意图分类: tech ({message[:20]}...)")
+            return "tech"
+        else:
+            logger.debug(f"【{cookie_id}】LLM意图分类: default ({message[:20]}...) raw={result_text}")
+            return "default"
+    
     async def _get_account(self, cookie_id: str, db_session: AsyncSession) -> Optional[XYAccount]:
         """获取账号信息"""
         stmt = select(XYAccount).where(XYAccount.account_id == cookie_id)
@@ -455,11 +593,11 @@ class AIReplyEngine:
     ) -> str:
         """调用OpenAI兼容API"""
         try:
-            from openai import AsyncOpenAI
-            
-            client = AsyncOpenAI(
+            pool = get_ai_client_pool()
+            client = await pool.get_client(
+                provider_type="openai_compatible",
+                base_url=settings["base_url"],
                 api_key=settings["api_key"],
-                base_url=normalize_openai_base_url(settings["base_url"]),
             )
             
             request_messages = self._build_openai_messages(messages)
@@ -557,10 +695,15 @@ class AIReplyEngine:
                 "Content-Type": "application/json",
             }
             
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.post(url, headers=headers, json=data)
-                response.raise_for_status()
-                result = response.json()
+            pool = get_ai_client_pool()
+            client = await pool.get_client(
+                provider_type="dashscope_app",
+                base_url=settings["base_url"],
+                api_key=settings["api_key"],
+            )
+            response = await client.post(url, headers=headers, json=data)
+            response.raise_for_status()
+            result = response.json()
             
             if "output" in result and "text" in result["output"]:
                 reply_text = self._normalize_text(result["output"]["text"])
@@ -623,10 +766,15 @@ class AIReplyEngine:
             
             headers = {"Content-Type": "application/json"}
             
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.post(url, headers=headers, params={"key": api_key}, json=payload)
-                response.raise_for_status()
-                result = response.json()
+            pool = get_ai_client_pool()
+            client = await pool.get_client(
+                provider_type="gemini",
+                base_url=settings.get("base_url", ""),
+                api_key=api_key,
+            )
+            response = await client.post(url, headers=headers, params={"key": api_key}, json=payload)
+            response.raise_for_status()
+            result = response.json()
             
             reply_text = result["candidates"][0]["content"]["parts"][0]["text"]
             normalized_reply = self._normalize_text(reply_text)
@@ -678,10 +826,15 @@ class AIReplyEngine:
                 "Content-Type": "application/json",
             }
             
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.post(url, headers=headers, json=payload)
-                response.raise_for_status()
-                result = response.json()
+            pool = get_ai_client_pool()
+            client = await pool.get_client(
+                provider_type="anthropic",
+                base_url=settings.get("base_url", ""),
+                api_key=api_key,
+            )
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            result = response.json()
             
             content_parts = result.get("content", []) if isinstance(result, dict) else []
             for item in content_parts:
@@ -695,6 +848,103 @@ class AIReplyEngine:
         except Exception as e:
             logger.error(f"Anthropic API调用失败: {e}")
             raise
+
+    async def _call_with_fallback(
+        self,
+        settings: Dict[str, Any],
+        messages: List[Dict],
+        max_tokens: int = 8192,
+        temperature: float = 0.5,
+        cookie_id: str = "",
+    ) -> str:
+        """多模型回退调用
+        
+        按 FALLBACK_CHAIN 顺序尝试调用，如果主模型失败则尝试下一个。
+        仅在非超时的实际错误时回退。
+        
+        Args:
+            settings: AI设置
+            messages: 消息列表
+            max_tokens: 最大token数
+            temperature: 温度
+            cookie_id: 账号ID（用于日志）
+            
+        Returns:
+            AI回复文本
+            
+        Raises:
+            Exception: 所有模型都失败时抛出最后一个异常
+        """
+        from common.services.ai_provider_service import normalize_ai_provider_type
+        
+        # 构建回退链：主模型 + 配置的回退模型
+        fallback_chain = list(settings.get("fallback_chain", []))
+        primary_model = settings.get("model_name", "")
+        
+        # 构建完整回退列表（主模型在前）
+        all_models = [primary_model] + [m for m in fallback_chain if m != primary_model]
+        
+        last_error: Optional[Exception] = None
+        
+        for idx, model_name in enumerate(all_models):
+            # 构建当前模型的settings副本
+            attempt_settings = dict(settings)
+            attempt_settings["model_name"] = model_name
+            
+            # 重新识别provider_type（回退模型可能需要不同的provider）
+            attempt_settings["provider_type"] = normalize_ai_provider_type(
+                attempt_settings.get("provider_type") if idx == 0 else "openai_compatible",
+                attempt_settings.get("base_url"),
+                model_name,
+            )
+            
+            provider_type = attempt_settings["provider_type"]
+            label = "主模型" if idx == 0 else f"回退模型[{idx}]"
+            
+            try:
+                logger.info(
+                    f"【{cookie_id}】{label}调用: model={model_name}, provider={provider_type}"
+                )
+                
+                reply = None
+                if provider_type == "dashscope_app":
+                    reply = await self._call_dashscope_api(
+                        attempt_settings, messages, max_tokens=max_tokens, temperature=temperature
+                    )
+                elif provider_type == "gemini":
+                    reply = await self._call_gemini_api(
+                        attempt_settings, messages, max_tokens=max_tokens, temperature=temperature
+                    )
+                elif provider_type == "anthropic":
+                    reply = await self._call_anthropic_api(
+                        attempt_settings, messages, max_tokens=max_tokens, temperature=temperature
+                    )
+                else:
+                    reply = await self._call_openai_api(
+                        attempt_settings, messages, max_tokens=max_tokens, temperature=temperature
+                    )
+                
+                if reply:
+                    logger.info(f"【{cookie_id}】成功使用模型: {model_name} ({label})")
+                    return reply
+                    
+            except asyncio.TimeoutError:
+                # 超时不回退，直接向上抛出
+                logger.warning(f"【{cookie_id}】{label}超时: model={model_name}")
+                raise
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    f"【{cookie_id}】{label}失败: model={model_name}, error={type(e).__name__}: {e}"
+                )
+                if idx < len(all_models) - 1:
+                    logger.info(f"【{cookie_id}】尝试下一个回退模型...")
+                    continue
+        
+        # 所有模型都失败
+        if last_error:
+            raise last_error
+        raise RuntimeError(f"【{cookie_id}】所有模型调用失败")
 
     async def generate_reply(
         self,
@@ -727,8 +977,13 @@ class AIReplyEngine:
             if not await self.is_ai_enabled(cookie_id, db_session):
                 return None
             
-            # 检测意图
-            intent = self.detect_intent(message, cookie_id)
+            # 获取AI设置
+            settings = await self.get_ai_settings(cookie_id, db_session)
+            if not settings.get("ai_enabled"):
+                return None
+            
+            # 检测意图（支持LLM增强分类）
+            intent = await self.detect_intent_with_llm(message, cookie_id, settings)
             logger.info(f"【{cookie_id}】检测到意图: {intent}")
             
             # 保存用户消息到数据库
@@ -781,10 +1036,6 @@ class AIReplyEngine:
                         logger.info(f"【{cookie_id}】检测到有更新的消息，跳过当前消息")
                         return None
                 
-                # 获取AI设置
-                settings = await self.get_ai_settings(cookie_id, db_session)
-                if not settings.get("ai_enabled"):
-                    return None
                 
                 # 获取对话历史
                 context_stmt = (
@@ -914,14 +1165,15 @@ class AIReplyEngine:
                     settings.get("model_name"),
                 )
                 logger.info(f"【{cookie_id}】使用{provider_name} API生成回复 (provider_type={provider_type})")
-                if provider_type == "dashscope_app":
-                    reply = await self._call_dashscope_api(settings, messages)
-                elif provider_type == "gemini":
-                    reply = await self._call_gemini_api(settings, messages)
-                elif provider_type == "anthropic":
-                    reply = await self._call_anthropic_api(settings, messages)
-                else:
-                    reply = await self._call_openai_api(settings, messages)
+                
+                # 使用多模型回退机制调用AI
+                reply = await self._call_with_fallback(
+                    settings=settings,
+                    messages=messages,
+                    max_tokens=8192,
+                    temperature=0.5,
+                    cookie_id=cookie_id,
+                )
                 
                 if reply:
                     # 保存AI回复（带重试机制，防止连接丢失）

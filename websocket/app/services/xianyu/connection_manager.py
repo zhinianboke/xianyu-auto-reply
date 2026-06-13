@@ -29,6 +29,9 @@ class ConnectionState(Enum):
 class ConnectionManager:
     """WebSocket连接管理器"""
     
+    # 代理回退开关：默认关闭，防止代理失败时静默切换到直连导致IP变化触发风控
+    PROXY_FALLBACK_ENABLED = False
+    
     def __init__(self, xianyu_instance):
         """
         初始化连接管理器
@@ -204,11 +207,17 @@ class ConnectionManager:
                     
             except ImportError:
                 logger.warning(f"【{self.cookie_id}】代理连接需要安装 python-socks: pip install python-socks[asyncio]")
-                logger.warning(f"【{self.cookie_id}】将尝试不使用代理进行WebSocket连接")
+                if not self.PROXY_FALLBACK_ENABLED:
+                    logger.error(f"【{self.cookie_id}】代理回退已禁用（PROXY_FALLBACK_ENABLED=False），不会静默切换到直连，连接将失败")
+                    raise
+                logger.warning(f"【{self.cookie_id}】⚠️ 代理回退：将尝试不使用代理进行WebSocket连接（IP将变化，可能触发风控）")
                 proxy_sock = None
             except Exception as e:
                 logger.error(f"【{self.cookie_id}】通过代理建立连接失败: {str(e)}")
-                logger.warning(f"【{self.cookie_id}】将尝试不使用代理进行WebSocket连接")
+                if not self.PROXY_FALLBACK_ENABLED:
+                    logger.error(f"【{self.cookie_id}】代理回退已禁用（PROXY_FALLBACK_ENABLED=False），不会静默切换到直连，连接将失败")
+                    raise
+                logger.warning(f"【{self.cookie_id}】⚠️ 代理回退：将尝试不使用代理进行WebSocket连接（IP将变化，可能触发风控）")
                 proxy_sock = None
 
         try:

@@ -31,6 +31,8 @@ from app.services.scheduler.api_cookie_renew_task import api_cookie_renew_task_s
 from app.services.scheduler.close_notice_task import close_notice_task_service
 from app.services.scheduler.red_flower_task import RedFlowerTask
 from app.services.scheduler.db_backup_task import db_backup_task_service
+from app.services.scheduler.inventory_monitor_task import inventory_monitor_task_service
+from app.services.scheduler.delivery_timeout_task import delivery_timeout_task_service
 from app.services.scheduled_task_service import (
     ScheduledTaskService,
     TASK_CODE_REDELIVERY,
@@ -47,6 +49,8 @@ from app.services.scheduled_task_service import (
     TASK_CODE_CLOSE_NOTICE,
     TASK_CODE_RED_FLOWER,
     TASK_CODE_DB_BACKUP,
+    TASK_CODE_INVENTORY_MONITOR,
+    TASK_CODE_DELIVERY_TIMEOUT,
 )
 from common.db.session import async_session_maker
 
@@ -56,22 +60,29 @@ class SchedulerService:
     
     _instance: Optional["SchedulerService"] = None
     
+    # Task registry: task_code -> (service_attr, default_interval, default_enabled, display_name)
+    TASK_REGISTRY: dict[str, tuple[str, int, bool, str]] = {
+        TASK_CODE_REDELIVERY: ("_redelivery_task", 5, True, "补发货"),
+        TASK_CODE_RATE: ("_rate_task", 20, True, "补评价"),
+        TASK_CODE_POLISH: ("_polish_task", 60, True, "擦亮"),
+        TASK_CODE_DAY_SWITCH: ("_day_switch_task", 60, True, "平台日切换"),
+        TASK_CODE_CLEANUP_BROWSER_DATA: ("_cleanup_browser_data_task", 600, True, "清理被禁用账号浏览器数据"),
+        TASK_CODE_FETCH_ORDERS: ("_fetch_orders_task", 600, True, "获取闲鱼订单"),
+        TASK_CODE_FETCH_PENDING_ORDERS: ("_fetch_pending_orders_task", 60, True, "获取待发货订单"),
+        TASK_CODE_FETCH_ITEMS: ("_fetch_items_task", 1200, True, "获取闲鱼商品"),
+        TASK_CODE_LOGIN_RENEW: ("_login_renew_task", 600, True, "登录续期"),
+        TASK_CODE_COOKIES_REFRESH: ("_cookies_refresh_task", 600, True, "COOKIES续期"),
+        TASK_CODE_API_COOKIE_RENEW: ("_api_cookie_renew_task", 600, True, "接口续期Cookies"),
+        TASK_CODE_CLOSE_NOTICE: ("_close_notice_task", 600, False, "关闭账号消息通知"),
+        TASK_CODE_RED_FLOWER: ("_red_flower_task", 300, False, "求小红花"),
+        TASK_CODE_DB_BACKUP: ("_db_backup_task", 3600, True, "数据库备份"),
+        TASK_CODE_INVENTORY_MONITOR: ("_inventory_monitor_task", 300, True, "卡券库存监控"),
+        TASK_CODE_DELIVERY_TIMEOUT: ("_delivery_timeout_task", 60, True, "发货超时检测"),
+    }
+    
     def __init__(self):
         self._running = False
-        self._redelivery_task_handle: Optional[asyncio.Task] = None
-        self._rate_task_handle: Optional[asyncio.Task] = None
-        self._polish_task_handle: Optional[asyncio.Task] = None
-        self._day_switch_task_handle: Optional[asyncio.Task] = None
-        self._cleanup_browser_data_task_handle: Optional[asyncio.Task] = None
-        self._fetch_orders_task_handle: Optional[asyncio.Task] = None
-        self._fetch_pending_orders_task_handle: Optional[asyncio.Task] = None
-        self._fetch_items_task_handle: Optional[asyncio.Task] = None
-        self._login_renew_task_handle: Optional[asyncio.Task] = None
-        self._cookies_refresh_task_handle: Optional[asyncio.Task] = None
-        self._api_cookie_renew_task_handle: Optional[asyncio.Task] = None
-        self._close_notice_task_handle: Optional[asyncio.Task] = None
-        self._red_flower_task_handle: Optional[asyncio.Task] = None
-        self._db_backup_task_handle: Optional[asyncio.Task] = None
+        self._task_handles: dict[str, asyncio.Task] = {}
         self._redelivery_task = RedeliveryTask()
         self._rate_task = RateTask()
         self._polish_task = polish_task_service
@@ -86,6 +97,8 @@ class SchedulerService:
         self._close_notice_task = close_notice_task_service
         self._red_flower_task = RedFlowerTask()
         self._db_backup_task = db_backup_task_service
+        self._inventory_monitor_task = inventory_monitor_task_service
+        self._delivery_timeout_task = delivery_timeout_task_service
     
     @classmethod
     def get_instance(cls) -> "SchedulerService":
@@ -114,7 +127,7 @@ class SchedulerService:
     
     async def reload_all_configs(self) -> None:
         """重新加载所有任务配置"""
-        for task_code in [TASK_CODE_REDELIVERY, TASK_CODE_RATE, TASK_CODE_POLISH, TASK_CODE_DAY_SWITCH, TASK_CODE_CLEANUP_BROWSER_DATA, TASK_CODE_FETCH_ORDERS, TASK_CODE_FETCH_PENDING_ORDERS, TASK_CODE_FETCH_ITEMS, TASK_CODE_LOGIN_RENEW, TASK_CODE_COOKIES_REFRESH, TASK_CODE_API_COOKIE_RENEW, TASK_CODE_CLOSE_NOTICE, TASK_CODE_RED_FLOWER, TASK_CODE_DB_BACKUP]:
+        for task_code in self.TASK_REGISTRY:
             await self.reload_task_config(task_code)
     
     def start(self) -> None:
@@ -125,20 +138,10 @@ class SchedulerService:
         
         self._running = True
         # 启动任务循环
-        self._redelivery_task_handle = asyncio.create_task(self._run_redelivery_loop())
-        self._rate_task_handle = asyncio.create_task(self._run_rate_loop())
-        self._polish_task_handle = asyncio.create_task(self._run_polish_loop())
-        self._day_switch_task_handle = asyncio.create_task(self._run_day_switch_loop())
-        self._cleanup_browser_data_task_handle = asyncio.create_task(self._run_cleanup_browser_data_loop())
-        self._fetch_orders_task_handle = asyncio.create_task(self._run_fetch_orders_loop())
-        self._fetch_pending_orders_task_handle = asyncio.create_task(self._run_fetch_pending_orders_loop())
-        self._fetch_items_task_handle = asyncio.create_task(self._run_fetch_items_loop())
-        self._login_renew_task_handle = asyncio.create_task(self._run_login_renew_loop())
-        self._cookies_refresh_task_handle = asyncio.create_task(self._run_cookies_refresh_loop())
-        self._api_cookie_renew_task_handle = asyncio.create_task(self._run_api_cookie_renew_loop())
-        self._close_notice_task_handle = asyncio.create_task(self._run_close_notice_loop())
-        self._red_flower_task_handle = asyncio.create_task(self._run_red_flower_loop())
-        self._db_backup_task_handle = asyncio.create_task(self._run_db_backup_loop())
+        for task_code in self.TASK_REGISTRY:
+            self._task_handles[task_code] = asyncio.create_task(
+                self._run_task_loop(task_code)
+            )
         logger.info("[定时任务调度] 已启动")
     
     def stop(self) -> None:
@@ -148,170 +151,23 @@ class SchedulerService:
             return
         
         self._running = False
-        if self._redelivery_task_handle:
-            self._redelivery_task_handle.cancel()
-            self._redelivery_task_handle = None
-        if self._rate_task_handle:
-            self._rate_task_handle.cancel()
-            self._rate_task_handle = None
-        if self._polish_task_handle:
-            self._polish_task_handle.cancel()
-            self._polish_task_handle = None
-        if self._day_switch_task_handle:
-            self._day_switch_task_handle.cancel()
-            self._day_switch_task_handle = None
-        if self._cleanup_browser_data_task_handle:
-            self._cleanup_browser_data_task_handle.cancel()
-            self._cleanup_browser_data_task_handle = None
-        if self._fetch_orders_task_handle:
-            self._fetch_orders_task_handle.cancel()
-            self._fetch_orders_task_handle = None
-        if self._fetch_pending_orders_task_handle:
-            self._fetch_pending_orders_task_handle.cancel()
-            self._fetch_pending_orders_task_handle = None
-        if self._fetch_items_task_handle:
-            self._fetch_items_task_handle.cancel()
-            self._fetch_items_task_handle = None
-        if self._login_renew_task_handle:
-            self._login_renew_task_handle.cancel()
-            self._login_renew_task_handle = None
-        if self._cookies_refresh_task_handle:
-            self._cookies_refresh_task_handle.cancel()
-            self._cookies_refresh_task_handle = None
-        if self._api_cookie_renew_task_handle:
-            self._api_cookie_renew_task_handle.cancel()
-            self._api_cookie_renew_task_handle = None
-        if self._close_notice_task_handle:
-            self._close_notice_task_handle.cancel()
-            self._close_notice_task_handle = None
-        if self._red_flower_task_handle:
-            self._red_flower_task_handle.cancel()
-            self._red_flower_task_handle = None
-        if self._db_backup_task_handle:
-            self._db_backup_task_handle.cancel()
-            self._db_backup_task_handle = None
+        for handle in self._task_handles.values():
+            if handle:
+                handle.cancel()
+        self._task_handles.clear()
         logger.info("[定时任务调度] 已停止")
     
     def get_task_status(self) -> dict:
         """获取所有任务的运行状态"""
-        redelivery_config = ScheduledTaskService.get_cached_config(TASK_CODE_REDELIVERY)
-        rate_config = ScheduledTaskService.get_cached_config(TASK_CODE_RATE)
-        polish_config = ScheduledTaskService.get_cached_config(TASK_CODE_POLISH)
-        day_switch_config = ScheduledTaskService.get_cached_config(TASK_CODE_DAY_SWITCH)
-        cleanup_browser_data_config = ScheduledTaskService.get_cached_config(TASK_CODE_CLEANUP_BROWSER_DATA)
-        fetch_orders_config = ScheduledTaskService.get_cached_config(TASK_CODE_FETCH_ORDERS)
-        fetch_pending_orders_config = ScheduledTaskService.get_cached_config(TASK_CODE_FETCH_PENDING_ORDERS)
-        fetch_items_config = ScheduledTaskService.get_cached_config(TASK_CODE_FETCH_ITEMS)
-        login_renew_config = ScheduledTaskService.get_cached_config(TASK_CODE_LOGIN_RENEW)
-        cookies_refresh_config = ScheduledTaskService.get_cached_config(TASK_CODE_COOKIES_REFRESH)
-        api_cookie_renew_config = ScheduledTaskService.get_cached_config(TASK_CODE_API_COOKIE_RENEW)
-        close_notice_config = ScheduledTaskService.get_cached_config(TASK_CODE_CLOSE_NOTICE)
-        red_flower_config = ScheduledTaskService.get_cached_config(TASK_CODE_RED_FLOWER)
-        db_backup_config = ScheduledTaskService.get_cached_config(TASK_CODE_DB_BACKUP)
-        
-        return {
-            "running": self._running,
-            "tasks": {
-                TASK_CODE_REDELIVERY: {
-                    "config": redelivery_config or {"interval_seconds": 5, "enabled": True},
-                    "task_running": (
-                        self._redelivery_task_handle is not None 
-                        and not self._redelivery_task_handle.done()
-                    ),
-                },
-                TASK_CODE_RATE: {
-                    "config": rate_config or {"interval_seconds": 20, "enabled": True},
-                    "task_running": (
-                        self._rate_task_handle is not None 
-                        and not self._rate_task_handle.done()
-                    ),
-                },
-                TASK_CODE_POLISH: {
-                    "config": polish_config or {"interval_seconds": 60, "enabled": True},
-                    "task_running": (
-                        self._polish_task_handle is not None 
-                        and not self._polish_task_handle.done()
-                    ),
-                },
-                TASK_CODE_DAY_SWITCH: {
-                    "config": day_switch_config or {"interval_seconds": 60, "enabled": True},
-                    "task_running": (
-                        self._day_switch_task_handle is not None 
-                        and not self._day_switch_task_handle.done()
-                    ),
-                },
-                TASK_CODE_CLEANUP_BROWSER_DATA: {
-                    "config": cleanup_browser_data_config or {"interval_seconds": 600, "enabled": True},
-                    "task_running": (
-                        self._cleanup_browser_data_task_handle is not None 
-                        and not self._cleanup_browser_data_task_handle.done()
-                    ),
-                },
-                TASK_CODE_FETCH_ORDERS: {
-                    "config": fetch_orders_config or {"interval_seconds": 600, "enabled": True},
-                    "task_running": (
-                        self._fetch_orders_task_handle is not None 
-                        and not self._fetch_orders_task_handle.done()
-                    ),
-                },
-                TASK_CODE_FETCH_PENDING_ORDERS: {
-                    "config": fetch_pending_orders_config or {"interval_seconds": 60, "enabled": True},
-                    "task_running": (
-                        self._fetch_pending_orders_task_handle is not None
-                        and not self._fetch_pending_orders_task_handle.done()
-                    ),
-                },
-                TASK_CODE_FETCH_ITEMS: {
-                    "config": fetch_items_config or {"interval_seconds": 1200, "enabled": True},
-                    "task_running": (
-                        self._fetch_items_task_handle is not None
-                        and not self._fetch_items_task_handle.done()
-                    ),
-                },
-                TASK_CODE_LOGIN_RENEW: {
-                    "config": login_renew_config or {"interval_seconds": 600, "enabled": True},
-                    "task_running": (
-                        self._login_renew_task_handle is not None 
-                        and not self._login_renew_task_handle.done()
-                    ),
-                },
-                TASK_CODE_COOKIES_REFRESH: {
-                    "config": cookies_refresh_config or {"interval_seconds": 600, "enabled": True},
-                    "task_running": (
-                        self._cookies_refresh_task_handle is not None
-                        and not self._cookies_refresh_task_handle.done()
-                    ),
-                },
-                TASK_CODE_API_COOKIE_RENEW: {
-                    "config": api_cookie_renew_config or {"interval_seconds": 600, "enabled": True},
-                    "task_running": (
-                        self._api_cookie_renew_task_handle is not None
-                        and not self._api_cookie_renew_task_handle.done()
-                    ),
-                },
-                TASK_CODE_CLOSE_NOTICE: {
-                    "config": close_notice_config or {"interval_seconds": 600, "enabled": False},
-                    "task_running": (
-                        self._close_notice_task_handle is not None 
-                        and not self._close_notice_task_handle.done()
-                    ),
-                },
-                TASK_CODE_RED_FLOWER: {
-                    "config": red_flower_config or {"interval_seconds": 300, "enabled": False},
-                    "task_running": (
-                        self._red_flower_task_handle is not None
-                        and not self._red_flower_task_handle.done()
-                    ),
-                },
-                TASK_CODE_DB_BACKUP: {
-                    "config": db_backup_config or {"interval_seconds": 3600, "enabled": True},
-                    "task_running": (
-                        self._db_backup_task_handle is not None
-                        and not self._db_backup_task_handle.done()
-                    ),
-                },
+        tasks = {}
+        for task_code, (_, default_interval, default_enabled, _) in self.TASK_REGISTRY.items():
+            config = ScheduledTaskService.get_cached_config(task_code)
+            handle = self._task_handles.get(task_code)
+            tasks[task_code] = {
+                "config": config or {"interval_seconds": default_interval, "enabled": default_enabled},
+                "task_running": handle is not None and not handle.done(),
             }
-        }
+        return {"running": self._running, "tasks": tasks}
     
     async def trigger_task(self, task_code: str) -> None:
         """
@@ -320,511 +176,57 @@ class SchedulerService:
         Args:
             task_code: 任务代码
         """
-        if task_code == TASK_CODE_REDELIVERY:
-            logger.info("[定时任务调度] 手动触发补发货任务")
-            await self._redelivery_task.execute()
-        elif task_code == TASK_CODE_RATE:
-            logger.info("[定时任务调度] 手动触发补评价任务")
-            await self._rate_task.execute()
-        elif task_code == TASK_CODE_POLISH:
-            logger.info("[定时任务调度] 手动触发擦亮任务")
-            await self._polish_task.execute()
-        elif task_code == TASK_CODE_DAY_SWITCH:
-            logger.info("[定时任务调度] 手动触发平台日切换任务")
-            await self._day_switch_task.execute()
-        elif task_code == TASK_CODE_CLEANUP_BROWSER_DATA:
-            logger.info("[定时任务调度] 手动触发清理被禁用账号浏览器数据任务")
-            await self._cleanup_browser_data_task.execute()
-        elif task_code == TASK_CODE_FETCH_ORDERS:
-            logger.info("[定时任务调度] 手动触发获取闲鱼订单任务")
-            await self._fetch_orders_task.execute()
-        elif task_code == TASK_CODE_FETCH_PENDING_ORDERS:
-            logger.info("[定时任务调度] 手动触发获取待发货订单任务")
-            await self._fetch_pending_orders_task.execute()
-        elif task_code == TASK_CODE_FETCH_ITEMS:
-            logger.info("[定时任务调度] 手动触发获取闲鱼商品任务")
-            await self._fetch_items_task.execute()
-        elif task_code == TASK_CODE_LOGIN_RENEW:
-            logger.info("[定时任务调度] 手动触发登录续期任务")
-            await self._login_renew_task.execute()
-        elif task_code == TASK_CODE_COOKIES_REFRESH:
-            logger.info("[定时任务调度] 手动触发COOKIES续期任务")
-            await self._cookies_refresh_task.execute()
-        elif task_code == TASK_CODE_API_COOKIE_RENEW:
-            logger.info("[定时任务调度] 手动触发接口续期Cookies任务")
-            await self._api_cookie_renew_task.execute()
-        elif task_code == TASK_CODE_CLOSE_NOTICE:
-            logger.info("[定时任务调度] 手动触发关闭账号消息通知任务")
-            await self._close_notice_task.execute()
-        elif task_code == TASK_CODE_RED_FLOWER:
-            logger.info("[定时任务调度] 手动触发求小红花任务")
-            await self._red_flower_task.execute()
-        elif task_code == TASK_CODE_DB_BACKUP:
-            logger.info("[定时任务调度] 手动触发数据库备份任务")
-            await self._db_backup_task.execute()
-        else:
+        if task_code not in self.TASK_REGISTRY:
             logger.warning(f"[定时任务调度] 未知的任务代码: {task_code}")
+            return
+        
+        service_attr, _, _, display_name = self.TASK_REGISTRY[task_code]
+        service = getattr(self, service_attr)
+        logger.info(f"[定时任务调度] 手动触发{display_name}任务")
+        await service.execute()
     
-    async def _run_redelivery_loop(self) -> None:
-        """补发货任务执行循环"""
-        logger.info("[定时任务调度] 补发货任务循环开始")
+    async def _run_task_loop(self, task_code: str, timeout: float = 300.0) -> None:
+        """通用任务执行循环
+        
+        Args:
+            task_code: 任务代码
+            timeout: 任务执行超时时间（秒），默认300秒
+        """
+        service_attr, default_interval, default_enabled, display_name = self.TASK_REGISTRY[task_code]
+        service = getattr(self, service_attr)
+        
+        logger.info(f"[定时任务调度] {display_name}任务循环开始")
         
         # 初始加载配置
-        await self.reload_task_config(TASK_CODE_REDELIVERY)
+        await self.reload_task_config(task_code)
         
         while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_REDELIVERY)
+            config = ScheduledTaskService.get_cached_config(task_code)
             if not config:
-                config = {"interval_seconds": 5, "enabled": True}
+                config = {"interval_seconds": default_interval, "enabled": default_enabled}
             
-            interval = config.get("interval_seconds", 5)
-            enabled = config.get("enabled", True)
+            interval = config.get("interval_seconds", default_interval)
+            enabled = config.get("enabled", default_enabled)
             
             if enabled:
                 try:
-                    await self._redelivery_task.execute()
+                    await asyncio.wait_for(service.execute(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    logger.error(f"[定时任务调度] {display_name}任务执行超时({timeout}秒)")
                 except asyncio.CancelledError:
-                    logger.info("[定时任务调度] 补发货任务被取消")
+                    logger.info(f"[定时任务调度] {display_name}任务被取消")
                     break
                 except Exception as e:
-                    logger.error(f"[定时任务调度] 补发货任务执行异常: {e}")
+                    logger.error(f"[定时任务调度] {display_name}任务执行异常: {e}")
             
             # 等待下一次执行
             try:
                 await asyncio.sleep(interval)
             except asyncio.CancelledError:
-                logger.info("[定时任务调度] 补发货任务等待被取消")
+                logger.info(f"[定时任务调度] {display_name}任务等待被取消")
                 break
         
-        logger.info("[定时任务调度] 补发货任务循环结束")
-    
-    async def _run_rate_loop(self) -> None:
-        """补评价任务执行循环"""
-        logger.info("[定时任务调度] 补评价任务循环开始")
-        
-        # 初始加载配置
-        await self.reload_task_config(TASK_CODE_RATE)
-        
-        while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_RATE)
-            if not config:
-                config = {"interval_seconds": 20, "enabled": True}
-            
-            interval = config.get("interval_seconds", 20)
-            enabled = config.get("enabled", True)
-            
-            if enabled:
-                try:
-                    await self._rate_task.execute()
-                except asyncio.CancelledError:
-                    logger.info("[定时任务调度] 补评价任务被取消")
-                    break
-                except Exception as e:
-                    logger.error(f"[定时任务调度] 补评价任务执行异常: {e}")
-            
-            # 等待下一次执行
-            try:
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("[定时任务调度] 补评价任务等待被取消")
-                break
-        
-        logger.info("[定时任务调度] 补评价任务循环结束")
-    
-    async def _run_polish_loop(self) -> None:
-        """擦亮任务执行循环"""
-        logger.info("[定时任务调度] 擦亮任务循环开始")
-        
-        # 初始加载配置
-        await self.reload_task_config(TASK_CODE_POLISH)
-        
-        while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_POLISH)
-            if not config:
-                config = {"interval_seconds": 60, "enabled": True}
-            
-            interval = config.get("interval_seconds", 60)
-            enabled = config.get("enabled", True)
-            
-            if enabled:
-                try:
-                    await self._polish_task.execute()
-                except asyncio.CancelledError:
-                    logger.info("[定时任务调度] 擦亮任务被取消")
-                    break
-                except Exception as e:
-                    logger.error(f"[定时任务调度] 擦亮任务执行异常: {e}")
-            
-            # 等待下一次执行
-            try:
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("[定时任务调度] 擦亮任务等待被取消")
-                break
-        
-        logger.info("[定时任务调度] 擦亮任务循环结束")
-    
-    async def _run_day_switch_loop(self) -> None:
-        """平台日切换任务执行循环"""
-        logger.info("[定时任务调度] 平台日切换任务循环开始")
-        
-        # 初始加载配置
-        await self.reload_task_config(TASK_CODE_DAY_SWITCH)
-        
-        while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_DAY_SWITCH)
-            if not config:
-                config = {"interval_seconds": 60, "enabled": True}
-            
-            interval = config.get("interval_seconds", 60)
-            enabled = config.get("enabled", True)
-            
-            if enabled:
-                try:
-                    await self._day_switch_task.execute()
-                except asyncio.CancelledError:
-                    logger.info("[定时任务调度] 平台日切换任务被取消")
-                    break
-                except Exception as e:
-                    logger.error(f"[定时任务调度] 平台日切换任务执行异常: {e}")
-            
-            # 等待下一次执行
-            try:
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("[定时任务调度] 平台日切换任务等待被取消")
-                break
-        
-        logger.info("[定时任务调度] 平台日切换任务循环结束")
-    
-    async def _run_cleanup_browser_data_loop(self) -> None:
-        """清理被禁用账号浏览器数据任务执行循环"""
-        logger.info("[定时任务调度] 清理被禁用账号浏览器数据任务循环开始")
-        
-        # 初始加载配置
-        await self.reload_task_config(TASK_CODE_CLEANUP_BROWSER_DATA)
-        
-        while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_CLEANUP_BROWSER_DATA)
-            if not config:
-                config = {"interval_seconds": 600, "enabled": True}
-            
-            interval = config.get("interval_seconds", 600)
-            enabled = config.get("enabled", True)
-            
-            if enabled:
-                try:
-                    await self._cleanup_browser_data_task.execute()
-                except asyncio.CancelledError:
-                    logger.info("[定时任务调度] 清理被禁用账号浏览器数据任务被取消")
-                    break
-                except Exception as e:
-                    logger.error(f"[定时任务调度] 清理被禁用账号浏览器数据任务执行异常: {e}")
-            
-            # 等待下一次执行
-            try:
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("[定时任务调度] 清理被禁用账号浏览器数据任务等待被取消")
-                break
-        
-        logger.info("[定时任务调度] 清理被禁用账号浏览器数据任务循环结束")
-
-    async def _run_fetch_orders_loop(self) -> None:
-        """获取闲鱼订单任务执行循环"""
-        logger.info("[定时任务调度] 获取闲鱼订单任务循环开始")
-        
-        # 初始加载配置
-        await self.reload_task_config(TASK_CODE_FETCH_ORDERS)
-        
-        while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_FETCH_ORDERS)
-            if not config:
-                config = {"interval_seconds": 600, "enabled": True}
-            
-            interval = config.get("interval_seconds", 600)
-            enabled = config.get("enabled", True)
-            
-            if enabled:
-                try:
-                    await self._fetch_orders_task.execute()
-                except asyncio.CancelledError:
-                    logger.info("[定时任务调度] 获取闲鱼订单任务被取消")
-                    break
-                except Exception as e:
-                    logger.error(f"[定时任务调度] 获取闲鱼订单任务执行异常: {e}")
-            
-            # 等待下一次执行
-            try:
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("[定时任务调度] 获取闲鱼订单任务等待被取消")
-                break
-        
-        logger.info("[定时任务调度] 获取闲鱼订单任务循环结束")
-
-    async def _run_fetch_pending_orders_loop(self) -> None:
-        """获取待发货订单任务执行循环"""
-        logger.info("[定时任务调度] 获取待发货订单任务循环开始")
-
-        # 初始加载配置
-        await self.reload_task_config(TASK_CODE_FETCH_PENDING_ORDERS)
-
-        while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_FETCH_PENDING_ORDERS)
-            if not config:
-                config = {"interval_seconds": 60, "enabled": True}
-
-            interval = config.get("interval_seconds", 60)
-            enabled = config.get("enabled", True)
-
-            if enabled:
-                try:
-                    await self._fetch_pending_orders_task.execute()
-                except asyncio.CancelledError:
-                    logger.info("[定时任务调度] 获取待发货订单任务被取消")
-                    break
-                except Exception as e:
-                    logger.error(f"[定时任务调度] 获取待发货订单任务执行异常: {e}")
-
-            # 等待下一次执行
-            try:
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("[定时任务调度] 获取待发货订单任务等待被取消")
-                break
-
-        logger.info("[定时任务调度] 获取待发货订单任务循环结束")
-
-    async def _run_fetch_items_loop(self) -> None:
-        """获取闲鱼商品任务执行循环"""
-        logger.info("[定时任务调度] 获取闲鱼商品任务循环开始")
-
-        # 初始加载配置
-        await self.reload_task_config(TASK_CODE_FETCH_ITEMS)
-
-        while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_FETCH_ITEMS)
-            if not config:
-                config = {"interval_seconds": 1200, "enabled": True}
-
-            interval = config.get("interval_seconds", 1200)
-            enabled = config.get("enabled", True)
-
-            if enabled:
-                try:
-                    await self._fetch_items_task.execute()
-                except asyncio.CancelledError:
-                    logger.info("[定时任务调度] 获取闲鱼商品任务被取消")
-                    break
-                except Exception as e:
-                    logger.error(f"[定时任务调度] 获取闲鱼商品任务执行异常: {e}")
-
-            # 等待下一次执行
-            try:
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("[定时任务调度] 获取闲鱼商品任务等待被取消")
-                break
-
-        logger.info("[定时任务调度] 获取闲鱼商品任务循环结束")
-
-    async def _run_login_renew_loop(self) -> None:
-        """登录续期任务执行循环"""
-        logger.info("[定时任务调度] 登录续期任务循环开始")
-        
-        # 初始加载配置
-        await self.reload_task_config(TASK_CODE_LOGIN_RENEW)
-        
-        while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_LOGIN_RENEW)
-            if not config:
-                config = {"interval_seconds": 600, "enabled": True}
-            
-            interval = config.get("interval_seconds", 600)
-            enabled = config.get("enabled", True)
-            
-            if enabled:
-                try:
-                    await self._login_renew_task.execute()
-                except asyncio.CancelledError:
-                    logger.info("[定时任务调度] 登录续期任务被取消")
-                    break
-                except Exception as e:
-                    logger.error(f"[定时任务调度] 登录续期任务执行异常: {e}")
-            
-            # 等待下一次执行
-            try:
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("[定时任务调度] 登录续期任务等待被取消")
-                break
-        
-        logger.info("[定时任务调度] 登录续期任务循环结束")
-
-    async def _run_cookies_refresh_loop(self) -> None:
-        """COOKIES续期任务执行循环"""
-        logger.info("[定时任务调度] COOKIES续期任务循环开始")
-        
-        await self.reload_task_config(TASK_CODE_COOKIES_REFRESH)
-        
-        while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_COOKIES_REFRESH)
-            if not config:
-                config = {"interval_seconds": 600, "enabled": True}
-            
-            interval = config.get("interval_seconds", 600)
-            enabled = config.get("enabled", True)
-            
-            if enabled:
-                try:
-                    await self._cookies_refresh_task.execute()
-                except asyncio.CancelledError:
-                    logger.info("[定时任务调度] COOKIES续期任务被取消")
-                    break
-                except Exception as e:
-                    logger.error(f"[定时任务调度] COOKIES续期任务执行异常: {e}")
-            
-            try:
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("[定时任务调度] COOKIES续期任务等待被取消")
-                break
-        
-        logger.info("[定时任务调度] COOKIES续期任务循环结束")
-
-    async def _run_api_cookie_renew_loop(self) -> None:
-        """接口续期Cookies任务执行循环"""
-        logger.info("[定时任务调度] 接口续期Cookies任务循环开始")
-
-        # 初始加载配置
-        await self.reload_task_config(TASK_CODE_API_COOKIE_RENEW)
-
-        while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_API_COOKIE_RENEW)
-            if not config:
-                config = {"interval_seconds": 600, "enabled": True}
-
-            interval = config.get("interval_seconds", 600)
-            enabled = config.get("enabled", True)
-
-            if enabled:
-                try:
-                    await self._api_cookie_renew_task.execute()
-                except asyncio.CancelledError:
-                    logger.info("[定时任务调度] 接口续期Cookies任务被取消")
-                    break
-                except Exception as e:
-                    logger.error(f"[定时任务调度] 接口续期Cookies任务执行异常: {e}")
-
-            # 等待下一次执行
-            try:
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("[定时任务调度] 接口续期Cookies任务等待被取消")
-                break
-
-        logger.info("[定时任务调度] 接口续期Cookies任务循环结束")
-
-    async def _run_close_notice_loop(self) -> None:
-        """关闭账号消息通知任务执行循环"""
-        logger.info("[定时任务调度] 关闭账号消息通知任务循环开始")
-        
-        # 初始加载配置
-        await self.reload_task_config(TASK_CODE_CLOSE_NOTICE)
-        
-        while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_CLOSE_NOTICE)
-            if not config:
-                config = {"interval_seconds": 600, "enabled": False}
-            
-            interval = config.get("interval_seconds", 600)
-            enabled = config.get("enabled", False)
-            
-            if enabled:
-                try:
-                    await self._close_notice_task.execute()
-                except asyncio.CancelledError:
-                    logger.info("[定时任务调度] 关闭账号消息通知任务被取消")
-                    break
-                except Exception as e:
-                    logger.error(f"[定时任务调度] 关闭账号消息通知任务执行异常: {e}")
-            
-            # 等待下一次执行
-            try:
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("[定时任务调度] 关闭账号消息通知任务等待被取消")
-                break
-        
-        logger.info("[定时任务调度] 关闭账号消息通知任务循环结束")
-
-    async def _run_red_flower_loop(self) -> None:
-        """求小红花任务执行循环"""
-        logger.info("[定时任务调度] 求小红花任务循环开始")
-        
-        # 初始加载配置
-        await self.reload_task_config(TASK_CODE_RED_FLOWER)
-        
-        while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_RED_FLOWER)
-            if not config:
-                config = {"interval_seconds": 300, "enabled": False}
-            
-            interval = config.get("interval_seconds", 300)
-            enabled = config.get("enabled", False)
-            
-            if enabled:
-                try:
-                    await self._red_flower_task.execute()
-                except asyncio.CancelledError:
-                    logger.info("[定时任务调度] 求小红花任务被取消")
-                    break
-                except Exception as e:
-                    logger.error(f"[定时任务调度] 求小红花任务执行异常: {e}")
-            
-            # 等待下一次执行
-            try:
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("[定时任务调度] 求小红花任务等待被取消")
-                break
-        
-        logger.info("[定时任务调度] 求小红花任务循环结束")
-
-
-    async def _run_db_backup_loop(self) -> None:
-        """数据库备份任务执行循环"""
-        logger.info("[定时任务调度] 数据库备份任务循环开始")
-
-        # 初始加载配置
-        await self.reload_task_config(TASK_CODE_DB_BACKUP)
-
-        while self._running:
-            config = ScheduledTaskService.get_cached_config(TASK_CODE_DB_BACKUP)
-            if not config:
-                config = {"interval_seconds": 3600, "enabled": True}
-
-            interval = config.get("interval_seconds", 3600)
-            enabled = config.get("enabled", True)
-
-            if enabled:
-                try:
-                    await self._db_backup_task.execute()
-                except asyncio.CancelledError:
-                    logger.info("[定时任务调度] 数据库备份任务被取消")
-                    break
-                except Exception as e:
-                    logger.error(f"[定时任务调度] 数据库备份任务执行异常: {e}")
-
-            # 等待下一次执行
-            try:
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("[定时任务调度] 数据库备份任务等待被取消")
-                break
-
-        logger.info("[定时任务调度] 数据库备份任务循环结束")
+        logger.info(f"[定时任务调度] {display_name}任务循环结束")
 
 
 # 全局实例获取函数

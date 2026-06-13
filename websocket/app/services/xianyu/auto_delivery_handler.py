@@ -23,10 +23,15 @@ from app.services.xianyu.delivery_utils import (
 )
 from app.services.xianyu.yifan_api_handler import YifanApiHandler
 from common.utils.fish_nick_utils import get_buyer_fish_nick
+from common.utils.delivery_cooldown import delivery_cooldown as _delivery_cooldown
+from app.services.xianyu.delivery_pipeline import DeliveryPipeline, DeliveryContext
 
 
 class AutoDeliveryHandler:
     """自动发货处理器"""
+    
+    # 配置标志：是否使用新的发货管道（默认关闭，保持向后兼容）
+    USE_DELIVERY_PIPELINE = False
     
     def __init__(self, parent):
         """
@@ -804,28 +809,31 @@ class AutoDeliveryHandler:
     
     # ==================== 发货冷却检查 ====================
     
-    def can_auto_delivery(self, order_id: str) -> bool:
-        """检查是否可以进行自动发货（防重复发货）- 基于订单ID"""
+    async def can_auto_delivery(self, order_id: str) -> bool:
+        """检查是否可以进行自动发货（防重复发货）- 基于订单ID
+        
+        使用 Redis 优先的 DeliveryCooldown 模块（多实例安全），
+        Redis 不可用时自动降级为内存缓存。
+        """
         if not order_id:
             # 如果没有订单ID，则不进行冷却检查，允许发货
             return True
 
-        current_time = time.time()
-        last_delivery = self.last_delivery_time.get(order_id, 0)
-
-        if current_time - last_delivery < self.delivery_cooldown:
+        in_cooldown = await _delivery_cooldown.check(order_id)
+        if in_cooldown:
             logger.info(f"【{self.cookie_id}】订单 {order_id} 在冷却期内，跳过自动发货")
             return False
 
         return True
 
-    def mark_delivery_sent(self, order_id: str):
-        """标记订单已发货"""
+    async def mark_delivery_sent(self, order_id: str):
+        """标记订单已发货（通过 Redis/内存冷却管理器设置冷却）"""
+        # 记录发货时间（用于内存清理，保留向后兼容）
         current_time = time.time()
-        # 记录发货时间（用于内存清理）
         self.delivery_sent_orders[order_id] = current_time
-        # 更新发货时间，用于冷却检查
         self.last_delivery_time[order_id] = current_time
+        # 通过 DeliveryCooldown 模块设置冷却（Redis 优先，降级内存）
+        await _delivery_cooldown.set(order_id)
         logger.info(f"【{self.cookie_id}】订单 {order_id} 已标记为发货（冷却期已设置）")
 
 
@@ -845,6 +853,25 @@ class AutoDeliveryHandler:
                 "重复关闭订单 / 重复给买家发提示消息 / 重复写 fail_reason" 的副作用。
                 若为 None，本方法仍按原逻辑自行调 pre_check。
         """
+        # 当启用发货管道时，委托给 DeliveryPipeline 执行
+        if self.USE_DELIVERY_PIPELINE:
+            pipeline = DeliveryPipeline(self)
+            ctx = DeliveryContext(
+                websocket=websocket,
+                message=message,
+                send_user_name=send_user_name,
+                send_user_id=send_user_id,
+                item_id=item_id,
+                chat_id=chat_id,
+                msg_time=msg_time,
+                override_order_id=override_order_id,
+                pre_check_result=pre_check_result,
+            )
+            result = await pipeline.execute(ctx)
+            if not result.success:
+                logger.info(f'[{msg_time}] 【{self.cookie_id}】发货管道执行结束: {result.reason}')
+            return
+        
         try:
             # 检查商品是否属于当前cookies
             if item_id and item_id != "未知商品":
@@ -933,7 +960,7 @@ class AutoDeliveryHandler:
                 return
 
             # 第二重检查：基于时间的冷却机制
-            if not self.can_auto_delivery(order_id):
+            if not await self.can_auto_delivery(order_id):
                 logger.info(f'[{msg_time}] 【{self.cookie_id}】订单 {order_id} 在冷却期内，跳过发货')
                 return
 
@@ -975,7 +1002,7 @@ class AutoDeliveryHandler:
                     return
 
                 # 第四重检查：获取锁后再次检查冷却状态
-                if not self.can_auto_delivery(order_id):
+                if not await self.can_auto_delivery(order_id):
                     logger.info(f'[{msg_time}] 【{self.cookie_id}】订单 {order_id} 在获取锁后检查发现仍在冷却期，跳过发货')
                     return
 
@@ -1104,7 +1131,7 @@ class AutoDeliveryHandler:
                         logger.info(f'[{msg_time}] 【{self.cookie_id}】订单 {order_id} 已发货，无需重复处理')
                     elif delivery_contents:
                         # 标记已发货（防重复）- 基于订单ID
-                        self.mark_delivery_sent(order_id)
+                        await self.mark_delivery_sent(order_id)
 
                         # 标记锁为持有状态，并启动延迟释放任务
                         self._lock_hold_info[lock_key] = {
@@ -1836,7 +1863,7 @@ class AutoDeliveryHandler:
                                     logger.error(f"【{self.cookie_id}】更新订单状态失败: {self._safe_str(e)}")
                                 
                                 # 标记已发货，防止重复处理
-                                self.mark_delivery_sent(order_id)
+                                await self.mark_delivery_sent(order_id)
                                 
                                 # 直接返回None，不再发送卡券内容
                                 self._last_delivery_fail_reason = f"订单 {order_id} 已发货过，不再发送卡券"

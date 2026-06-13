@@ -16,6 +16,31 @@ from loguru import logger
 from common.models.ai_chat_message import AIChatMessage
 
 
+def _estimate_tokens(text: str) -> int:
+    """估算文本的token数量
+    
+    优先使用tiktoken（如果已安装），否则使用简单的字符数估算。
+    对于中文，大约1个汉字≈1-2个token；英文约4个字符≈1个token。
+    这里使用保守估算：len(text) // 2 + 1
+    
+    Args:
+        text: 输入文本
+        
+    Returns:
+        估算的token数
+    """
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+        return len(enc.encode(text))
+    except ImportError:
+        # tiktoken未安装，使用字符数估算
+        return len(text) // 2 + 1
+    except Exception:
+        logger.debug("AIConversationService: tiktoken unavailable, using char-based estimation")
+        return len(text) // 2 + 1
+
+
 class AIConversationService:
     """AI对话服务
     
@@ -28,6 +53,7 @@ class AIConversationService:
     
     def __init__(self, session: AsyncSession):
         self.session = session
+        self._summary_cache: Dict[str, tuple] = {}  # {cache_key: (summary_text, timestamp)}
     
     async def save_message(
         self,
@@ -111,6 +137,61 @@ class AIConversationService:
             
         except Exception as e:
             logger.error(f"获取对话上下文失败: {e}")
+            return []
+    
+    async def get_context_with_token_limit(
+        self,
+        chat_id: str,
+        cookie_id: str,
+        limit: int = 20,
+        max_tokens: int = 2000,
+    ) -> List[Dict[str, str]]:
+        """获取对话上下文（带token限制）
+        
+        从数据库获取对话历史，并确保总token数不超过max_tokens。
+        从最旧的消息开始截断，保留最新的对话内容。
+        
+        Args:
+            chat_id: 聊天ID
+            cookie_id: 账号ID
+            limit: 最大记录数
+            max_tokens: 最大token数（默认2000）
+            
+        Returns:
+            对话历史列表 [{"role": "user", "content": "..."}]
+        """
+        try:
+            # 先获取原始上下文
+            context = await self.get_context(chat_id, cookie_id, limit)
+            
+            if not context:
+                return []
+            
+            # 从最新消息开始计算token，保留尽可能多的近期消息
+            total_tokens = 0
+            selected_start = len(context)
+            
+            # 从后往前（最新到最旧）累加token
+            for i in range(len(context) - 1, -1, -1):
+                msg_tokens = _estimate_tokens(context[i]["content"])
+                if total_tokens + msg_tokens > max_tokens:
+                    # 超出限制，从此处截断（保留i+1之后的消息）
+                    selected_start = i + 1
+                    break
+                total_tokens += msg_tokens
+            
+            truncated = context[selected_start:]
+            
+            if len(truncated) < len(context):
+                logger.info(
+                    f"对话上下文token截断: {len(context)} -> {len(truncated)} 条消息, "
+                    f"估算token: ~{total_tokens}/{max_tokens}"
+                )
+            
+            return truncated
+            
+        except Exception as e:
+            logger.error(f"获取token限制上下文失败: {e}")
             return []
     
     async def get_bargain_count(
@@ -224,6 +305,132 @@ class AIConversationService:
             await self.session.rollback()
             return False
     
+    async def generate_summary(
+        self,
+        chat_id: str,
+        cookie_id: str,
+        max_length: int = 200,
+    ) -> Optional[str]:
+        """生成对话摘要
+
+        加载完整对话历史，使用AI模型生成简洁摘要。
+        摘要会缓存30分钟。
+
+        Args:
+            chat_id: 聊天ID
+            cookie_id: 账号ID
+            max_length: 摘要最大字符数
+
+        Returns:
+            摘要文本，失败返回None
+        """
+        try:
+            # 检查缓存
+            cache_key = f"summary:{chat_id}:{cookie_id}"
+            cached = self._summary_cache.get(cache_key)
+            if cached:
+                cached_text, cached_time = cached
+                if (datetime.now(timezone.utc) - cached_time).total_seconds() < 1800:
+                    logger.debug(f"对话摘要缓存命中: chat_id={chat_id}")
+                    return cached_text
+
+            # 获取对话历史（不限制条数，获取全部）
+            context = await self.get_context(chat_id, cookie_id, limit=100)
+            if not context:
+                return None
+
+            # 构建对话文本
+            conversation_text = "\n".join(
+                f"{'用户' if msg['role'] == 'user' else 'AI'}: {msg['content']}"
+                for msg in context
+            )
+
+            # 截断过长的对话
+            if len(conversation_text) > 3000:
+                conversation_text = conversation_text[-3000:]
+
+            # 构建摘要请求
+            summary_prompt = f"""请为以下对话生成一个简洁的摘要（不超过{max_length}字），
+包含：对话主题、用户主要需求、当前状态（是否已成交/议价中/咨询中）。
+
+对话内容：
+{conversation_text}"""
+
+            # 调用AI模型生成摘要
+            summary = await self._call_ai_for_summary(summary_prompt, max_length)
+            if summary:
+                # 缓存结果
+                self._summary_cache[cache_key] = (summary, datetime.now(timezone.utc))
+                logger.info(f"生成对话摘要成功: chat_id={chat_id}, 长度={len(summary)}")
+                return summary
+
+            return None
+
+        except Exception as e:
+            logger.error(f"生成对话摘要失败: {e}")
+            return None
+
+    async def _call_ai_for_summary(self, prompt: str, max_length: int) -> Optional[str]:
+        """调用AI模型生成摘要
+
+        Args:
+            prompt: 摘要请求提示词
+            max_length: 最大字符数
+
+        Returns:
+            摘要文本
+        """
+        try:
+            import httpx
+            from common.services.ai_client_pool import get_ai_client_pool
+            from common.models.xy_account import XYAccount
+            from sqlalchemy import select
+
+            # 获取AI配置（使用第一个可用账号的配置）
+            stmt = select(XYAccount).where(
+                XYAccount.ai_enabled == True,
+                XYAccount.ai_base_url.isnot(None),
+                XYAccount.ai_api_key.isnot(None),
+            ).limit(1)
+            result = await self.session.execute(stmt)
+            account = result.scalar_one_or_none()
+
+            if not account:
+                logger.warning("未找到AI配置，无法生成摘要")
+                return None
+
+            # 使用AI客户端池
+            client_pool = get_ai_client_pool()
+            client = await client_pool.get_client(
+                provider_type='openai_compatible',
+                base_url=account.ai_base_url,
+                api_key=account.ai_api_key,
+            )
+
+            # 调用AI API
+            response = await client.chat.completions.create(
+                model=account.ai_model_name or "gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "你是一个对话摘要助手，负责生成简洁的对话摘要。"},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=200,
+                temperature=0.3,
+            )
+
+            if response.choices and response.choices[0].message:
+                summary = response.choices[0].message.content.strip()
+                # 确保不超过最大长度
+                if len(summary) > max_length:
+                    summary = summary[:max_length-3] + "..."
+                return summary
+
+            return None
+
+        except Exception as e:
+            logger.error(f"调用AI生成摘要失败: {e}")
+            return None
+
     async def get_conversation_stats(
         self,
         cookie_id: str,

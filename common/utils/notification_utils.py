@@ -13,8 +13,9 @@ import time
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
-import aiohttp
 from loguru import logger
+
+from common.utils.http_pool import http_pool
 
 
 def parse_notification_config(config) -> Dict[str, Any]:
@@ -37,7 +38,7 @@ def parse_notification_config(config) -> Dict[str, Any]:
         return {"config": config}
 
 
-async def send_dingtalk_notification(config_data: Dict[str, Any], message: str) -> bool:
+async def send_dingtalk_notification(config_data: Dict[str, Any], message: str, timeout: int = 15) -> bool:
     """发送钉钉通知
     
     Args:
@@ -74,21 +75,66 @@ async def send_dingtalk_notification(config_data: Dict[str, Any], message: str) 
             }
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(webhook_url, json=data, timeout=10) as response:
-                if response.status == 200:
-                    logger.info("📱 钉钉通知发送成功")
-                    return True
-                else:
-                    logger.warning(f"📱 钉钉通知发送失败: {response.status}")
-                    return False
+        async with http_pool.post(webhook_url, json=data, timeout=timeout) as response:
+            if response.status == 200:
+                logger.info("📱 钉钉通知发送成功")
+                return True
+            else:
+                logger.warning(f"📱 钉钉通知发送失败: {response.status}")
+                return False
 
     except Exception as e:
         logger.error(f"📱 发送钉钉通知异常: {e}")
         return False
 
 
-async def send_feishu_notification(config_data: Dict[str, Any], message: str) -> bool:
+async def send_feishu_card(webhook_url: str, card_data: Dict[str, Any], timeout: int = 15) -> bool:
+    """发送飞书交互卡片消息
+
+    使用飞书 webhook 发送 interactive card 消息 (schema 2.0)。
+
+    Args:
+        webhook_url: 飞书 webhook 地址
+        card_data: 飞书卡片 JSON 结构（由 FeishuCardBuilder 生成）
+        timeout: 请求超时时间（秒）
+
+    Returns:
+        是否发送成功
+    """
+    try:
+        if not webhook_url:
+            logger.warning("📱 飞书卡片通知 - Webhook URL配置为空")
+            return False
+
+        data = {
+            "msg_type": "interactive",
+            "card": card_data,
+        }
+
+        async with http_pool.post(webhook_url, json=data, timeout=timeout) as response:
+            if response.status == 200:
+                response_text = await response.text()
+                try:
+                    response_json = json.loads(response_text)
+                    if response_json.get('code') == 0:
+                        logger.info("📱 飞书卡片通知发送成功")
+                        return True
+                    else:
+                        logger.warning(f"📱 飞书卡片通知发送失败: {response_json.get('msg')}")
+                        return False
+                except json.JSONDecodeError:
+                    logger.info("📱 飞书卡片通知发送成功")
+                    return True
+            else:
+                logger.warning(f"📱 飞书卡片通知发送失败: HTTP {response.status}")
+                return False
+
+    except Exception as e:
+        logger.error(f"📱 发送飞书卡片通知异常: {e}")
+        return False
+
+
+async def send_feishu_notification(config_data: Dict[str, Any], message: str, timeout: int = 15) -> bool:
     """发送飞书通知
     
     Args:
@@ -127,24 +173,23 @@ async def send_feishu_notification(config_data: Dict[str, Any], message: str) ->
         if sign:
             data["sign"] = sign
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(webhook_url, json=data, timeout=10) as response:
-                if response.status == 200:
-                    response_text = await response.text()
-                    try:
-                        response_json = json.loads(response_text)
-                        if response_json.get('code') == 0:
-                            logger.info("📱 飞书通知发送成功")
-                            return True
-                        else:
-                            logger.warning(f"📱 飞书通知发送失败: {response_json.get('msg')}")
-                            return False
-                    except json.JSONDecodeError:
+        async with http_pool.post(webhook_url, json=data, timeout=timeout) as response:
+            if response.status == 200:
+                response_text = await response.text()
+                try:
+                    response_json = json.loads(response_text)
+                    if response_json.get('code') == 0:
                         logger.info("📱 飞书通知发送成功")
                         return True
-                else:
-                    logger.warning(f"📱 飞书通知发送失败: HTTP {response.status}")
-                    return False
+                    else:
+                        logger.warning(f"📱 飞书通知发送失败: {response_json.get('msg')}")
+                        return False
+                except json.JSONDecodeError:
+                    logger.info("📱 飞书通知发送成功")
+                    return True
+            else:
+                logger.warning(f"📱 飞书通知发送失败: HTTP {response.status}")
+                return False
 
     except Exception as e:
         logger.error(f"📱 发送飞书通知异常: {e}")
@@ -152,7 +197,7 @@ async def send_feishu_notification(config_data: Dict[str, Any], message: str) ->
 
 
 
-async def send_bark_notification(config_data: Dict[str, Any], message: str) -> bool:
+async def send_bark_notification(config_data: Dict[str, Any], message: str, timeout: int = 15) -> bool:
     """发送Bark通知"""
     try:
         server_url = config_data.get('server_url', 'https://api.day.app').rstrip('/')
@@ -180,21 +225,20 @@ async def send_bark_notification(config_data: Dict[str, Any], message: str) -> b
         if url:
             data["url"] = url
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(api_url, json=data, timeout=10) as response:
-                if response.status == 200:
-                    response_text = await response.text()
-                    try:
-                        response_json = json.loads(response_text)
-                        if response_json.get('code') == 200:
-                            logger.info("📱 Bark通知发送成功")
-                            return True
-                    except json.JSONDecodeError:
-                        if 'success' in response_text.lower() or 'ok' in response_text.lower():
-                            logger.info("📱 Bark通知发送成功")
-                            return True
-                logger.warning(f"📱 Bark通知发送失败: HTTP {response.status}")
-                return False
+        async with http_pool.post(api_url, json=data, timeout=timeout) as response:
+            if response.status == 200:
+                response_text = await response.text()
+                try:
+                    response_json = json.loads(response_text)
+                    if response_json.get('code') == 200:
+                        logger.info("📱 Bark通知发送成功")
+                        return True
+                except json.JSONDecodeError:
+                    if 'success' in response_text.lower() or 'ok' in response_text.lower():
+                        logger.info("📱 Bark通知发送成功")
+                        return True
+            logger.warning(f"📱 Bark通知发送失败: HTTP {response.status}")
+            return False
 
     except Exception as e:
         logger.error(f"📱 发送Bark通知异常: {e}")
@@ -404,7 +448,7 @@ async def send_email_notification(
         return False
 
 
-async def send_webhook_notification(config_data: Dict[str, Any], message: str) -> bool:
+async def send_webhook_notification(config_data: Dict[str, Any], message: str, timeout: int = 15) -> bool:
     """发送Webhook通知"""
     try:
         webhook_url = config_data.get('webhook_url', '')
@@ -429,17 +473,16 @@ async def send_webhook_notification(config_data: Dict[str, Any], message: str) -
             'source': 'xianyu-auto-reply'
         }
 
-        async with aiohttp.ClientSession() as session:
-            if http_method == 'POST':
-                async with session.post(webhook_url, json=data, headers=headers, timeout=10) as response:
-                    if response.status == 200:
-                        logger.info("📱 Webhook通知发送成功")
-                        return True
-            elif http_method == 'PUT':
-                async with session.put(webhook_url, json=data, headers=headers, timeout=10) as response:
-                    if response.status == 200:
-                        logger.info("📱 Webhook通知发送成功")
-                        return True
+        if http_method == 'POST':
+            async with http_pool.post(webhook_url, json=data, headers=headers, timeout=timeout) as response:
+                if response.status == 200:
+                    logger.info("📱 Webhook通知发送成功")
+                    return True
+        elif http_method == 'PUT':
+            async with http_pool.put(webhook_url, json=data, headers=headers, timeout=timeout) as response:
+                if response.status == 200:
+                    logger.info("📱 Webhook通知发送成功")
+                    return True
         
         logger.warning(f"📱 Webhook通知发送失败")
         return False
@@ -449,7 +492,7 @@ async def send_webhook_notification(config_data: Dict[str, Any], message: str) -
         return False
 
 
-async def send_wechat_notification(config_data: Dict[str, Any], message: str) -> bool:
+async def send_wechat_notification(config_data: Dict[str, Any], message: str, timeout: int = 15) -> bool:
     """发送微信通知"""
     try:
         webhook_url = config_data.get('webhook_url', '')
@@ -462,20 +505,19 @@ async def send_wechat_notification(config_data: Dict[str, Any], message: str) ->
             "text": {"content": message}
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(webhook_url, json=data, timeout=10) as response:
-                if response.status == 200:
-                    logger.info("📱 微信通知发送成功")
-                    return True
-                logger.warning(f"📱 微信通知发送失败: {response.status}")
-                return False
+        async with http_pool.post(webhook_url, json=data, timeout=timeout) as response:
+            if response.status == 200:
+                logger.info("📱 微信通知发送成功")
+                return True
+            logger.warning(f"📱 微信通知发送失败: {response.status}")
+            return False
 
     except Exception as e:
         logger.error(f"📱 发送微信通知异常: {e}")
         return False
 
 
-async def send_telegram_notification(config_data: Dict[str, Any], message: str) -> bool:
+async def send_telegram_notification(config_data: Dict[str, Any], message: str, timeout: int = 15) -> bool:
     """发送Telegram通知"""
     try:
         bot_token = config_data.get('bot_token', '')
@@ -492,13 +534,12 @@ async def send_telegram_notification(config_data: Dict[str, Any], message: str) 
             'parse_mode': 'HTML'
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(api_url, json=data, timeout=10) as response:
-                if response.status == 200:
-                    logger.info("📱 Telegram通知发送成功")
-                    return True
-                logger.warning(f"📱 Telegram通知发送失败: {response.status}")
-                return False
+        async with http_pool.post(api_url, json=data, timeout=timeout) as response:
+            if response.status == 200:
+                logger.info("📱 Telegram通知发送成功")
+                return True
+            logger.warning(f"📱 Telegram通知发送失败: {response.status}")
+            return False
 
     except Exception as e:
         logger.error(f"📱 发送Telegram通知异常: {e}")
