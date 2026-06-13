@@ -13,6 +13,7 @@ import {
   updateDisclaimerSettings,
   updateLoginBrandingSettings,
   updateProxySettings,
+  updateDistributionSettings,
   updateThemeAppearanceSettings,
   updateThemeFontSettings,
   testEmailSend,
@@ -59,6 +60,8 @@ export function Settings() {
   const [themeFontSaving, setThemeFontSaving] = useState(false)
   // 代理设置独立保存状态：与页面右上角"保存设置"按钮的 saving 分离，互不影响
   const [proxySaving, setProxySaving] = useState(false)
+  // 分销设置独立保存状态：与页面右上角"保存设置"按钮的 saving 分离，互不影响
+  const [distributionSaving, setDistributionSaving] = useState(false)
   const [settings, setSettings] = useState<SystemSettings | null>(null)
 
   // SMTP密码显示状态
@@ -334,6 +337,28 @@ export function Settings() {
       addToast({ type: 'error', message: getApiErrorMessage(error, '代理设置保存失败') })
     } finally {
       setProxySaving(false)
+    }
+  }
+
+  // 分销设置独立保存：只 PUT distribution.* 相关键
+  // 不使用页面右上角"保存设置"按钮，避免影响其他未改动的设置
+  const handleDistributionSave = async () => {
+    if (!settings) {
+      return
+    }
+
+    try {
+      setDistributionSaving(true)
+      const result = await updateDistributionSettings(settings)
+      if (result.success) {
+        addToast({ type: 'success', message: result.message || '分销设置保存成功' })
+      } else {
+        addToast({ type: 'error', message: result.message || '分销设置保存失败' })
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '分销设置保存失败') })
+    } finally {
+      setDistributionSaving(false)
     }
   }
 
@@ -1157,6 +1182,17 @@ export function Settings() {
                     ? '按订单金额的百分比收取手续费，例如输入 5 表示每笔收取订单金额的 5%'
                     : '分销交易时收取的固定手续费金额，例如输入 2.00 表示每笔收取 2 元'}
                 </p>
+              </div>
+              {/* 独立保存按钮：只提交分销相关设置，不影响页面其他未改动字段 */}
+              <div className="flex justify-end pt-2">
+                <button
+                  onClick={handleDistributionSave}
+                  disabled={distributionSaving}
+                  className="btn-ios-primary"
+                >
+                  {distributionSaving ? <ButtonLoading /> : <Save className="w-4 h-4" />}
+                  保存分销设置
+                </button>
               </div>
             </div>
           </div>

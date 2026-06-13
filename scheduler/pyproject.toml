@@ -24,9 +24,7 @@ dependencies = [
     "idna>=3.6",
     "certifi>=2023.11.0",
     "python-dateutil>=2.8.0",
-    # 固定 1.56.x：其 chromium(build 1200/Chromium 143) 仍走 builds/chromium，npmmirror 已镜像(amd64+arm64)；
-    # 1.57+ 改用 builds/cft，npmmirror 未镜像(amd64 缺失)会导致 playwright install 404
-    "playwright>=1.56.0,<1.57.0",
+    "playwright",
     "Pillow>=10.0.0",
 ]
 

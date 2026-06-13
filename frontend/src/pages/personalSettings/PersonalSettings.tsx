@@ -7,7 +7,7 @@
  * 3. 后续可扩展更多个人设置项
  */
 import { useState, useEffect, useRef } from 'react'
-import { User, RefreshCw, Wallet, Plus, Key, Link2, Copy, RotateCcw, Save, Package, X, ScrollText, ArrowUpFromLine, Upload, QrCode } from 'lucide-react'
+import { User, RefreshCw, Wallet, Plus, Key, Link2, Copy, RotateCcw, Save, Package, X, ScrollText, ArrowUpFromLine, Upload, QrCode, Eye, EyeOff } from 'lucide-react'
 import { getUserSetting, updateUserSetting, changePassword, getDockCode, resetDockCode, getSecretKey, resetSecretKey, uploadPaymentQrcode, getSystemSettings } from '@/api/settings'
 import { createWithdraw, getSettlementRecords, type SettlementRecord } from '@/api/payment'
 import { useUIStore } from '@/store/uiStore'
@@ -24,6 +24,8 @@ const CONTACT_QQ_KEY = 'contact_qq'
 const REDELIVERY_TRIGGER_KEYWORD_KEY = 'redelivery_trigger_keyword'
 const PAYMENT_QRCODE_KEY = 'payment_qrcode'
 const PAYMENT_TYPE_KEY = 'payment_type'
+// 对接卡密秘钥的 key（按用户存储，用于「分销卡券」页面对接上游卡券系统）
+const CARD_SECRET_KEY = 'distribution.card_secret_key'
 
 export function PersonalSettings() {
   const { addToast } = useUIStore()
@@ -61,6 +63,11 @@ export function PersonalSettings() {
   const [secretKeyLoading, setSecretKeyLoading] = useState(false)
   const [resettingSecretKey, setResettingSecretKey] = useState(false)
   const [secretKeyResetConfirmOpen, setSecretKeyResetConfirmOpen] = useState(false)
+
+  // 对接卡密秘钥状态（用于分销卡券对接上游系统）
+  const [cardSecretKey, setCardSecretKey] = useState('')
+  const [savingCardSecretKey, setSavingCardSecretKey] = useState(false)
+  const [showCardSecretKey, setShowCardSecretKey] = useState(false)
 
   // 联系方式状态
   const [contactWechat, setContactWechat] = useState('')
@@ -109,6 +116,11 @@ export function PersonalSettings() {
       const qqResult = await getUserSetting(CONTACT_QQ_KEY)
       if (qqResult.success && qqResult.value !== undefined) {
         setContactQQ(qqResult.value)
+      }
+      // 加载对接卡密秘钥
+      const cardKeyResult = await getUserSetting(CARD_SECRET_KEY)
+      if (cardKeyResult.success && cardKeyResult.value !== undefined) {
+        setCardSecretKey(cardKeyResult.value)
       }
     } catch {
       setBalance('0.00')
@@ -207,6 +219,23 @@ export function PersonalSettings() {
     }).catch(() => {
       addToast({ type: 'error', message: '复制失败，请手动复制' })
     })
+  }
+
+  // 保存对接卡密秘钥
+  const handleSaveCardSecretKey = async () => {
+    try {
+      setSavingCardSecretKey(true)
+      const result = await updateUserSetting(CARD_SECRET_KEY, cardSecretKey.trim(), '对接卡密秘钥')
+      if (result.success) {
+        addToast({ type: 'success', message: '对接卡密秘钥已保存' })
+      } else {
+        addToast({ type: 'error', message: result.message || '保存失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '保存对接卡密秘钥失败' })
+    } finally {
+      setSavingCardSecretKey(false)
+    }
   }
 
   const loadSettlementRecords = async (page: number = 1, pageSize: number = settlementPageSize) => {
@@ -606,6 +635,42 @@ export function PersonalSettings() {
               >
                 <RotateCcw className={`w-4 h-4 ${resettingSecretKey ? 'animate-spin' : ''}`} />
                 更换
+              </button>
+            </div>
+          </div>
+
+          {/* 对接卡密秘钥设置 */}
+          <div>
+            <label className="input-label">对接卡密秘钥</label>
+            <p className="text-xs text-gray-500 mb-2">用于「分销卡券」页面对接上游卡券系统的鉴权秘钥，请妥善保管。修改后点击「保存」生效。</p>
+            <p className="text-xs text-blue-600 dark:text-blue-400 mb-2">如需获取对接卡密秘钥，请联系 QQ：531779707 微信：zhinian_znbk</p>
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="relative flex-1 min-w-[260px]">
+                <input
+                  type="text"
+                  value={cardSecretKey}
+                  onChange={(e) => setCardSecretKey(e.target.value)}
+                  placeholder="请输入对接卡密秘钥"
+                  className="input-ios pr-10"
+                  style={{ WebkitTextSecurity: showCardSecretKey ? 'none' : 'disc' } as React.CSSProperties}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowCardSecretKey(!showCardSecretKey)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+                  title={showCardSecretKey ? '隐藏' : '显示'}
+                >
+                  {showCardSecretKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <button
+                onClick={handleSaveCardSecretKey}
+                disabled={savingCardSecretKey}
+                className="btn-ios-primary text-sm"
+                title="保存对接卡密秘钥"
+              >
+                {savingCardSecretKey ? <ButtonLoading /> : <Save className="w-4 h-4" />}
+                保存
               </button>
             </div>
           </div>

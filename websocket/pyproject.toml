@@ -14,9 +14,7 @@ dependencies = [
     "pydantic-settings>=2.1.0",
     "aiohttp>=3.9.0",
     "aiohttp-socks>=0.8.0",
-    # 固定 1.56.x：其 chromium(build 1200/Chromium 143) 仍走 builds/chromium，npmmirror 已镜像(amd64+arm64)；
-    # 1.57+ 改用 builds/cft，npmmirror 未镜像(amd64 缺失)会导致 playwright install 404
-    "playwright>=1.56.0,<1.57.0",
+    "playwright",
     "DrissionPage>=4.0.0",
     "python-multipart>=0.0.6",
     "websockets==12.0",

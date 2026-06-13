@@ -68,6 +68,7 @@ const routeTitles: Record<string, string> = {
   '/personal-settings': '个人设置',
   '/cards': '卡券管理',
   '/distribution/supply': '货源广场',
+  '/distribution/card-pickup': '分销卡券',
   '/distribution/sources': '货源管理',
   '/distribution/docked': '对接的商品',
   '/distribution/dealers': '分销商管理',

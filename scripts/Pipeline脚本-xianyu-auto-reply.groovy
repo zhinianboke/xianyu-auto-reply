@@ -33,9 +33,9 @@
         PLATFORMS = 'linux/amd64,linux/arm64'
 
         // 构建资源限制（作用于 buildx 的 buildkit 容器）—— 已按 2核/2G 服务器调小
-        BUILD_MEMORY = '1536m'       // buildkit 容器内存上限（总内存 2G，留 ~0.5G 给系统/守护进程）
-        BUILD_CPU_QUOTA = '150000'   // CPU 配额(微秒/100ms)：100000=1核，150000=1.5核，留点给系统
-        BUILD_PARALLELISM = '1'      // 低内存下串行构建，避免并发步骤叠加内存导致 OOM
+        BUILD_MEMORY = '6536m'       // buildkit 容器内存上限（总内存 2G，留 ~0.5G 给系统/守护进程）
+        BUILD_CPU_QUOTA = '550000'   // CPU 配额(微秒/100ms)：100000=1核，150000=1.5核，留点给系统
+        BUILD_PARALLELISM = '2'      // 低内存下串行构建，避免并发步骤叠加内存导致 OOM
     }
     
     stages {

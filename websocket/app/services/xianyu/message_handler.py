@@ -551,7 +551,7 @@ class MessageHandler:
                 # 过滤不需要打印的消息类型
                 biz_type = decrypted.get('bizType', '') if isinstance(decrypted, dict) else ''
                 if biz_type not in ('IDLE_SPACE_PRICING',) and not self.is_system_tip_message(decrypted):
-                    logger.warning(f"【{self.cookie_id}】解密消息: {json.dumps(decrypted, ensure_ascii=False)[:1000]}")
+                    logger.info(f"【{self.cookie_id}】解密消息: {json.dumps(decrypted, ensure_ascii=False)[:1000]}")
                 return decrypted
         except Exception as e:
             logger.debug(f"【{self.cookie_id}】消息解密失败: {safe_str(e)}")

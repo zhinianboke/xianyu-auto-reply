@@ -95,6 +95,7 @@ export const mainNavItems: NavEntry[] = [
     children: [
       { key: 'distribution-sources', icon: Link2, label: '货源管理', path: '/distribution/sources' },
       { key: 'distribution-supply', icon: PackageSearch, label: '货源广场', path: '/distribution/supply' },
+      { key: 'distribution-card-pickup', icon: Ticket, label: '分销卡券', path: '/distribution/card-pickup' },
       { key: 'distribution-docked', icon: PackageCheck, label: '对接的商品', path: '/distribution/docked' },
       { key: 'distribution-agent-orders', icon: ShoppingCart, label: '代理订单', path: '/distribution/agent-orders' },
       { key: 'distribution-dealers', icon: Users, label: '分销商管理', path: '/distribution/dealers' },
