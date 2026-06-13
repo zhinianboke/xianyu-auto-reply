@@ -12,9 +12,11 @@
 """
 from __future__ import annotations
 
+import time
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.api import deps
@@ -22,6 +24,24 @@ from app.services.card_dock_service import CardDockService
 from common.models.user import User
 
 router = APIRouter(prefix="/card-dock", tags=["分销卡券"])
+
+# Rate limiter: {user_id: [timestamps]}
+_purchase_rate_limit: dict[int, list[float]] = {}
+_PURCHASE_MAX_REQUESTS = 5
+_PURCHASE_WINDOW_SECONDS = 60
+
+
+def _check_purchase_rate_limit(user_id: int) -> bool:
+    """Return True if within limit, False if exceeded."""
+    now = time.time()
+    window_start = now - _PURCHASE_WINDOW_SECONDS
+    timestamps = _purchase_rate_limit.setdefault(user_id, [])
+    # Prune old entries
+    _purchase_rate_limit[user_id] = [t for t in timestamps if t > window_start]
+    if len(_purchase_rate_limit[user_id]) >= _PURCHASE_MAX_REQUESTS:
+        return False
+    _purchase_rate_limit[user_id].append(now)
+    return True
 
 
 class CardPurchaseRequest(BaseModel):
@@ -89,6 +109,11 @@ async def purchase_card(
     service: CardDockService = Depends(deps.get_card_dock_service),
 ) -> Dict[str, Any]:
     """提货：通过上游卡券系统购买并返回卡密"""
+    if not _check_purchase_rate_limit(current_user.id):
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "code": 429, "message": "请求过于频繁，请稍后再试", "data": None},
+        )
     if not payload.source_code.strip():
         return {"success": False, "code": 400, "message": "请先选择卡券商", "data": None}
     if payload.quantity < 1:
