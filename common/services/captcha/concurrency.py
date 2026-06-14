@@ -6,9 +6,12 @@
 """
 from __future__ import annotations
 
+import asyncio
+import functools
 import threading
 import time
-from typing import Any, Dict, Optional, Set
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, Dict, Optional, Set
 
 from loguru import logger
 
@@ -500,4 +503,52 @@ class SliderConcurrencyManager:
 
 # 全局实例
 concurrency_manager = SliderConcurrencyManager()
+
+
+# ==================== 浏览器任务专用线程池 ====================
+#
+# 所有"会长时间阻塞"的浏览器/Playwright 任务（滑块验证、密码登录、Cookie 续期等）
+# 都必须通过本线程池调度，而不是 asyncio 默认线程池。
+#
+# 原因：这些任务内部会等待并发槽位/账号锁（可能 park 长达 120 秒）并驱动浏览器，
+# 若占用 asyncio 默认线程池，会与 aiohttp 的 DNS 解析（ThreadedResolver 默认用同一线程池）
+# 争抢线程。一旦默认线程池被这些长任务占满，aiohttp 的 getaddrinfo 排不到线程，
+# 所有 token 刷新等网络请求会集体在超时时间后失败（即使网络本身完全正常）。
+
+_browser_task_executor: Optional[ThreadPoolExecutor] = None
+_browser_task_executor_lock = threading.Lock()
+
+
+def get_browser_task_executor() -> ThreadPoolExecutor:
+    """返回浏览器任务专用线程池（与 asyncio 默认线程池隔离的单例）。
+
+    线程池大小 = 浏览器并发槽位上限 + 少量余量。余量用于容纳"已进入任务但正在等待
+    槽位/账号锁"的线程，避免它们排队时阻塞新任务进入；整体仍有上限，绝不会无限增长。
+    """
+    global _browser_task_executor
+    if _browser_task_executor is None:
+        with _browser_task_executor_lock:
+            if _browser_task_executor is None:
+                try:
+                    slots = int(_slot_manager.max_concurrent or 1)
+                except Exception:
+                    slots = 1
+                max_workers = max(2, slots + 2)
+                _browser_task_executor = ThreadPoolExecutor(
+                    max_workers=max_workers,
+                    thread_name_prefix="browser-task",
+                )
+                logger.info(f"浏览器任务专用线程池初始化完成，max_workers={max_workers}")
+    return _browser_task_executor
+
+
+async def run_browser_task(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """在浏览器任务专用线程池中运行同步阻塞函数（替代 asyncio.to_thread）。
+
+    用于所有长阻塞的浏览器/验证码任务，避免占用 asyncio 默认线程池导致
+    aiohttp DNS 解析被饿死、网络请求集体超时。
+    """
+    loop = asyncio.get_running_loop()
+    call = functools.partial(func, *args, **kwargs)
+    return await loop.run_in_executor(get_browser_task_executor(), call)
 

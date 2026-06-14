@@ -23,6 +23,7 @@ from common.utils.cookie_refresh import (
     parse_cookie_string,
 )
 from common.utils.browser_utils import ensure_playwright_browser_path, get_chromium_executable_path
+from common.services.captcha.concurrency import run_browser_task
 
 try:
     from playwright.sync_api import sync_playwright
@@ -230,7 +231,8 @@ class CookiesRefreshService:
             cookie=cookie,
             metadata_json=metadata_json,
         )
-        return await asyncio.to_thread(self._sync_refresh_account_cookies, account)
+        # 浏览器续期为长阻塞任务，走专用线程池，避免占用 asyncio 默认线程池拖垮 aiohttp
+        return await run_browser_task(self._sync_refresh_account_cookies, account)
 
 
 cookies_refresh_service = CookiesRefreshService()

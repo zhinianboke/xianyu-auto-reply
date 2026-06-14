@@ -14,6 +14,8 @@ from common.services.captcha.concurrency import (
     get_browser_stats,
     SliderConcurrencyManager,
     concurrency_manager,
+    get_browser_task_executor,
+    run_browser_task,
 )
 
 __all__ = [
@@ -27,4 +29,6 @@ __all__ = [
     "get_browser_stats",
     "SliderConcurrencyManager",
     "concurrency_manager",
+    "get_browser_task_executor",
+    "run_browser_task",
 ]

@@ -15,10 +15,12 @@ import json
 import random
 import time
 import aiohttp
+import requests
 from typing import Optional
 from loguru import logger
 
 from common.db.session import async_session_maker
+from common.services.captcha.concurrency import run_browser_task
 from common.utils.cookie_refresh import get_account_by_identity, update_account_cookies_in_db
 from common.utils.xianyu_utils import trans_cookies, generate_sign
 from common.utils.time_utils import get_beijing_now_naive
@@ -362,7 +364,6 @@ class CookieTokenManager:
             新的验证 URL；若接口已不再要求验证或解析失败则返回 None（此时沿用原链接）。
         """
         try:
-            import requests
             from app.services.captcha.slider_stealth import CAPTCHA_NOT_REQUIRED
 
             # 幂等缓存：本轮若已确认 token 可用，直接返回哨兵，绝不重复请求 token 接口。
@@ -505,11 +506,11 @@ class CookieTokenManager:
                 self._refetch_new_token = None
                 self._refetch_new_cookies = {}
 
-                # 使用 asyncio.to_thread 在独立线程中运行同步的 Playwright 代码
-                # 这样可以避免 greenlet 的线程切换问题
+                # 在浏览器任务专用线程池中运行同步的 Playwright 代码（不能用 asyncio.to_thread，
+                # 否则会占用默认线程池、饿死 aiohttp 的 DNS 解析，导致所有 token 请求集体超时）
                 # run_slider_verification_with_fallback: 主引擎(Playwright)失败后自动用 DrissionPage 兜底
                 # 返回 (是否成功, cookies, 通过引擎: playwright/drissionpage/None)
-                success, cookies, captcha_engine = await asyncio.to_thread(
+                success, cookies, captcha_engine = await run_browser_task(
                     run_slider_verification_with_fallback,
                     f"{self.cookie_id}",
                     verification_url,
@@ -1289,7 +1290,8 @@ class CookieTokenManager:
                     except Exception:
                         pass
             
-            result = await asyncio.to_thread(_do_password_login)
+            # 密码登录同样驱动浏览器，必须走浏览器任务专用线程池，避免占用默认线程池
+            result = await run_browser_task(_do_password_login)
             
             if result:
                 logger.info(f"【{self.cookie_id}】密码登录成功，获取到Cookie")

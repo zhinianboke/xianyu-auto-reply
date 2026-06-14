@@ -8,7 +8,6 @@ COOKIES续期内部接口
 """
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from fastapi import APIRouter
@@ -18,6 +17,7 @@ from sqlalchemy import select
 
 from common.db.session import async_session_maker
 from common.models.xy_account import XYAccount
+from common.services.captcha.concurrency import run_browser_task
 from common.services.cookie_renew_browser_service import cookie_renew_browser_service
 from app.services.xianyu.cookies_refresh_service import cookies_refresh_service
 
@@ -46,8 +46,9 @@ async def browser_renew(request: BrowserRenewRequest) -> dict[str, Any]:
     """
     logger.info(f"【内部API】收到账号 {request.account_id} 的浏览器续期委托请求")
     try:
-        # renew_local 为同步阻塞执行（内部含等待槽位/账号锁 + 浏览器操作），放入线程池
-        result = await asyncio.to_thread(
+        # renew_local 为同步阻塞执行（内部含等待槽位/账号锁 + 浏览器操作），
+        # 走浏览器任务专用线程池，避免占用 asyncio 默认线程池拖垮 aiohttp 网络请求
+        result = await run_browser_task(
             cookie_renew_browser_service.renew_local,
             request.cookies_str,
             request.account_id,

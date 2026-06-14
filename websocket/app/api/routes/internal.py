@@ -1651,7 +1651,9 @@ async def _standalone_password_login(account_id: str, trigger_reason: str) -> di
                 except Exception:
                     pass
         
-        result = await asyncio.to_thread(_do_login)
+        # 密码登录驱动浏览器，走浏览器任务专用线程池，避免占用默认线程池拖垮 aiohttp
+        from app.services.captcha.concurrency import run_browser_task
+        result = await run_browser_task(_do_login)
         
         if result:
             # 登录成功，更新数据库中的Cookie

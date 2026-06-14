@@ -32,6 +32,7 @@ from common.core.config import get_settings
 from common.services.captcha.concurrency import (
     account_browser_lock_manager,
     concurrency_manager,
+    run_browser_task,
 )
 from common.utils.xianyu_utils import trans_cookies
 from common.utils.browser_utils import ensure_playwright_browser_path, get_chromium_executable_path
@@ -178,8 +179,9 @@ class CookieRenewBrowserService:
 
         logger.info(f"{log_prefix} 开始执行浏览器续期（本地）...")
 
-        # 在线程中执行同步Playwright操作
-        result = await asyncio.to_thread(
+        # 在浏览器任务专用线程池中执行同步Playwright操作（隔离于 asyncio 默认线程池，
+        # 避免长时间阻塞的浏览器续期占满默认池、饿死 aiohttp DNS 解析导致网络请求超时）
+        result = await run_browser_task(
             self._sync_browser_renew, cookies_str, account_id, log_prefix
         )
 
