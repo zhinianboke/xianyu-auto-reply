@@ -38,6 +38,7 @@ interface AccountFilters {
   auto_polish: boolean | null
   auto_confirm: boolean | null
   has_password: boolean | null
+  online: boolean | null
   disable_reason: string | null
   account_id: string | null
 }
@@ -93,6 +94,7 @@ export function Accounts() {
     auto_polish: null,
     auto_confirm: null,
     has_password: null,
+    online: null,
     disable_reason: null,
     account_id: null,
   })
@@ -255,6 +257,7 @@ export function Accounts() {
       if (currentFilters.auto_polish !== null) filterParams.auto_polish = currentFilters.auto_polish
       if (currentFilters.auto_confirm !== null) filterParams.auto_confirm = currentFilters.auto_confirm
       if (currentFilters.has_password !== null) filterParams.has_password = currentFilters.has_password
+      if (currentFilters.online !== null) filterParams.online = currentFilters.online
       if (currentFilters.disable_reason && currentFilters.disable_reason.trim()) {
         filterParams.disable_reason = currentFilters.disable_reason.trim()
       }
@@ -310,6 +313,7 @@ export function Accounts() {
       auto_polish: null,
       auto_confirm: null,
       has_password: null,
+      online: null,
       disable_reason: null,
       account_id: null,
     }
@@ -2032,6 +2036,20 @@ export function Accounts() {
                 </select>
               </div>
 
+              {/* 在线状态筛选（口径同仪表盘“在线账号”） */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-gray-500 dark:text-gray-400">在线状态</label>
+                <select
+                  value={filters.online === null ? '' : String(filters.online)}
+                  onChange={(e) => handleFilterChange('online', e.target.value === '' ? null : e.target.value === 'true')}
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">全部</option>
+                  <option value="true">在线</option>
+                  <option value="false">离线</option>
+                </select>
+              </div>
+
               {/* 账号ID筛选（模糊搜索，回车/失焦/查询按钮均会提交） */}
               <div className="flex flex-col gap-1 col-span-2">
                 <label className="text-xs text-gray-500 dark:text-gray-400">账号ID</label>
@@ -2118,6 +2136,7 @@ export function Accounts() {
                   <th className="whitespace-nowrap min-w-[80px]">过滤词</th>
                   <th className="whitespace-nowrap min-w-[80px]">今日回复</th>
                   <th className="whitespace-nowrap min-w-[120px]">状态</th>
+                  <th className="whitespace-nowrap min-w-[90px]">在线状态</th>
                   <th className="whitespace-nowrap min-w-[90px]">配置密码</th>
                   <th className="whitespace-nowrap min-w-[280px]">功能开关</th>
                   <th className="whitespace-nowrap min-w-[90px]">暂停时间</th>
@@ -2127,7 +2146,7 @@ export function Accounts() {
               <tbody>
                 {accounts.length === 0 ? (
                   <tr>
-                    <td colSpan={isAdmin ? 11 : 10}>
+                    <td colSpan={isAdmin ? 12 : 11}>
                       <div className="empty-state py-8">
                         <p className="text-slate-500 dark:text-slate-400">暂无账号，请添加新账号</p>
                       </div>
@@ -2188,6 +2207,16 @@ export function Accounts() {
                           </span>
                         )}
                       </div>
+                    </td>
+                    <td>
+                      <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded ${
+                        account.online
+                          ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+                          : 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400'
+                      }`}>
+                        <span className={`status-dot ${account.online ? 'status-dot-success' : 'status-dot-danger'}`} />
+                        {account.online ? '在线' : '离线'}
+                      </span>
                     </td>
                     <td>
                       <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded ${

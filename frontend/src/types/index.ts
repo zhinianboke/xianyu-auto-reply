@@ -43,6 +43,7 @@ export interface Account {
   owner_id?: number
   cookie: string
   enabled: boolean
+  online?: boolean  // 在线状态：是否已建立真实 WebSocket 连接（口径同仪表盘“在线账号”）
   use_ai_reply: boolean
   use_default_reply: boolean
   auto_confirm: boolean

@@ -563,7 +563,12 @@ class CookieTokenManager:
                     if log_id:
                         try:
                             from common.db.compat import db_manager
-                            engine_label = '兜底引擎(DrissionPage)' if captcha_engine == 'drissionpage' else '主引擎(Playwright)'
+                            engine_label_map = {
+                                'drissionpage': '兜底引擎(DrissionPage)',
+                                'real_mouse': '真人鼠标引擎(RealMouse)',
+                                'playwright': '主引擎(Playwright)',
+                            }
+                            engine_label = engine_label_map.get(captcha_engine, '主引擎(Playwright)')
                             db_manager.update_risk_control_log(
                                 log_id=log_id,
                                 processing_status='success',

@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -38,6 +39,10 @@ class DashboardStatsService:
     # Online cookies cache: (timestamp, count)
     _online_cookies_cache: tuple[float, int] | None = None
     _ONLINE_COOKIES_CACHE_TTL = 10  # seconds
+
+    # Online account-id set cache: (timestamp, frozenset[account_id])
+    _online_ids_cache: tuple[float, frozenset[str]] | None = None
+    _ONLINE_IDS_CACHE_TTL = 10  # seconds
 
     INACTIVE_ACCOUNT_STATUSES = ("inactive", "disabled", "suspended", "deleted")
     # 已关闭/已退款订单：不计入营收、有效订单与待处理统计
@@ -311,6 +316,34 @@ class DashboardStatsService:
         except Exception as e:
             logger.warning(f"获取在线账号数失败: {e}")
         return 0
+
+    async def get_online_account_ids(self) -> frozenset[str]:
+        """实时获取真实 WebSocket 在线账号 ID 集合（10 秒 TTL 缓存）。
+
+        口径与仪表盘“在线账号”一致：取 websocket 服务 connection-stats 的
+        connected_account_ids（真正建立 WebSocket 连接的账号）。失败返回空集合。
+        """
+        now = time.time()
+        if self.__class__._online_ids_cache is not None:
+            ts, ids = self.__class__._online_ids_cache
+            if now - ts < self._ONLINE_IDS_CACHE_TTL:
+                return ids
+
+        try:
+            settings = get_settings()
+            url = f"{settings.websocket_service_url.rstrip('/')}/internal/accounts/connection-stats"
+            # 加 3 秒超时上限：websocket 慢/不可达时也不会拖慢账号列表（最多等 3 秒即按离线处理）
+            response = await asyncio.wait_for(get_http_client().get(url), timeout=3.0)
+            if isinstance(response, dict) and response.get("success"):
+                raw_ids = (response.get("data") or {}).get("connected_account_ids") or []
+                ids = frozenset(str(x) for x in raw_ids)
+                self.__class__._online_ids_cache = (now, ids)
+                return ids
+        except Exception as e:
+            logger.warning(f"获取在线账号ID列表失败: {e}")
+        # 失败也缓存（空集合，10 秒）：避免 websocket 异常时每次账号列表请求都重试拖慢响应
+        self.__class__._online_ids_cache = (now, frozenset())
+        return frozenset()
 
     async def get_admin_dashboard_stats(self, *, current_user_id: int) -> dict[str, int | None]:
         """获取管理员首页全局统计。"""

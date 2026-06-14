@@ -80,6 +80,8 @@ class AccountService:
         has_password: bool | None = None,
         disable_reason: str | None = None,
         account_id: str | None = None,
+        online: bool | None = None,
+        online_account_ids: list[str] | None = None,
     ) -> tuple[list[XYAccount], int]:
         """获取账号列表（分页），支持多条件筛选
         
@@ -96,7 +98,9 @@ class AccountService:
             has_password: 是否配置密码筛选
             disable_reason: 禁用原因模糊搜索关键词（LIKE %keyword%）
             account_id: 账号ID模糊搜索关键词（LIKE %keyword%）
-            
+            online: 在线状态筛选（True=仅在线 / False=仅离线 / None=不筛选）
+            online_account_ids: 当前在线账号ID集合（口径同仪表盘“在线账号”，由调用方实时取得）
+
         Returns:
             (账号列表, 总数)
         """
@@ -171,6 +175,16 @@ class AccountService:
             account_id_keyword = account_id.strip()
             if account_id_keyword:
                 conditions.append(XYAccount.account_id.ilike(f"%{account_id_keyword}%"))
+
+        # 在线状态筛选：在线集合来自 websocket 实时连接（不在库内），
+        # 故以 account_id IN / NOT IN 在线集合 的方式参与 SQL 条件，保证分页正确。
+        # 空集合时：online=True 匹配为空（无人在线）；online=False 匹配全部（与语义一致）。
+        if online is not None:
+            online_ids = [str(x) for x in (online_account_ids or [])]
+            if online:
+                conditions.append(XYAccount.account_id.in_(online_ids))
+            else:
+                conditions.append(XYAccount.account_id.notin_(online_ids))
         
         # 是否配置密码筛选（账号和密码都配置了才算已配置）
         if has_password is not None:

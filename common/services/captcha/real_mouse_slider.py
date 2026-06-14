@@ -24,6 +24,8 @@ import json
 import os
 import random
 import shutil
+import subprocess
+import sys
 import threading
 import time
 from typing import Callable, Dict, List, Optional, Tuple
@@ -138,6 +140,7 @@ class _RealMouseSolver:
         )
         os.makedirs(self.user_data_dir, exist_ok=True)
         self._slide_code: Optional[int] = None
+        self._timed_out = False
 
     # ---------- 浏览器 ----------
     def init_browser(self) -> None:
@@ -184,6 +187,31 @@ class _RealMouseSolver:
             shutil.rmtree(self.user_data_dir, ignore_errors=True)
         except Exception:
             pass
+
+    def force_kill(self) -> None:
+        """看门狗超时回调：按本次唯一 user_data_dir 精确强杀对应 Chrome 进程。
+
+        仅匹配命令行包含本次 user_data_dir 的进程，绝不误伤用户自己的 Chrome。
+        强杀后，solve()/close() 中阻塞的 Playwright 调用会立即抛错返回，
+        从而保证 run_real_mouse_verification 一定返回、上层风控日志不再卡在“处理中”。
+        """
+        self._timed_out = True
+        if sys.platform != "win32":
+            return
+        try:
+            udir = self.user_data_dir
+            ps = (
+                "Get-CimInstance Win32_Process | "
+                f"Where-Object {{ $_.CommandLine -like '*{udir}*' }} | "
+                "ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }"
+            )
+            subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                capture_output=True, timeout=15,
+            )
+            logger.warning(f"【{self.pure_id}】真实鼠标引擎超时，已强杀本次浏览器进程")
+        except Exception as e:
+            logger.warning(f"【{self.pure_id}】真实鼠标引擎强杀浏览器失败（可忽略）: {e}")
 
     # ---------- 工具 ----------
     def _cookies(self) -> Dict[str, str]:
@@ -339,7 +367,8 @@ class _RealMouseSolver:
             )
             if passed:
                 cookies = self._collect_success()
-                # 仅当真正拿到 x5sec 才算成功；否则判失败，让上层回退原引擎
+                # 仅当真正拿到 x5sec 才算成功；否则按失败返回
+                # （是否回退原引擎由编排层根据 CAPTCHA_REAL_MOUSE 决定，本引擎只负责返回结果）
                 return (True, cookies) if cookies else (False, None)
         return False, None
 
@@ -376,10 +405,23 @@ def run_real_mouse_verification(
 
     with _REAL_MOUSE_LOCK:
         solver = _RealMouseSolver(user_id)
+        # 看门狗：总预算内若 solve()/close() 卡死，强杀浏览器解除阻塞，
+        # 保证本函数一定返回（否则上层风控日志会一直停留在“处理中”，且全局锁被长期占用）。
+        budget = max(browser_timeout, 40) + 20
+        watchdog = threading.Timer(budget, solver.force_kill)
+        watchdog.daemon = True
+        watchdog.start()
+        ok: bool = False
+        cookies: Optional[Dict[str, str]] = None
         try:
-            return solver.solve(url, random.choice(drags), browser_timeout, url_provider)
+            ok, cookies = solver.solve(url, random.choice(drags), browser_timeout, url_provider)
         except Exception as e:
             logger.error(f"【{user_id}】真实鼠标引擎执行异常: {e}")
-            return False, None
+            ok, cookies = False, None
         finally:
-            solver.close()
+            try:
+                solver.close()
+            except Exception:
+                pass
+            watchdog.cancel()
+        return ok, cookies

@@ -296,6 +296,10 @@ export function RiskLogs() {
                         <span className="text-xs px-2 py-1 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
                           主引擎
                         </span>
+                      ) : log.captcha_engine === 'real_mouse' ? (
+                        <span className="text-xs px-2 py-1 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                          真人鼠标
+                        </span>
                       ) : (
                         <span className="text-slate-400 dark:text-slate-500">-</span>
                       )}
