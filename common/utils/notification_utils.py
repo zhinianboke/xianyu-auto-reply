@@ -503,3 +503,53 @@ async def send_telegram_notification(config_data: Dict[str, Any], message: str) 
     except Exception as e:
         logger.error(f"📱 发送Telegram通知异常: {e}")
         return False
+
+
+async def send_ntfy_notification(config_data: Dict[str, Any], message: str, timeout: int = 15) -> bool:
+    """发送 ntfy 通知
+
+    ntfy 是一个轻量级 HTTP 推送通知服务，支持自托管。
+    API: POST https://ntfy.sh/{topic}
+
+    config_data 参数:
+        server_url: ntfy 服务器地址（如 https://ntfy.sh 或自建地址）
+        topic: 订阅主题
+        priority: 优先级（low/min/default/high/urgent），可选
+        tags: 标签列表，可选
+    """
+    try:
+        server_url = config_data.get('server_url', 'https://ntfy.sh').rstrip('/')
+        topic = config_data.get('topic', '')
+
+        if not topic:
+            logger.warning("ntfy 通知配置不完整: 缺少 topic")
+            return False
+
+        url = f"{server_url}/{topic}"
+        headers: Dict[str, str] = {}
+        data = message.encode('utf-8')
+
+        # 可选参数
+        priority = config_data.get('priority', '')
+        if priority:
+            headers['Priority'] = priority
+
+        tags = config_data.get('tags', '')
+        if tags:
+            headers['Tags'] = tags if isinstance(tags, str) else ','.join(tags)
+
+        title = config_data.get('title', '')
+        if title:
+            headers['Title'] = title
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=data, headers=headers, timeout=timeout) as response:
+                if response.status == 200:
+                    logger.info("ntfy 通知发送成功")
+                    return True
+                logger.warning(f"ntfy 通知发送失败: HTTP {response.status}")
+                return False
+
+    except Exception as e:
+        logger.error(f"发送 ntfy 通知异常: {e}")
+        return False
