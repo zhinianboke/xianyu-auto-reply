@@ -98,28 +98,44 @@ def run_slider_verification_with_fallback(
     """
     # 0. 真实鼠标模式（可选，环境变量 CAPTCHA_REAL_MOUSE=true 开启）：
     #    用物理光标回放真人轨迹，成功率高但会占用桌面鼠标，仅限有桌面的 Windows。
-    #    未开启 / 不可用（无头 Linux、依赖缺失）时自动跳过，走原有逻辑。
+    #    一旦开启且引擎可用：真实鼠标即为唯一引擎——成功返回成功；失败也【直接返回失败、不回退】
+    #    原 CDP/DrissionPage 逻辑（避免低效且会被风控识破的 CDP 滑动；下次重试仍走真实鼠标）。
+    #    仅当“开启了但引擎不可用”（非 Windows / 未装 pyautogui，属误配置）时，才回退原逻辑兜底。
     if _real_mouse_enabled():
+        real_mouse_available = False
+        run_real_mouse_verification = None
         try:
             from common.services.captcha.real_mouse_slider import (
-                run_real_mouse_verification,
-                REAL_MOUSE_AVAILABLE,
+                run_real_mouse_verification as _rm_run,
+                REAL_MOUSE_AVAILABLE as _rm_avail,
             )
-            if REAL_MOUSE_AVAILABLE:
-                logger.info(f"【{user_id}】启用真实鼠标滑块引擎")
+            run_real_mouse_verification = _rm_run
+            real_mouse_available = bool(_rm_avail)
+        except Exception as imp_e:
+            logger.warning(f"【{user_id}】真实鼠标引擎导入失败: {imp_e}")
+
+        if real_mouse_available and run_real_mouse_verification is not None:
+            logger.info(f"【{user_id}】启用真实鼠标滑块引擎（失败不回退，重试仍用真实鼠标）")
+            try:
                 rm_ok, rm_cookies = run_real_mouse_verification(
                     user_id, url,
                     existing_cookies_str=existing_cookies_str,
                     browser_timeout=max(browser_timeout, 40),
                     url_provider=url_provider,
                 )
-                if rm_ok and _has_x5sec(rm_cookies):
-                    return True, rm_cookies, "real_mouse"
-                logger.info(f"【{user_id}】真实鼠标引擎未通过，回退原有滑块逻辑")
-            else:
-                logger.info(f"【{user_id}】真实鼠标引擎不可用（无桌面/依赖缺失），走原有逻辑")
-        except Exception as rm_e:
-            logger.warning(f"【{user_id}】真实鼠标引擎异常，回退原有逻辑: {rm_e}")
+            except Exception as rm_e:
+                logger.warning(f"【{user_id}】真实鼠标引擎执行异常: {rm_e}")
+                rm_ok, rm_cookies = False, None
+            if rm_ok and _has_x5sec(rm_cookies):
+                return True, rm_cookies, "real_mouse"
+            # 按配置：真实鼠标失败不回退原引擎，直接返回失败
+            logger.info(f"【{user_id}】真实鼠标未通过，按配置不回退，返回失败（下次重试仍用真实鼠标）")
+            return False, None, None
+        else:
+            logger.error(
+                f"【{user_id}】CAPTCHA_REAL_MOUSE 已开启但引擎不可用"
+                f"（需 Windows 桌面 + pyautogui），本次回退原有滑块逻辑"
+            )
 
     # 1. Playwright 主引擎
     ok, cookies = run_slider_verification(
