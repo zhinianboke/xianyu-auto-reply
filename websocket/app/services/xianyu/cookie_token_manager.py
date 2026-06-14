@@ -15,6 +15,7 @@ import json
 import random
 import time
 import aiohttp
+from typing import Optional
 from loguru import logger
 
 from common.db.session import async_session_maker
@@ -349,6 +350,108 @@ class CookieTokenManager:
 
     # ==================== 滑块验证处理 ====================
 
+    def _request_captcha_url_sync(self) -> Optional[str]:
+        """同步重新请求 token 接口，提取一个新鲜的滑块验证链接。
+
+        说明：滑块验证在独立线程中执行（asyncio.to_thread），而浏览器需要等待并发槽位/
+        账号锁并完成启动，期间最初拿到的 punish?x5secdata 链接极易过期，导致页面显示
+        "抱歉，页面访问出现了问题"。本方法在浏览器就绪后被回调，使用同步 requests 重新
+        触发一次 token 接口，拿到最新的验证链接再交给浏览器导航，从源头规避链接过期。
+
+        Returns:
+            新的验证 URL；若接口已不再要求验证或解析失败则返回 None（此时沿用原链接）。
+        """
+        try:
+            import requests
+            from app.services.captcha.slider_stealth import CAPTCHA_NOT_REQUIRED
+
+            # 幂等缓存：本轮若已确认 token 可用，直接返回哨兵，绝不重复请求 token 接口。
+            # 这样即便 run()/兜底编排层多次回调本方法，也只会真正请求一次，避免频繁调用。
+            if getattr(self, '_refetch_token_ok', False):
+                return CAPTCHA_NOT_REQUIRED
+
+            timestamp = str(int(time.time() * 1000))
+            params = {
+                'jsv': '2.7.2',
+                'appKey': '34839810',
+                't': timestamp,
+                'sign': '',
+                'v': '1.0',
+                'type': 'originaljson',
+                'accountSite': 'xianyu',
+                'dataType': 'json',
+                'timeout': '20000',
+                'api': 'mtop.taobao.idlemessage.pc.login.token',
+                'sessionOption': 'AutoLoginOnly',
+                'dangerouslySetWindvaneParams': '%5Bobject%20Object%5D',
+                'smToken': 'token',
+                'queryToken': 'sm',
+                'sm': 'sm',
+                'spm_cnt': 'a21ybx.im.0.0',
+                'spm_pre': 'a21ybx.home.sidebar.1.4c053da6vYwnmf',
+                'log_id': '4c053da6vYwnmf'
+            }
+            data_val = '{"appKey":"444e9908a51d1cb236a27862abc769c9","deviceId":"' + self.device_id + '"}'
+            data = {'data': data_val}
+
+            token = self.cookies.get('_m_h5_tk', '').split('_')[0] if self.cookies.get('_m_h5_tk') else ''
+            params['sign'] = generate_sign(params['t'], token, data_val)
+
+            headers = {
+                'accept': 'application/json',
+                'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'cache-control': 'no-cache',
+                'content-type': 'application/x-www-form-urlencoded',
+                'pragma': 'no-cache',
+                'priority': 'u=1, i',
+                'sec-ch-ua': '"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Windows"',
+                'sec-fetch-dest': 'empty',
+                'sec-fetch-mode': 'cors',
+                'sec-fetch-site': 'same-site',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
+                'referer': 'https://www.goofish.com/',
+                'origin': 'https://www.goofish.com',
+                'cookie': self.cookies_str.replace('\n', '').replace('\r', '') if self.cookies_str else ''
+            }
+            api_url = 'https://h5api.m.goofish.com/h5/mtop.taobao.idlemessage.pc.login.token/1.0/'
+
+            logger.info(f"【{self.cookie_id}】浏览器就绪，重新请求新鲜的滑块验证链接...")
+            resp = requests.post(api_url, params=params, data=data, headers=headers, timeout=15)
+            res_json = resp.json()
+
+            # 优先判断 token 是否已可用：等待槽位/启动浏览器期间风控可能已解除，
+            # 此时接口直接返回成功 accessToken，根本不需要滑块验证。捕获结果并返回哨兵，
+            # 让上层提前结束滑块流程、直接采用新 token，避免把这次成功白白丢弃。
+            if isinstance(res_json, dict):
+                ret_value = res_json.get('ret', []) or []
+                if any('SUCCESS::调用成功' in str(r) for r in ret_value):
+                    data_f = res_json.get('data', {}) if isinstance(res_json.get('data'), dict) else {}
+                    new_token = data_f.get('accessToken')
+                    if new_token:
+                        logger.info(f"【{self.cookie_id}】重新请求 token 已成功（风控已解除），无需滑块验证")
+                        try:
+                            self._refetch_token_ok = True
+                            self._refetch_new_token = new_token
+                            # 捕获接口可能下发的刷新后 cookie
+                            self._refetch_new_cookies = resp.cookies.get_dict() or {}
+                        except Exception:
+                            pass
+                        return CAPTCHA_NOT_REQUIRED
+
+            data_field = res_json.get('data', {}) if isinstance(res_json, dict) else {}
+            new_url = data_field.get('url') if isinstance(data_field, dict) else None
+            if new_url:
+                logger.info(f"【{self.cookie_id}】已获取新鲜验证链接")
+                return new_url
+
+            logger.info(f"【{self.cookie_id}】重新请求未返回验证链接（可能已不需要验证），沿用原链接")
+            return None
+        except Exception as e:
+            logger.warning(f"【{self.cookie_id}】重新获取滑块验证链接失败，沿用原链接: {self._safe_str(e)}")
+            return None
+
     async def handle_captcha_verification(self, res_json: dict) -> str:
         """处理滑块验证，返回新的cookies字符串"""
         try:
@@ -397,6 +500,11 @@ class CookieTokenManager:
             try:
                 from app.services.captcha.slider_stealth import run_slider_verification_with_fallback
 
+                # 重置"重取链接时 token 已可用"标志，避免读到上一次的残留值
+                self._refetch_token_ok = False
+                self._refetch_new_token = None
+                self._refetch_new_cookies = {}
+
                 # 使用 asyncio.to_thread 在独立线程中运行同步的 Playwright 代码
                 # 这样可以避免 greenlet 的线程切换问题
                 # run_slider_verification_with_fallback: 主引擎(Playwright)失败后自动用 DrissionPage 兜底
@@ -409,7 +517,40 @@ class CookieTokenManager:
                     False,  # headless（主引擎）
                     20,     # browser_timeout（主引擎）
                     self.cookies_str,  # existing_cookies_str，供 DrissionPage 兜底注入
+                    self._request_captcha_url_sync,  # url_provider：浏览器就绪后重新取链接，规避过期
                 )
+
+                # 重取链接时发现 token 已可用（风控解除，无需滑块）：直接采用，跳过滑块结果处理。
+                # 合并接口可能下发的刷新 cookie，并返回 cookies_str，让上层 refresh_token
+                # 清缓存后重试 token 刷新（此时风控已解除，会直接成功）。
+                if getattr(self, '_refetch_token_ok', False):
+                    logger.info(f"【{self.cookie_id}】滑块流程中检测到 token 已可用，直接采用，跳过滑块验证")
+                    try:
+                        if getattr(self, '_refetch_new_cookies', None):
+                            self.cookies.update(self._refetch_new_cookies)
+                            self.cookies_str = '; '.join([f"{k}={v}" for k, v in self.cookies.items()])
+                            await self.update_config_cookies()
+                            logger.info(f"【{self.cookie_id}】已合并重取 token 时下发的刷新 cookie")
+                    except Exception as merge_e:
+                        logger.warning(f"【{self.cookie_id}】合并重取 cookie 失败（可忽略）: {self._safe_str(merge_e)}")
+
+                    captcha_duration = time.time() - captcha_start_time
+                    if log_id:
+                        try:
+                            from common.db.compat import db_manager
+                            db_manager.update_risk_control_log(
+                                log_id=log_id,
+                                processing_status='success',
+                                processing_result=(
+                                    f'重取验证链接时风控已解除，token 直接可用，无需滑块，'
+                                    f'耗时: {captcha_duration:.2f}秒'
+                                ),
+                            )
+                        except Exception as update_e:
+                            logger.error(f"【{self.cookie_id}】更新风控日志失败: {update_e}")
+
+                    self._refetch_token_ok = False
+                    return self.cookies_str
 
                 if success and cookies:
                     logger.info(f"【{self.cookie_id}】滑块验证成功，获取到新的cookies")

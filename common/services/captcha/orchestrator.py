@@ -10,11 +10,11 @@
 """
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 from loguru import logger
 
-from common.services.captcha.slider_stealth import run_slider_verification
+from common.services.captcha.slider_stealth import run_slider_verification, CAPTCHA_NOT_REQUIRED
 from common.services.captcha.drissionpage_slider import (
     run_drissionpage_verification,
     DRISSIONPAGE_AVAILABLE,
@@ -62,6 +62,7 @@ def run_slider_verification_with_fallback(
     headless: bool = False,
     browser_timeout: int = 20,
     existing_cookies_str: str = "",
+    url_provider: Optional[Callable[[], Optional[str]]] = None,
 ) -> Tuple[bool, Optional[Dict[str, str]], Optional[str]]:
     """主引擎 + DrissionPage 兜底的滑块验证编排。
 
@@ -72,6 +73,7 @@ def run_slider_verification_with_fallback(
         headless: 主引擎是否无头
         browser_timeout: 主引擎单次超时（秒）
         existing_cookies_str: 现有 cookie 字符串，供兜底引擎注入
+        url_provider: 可选回调，浏览器就绪后用于重新获取新鲜验证链接，规避等待槽位导致的链接过期
 
     Returns:
         (是否成功, cookies 字典 | None, 通过引擎 | None)
@@ -79,7 +81,8 @@ def run_slider_verification_with_fallback(
     """
     # 1. Playwright 主引擎
     ok, cookies = run_slider_verification(
-        user_id, url, enable_learning, headless, browser_timeout
+        user_id, url, enable_learning, headless, browser_timeout,
+        url_provider=url_provider,
     )
     if ok and _has_x5sec(cookies):
         return True, cookies, "playwright"
@@ -92,9 +95,24 @@ def run_slider_verification_with_fallback(
         return ok, cookies, ("playwright" if (ok and cookies) else None)
 
     # 3. DrissionPage 兜底
+    # 兜底前同样尝试刷新链接，避免主引擎耗时后链接再次过期
+    fb_url = url
+    if url_provider is not None:
+        try:
+            fresh = url_provider()
+            if fresh == CAPTCHA_NOT_REQUIRED:
+                # token 已可用、风控已解除，无需滑块，跳过兜底引擎（由上层采用新 token）
+                logger.info(f"【{user_id}】检测到 token 已可用，跳过 DrissionPage 兜底引擎")
+                return ok, cookies, ("playwright" if (ok and cookies) else None)
+            if fresh and isinstance(fresh, str):
+                fb_url = fresh
+                logger.info(f"【{user_id}】兜底引擎使用刷新后的验证链接")
+        except Exception as up_e:
+            logger.warning(f"【{user_id}】兜底前刷新验证链接失败，沿用原链接: {up_e}")
+
     logger.info(f"【{user_id}】主引擎滑块未通过，启用 DrissionPage 兜底引擎重试")
     ok2, cookies2 = run_drissionpage_verification(
-        user_id, url, existing_cookies_str=existing_cookies_str,
+        user_id, fb_url, existing_cookies_str=existing_cookies_str,
         headless=fb_headless, browser_timeout=fb_timeout,
     )
     if ok2 and _has_x5sec(cookies2):

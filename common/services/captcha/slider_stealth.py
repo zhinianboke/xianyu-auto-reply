@@ -13,7 +13,7 @@ import shutil
 import sys
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -36,6 +36,11 @@ except ImportError:
     BrowserContext = Any
     ElementHandle = Any
     logger.warning("Playwright 未安装")
+
+
+# url_provider 回调可返回的特殊哨兵值：表示"重新请求时 token 已可用、风控已解除，
+# 根本不需要滑块验证"。run()/编排层据此提前结束，避免无谓地导航到失效链接或启动兜底引擎。
+CAPTCHA_NOT_REQUIRED = "__CAPTCHA_NOT_REQUIRED__"
 
 
 class PlaywrightSliderService:
@@ -500,13 +505,24 @@ class PlaywrightSliderService:
             logger.error(f"【{self.pure_user_id}】滑块验证异常: {e}")
             return False
 
-    def run(self, url: str, browser_timeout: int = 20) -> Tuple[bool, Optional[Dict[str, str]]]:
+    def run(
+        self,
+        url: str,
+        browser_timeout: int = 20,
+        url_provider: Optional[Callable[[], Optional[str]]] = None,
+    ) -> Tuple[bool, Optional[Dict[str, str]]]:
         """
         运行滑块验证流程
         
         Args:
             url: 验证页面URL
             browser_timeout: 浏览器验证超时时间（秒），默认20秒
+            url_provider: 可选的"重新获取验证链接"回调。由于 __init__ 中需要等待并发槽位/
+                账号锁，再加上浏览器启动耗时，传入的 url（punish?x5secdata=...）可能在导航前
+                就已过期，导致页面显示"抱歉，页面访问出现了问题"。提供该回调后：仅当导航命中
+                过期页时才用它按需重新拉取链接并重试（链接未过期则完全不调用，避免多余请求）；
+                若回调发现 token 已可用（风控解除），返回哨兵 CAPTCHA_NOT_REQUIRED，本方法据此
+                提前结束。回调返回新 URL 字符串 / 哨兵 / None（None 时沿用原链接）。
             
         Returns:
             (是否成功, cookies字典)
@@ -580,62 +596,99 @@ class PlaywrightSliderService:
             timeout_timer.daemon = True
             timeout_timer.start()
 
-            # 导航到目标URL
-            logger.info(f"【{self.pure_user_id}】导航到URL: {url}")
-            try:
-                # goto 超时设为 browser_timeout 的一半，确保不会卡住超过总超时
-                goto_timeout = min(browser_timeout * 1000 // 2, 15000)
-                self.page.goto(url, wait_until="domcontentloaded", timeout=goto_timeout)
-            except Exception as e:
+            def _get_fresh_url() -> Optional[str]:
+                """调用 url_provider 重新获取一个新鲜的验证链接；失败返回 None。"""
+                if url_provider is None:
+                    return None
+                try:
+                    fresh = url_provider()
+                    if fresh and isinstance(fresh, str):
+                        return fresh
+                    logger.info(f"【{self.pure_user_id}】重新获取验证链接返回空，沿用原链接")
+                except Exception as up_e:
+                    logger.warning(f"【{self.pure_user_id}】重新获取验证链接异常，沿用原链接: {up_e}")
+                return None
+
+            def _load_and_read(target_url: str) -> Optional[str]:
+                """导航到目标URL并读取页面内容。返回 page_content；需要中止时返回 None。"""
+                logger.info(f"【{self.pure_user_id}】导航到URL: {target_url}")
+                try:
+                    # goto 超时设为 browser_timeout 的一半，确保不会卡住超过总超时
+                    goto_timeout = min(browser_timeout * 1000 // 2, 15000)
+                    self.page.goto(target_url, wait_until="domcontentloaded", timeout=goto_timeout)
+                except Exception as e:
+                    if timed_out:
+                        logger.warning(f"【{self.pure_user_id}】页面加载被超时守护中断")
+                        return None
+                    # 页面加载可能会有各种异常，但只要页面对象存在就继续
+                    logger.warning(f"【{self.pure_user_id}】页面加载异常，尝试继续: {str(e)}")
+                    time.sleep(1)
+
                 if timed_out:
-                    logger.warning(f"【{self.pure_user_id}】页面加载被超时守护中断")
+                    return None
+                if self._check_browser_timeout(browser_start_time, browser_timeout):
+                    return None
+
+                # 短暂延迟
+                delay = random.uniform(0.3, 0.8)
+                logger.info(f"【{self.pure_user_id}】等待页面加载: {delay:.2f}秒")
+                time.sleep(delay)
+                if timed_out:
+                    return None
+
+                # 快速滚动（模拟人类行为）
+                self.page.mouse.move(640, 360)
+                time.sleep(random.uniform(0.02, 0.05))
+                self.page.mouse.wheel(0, random.randint(200, 500))
+                time.sleep(random.uniform(0.02, 0.05))
+                if timed_out:
+                    return None
+
+                # 检查页面标题
+                page_title = self.page.title()
+                logger.info(f"【{self.pure_user_id}】页面标题: {page_title}")
+
+                # 检查页面内容
+                content = self.page.content()
+                if timed_out:
+                    return None
+                if self._check_browser_timeout(browser_start_time, browser_timeout):
+                    return None
+                return content
+
+            # 先用原链接导航；仅当命中"页面访问出现了问题"过期页时，才按需重新取链接，
+            # 最多重试 2 次。这样链接未过期时不会产生任何额外的 token 接口调用，避免无谓地
+            # 增加调用频率（频繁调用 token 接口更易被风控盯上）。
+            url_refresh_count = 0
+            max_url_refreshes = 2 if url_provider is not None else 0
+            page_content = None
+            while True:
+                page_content = _load_and_read(url)
+                if page_content is None:
                     return False, None
-                # 页面加载可能会有各种异常，但只要页面对象存在就继续
-                logger.warning(f"【{self.pure_user_id}】页面加载异常，尝试继续: {str(e)}")
-                time.sleep(1)
-            
-            if timed_out:
-                return False, None
 
-            # 检查超时
-            if self._check_browser_timeout(browser_start_time, browser_timeout):
-                return False, None
+                if "抱歉，页面访问出现了问题" in page_content:
+                    if url_provider is not None and url_refresh_count < max_url_refreshes:
+                        if self._check_browser_timeout(browser_start_time, browser_timeout):
+                            return False, None
+                        url_refresh_count += 1
+                        logger.warning(
+                            f"【{self.pure_user_id}】页面访问出现问题（链接已过期），"
+                            f"第{url_refresh_count}次重新获取验证链接后重试"
+                        )
+                        retry_url = _get_fresh_url()
+                        if retry_url == CAPTCHA_NOT_REQUIRED:
+                            logger.info(f"【{self.pure_user_id}】重取链接时检测到 token 已可用，无需滑块验证，提前结束")
+                            return True, None
+                        if retry_url:
+                            url = retry_url
+                            continue
+                        logger.error(f"【{self.pure_user_id}】重新获取验证链接失败，返回失败")
+                    else:
+                        logger.error(f"【{self.pure_user_id}】页面访问出现问题，直接返回失败")
+                    return False, None
+                break
 
-            # 短暂延迟
-            delay = random.uniform(0.3, 0.8)
-            logger.info(f"【{self.pure_user_id}】等待页面加载: {delay:.2f}秒")
-            time.sleep(delay)
-
-            if timed_out:
-                return False, None
-
-            # 快速滚动（模拟人类行为）
-            self.page.mouse.move(640, 360)
-            time.sleep(random.uniform(0.02, 0.05))
-            self.page.mouse.wheel(0, random.randint(200, 500))
-            time.sleep(random.uniform(0.02, 0.05))
-
-            if timed_out:
-                return False, None
-
-            # 检查页面标题
-            page_title = self.page.title()
-            logger.info(f"【{self.pure_user_id}】页面标题: {page_title}")
-
-            # 检查页面内容
-            page_content = self.page.content()
-            
-            if timed_out:
-                return False, None
-
-            # 检查超时
-            if self._check_browser_timeout(browser_start_time, browser_timeout):
-                return False, None
-            
-            # 检查页面是否出现访问错误或崩溃
-            if "抱歉，页面访问出现了问题" in page_content:
-                logger.error(f"【{self.pure_user_id}】页面访问出现问题，直接返回失败")
-                return False, None
             if "崩溃" in page_content or "STATUS_BREAKPOINT" in page_content:
                 logger.error(f"【{self.pure_user_id}】页面崩溃（STATUS_BREAKPOINT），直接返回失败")
                 return False, None
@@ -1277,7 +1330,8 @@ def run_slider_verification(
     url: str, 
     enable_learning: bool = True, 
     headless: bool = False,
-    browser_timeout: int = 20
+    browser_timeout: int = 20,
+    url_provider: Optional[Callable[[], Optional[str]]] = None,
 ) -> Tuple[bool, Optional[Dict[str, str]]]:
     """在独立进程中运行滑块验证（模块级别函数，支持ProcessPoolExecutor）
     
@@ -1287,6 +1341,7 @@ def run_slider_verification(
         enable_learning: 是否启用学习
         headless: 是否无头模式
         browser_timeout: 浏览器验证超时时间（秒），默认20秒
+        url_provider: 可选回调，浏览器就绪后用于重新获取新鲜验证链接，避免链接过期
         
     Returns:
         (是否成功, cookies字典)
@@ -1298,7 +1353,7 @@ def run_slider_verification(
             enable_learning=enable_learning,
             headless=headless
         )
-        return slider.run(url, browser_timeout=browser_timeout)
+        return slider.run(url, browser_timeout=browser_timeout, url_provider=url_provider)
     except Exception as e:
         logger.error(f"【{user_id}】滑块验证进程执行失败: {e}")
         return False, None
