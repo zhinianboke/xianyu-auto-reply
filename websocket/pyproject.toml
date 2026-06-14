@@ -32,6 +32,9 @@ dependencies = [
     "certifi>=2023.11.0",
     "python-dateutil>=2.8.0",
     "openai>=1.0.0",
+    # 真实鼠标滑块引擎（可选，仅 Windows 有桌面环境使用；CAPTCHA_REAL_MOUSE=true 时启用）。
+    # 用环境标记限定仅 Windows 安装，避免 Linux/Docker 构建引入无效依赖。
+    "pyautogui>=0.9.54; sys_platform == 'win32'",
 ]
 
 [build-system]

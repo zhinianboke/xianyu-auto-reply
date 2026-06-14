@@ -85,6 +85,13 @@ class BaseConfig(BaseSettings):
     # 通过环境变量 BACKUP_DIR 配置，禁止写死 localhost / 绝对路径
     backup_dir: str = Field(default="backups", alias="BACKUP_DIR")
 
+    # 滑块验证 - 真实鼠标模式开关
+    # 开启后：用 pyautogui 驱动“物理光标”回放真人轨迹完成滑块（成功率高，但会占用桌面鼠标，
+    #         仅适用于有图形桌面的 Windows 环境；运行期间该桌面鼠标被接管约 2~3 秒）。
+    # 关闭（默认）：走原有 Playwright(CDP) 轨迹 + DrissionPage 兜底逻辑。
+    # Docker / 无头 Linux 环境必须保持关闭（无桌面无法驱动物理鼠标），故默认 False。
+    captcha_real_mouse_enabled: bool = Field(default=False, alias="CAPTCHA_REAL_MOUSE")
+
     @property
     def database_url(self) -> str:
         """同步数据库连接URL"""

@@ -55,6 +55,23 @@ def _load_fallback_config() -> Tuple[bool, bool, int]:
     return enabled, headless, timeout
 
 
+def _real_mouse_enabled() -> bool:
+    """读取「真实鼠标模式」开关（默认 False；Docker/无头默认关闭）。"""
+    settings = None
+    try:
+        from app.core.config import get_settings
+        settings = get_settings()
+    except Exception:
+        try:
+            from common.core.config import get_settings
+            settings = get_settings()
+        except Exception:
+            settings = None
+    if settings is None:
+        return False
+    return bool(getattr(settings, "captcha_real_mouse_enabled", False))
+
+
 def run_slider_verification_with_fallback(
     user_id: str,
     url: str,
@@ -77,8 +94,33 @@ def run_slider_verification_with_fallback(
 
     Returns:
         (是否成功, cookies 字典 | None, 通过引擎 | None)
-        通过引擎取值：'playwright'（主引擎）/ 'drissionpage'（兜底引擎）/ None（未成功）
+        通过引擎取值：'playwright'（主引擎）/ 'drissionpage'（兜底引擎）/ 'real_mouse'（真实鼠标）/ None（未成功）
     """
+    # 0. 真实鼠标模式（可选，环境变量 CAPTCHA_REAL_MOUSE=true 开启）：
+    #    用物理光标回放真人轨迹，成功率高但会占用桌面鼠标，仅限有桌面的 Windows。
+    #    未开启 / 不可用（无头 Linux、依赖缺失）时自动跳过，走原有逻辑。
+    if _real_mouse_enabled():
+        try:
+            from common.services.captcha.real_mouse_slider import (
+                run_real_mouse_verification,
+                REAL_MOUSE_AVAILABLE,
+            )
+            if REAL_MOUSE_AVAILABLE:
+                logger.info(f"【{user_id}】启用真实鼠标滑块引擎")
+                rm_ok, rm_cookies = run_real_mouse_verification(
+                    user_id, url,
+                    existing_cookies_str=existing_cookies_str,
+                    browser_timeout=max(browser_timeout, 40),
+                    url_provider=url_provider,
+                )
+                if rm_ok and _has_x5sec(rm_cookies):
+                    return True, rm_cookies, "real_mouse"
+                logger.info(f"【{user_id}】真实鼠标引擎未通过，回退原有滑块逻辑")
+            else:
+                logger.info(f"【{user_id}】真实鼠标引擎不可用（无桌面/依赖缺失），走原有逻辑")
+        except Exception as rm_e:
+            logger.warning(f"【{user_id}】真实鼠标引擎异常，回退原有逻辑: {rm_e}")
+
     # 1. Playwright 主引擎
     ok, cookies = run_slider_verification(
         user_id, url, enable_learning, headless, browser_timeout,
