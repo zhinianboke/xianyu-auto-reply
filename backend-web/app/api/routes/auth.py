@@ -8,10 +8,12 @@
 4. 用户登出
 """
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
-from app.core.security import decode_token
+from app.api.routes.captcha import check_email_code
+from app.core.security import decode_token, get_password_hash
 from common.models.user import User, UserRole, UserStatus
 from common.schemas.auth import LoginRequest, LoginResponse, VerifyResponse
 from common.schemas.common import ApiResponse
@@ -20,6 +22,13 @@ from app.services.auth import AuthService
 from app.services.user_service import UserService
 
 router = APIRouter(tags=["auth"])
+
+
+class ResetPasswordRequest(BaseModel):
+    """重置密码请求"""
+    email: str
+    verification_code: str
+    new_password: str
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -67,8 +76,6 @@ async def login_user(
         user, error_message = await auth_service.authenticate_by_email(payload.email, payload.password)
     elif payload.email and payload.verification_code:
         # 邮箱验证码登录
-        from app.api.routes.captcha import check_email_code
-        
         # 验证验证码
         code_valid, code_msg = check_email_code(payload.email, payload.verification_code, "login")
         if not code_valid:
@@ -204,7 +211,6 @@ async def register_user(
 ) -> ApiResponse:
     # 验证邮箱验证码
     if payload.email and payload.verification_code:
-        from app.api.routes.captcha import check_email_code
         code_valid, code_msg = check_email_code(payload.email, payload.verification_code, "register")
         if not code_valid:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=code_msg)
@@ -225,3 +231,34 @@ async def register_user(
     
     await user_service.create(payload)
     return ApiResponse(success=True, message="注册成功")
+
+
+@router.post("/reset-password", response_model=ApiResponse)
+async def reset_password(
+    payload: ResetPasswordRequest,
+    session: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """重置密码（通过邮箱验证码）
+
+    业务错误统一以 HTTP 200 + success=False 返回，由前端展示具体消息。
+    """
+    # 先校验新密码长度，避免在密码不合规时提前消费掉验证码
+    if len(payload.new_password) < 6:
+        return ApiResponse(success=False, message="新密码长度不能少于6位")
+
+    # 验证邮箱验证码（校验成功后会消费该验证码）
+    code_valid, code_msg = check_email_code(payload.email, payload.verification_code, "reset_password")
+    if not code_valid:
+        return ApiResponse(success=False, message=code_msg)
+
+    # 查找用户
+    user_service = UserService(session)
+    user = await user_service.get_by_email(payload.email)
+    if not user:
+        return ApiResponse(success=False, message="该邮箱未注册")
+
+    # 更新密码（直接操作 ORM 对象后 commit）
+    user.password_hash = get_password_hash(payload.new_password)
+    await session.commit()
+
+    return ApiResponse(success=True, message="密码重置成功")

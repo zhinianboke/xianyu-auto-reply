@@ -38,7 +38,7 @@ class SendCodeRequest(BaseModel):
     """发送邮箱验证码请求"""
     email: EmailStr
     session_id: Optional[str] = None
-    type: str = "register"  # register 或 login
+    type: str = "register"  # register, login 或 reset_password
 
 
 # ==================== 工具函数 ====================
@@ -123,8 +123,11 @@ def generate_verification_code(length: int = 6) -> str:
 # 图形验证码存储: {session_id: {"code": str, "expires_at": float}}
 captcha_store: dict = {}
 
-# 邮箱验证码存储: {email: {"code": str, "type": str, "expires_at": float}}
+# 邮箱验证码存储: {email: {"code": str, "type": str, "expires_at": float, "fail_count": int}}
 email_code_store: dict = {}
+
+# 单个邮箱验证码最大允许尝试次数，超过即作废（防暴力枚举）
+MAX_EMAIL_CODE_ATTEMPTS = 5
 
 
 def cleanup_expired_captcha():
@@ -258,6 +261,13 @@ async def send_email_verification_code(
                     success=False,
                     message="该邮箱未注册"
                 )
+        elif request.type == "reset_password":
+            existing_user = await user_service.get_by_email(request.email)
+            if not existing_user:
+                return ApiResponse(
+                    success=False,
+                    message="该邮箱未注册"
+                )
         
         # 检查发送频率（1分钟内只能发送一次）
         stored = email_code_store.get(request.email)
@@ -337,27 +347,36 @@ async def verify_email_code(
 def check_email_code(email: str, code: str, code_type: str = "login") -> tuple[bool, str]:
     """
     验证邮箱验证码（供其他模块调用）
-    
+
     返回: (是否成功, 消息)
+
+    安全说明：单个验证码最多允许尝试 MAX_EMAIL_CODE_ATTEMPTS 次，
+    超过后立即作废，防止 6 位数字验证码被暴力枚举。
     """
     cleanup_expired_email_codes()
-    
+
     stored = email_code_store.get(email)
-    
+
     if not stored:
         return False, "验证码不存在或已过期"
-    
+
     if stored["expires_at"] < time.time():
         del email_code_store[email]
         return False, "验证码已过期"
-    
-    if stored["code"] != code:
-        return False, "验证码错误"
-    
+
     if stored["type"] != code_type:
         return False, "验证码类型不匹配"
-    
+
+    if stored["code"] != code:
+        # 记录失败次数，超过上限直接作废，避免暴力枚举
+        stored["fail_count"] = stored.get("fail_count", 0) + 1
+        if stored["fail_count"] >= MAX_EMAIL_CODE_ATTEMPTS:
+            del email_code_store[email]
+            return False, "验证码错误次数过多，请重新获取验证码"
+        remaining = MAX_EMAIL_CODE_ATTEMPTS - stored["fail_count"]
+        return False, f"验证码错误，还可尝试 {remaining} 次"
+
     # 验证成功后删除
     del email_code_store[email]
-    
+
     return True, "验证码验证成功"
