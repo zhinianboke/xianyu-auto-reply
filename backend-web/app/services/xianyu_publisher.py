@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 import re
 from pathlib import Path
@@ -1097,7 +1098,7 @@ class XianyuPublisher:
         logger.info(f"描述内容: {full_description[:100]}...")
         await desc_input.click()
         await asyncio.sleep(0.5)
-        await desc_input.evaluate(f"el => el.innerText = {repr(full_description)}")
+        await desc_input.evaluate(f"el => el.innerText = {json.dumps(full_description, ensure_ascii=False)}")
 
         logger.info("✅ 描述已填写")
 
