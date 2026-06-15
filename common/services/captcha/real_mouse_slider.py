@@ -252,7 +252,7 @@ class _RealMouseSolver:
         return out
 
     # ---------- 核心 ----------
-    def solve(self, url: str, drag: List[Tuple[float, float, float]],
+    def solve(self, url: str, drags: List[List[Tuple[float, float, float]]],
               browser_timeout: int, url_provider: Optional[Callable[[], Optional[str]]]) -> Tuple[bool, Optional[Dict[str, str]]]:
         start = time.time()
         self.init_browser()
@@ -281,22 +281,57 @@ class _RealMouseSolver:
                 return False, None
             break
 
-        # 定位滑块
-        frame = btn = track = None
-        for _ in range(12):
+        # 多次尝试：失败则点“重试”按钮重置滑块，再用物理鼠标滑（同页重试，最多 3 次）
+        pre_x5 = self._x5sec()
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
             if time.time() - start > browser_timeout:
-                return False, None
-            frame, btn, track = self._find_slider()
-            if btn and track:
                 break
-            time.sleep(0.4)
-        if not btn or not track:
-            logger.warning(f"【{self.pure_id}】真实鼠标引擎未找到滑块")
-            return False, None
 
+            # 定位滑块
+            frame = btn = track = None
+            for _ in range(12):
+                if time.time() - start > browser_timeout:
+                    break
+                frame, btn, track = self._find_slider()
+                if btn and track:
+                    break
+                time.sleep(0.4)
+            if not btn or not track:
+                # 滑块消失：可能已通过（被前一次滑动放行）
+                if not self._in_punish() and self._x5sec() and self._x5sec() != pre_x5:
+                    cookies = self._collect_success()
+                    if cookies:
+                        return True, cookies
+                logger.warning(f"【{self.pure_id}】真实鼠标引擎未找到滑块（第{attempt}次尝试）")
+                break
+
+            # 计算坐标 + 物理鼠标回放真人轨迹（每次随机挑一条轨迹，降低重复模式风险）
+            if not self._do_real_slide(frame, btn, drag=random.choice(drags)):
+                break
+
+            # 判定本次结果
+            res = self._wait_result(pre_x5, start, browser_timeout)
+            if res is True:
+                cookies = self._collect_success()
+                # 仅当真正拿到 x5sec 才算成功；否则按失败返回
+                # （是否回退原引擎由编排层根据 CAPTCHA_REAL_MOUSE 决定，本引擎只负责返回结果）
+                return (True, cookies) if cookies else (False, None)
+
+            # 本次未过：若还有重试机会且时间充足，点“重试”按钮重置滑块后再滑
+            if attempt < max_attempts and (time.time() - start) < (browser_timeout - 5):
+                logger.info(f"【{self.pure_id}】真实鼠标引擎第{attempt}次未通过，点击重试后再滑")
+                self._click_retry()
+                time.sleep(random.uniform(1.0, 1.8))
+                continue
+            break
+        return False, None
+
+    def _do_real_slide(self, frame, btn, drag: List[Tuple[float, float, float]]) -> bool:
+        """对当前滑块做一次：坐标校准 + 物理鼠标接近/按下/回放真人轨迹/松手。返回是否完成滑动。"""
         box = btn.bounding_box()
         if not box:
-            return False, None
+            return False
         mx = box["x"] + box["width"] / 2
         my = box["y"] + box["height"] / 2
         dpr = self.page.evaluate("() => window.devicePixelRatio") or 1.0
@@ -315,15 +350,14 @@ class _RealMouseSolver:
             pass
         if not cal:
             logger.warning(f"【{self.pure_id}】真实鼠标引擎坐标校准失败")
-            return False, None
+            return False
         c = cal[-1]
         off_x, off_y = c[2] - mx, c[3] - my
 
         def to_screen(vx: float, vy: float) -> Tuple[int, int]:
             return int(round((vx + off_x) * dpr)), int(round((vy + off_y) * dpr))
 
-        pre_x5 = self._x5sec()
-        self._slide_code = None
+        self._slide_code = None  # 每次滑动前重置，避免读到上一次的返回码
 
         # 物理鼠标接近 + 按下 + 回放真人轨迹 + 松手
         ax, ay = to_screen(mx - 50, my - 40)
@@ -341,8 +375,10 @@ class _RealMouseSolver:
             time.sleep(max(0.0, (dt / 1000.0) * random.uniform(0.85, 1.15)))
         time.sleep(0.08)
         pyautogui.mouseUp()
+        return True
 
-        # 多信号判定：baxia code=0 / x5sec 新下发 / 离开 punish / 出现成功标志
+    def _wait_result(self, pre_x5: str, start: float, browser_timeout: int) -> Optional[bool]:
+        """等待并判定本次滑动结果：True=通过 / False=明确失败(code 300) / None=不明确（可重试）。"""
         def _nc_ok() -> bool:
             for fr in self.page.frames:
                 try:
@@ -358,19 +394,36 @@ class _RealMouseSolver:
             time.sleep(0.5)
             waited += 0.5
             if self._slide_code == 300:
-                return False, None
-            passed = (
-                self._slide_code == 0
-                or (self._x5sec() and self._x5sec() != pre_x5)
-                or (not self._in_punish())
-                or _nc_ok()
-            )
-            if passed:
-                cookies = self._collect_success()
-                # 仅当真正拿到 x5sec 才算成功；否则按失败返回
-                # （是否回退原引擎由编排层根据 CAPTCHA_REAL_MOUSE 决定，本引擎只负责返回结果）
-                return (True, cookies) if cookies else (False, None)
-        return False, None
+                return False
+            if self._slide_code == 0:
+                return True
+            if self._x5sec() and self._x5sec() != pre_x5:
+                return True
+            if not self._in_punish():
+                return True
+            if _nc_ok():
+                return True
+        return None
+
+    def _click_retry(self) -> None:
+        """点击滑块失败后的“点击框体重试”按钮，重置滑块（与老引擎一致的选择器）。"""
+        selectors = (
+            "#nc_1_refresh1",
+            ".nc_iconfont.btn_refresh",
+            ".errloading",
+            "[class*='refresh']",
+            ".nc-container",
+        )
+        for fr in self.page.frames:
+            for sel in selectors:
+                try:
+                    el = fr.query_selector(sel)
+                    if el and el.is_visible():
+                        el.click()
+                        logger.info(f"【{self.pure_id}】真实鼠标引擎已点击重试按钮: {sel}")
+                        return
+                except Exception:
+                    continue
 
     def _collect_success(self) -> Optional[Dict[str, str]]:
         """成功后等待 set-cookie 落盘并返回 x5* cookies。"""
@@ -414,7 +467,7 @@ def run_real_mouse_verification(
         ok: bool = False
         cookies: Optional[Dict[str, str]] = None
         try:
-            ok, cookies = solver.solve(url, random.choice(drags), browser_timeout, url_provider)
+            ok, cookies = solver.solve(url, drags, browser_timeout, url_provider)
         except Exception as e:
             logger.error(f"【{user_id}】真实鼠标引擎执行异常: {e}")
             ok, cookies = False, None
