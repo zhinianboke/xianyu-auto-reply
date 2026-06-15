@@ -2118,7 +2118,7 @@ export function Accounts() {
               <RefreshCw className="w-6 h-6 animate-spin text-blue-500" />
             </div>
           ) : (
-            <table className="table-ios min-w-[1600px]">
+            <table className="table-ios" style={{ minWidth: 'max-content' }}>
               <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
                 <tr>
                   <th className="w-10">
@@ -2230,7 +2230,7 @@ export function Accounts() {
                     </td>
                     {/* 功能开关组：7 个开关合并为紧凑图标组，点击切换，hover 查看说明 */}
                     <td>
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1 [&>button]:shrink-0">
                         {/* AI回复 */}
                         <button
                           onClick={() => handleToggleAI(account)}
