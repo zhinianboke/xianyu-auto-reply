@@ -110,6 +110,11 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
 
+    # 关闭复用的 goofish API 连接池
+    from common.services.order_service import close_goofish_connector
+    await close_goofish_connector()
+    logger.info("goofish API 连接池已关闭")
+
 
 # 创建FastAPI应用
 app = FastAPI(

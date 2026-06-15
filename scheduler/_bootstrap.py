@@ -103,6 +103,11 @@ async def lifespan(app: FastAPI):
     await close_http_client()
     logger.info("HTTP客户端已关闭")
 
+    # 关闭复用的 goofish API 连接池
+    from common.services.order_service import close_goofish_connector
+    await close_goofish_connector()
+    logger.info("goofish API 连接池已关闭")
+
 
 # 创建FastAPI应用
 app = FastAPI(

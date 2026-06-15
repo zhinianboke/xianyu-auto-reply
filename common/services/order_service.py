@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 from typing import Optional, Dict
 
+import aiohttp
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +24,40 @@ from loguru import logger
 from common.models.xy_order import XYOrder
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.auto_reply_message_log import XYAutoReplyMessageLog
+
+
+# 复用的 goofish API 连接池（TCPConnector）
+# 背景：订单详情/列表等接口会被定时补发货等任务高频调用，原先每次请求都新建
+# aiohttp.ClientSession（连带新建 TCPConnector），导致 TCP 连接无法 keep-alive 复用、
+# DNS 反复解析、短时间内大量 TIME_WAIT 连接堆积，浪费 CPU 与文件描述符。
+# 这里改为共享一个进程级连接池，ClientSession 仍按调用创建（其本身开销很小），
+# 但通过 connector_owner=False 让会话关闭时不关闭连接池，从而保持长连接被后续请求复用。
+_goofish_connector: Optional[aiohttp.BaseConnector] = None
+
+
+def get_goofish_connector() -> aiohttp.BaseConnector:
+    """获取复用的 goofish API 连接池（TCPConnector）
+
+    需在事件循环内调用（aiohttp 连接器创建依赖运行中的事件循环）。
+    连接池关闭后会自动重建，保证服务长期运行的健壮性。
+    """
+    global _goofish_connector
+    if _goofish_connector is None or _goofish_connector.closed:
+        _goofish_connector = aiohttp.TCPConnector(
+            limit=100,             # 最大连接数
+            limit_per_host=100,    # 单主机最大连接数
+            ttl_dns_cache=300,     # DNS 缓存时间（秒）
+            keepalive_timeout=60,  # 空闲连接保活时间（秒）
+        )
+    return _goofish_connector
+
+
+async def close_goofish_connector() -> None:
+    """关闭复用的 goofish API 连接池（进程退出时调用）"""
+    global _goofish_connector
+    if _goofish_connector is not None and not _goofish_connector.closed:
+        await _goofish_connector.close()
+        _goofish_connector = None
 
 
 class OrderService:
@@ -1010,7 +1045,11 @@ class OrderService:
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36',
         }
         
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(
+            connector=get_goofish_connector(),
+            connector_owner=False,
+            cookie_jar=aiohttp.DummyCookieJar(),
+        ) as session:
             async with session.post(
                 'https://h5api.m.goofish.com/h5/mtop.taobao.idle.trade.merchant.sold.get/1.0/',
                 params=params,
@@ -1470,7 +1509,11 @@ class OrderDetailService:
                 'cookie': self.cookies_str,
             }
             
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(
+                connector=get_goofish_connector(),
+                connector_owner=False,
+                cookie_jar=aiohttp.DummyCookieJar(),
+            ) as session:
                 async with session.post(
                     'https://h5api.m.goofish.com/h5/mtop.idle.web.trade.order.detail/1.0/',
                     params=params,
@@ -1877,7 +1920,11 @@ class OrderStatusChecker:
                 'cookie': self.cookies_str,
             }
             
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(
+                connector=get_goofish_connector(),
+                connector_owner=False,
+                cookie_jar=aiohttp.DummyCookieJar(),
+            ) as session:
                 async with session.post(
                     'https://h5api.m.goofish.com/h5/mtop.idle.web.trade.order.detail/1.0/',
                     params=params,
