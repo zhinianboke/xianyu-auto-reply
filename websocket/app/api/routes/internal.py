@@ -223,13 +223,13 @@ async def stop_account(account_id: str):
 
 
 @router.post("/accounts/{account_id}/restart")
-async def restart_account(account_id: str, request: StartAccountRequest):
+async def restart_account(account_id: str, request: StartAccountRequest = None):
     """
     重启账号任务
     
     Args:
         account_id: 账号ID
-        request: 启动请求参数
+        request: 启动请求参数(可选，不传则从数据库获取Cookie)
         
     Returns:
         操作结果
@@ -237,7 +237,11 @@ async def restart_account(account_id: str, request: StartAccountRequest):
     try:
         from app.services.xianyu.cookie_manager import get_manager
         from loguru import logger
-        
+
+        # 请求体可选：未携带时使用空请求，统一从数据库获取Cookie
+        if request is None:
+            request = StartAccountRequest()
+
         # 重启前清除Token缓存，确保重新获取Token和完整Cookie
         # 注意：xy_token_cache.user_id 存的是闲鱼的 unb（myid），不是 cookie_id(account_id)
         # 因此必须先从 Cookie 中解析出 unb 再作为 user_id 参数删除

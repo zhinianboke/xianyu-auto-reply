@@ -230,15 +230,28 @@ class CookieManager:
         async with lock:
             task = self.tasks.pop(cookie_id, None)
             if task:
-                task.cancel()
-                try:
-                    await asyncio.wait_for(task, timeout=10.0)
-                except asyncio.TimeoutError:
-                    logger.warning(f"【{cookie_id}】等待任务停止超时（10秒），强制继续")
-                except asyncio.CancelledError:
-                    pass
-                except Exception as e:
-                    logger.error(f"等待任务清理时出错: {cookie_id}, {safe_str(e)}")
+                # 任务可能此前已自行结束（例如启动时Cookie为空抛出异常）：
+                # 此时不再视为清理错误，避免误导性的 ERROR 噪音日志
+                if task.done():
+                    prev_exc = None
+                    try:
+                        prev_exc = task.exception()
+                    except asyncio.CancelledError:
+                        prev_exc = None
+                    if prev_exc is not None:
+                        logger.info(
+                            f"【{cookie_id}】任务此前已结束(原因: {safe_str(prev_exc)})，直接清理"
+                        )
+                else:
+                    task.cancel()
+                    try:
+                        await asyncio.wait_for(task, timeout=10.0)
+                    except asyncio.TimeoutError:
+                        logger.warning(f"【{cookie_id}】等待任务停止超时（10秒），强制继续")
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as e:
+                        logger.error(f"等待任务清理时出错: {cookie_id}, {safe_str(e)}")
             
             # 清理内存
             self.cookies.pop(cookie_id, None)

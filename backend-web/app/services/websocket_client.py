@@ -76,7 +76,7 @@ class WebSocketServiceClient:
         """
         url = f"{self.base_url}/internal/accounts/{account_id}/restart"
         try:
-            response = await self.http_client.post(url)
+            response = await self.http_client.post(url, json={})
             return response
         except Exception as e:
             logger.error(f"重启账号任务失败: {account_id}, 错误: {e}")
