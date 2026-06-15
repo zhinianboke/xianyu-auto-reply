@@ -30,6 +30,7 @@ import {
   deleteMyAd,
 } from '@/api/advertisements'
 import type { Advertisement } from '@/api/advertisements'
+import { withApiBase } from '@/utils/request'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { PageLoading } from '@/components/common/Loading'
@@ -213,7 +214,7 @@ export default function AdApply() {
     try {
       const formData = new FormData()
       formData.append('image', file)
-      const response = await fetch('/api/v1/upload/upload-image', {
+      const response = await fetch(withApiBase('/api/v1/upload/upload-image'), {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: formData,

@@ -1,5 +1,5 @@
 import { get, post, put, del } from '@/utils/request'
-import type { Item, ApiResponse } from '@/types'
+import type { Item, ItemReply, ApiResponse } from '@/types'
 
 // API前缀
 const ITEM_PREFIX = '/api/v1/items'
@@ -118,19 +118,49 @@ export const updateItemMultiSpec = (cookieId: string, itemId: string, enabled: b
   return put(`${ITEM_PREFIX}/${cookieId}/${itemId}/multi-spec`, { is_multi_spec: enabled })
 }
 
+// ==================== Legacy item reply page compatibility ====================
+
+export const getItemReplies = async (cookieId?: string): Promise<{ success: boolean; data: ItemReply[] }> => {
+  const params = cookieId ? `/cookie/${cookieId}` : ''
+  const result = await get<{ items?: ItemReply[] } | ItemReply[]>(`/itemReplays${params}`)
+  const items = Array.isArray(result) ? result : (result.items || [])
+  return { success: true, data: items }
+}
+
+export const addItemReply = (cookieId: string, itemId: string, data: Partial<ItemReply>): Promise<ApiResponse> => {
+  return put(`/item-reply/${cookieId}/${itemId}`, data)
+}
+
+export const updateItemReply = (cookieId: string, itemId: string, data: Partial<ItemReply>): Promise<ApiResponse> => {
+  return put(`/item-reply/${cookieId}/${itemId}`, data)
+}
+
+export const deleteItemReply = (cookieId: string, itemId: string): Promise<ApiResponse> => {
+  return del(`/item-reply/${cookieId}/${itemId}`)
+}
+
+export const batchDeleteItemReplies = (items: { cookie_id: string; item_id: string }[]): Promise<ApiResponse> => {
+  return del('/item-reply/batch', { data: { items } })
+}
+
 
 // ==================== 商品默认回复 ====================
 
 // 商品默认回复配置类型
 export interface ItemDefaultReplyConfig {
   item_id: string
+  default_reply?: string
   reply_content: string
   reply_image: string
+  reply_image_url?: string
   enabled: boolean
   reply_once: boolean
   reply_type?: string  // text-文本，image-图片，api-接口
   api_url?: string
   api_timeout?: number
+  forbidden_keywords?: string
+  forbidden_action?: 'ignore' | 'fixed_reply'
+  forbidden_reply_content?: string
 }
 
 // 获取商品默认回复配置
@@ -142,7 +172,19 @@ export const getItemDefaultReply = (cookieId: string, itemId: string): Promise<A
 export const saveItemDefaultReply = (
   cookieId: string,
   itemId: string,
-  data: { reply_content: string; reply_image?: string; enabled: boolean; reply_once: boolean; reply_type?: string; api_url?: string; api_timeout?: number }
+  data: {
+    reply_content: string
+    reply_image?: string
+    reply_image_url?: string
+    enabled: boolean
+    reply_once: boolean
+    reply_type?: string
+    api_url?: string
+    api_timeout?: number
+    forbidden_keywords?: string
+    forbidden_action?: 'ignore' | 'fixed_reply'
+    forbidden_reply_content?: string
+  }
 ): Promise<ApiResponse> => {
   return put(`${ITEM_PREFIX}/${cookieId}/${itemId}/default-reply`, data)
 }
@@ -168,7 +210,20 @@ export const deleteItemDefaultReply = (cookieId: string, itemId: string): Promis
 // 批量保存商品默认回复配置
 export const batchSaveItemDefaultReply = (
   cookieId: string,
-  data: { item_ids: string[]; reply_content: string; reply_image?: string; enabled: boolean; reply_once: boolean; reply_type?: string; api_url?: string; api_timeout?: number }
+  data: {
+    item_ids: string[]
+    reply_content: string
+    reply_image?: string
+    reply_image_url?: string
+    enabled: boolean
+    reply_once: boolean
+    reply_type?: string
+    api_url?: string
+    api_timeout?: number
+    forbidden_keywords?: string
+    forbidden_action?: 'ignore' | 'fixed_reply'
+    forbidden_reply_content?: string
+  }
 ): Promise<ApiResponse> => {
   return post(`${ITEM_PREFIX}/${cookieId}/batch-default-reply`, data)
 }

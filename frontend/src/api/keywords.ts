@@ -120,11 +120,25 @@ export const batchDeleteKeywords = async (cookieId: string, keywordIds: string[]
 const DEFAULT_REPLY_PREFIX = '/api/v1/default-replies'
 
 // 获取默认回复设置
-export const getDefaultReply = async (cookieId: string): Promise<{ default_reply: string; reply_image: string; enabled: boolean; reply_once: boolean; reply_type: string; api_url: string; api_timeout: number }> => {
+export const getDefaultReply = async (cookieId: string): Promise<{
+  default_reply: string
+  reply_content: string
+  reply_image: string
+  reply_image_url: string
+  enabled: boolean
+  reply_once: boolean
+  reply_type: string
+  api_url: string
+  api_timeout: number
+}> => {
   const result = await get<{ enabled: boolean; reply_content: string; reply_image: string; reply_once: boolean; reply_type?: string; api_url?: string; api_timeout?: number }>(`${DEFAULT_REPLY_PREFIX}/${cookieId}`)
+  const replyContent = result.reply_content || ''
+  const replyImage = result.reply_image || ''
   return {
-    default_reply: result.reply_content || '',
-    reply_image: result.reply_image || '',
+    default_reply: replyContent,
+    reply_content: replyContent,
+    reply_image: replyImage,
+    reply_image_url: replyImage,
     enabled: result.enabled || false,
     reply_once: result.reply_once || false,
     reply_type: result.reply_type || 'text',

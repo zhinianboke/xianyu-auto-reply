@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
-import { Database, RefreshCw, Trash2, Table } from 'lucide-react'
+import { Database, RefreshCw, Trash2 } from 'lucide-react'
+import { Button, Empty, Form, Modal, Select as ArcoSelect, Space, Table } from '@arco-design/web-react'
+import type { TableColumnProps } from '@arco-design/web-react'
 import { getTableData, clearTableData } from '@/api/admin'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { PageLoading, ButtonLoading } from '@/components/common/Loading'
-import { Select } from '@/components/common/Select'
-import { ConfirmModal } from '@/components/common/ConfirmModal'
 
 // 可选择的数据表
 const tableOptions = [
@@ -16,6 +16,7 @@ const tableOptions = [
   { value: 'orders', label: '订单表' },
   { value: 'item_info', label: '商品信息表' },
   { value: 'notification_channels', label: '通知渠道表' },
+  { value: 'delivery_rules', label: '发货规则表' },
   { value: 'risk_control_logs', label: '风控日志表' },
 ]
 
@@ -28,9 +29,6 @@ export function DataManagement() {
   const [columns, setColumns] = useState<string[]>([])
   const [count, setCount] = useState(0)
   const [clearing, setClearing] = useState(false)
-
-  // 清空确认弹窗状态
-  const [clearConfirmStep, setClearConfirmStep] = useState<0 | 1 | 2>(0) // 0=关闭, 1=第一次确认, 2=第二次确认
 
   const loadTableData = async () => {
     if (!_hasHydrated || !isAuthenticated || !token) return
@@ -58,161 +56,129 @@ export function DataManagement() {
   }, [_hasHydrated, isAuthenticated, token, selectedTable])
 
   const handleClearTable = async () => {
-    try {
-      setClearing(true)
-      const result = await clearTableData(selectedTable)
-      if (result.success) {
-        addToast({ type: 'success', message: '清空成功' })
-        setClearConfirmStep(0)
-        loadTableData()
-      } else {
-        addToast({ type: 'error', message: result.message || '清空失败' })
-      }
-    } catch {
-      addToast({ type: 'error', message: '清空失败' })
-    } finally {
-      setClearing(false)
-    }
+    Modal.confirm({
+      title: '清空数据表',
+      content: `确定要清空 ${tableOptions.find(t => t.value === selectedTable)?.label} 吗？此操作不可恢复。`,
+      okButtonProps: { status: 'danger' },
+      onOk: async () => {
+        try {
+          setClearing(true)
+          const result = await clearTableData(selectedTable)
+          if (result.success) {
+            addToast({ type: 'success', message: '清空成功' })
+            loadTableData()
+          } else {
+            addToast({ type: 'error', message: result.message || '清空失败' })
+          }
+        } catch {
+          addToast({ type: 'error', message: '清空失败' })
+        } finally {
+          setClearing(false)
+        }
+      },
+    })
   }
 
   if (!_hasHydrated) {
     return <PageLoading />
   }
 
+  const arcoColumns: TableColumnProps<Record<string, unknown>>[] = columns.map((col, index) => ({
+    title: col,
+    dataIndex: col,
+    width: index === 0 ? 180 : 260,
+    render: (value: unknown) => (
+      <span
+        className={`block truncate text-slate-600 dark:text-slate-400 ${index === 0 ? 'max-w-[180px]' : 'max-w-[260px]'}`}
+        title={String(value ?? '')}
+      >
+        {String(value ?? '-')}
+      </span>
+    ),
+  }))
+  const displayTableData = tableData.slice(0, 100).map((row, index) => ({
+    ...row,
+    key: `${selectedTable}-${index}`,
+  }))
+
   return (
     <div className="space-y-4">
-      {/* 数据表选择 */}
       <div className="vben-card">
-        <div className="vben-card-header">
-          <h2 className="vben-card-title">
-            <Table className="w-4 h-4" />
-            数据表选择
-          </h2>
+        <div className="accounts-page-intro">
+          <h1>数据库管理</h1>
+          <p>查看并维护系统核心数据表。</p>
         </div>
-        <div className="vben-card-body">
-          <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-end">
-            <div className="sm:col-span-6">
-              <label className="input-label mb-1">选择数据表</label>
-              <Select
-                value={selectedTable}
-                onChange={setSelectedTable}
-                options={tableOptions}
-                placeholder="选择数据表"
-              />
-            </div>
-            <div className="sm:col-span-2 text-center py-2 px-4 bg-slate-50 dark:bg-slate-800/50 rounded-lg">
-              <p className="text-xs text-slate-500 dark:text-slate-400">数据统计</p>
-              <p className="text-xl font-bold text-slate-900 dark:text-slate-100">{count}</p>
-              <p className="text-xs text-slate-400">条记录</p>
-            </div>
-            <div className="sm:col-span-4 flex justify-end">
-              <button
-                onClick={loadTableData}
-                disabled={loading}
-                className="btn-ios-primary w-full sm:w-auto"
-              >
-                {loading ? <ButtonLoading /> : <RefreshCw className="w-4 h-4" />}
-                刷新数据
-              </button>
+        <div className="table-toolbar">
+          <div className="table-filter-row table-filter-row--lined">
+            <Form layout="inline" className="table-filter-form">
+              <Form.Item label="选择数据表">
+                <ArcoSelect
+                  value={selectedTable}
+                  onChange={(value) => setSelectedTable(String(value))}
+                  style={{ width: 220 }}
+                  options={tableOptions}
+                  placeholder="选择数据表"
+                />
+              </Form.Item>
+            </Form>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-4 py-2 dark:bg-slate-800/50">
+                <span className="text-lg font-bold text-slate-900 dark:text-slate-100">{count}</span>
+                <span className="text-xs text-slate-400">条记录</span>
+              </div>
+              <Space className="batch-actions">
+                <Button
+                  type="primary"
+                  onClick={loadTableData}
+                  loading={loading}
+                  className="accounts-header-btn"
+                >
+                  <RefreshCw />
+                  刷新数据
+                </Button>
+                <Button
+                  status="danger"
+                  onClick={handleClearTable}
+                  disabled={clearing || count === 0}
+                  className="accounts-header-btn"
+                >
+                  {clearing ? <ButtonLoading /> : <Trash2 />}
+                  清空数据
+                </Button>
+              </Space>
             </div>
           </div>
         </div>
-      </div>
-
-      {/* 数据表展示 */}
-      <div className="vben-card">
-        <div className="vben-card-header flex items-center justify-between">
-          <h2 className="vben-card-title">
-            <Database className="w-4 h-4" />
-            {tableOptions.find(t => t.value === selectedTable)?.label || selectedTable}
-          </h2>
-          <button
-            onClick={() => setClearConfirmStep(1)}
-            disabled={clearing || count === 0}
-            className="btn-ios-danger text-sm"
-          >
-            {clearing ? <ButtonLoading /> : <Trash2 className="w-4 h-4" />}
-            清空
-          </button>
-        </div>
-        <div className="vben-card-body p-0">
+        <div>
           {loading ? (
             <div className="p-8 text-center">
               <ButtonLoading />
               <p className="text-slate-500 mt-2">加载中...</p>
             </div>
           ) : tableData.length === 0 ? (
-            <div className="p-8 text-center">
-              <Database className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
-              <p className="text-slate-500 dark:text-slate-400">该表暂无数据</p>
-            </div>
+            <Empty
+              className="py-10"
+              icon={<Database className="w-12 h-12 text-slate-300 dark:text-slate-600" />}
+              description="该表暂无数据"
+            />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm table-fixed">
-                <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700">
-                  <tr>
-                    {columns.map((col, index) => (
-                      <th
-                        key={col}
-                        className={`px-4 py-3 text-left font-medium text-slate-700 dark:text-slate-300 ${
-                          index === 0 ? 'w-32' : 'min-w-[120px]'
-                        }`}
-                      >
-                        {col}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                  {tableData.slice(0, 100).map((row, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
-                      {columns.map((col) => (
-                        <td
-                          key={col}
-                          className="px-4 py-3 text-slate-600 dark:text-slate-400 truncate"
-                          title={String(row[col] ?? '')}
-                        >
-                          {String(row[col] ?? '-')}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {tableData.length > 100 && (
-                <div className="p-3 text-center text-sm text-slate-500 bg-slate-50 dark:bg-slate-800/30 border-t border-slate-200 dark:border-slate-700">
-                  仅显示前 100 条记录，共 {tableData.length} 条
-                </div>
-              )}
+            <Table
+              className="accounts-arco-table"
+              columns={arcoColumns}
+              data={displayTableData}
+              rowKey="key"
+              borderCell={false}
+              pagination={false}
+              scroll={{ x: 'max-content' }}
+            />
+          )}
+          {!loading && tableData.length > 100 && (
+            <div className="border-t border-slate-200 bg-slate-50 px-4 py-3 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800/30">
+              仅显示前 100 条记录，共 {tableData.length} 条
             </div>
           )}
         </div>
       </div>
-
-      {/* 第一次确认弹窗 */}
-      <ConfirmModal
-        isOpen={clearConfirmStep === 1}
-        title="清空确认"
-        message={`确定要清空 ${tableOptions.find(t => t.value === selectedTable)?.label} 吗？此操作不可恢复！`}
-        confirmText="确定"
-        cancelText="取消"
-        type="danger"
-        onConfirm={() => setClearConfirmStep(2)}
-        onCancel={() => setClearConfirmStep(0)}
-      />
-
-      {/* 第二次确认弹窗 */}
-      <ConfirmModal
-        isOpen={clearConfirmStep === 2}
-        title="再次确认"
-        message="是否真的要清空该表的所有数据？"
-        confirmText="确定清空"
-        cancelText="取消"
-        type="danger"
-        loading={clearing}
-        onConfirm={handleClearTable}
-        onCancel={() => setClearConfirmStep(0)}
-      />
     </div>
   )
 }

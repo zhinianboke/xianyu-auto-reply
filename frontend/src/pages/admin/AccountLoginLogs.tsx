@@ -249,43 +249,45 @@ export function AccountLoginLogs() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="page-title">账号登录日志</h1>
-          <p className="page-description">查看账号密码登录每一次尝试的结果与失败原因</p>
+      <div
+        className="vben-card flex flex-col"
+        style={{ height: 'calc(100vh - 180px)', minHeight: '520px' }}
+      >
+        <div className="accounts-page-intro blacklist-page-intro">
+          <div>
+            <h1>账号登录日志</h1>
+            <p>查看账号密码登录每一次尝试的结果与失败原因</p>
+          </div>
+          <div className="table-toolbar-right">
+            {user?.is_admin ? (
+              <>
+                <button
+                  onClick={() => setClearMode('older_than_30d')}
+                  className="btn-ios-secondary"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  清理30天前
+                </button>
+                <button onClick={() => setClearMode('all')} className="btn-ios-danger">
+                  <Trash2 className="w-4 h-4" />
+                  清空全部
+                </button>
+              </>
+            ) : null}
+            <button onClick={() => loadLogs()} disabled={loading} className="btn-ios-secondary">
+              {loading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4" />
+              )}
+              刷新
+            </button>
+          </div>
         </div>
-        <div className="flex gap-3 flex-wrap">
-          {user?.is_admin ? (
-            <>
-              <button
-                onClick={() => setClearMode('older_than_30d')}
-                className="btn-ios-secondary"
-              >
-                <Trash2 className="w-4 h-4" />
-                清理30天前
-              </button>
-              <button onClick={() => setClearMode('all')} className="btn-ios-danger">
-                <Trash2 className="w-4 h-4" />
-                清空全部
-              </button>
-            </>
-          ) : null}
-          <button onClick={() => loadLogs()} disabled={loading} className="btn-ios-secondary">
-            {loading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <RefreshCw className="w-4 h-4" />
-            )}
-            刷新
-          </button>
-        </div>
-      </div>
 
-      {/* Filter */}
-      <div className="vben-card">
-        <div className="vben-card-body">
-          <div className="flex flex-wrap items-end gap-4">
+        <div className="table-toolbar">
+          <div className="table-filter-row table-filter-row--lined flex-wrap">
+            <div className="flex flex-wrap items-end gap-4">
             <div className="input-group">
               <label className="input-label">开始日期</label>
               <input
@@ -338,21 +340,15 @@ export function AccountLoginLogs() {
               <Calendar className="w-4 h-4" />
               查询
             </button>
+            </div>
+            <div className="table-toolbar-right">
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-300">
+                <KeyRound className="w-4 h-4 text-blue-500" />
+                登录尝试记录
+              </div>
+              <span className="badge-primary">{total} 条记录</span>
+            </div>
           </div>
-        </div>
-      </div>
-
-      {/* Logs List */}
-      <div
-        className="vben-card flex flex-col"
-        style={{ height: 'calc(100vh - 380px)', minHeight: '400px' }}
-      >
-        <div className="vben-card-header flex-shrink-0">
-          <h2 className="vben-card-title">
-            <KeyRound className="w-4 h-4 text-blue-500" />
-            登录尝试记录
-          </h2>
-          <span className="badge-primary">{total} 条记录</span>
         </div>
         <div className="flex-1 overflow-x-auto overflow-y-auto">
           <table className="table-ios">

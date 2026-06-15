@@ -14,7 +14,6 @@ import type { DisclaimerSettings } from '@/types'
 // 登录/注册/激活码页面保持同步导入（首屏必需）
 import { Login } from '@/pages/auth/Login'
 import { Register } from '@/pages/auth/Register'
-import { ForgotPassword } from '@/pages/auth/ForgotPassword'
 import { GetActivation } from '@/pages/auth/GetActivation'
 import { RenewActivation } from '@/pages/auth/RenewActivation'
 import { GetLocalVersion } from '@/pages/auth/GetLocalVersion'
@@ -42,6 +41,18 @@ const ItemSearch = React.lazy(() => import('@/pages/search/ItemSearch').then(m =
 const GoofishCompass = React.lazy(() => import('@/pages/compass/GoofishCompass').then(m => ({ default: m.GoofishCompass })))
 const GoofishScheduledCrawler = React.lazy(() => import('@/pages/crawler/GoofishScheduledCrawler').then(m => ({ default: m.GoofishScheduledCrawler })))
 const Cards = React.lazy(() => import('@/pages/cards/Cards').then(m => ({ default: m.Cards })))
+const ChatNew = React.lazy(() => import('@/pages/chat-new/ChatNew').then(m => ({ default: m.ChatNew })))
+const Delivery = React.lazy(() => import('@/pages/delivery/Delivery').then(m => ({ default: m.Delivery })))
+const ItemReplies = React.lazy(() => import('@/pages/item-replies/ItemReplies').then(m => ({ default: m.ItemReplies })))
+const AISettings = React.lazy(() => import('@/pages/settings/AISettings').then(m => ({ default: m.AISettings })))
+const ProfileSettings = React.lazy(() => import('@/pages/settings/ProfileSettings').then(m => ({ default: m.ProfileSettings })))
+const BackupSettings = React.lazy(() => import('@/pages/settings/BackupSettings').then(m => ({ default: m.BackupSettings })))
+const ReplySafety = React.lazy(() => import('@/pages/settings/ReplySafety').then(m => ({ default: m.ReplySafety })))
+const ReplySimulator = React.lazy(() => import('@/pages/tools/ReplySimulator').then(m => ({ default: m.ReplySimulator })))
+const AutoReview = React.lazy(() => import('@/pages/auto-review/AutoReview').then(m => ({ default: m.AutoReview })))
+const AICallDetails = React.lazy(() => import('@/pages/ai/AICallDetails').then(m => ({ default: m.AICallDetails })))
+const AITokenStats = React.lazy(() => import('@/pages/ai/AITokenStats').then(m => ({ default: m.AITokenStats })))
+const ItemInteractionAssistant = React.lazy(() => import('@/pages/interaction/ItemInteractionAssistant').then(m => ({ default: m.ItemInteractionAssistant })))
 const PersonalSettings = React.lazy(() => import('@/pages/personalSettings/PersonalSettings').then(m => ({ default: m.PersonalSettings })))
 const Blacklist = React.lazy(() => import('@/pages/blacklist/Blacklist'))
 const SupplyManagement = React.lazy(() => import('@/pages/distribution/SupplyManagement').then(m => ({ default: m.SupplyManagement })))
@@ -69,6 +80,8 @@ const Users = React.lazy(() => import('@/pages/admin/Users').then(m => ({ defaul
 const Logs = React.lazy(() => import('@/pages/admin/Logs').then(m => ({ default: m.Logs })))
 const AutoReplyLogs = React.lazy(() => import('@/pages/autoReplyLogs/AutoReplyLogs').then(m => ({ default: m.AutoReplyLogs })))
 const RiskLogs = React.lazy(() => import('@/pages/admin/RiskLogs').then(m => ({ default: m.RiskLogs })))
+const SystemHealth = React.lazy(() => import('@/pages/admin/SystemHealth').then(m => ({ default: m.SystemHealth })))
+const AccountExceptions = React.lazy(() => import('@/pages/admin/AccountExceptions').then(m => ({ default: m.AccountExceptions })))
 const AccountLoginLogs = React.lazy(() => import('@/pages/admin/AccountLoginLogs').then(m => ({ default: m.AccountLoginLogs })))
 const DbBackupLogs = React.lazy(() => import('@/pages/admin/DbBackupLogs').then(m => ({ default: m.DbBackupLogs })))
 const DataManagement = React.lazy(() => import('@/pages/admin/DataManagement').then(m => ({ default: m.DataManagement })))
@@ -268,6 +281,9 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function App() {
   const { setIsExeMode } = useMenuVisibilityStore()
+  const routerBasename = import.meta.env.BASE_URL === '/'
+    ? undefined
+    : import.meta.env.BASE_URL.replace(/\/$/, '')
 
   useEffect(() => {
     let cancelled = false
@@ -298,14 +314,13 @@ function App() {
   }, [setIsExeMode])
 
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={routerBasename}>
       <Toast />
       <Suspense fallback={<PageLoading />}>
         <Routes>
           {/* Public routes */}
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
-          <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/get-activation" element={<GetActivation />} />
           <Route path="/renew-activation" element={<RenewActivation />} />
           <Route path="/get-local-version" element={<GetLocalVersion />} />
@@ -330,12 +345,13 @@ function App() {
             <Route path="items" element={<Items />} />
             <Route path="orders" element={<Orders />} />
             <Route path="keywords" element={<Keywords />} />
+            <Route path="item-replies" element={<ItemReplies />} />
             <Route path="message-logs" element={<AutoReplyLogs />} />
             <Route path="account-login-logs" element={<Navigate to="/admin/account-login-logs" replace />} />
             <Route path="risk-logs" element={<RiskLogs />} />
             <Route path="message-filters" element={<MessageFilters />} />
             {/* 在线聊天由 MainLayout 直接渲染以实现 KeepAlive，此处仅保留路由占位 */}
-            <Route path="online-chat-new" element={<></>} />
+            <Route path="online-chat-new" element={<ChatNew />} />
             <Route path="notification-channels" element={<NotificationChannels />} />
             <Route path="message-notifications" element={<MessageNotifications />} />
             <Route path="feedback" element={<Feedback />} />
@@ -344,6 +360,16 @@ function App() {
             <Route path="goofish-compass" element={<GoofishCompass />} />
             <Route path="goofish-scheduled-crawler" element={<GoofishScheduledCrawler />} />
             <Route path="cards" element={<Cards />} />
+            <Route path="delivery" element={<Delivery />} />
+            <Route path="settings/ai" element={<AISettings />} />
+            <Route path="settings/profile" element={<ProfileSettings />} />
+            <Route path="settings/backup" element={<BackupSettings />} />
+            <Route path="settings/reply-safety" element={<ReplySafety />} />
+            <Route path="tools/reply-simulator" element={<ReplySimulator />} />
+            <Route path="auto-review" element={<AutoReview />} />
+            <Route path="ai/calls" element={<AICallDetails />} />
+            <Route path="ai/tokens" element={<AITokenStats />} />
+            <Route path="interaction/items" element={<ItemInteractionAssistant />} />
             <Route path="distribution/supply" element={<SupplyManagement />} />
             <Route path="distribution/card-pickup" element={<CardPickup />} />
             <Route path="distribution/docked" element={<DockedProducts />} />
@@ -375,6 +401,8 @@ function App() {
             <Route path="admin/auto-reply-logs" element={<Navigate to="/message-logs" replace />} />
             <Route path="admin/risk-logs" element={<Navigate to="/risk-logs" replace />} />
             <Route path="admin/data" element={<DataManagement />} />
+            <Route path="admin/health" element={<SystemHealth />} />
+            <Route path="admin/account-exceptions" element={<AccountExceptions />} />
             <Route path="admin/redelivery-batches" element={<RedeliveryBatches />} />
             <Route path="admin/redelivery-batches/:batchId" element={<RedeliveryBatchDetailPage />} />
             <Route path="admin/rate-batches" element={<RateBatches />} />

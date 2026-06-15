@@ -1,64 +1,33 @@
-import { useEffect, useState } from 'react'
-import { Users as UsersIcon, RefreshCw, Plus, ChevronLeft, ChevronRight, Loader2, Pencil, Power, PowerOff } from 'lucide-react'
-import { getUsers, deleteUser, updateUser } from '@/api/admin'
+import { useState, useEffect } from 'react'
+import { Users as UsersIcon, RefreshCw, Plus, Trash2 } from 'lucide-react'
+import { addUser, getUsers, deleteUser } from '@/api/admin'
+import { Button, Form, Input, Modal, Popconfirm, Space } from '@arco-design/web-react'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { PageLoading } from '@/components/common/Loading'
-import { ConfirmModal } from '@/components/common/ConfirmModal'
-import { UserFormModal } from './UserFormModal'
-import { getApiErrorMessage } from '@/utils/request'
 import type { User } from '@/types'
-
-const roleLabelMap: Record<string, string> = {
-  ADMIN: '管理员',
-  OPERATOR: '运营人员',
-  MEMBER: '普通用户',
-}
-
-const statusLabelMap: Record<string, string> = {
-  ACTIVE: '正常',
-  INACTIVE: '停用',
-  SUSPENDED: '封禁',
-  DELETED: '已删除',
-}
-
-const statusClassMap: Record<string, string> = {
-  ACTIVE: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300',
-  INACTIVE: 'bg-slate-100 text-slate-700 dark:bg-slate-700/50 dark:text-slate-300',
-  SUSPENDED: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
-  DELETED: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
-}
 
 export function Users() {
   const { addToast } = useUIStore()
-  const { isAuthenticated, token, _hasHydrated, user: currentUser, updateUser: updateAuthUser } = useAuthStore()
+  const { isAuthenticated, token, _hasHydrated } = useAuthStore()
   const [loading, setLoading] = useState(true)
   const [users, setUsers] = useState<User[]>([])
-
-  const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
-  const [total, setTotal] = useState(0)
-
-  const [statusConfirm, setStatusConfirm] = useState<{ open: boolean; user: User | null; action: 'enable' | 'disable' }>({ open: false, user: null, action: 'disable' })
-  const [statusSubmitting, setStatusSubmitting] = useState(false)
-  const [showFormModal, setShowFormModal] = useState(false)
-  const [editingUser, setEditingUser] = useState<User | null>(null)
+  const [showAddModal, setShowAddModal] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
 
   const loadUsers = async () => {
     if (!_hasHydrated || !isAuthenticated || !token) return
     try {
       setLoading(true)
-      const result = await getUsers({ page: currentPage, pageSize })
-      if (!result.success) {
-        setUsers([])
-        setTotal(0)
-        addToast({ type: 'error', message: result.message || '加载用户列表失败' })
-        return
+      const result = await getUsers()
+      if (result.success) {
+        setUsers(result.data || [])
       }
-      setUsers(result.data || [])
-      setTotal(result.total || 0)
-    } catch (error) {
-      addToast({ type: 'error', message: getApiErrorMessage(error, '加载用户列表失败') })
+    } catch {
+      addToast({ type: 'error', message: '加载用户列表失败' })
     } finally {
       setLoading(false)
     }
@@ -67,113 +36,109 @@ export function Users() {
   useEffect(() => {
     if (!_hasHydrated || !isAuthenticated || !token) return
     loadUsers()
-  }, [_hasHydrated, isAuthenticated, token, currentPage, pageSize])
+  }, [_hasHydrated, isAuthenticated, token])
 
-  const handleOpenCreate = () => {
-    setEditingUser(null)
-    setShowFormModal(true)
-  }
-
-  const handleOpenEdit = (user: User) => {
-    setEditingUser(user)
-    setShowFormModal(true)
-  }
-
-  const handleSaved = async (user: User, mode: 'create' | 'update') => {
-    setShowFormModal(false)
-    setEditingUser(null)
-    if (currentUser?.user_id === user.user_id) {
-      updateAuthUser(user)
+  const handleDelete = async (userId: number) => {
+    try {
+      await deleteUser(userId)
+      addToast({ type: 'success', message: '删除成功' })
+      loadUsers()
+    } catch {
+      addToast({ type: 'error', message: '删除失败' })
     }
-    if (mode === 'create' && currentPage !== 1) {
-      setCurrentPage(1)
+  }
+
+  const handleCreateUser = async () => {
+    if (!username.trim()) {
+      addToast({ type: 'warning', message: '请输入用户名' })
       return
     }
-    await loadUsers()
-  }
+    if (!email.trim()) {
+      addToast({ type: 'warning', message: '请输入邮箱' })
+      return
+    }
+    if (!password) {
+      addToast({ type: 'warning', message: '请输入密码' })
+      return
+    }
+    if (password.length < 6) {
+      addToast({ type: 'warning', message: '密码长度不能少于6位' })
+      return
+    }
 
-  const closeStatusConfirm = () => {
-    setStatusConfirm({ open: false, user: null, action: 'disable' })
-  }
-
-  const handleStatusChange = async (user: User, action: 'enable' | 'disable') => {
-    setStatusSubmitting(true)
     try {
-      const result = action === 'enable'
-        ? await updateUser(user.user_id, { status: 'ACTIVE' })
-        : await deleteUser(user.user_id)
-      if (!result.success) {
-        addToast({ type: 'error', message: result.message || (action === 'enable' ? '启用失败' : '停用失败') })
-        return
+      setCreating(true)
+      const result = await addUser({
+        username: username.trim(),
+        email: email.trim(),
+        password,
+      })
+      if (result.success) {
+        addToast({ type: 'success', message: '用户创建成功' })
+        setShowAddModal(false)
+        setUsername('')
+        setEmail('')
+        setPassword('')
+        loadUsers()
+      } else {
+        addToast({ type: 'error', message: result.message || '创建用户失败' })
       }
-      addToast({ type: 'success', message: result.message || (action === 'enable' ? '用户已启用' : '用户已停用') })
-      closeStatusConfirm()
-      await loadUsers()
-    } catch (error) {
-      addToast({ type: 'error', message: getApiErrorMessage(error, action === 'enable' ? '启用失败' : '停用失败') })
+    } catch (error: unknown) {
+      const axiosError = error as { response?: { data?: { detail?: string; message?: string } } }
+      const detail = axiosError.response?.data?.detail || axiosError.response?.data?.message
+      addToast({ type: 'error', message: detail || '创建用户失败' })
     } finally {
-      setStatusSubmitting(false)
+      setCreating(false)
     }
   }
 
-  const totalPages = Math.ceil(total / pageSize)
-  const startIndex = (currentPage - 1) * pageSize + 1
-  const endIndex = Math.min(currentPage * pageSize, total)
-  const isEnableAction = statusConfirm.action === 'enable'
-
-  if (loading && users.length === 0) {
+  if (loading) {
     return <PageLoading />
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="page-title">用户管理</h1>
-          <p className="page-description">管理系统用户账号</p>
+      {/* Users List */}
+      <div className="vben-card">
+        <div className="accounts-page-intro">
+          <h1>用户管理</h1>
+          <p>管理系统用户账号</p>
         </div>
         <div className="flex gap-3">
-          <button onClick={handleOpenCreate} className="btn-ios-primary">
-            <Plus className="w-4 h-4" />
-            添加用户
-          </button>
-          <button onClick={loadUsers} disabled={loading} className="btn-ios-secondary">
-            {loading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <RefreshCw className="w-4 h-4" />
-            )}
-            刷新
-          </button>
+          <div className="accounts-toolbar">
+            <div className="accounts-filter-row accounts-filter-row--lined">
+              <div className="accounts-action-row">
+                <Space className="accounts-toolbar-right">
+                  <Button 
+                    type="primary"
+                    onClick={() => setShowAddModal(true)} className="accounts-header-btn">
+                    <Plus />
+                    添加用户
+                  </Button>
+                  <Button onClick={loadUsers} className="accounts-header-btn">
+                    <RefreshCw />
+                    刷新
+                  </Button>
+                </Space>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
-
-      <div className="vben-card flex flex-col" style={{ height: 'calc(100vh - 280px)', minHeight: '400px' }}>
-        <div className="vben-card-header flex-shrink-0 flex items-center justify-between">
-          <h2 className="vben-card-title">
-            <UsersIcon className="w-4 h-4" />
-            用户列表
-          </h2>
-          <span className="badge-primary">{total} 个用户</span>
-        </div>
-        <div className="flex-1 overflow-auto">
+        <div className="overflow-x-auto">
           <table className="table-ios">
-            <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
+            <thead>
               <tr>
                 <th>ID</th>
                 <th>用户名</th>
                 <th>邮箱</th>
-                <th>手机号</th>
                 <th>角色</th>
-                <th>可添加账号数</th>
-                <th>状态</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody>
               {users.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-8 text-slate-500 dark:text-slate-400">
+                  <td colSpan={5} className="text-center py-8 text-slate-500 dark:text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <UsersIcon className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>暂无用户数据</p>
@@ -186,48 +151,30 @@ export function Users() {
                     <td className="font-medium">{user.user_id}</td>
                     <td className="font-medium text-blue-600 dark:text-blue-400">{user.username}</td>
                     <td className="text-slate-500 dark:text-slate-400">{user.email || '-'}</td>
-                    <td className="text-slate-500 dark:text-slate-400">{user.phone || '-'}</td>
                     <td>
-                      <span className={user.role === 'ADMIN' ? 'badge-warning' : 'badge-gray'}>
-                        {roleLabelMap[user.role || (user.is_admin ? 'ADMIN' : 'MEMBER')] || '普通用户'}
-                      </span>
-                    </td>
-                    <td className="text-slate-500 dark:text-slate-400">{user.account_limit ?? '-'}</td>
-                    <td>
-                      <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${statusClassMap[user.status || 'ACTIVE'] || statusClassMap.ACTIVE}`}>
-                        {statusLabelMap[user.status || 'ACTIVE'] || '正常'}
-                      </span>
+                      {user.is_admin ? (
+                        <span className="badge-warning">管理员</span>
+                      ) : (
+                        <span className="badge-gray">普通用户</span>
+                      )}
                     </td>
                     <td>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          onClick={() => handleOpenEdit(user)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400 transition-colors"
-                          title="编辑"
+                      <div className="flex gap-1">
+                        <Popconfirm
+                          title="确定要删除这个用户吗？"
+                          content="此操作不可恢复。"
+                          okText="删除"
+                          cancelText="取消"
+                          okButtonProps={{ status: 'danger' }}
+                          onOk={() => handleDelete(user.user_id)}
                         >
-                          <Pencil className="w-4 h-4" />
-                          编辑
-                        </button>
-                        {user.status === 'INACTIVE' ? (
                           <button
-                            onClick={() => setStatusConfirm({ open: true, user, action: 'enable' })}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 transition-colors"
-                            title="启用"
+                            className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                            title="删除"
                           >
-                            <Power className="w-4 h-4" />
-                            启用
+                            <Trash2 className="w-4 h-4 text-red-500" />
                           </button>
-                        ) : (
-                          <button
-                            onClick={() => setStatusConfirm({ open: true, user, action: 'disable' })}
-                            disabled={user.status === 'DELETED'}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-red-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                            title="停用"
-                          >
-                            <PowerOff className="w-4 h-4" />
-                            停用
-                          </button>
-                        )}
+                        </Popconfirm>
                       </div>
                     </td>
                   </tr>
@@ -236,84 +183,43 @@ export function Users() {
             </tbody>
           </table>
         </div>
-
-        {total > 0 && (
-          <div className="flex-shrink-0 vben-card-footer flex flex-col sm:flex-row items-center justify-between gap-4 px-4 py-3 border-t border-slate-200 dark:border-slate-700">
-            <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-              <span>每页</span>
-              <select
-                value={pageSize}
-                onChange={(e) => {
-                  setPageSize(Number(e.target.value))
-                  setCurrentPage(1)
-                }}
-                className="px-2 py-1 border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300"
-              >
-                <option value={10}>10</option>
-                <option value={20}>20</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </select>
-              <span>条</span>
-              <span className="ml-2">
-                显示 {startIndex}-{endIndex} 条，共 {total} 条
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                className="p-2 rounded border border-slate-300 dark:border-slate-600 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-100 dark:hover:bg-slate-700"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <span className="px-3 py-1 text-sm text-slate-600 dark:text-slate-400">
-                第 {currentPage} / {totalPages || 1} 页
-              </span>
-              <button
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage >= totalPages}
-                className="p-2 rounded border border-slate-300 dark:border-slate-600 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-100 dark:hover:bg-slate-700"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
       </div>
-
-      <div className="vben-card">
-        <div className="vben-card-body">
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            提示：管理员可在此页面新增、编辑、停用和启用用户账号，停用后用户将无法登录，但历史数据会保留。
-          </p>
-        </div>
-      </div>
-
-      {showFormModal && (
-        <UserFormModal
-          initial={editingUser}
-          onClose={() => {
-            setShowFormModal(false)
-            setEditingUser(null)
-          }}
-          onSaved={handleSaved}
-        />
-      )}
-
-      <ConfirmModal
-        isOpen={statusConfirm.open}
-        title={isEnableAction ? '启用确认' : '停用确认'}
-        message={isEnableAction
-          ? `确定要启用用户「${statusConfirm.user?.username || ''}」吗？启用后该用户可恢复登录。`
-          : `确定要停用用户「${statusConfirm.user?.username || ''}」吗？停用后该用户将无法登录，但历史数据会保留。`}
-        confirmText={isEnableAction ? '启用' : '停用'}
-        cancelText="取消"
-        type={isEnableAction ? 'info' : 'danger'}
-        loading={statusSubmitting}
-        onConfirm={() => statusConfirm.user && handleStatusChange(statusConfirm.user, statusConfirm.action)}
-        onCancel={closeStatusConfirm}
-      />
+      <Modal
+        title="添加用户"
+        visible={showAddModal}
+        onCancel={() => {
+          if (creating) return
+          setShowAddModal(false)
+        }}
+        onOk={handleCreateUser}
+        confirmLoading={creating}
+        autoFocus={false}
+        focusLock
+      >
+        <Form layout="vertical">
+          <Form.Item label="用户名" required>
+            <Input
+              value={username}
+              onChange={setUsername}
+              placeholder="请输入用户名"
+            />
+          </Form.Item>
+          <Form.Item label="邮箱" required>
+            <Input
+              value={email}
+              onChange={setEmail}
+              placeholder="请输入邮箱"
+            />
+          </Form.Item>
+          <Form.Item label="密码" required>
+            <Input.Password
+              value={password}
+              onChange={setPassword}
+              placeholder="请输入密码，至少6位"
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }

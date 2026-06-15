@@ -1,5 +1,5 @@
 import { get, post, put, del } from '@/utils/request'
-import type { AccountDetail, ApiResponse } from '@/types'
+import type { Account, AccountDetail, ApiResponse } from '@/types'
 
 // API前缀
 const COOKIE_PREFIX = '/api/v1/cookies'
@@ -30,6 +30,18 @@ export const getAccountDetails = async (): Promise<AccountDetail[]> => {
   }))
 }
 
+// Legacy helper used by custom local pages.
+export const getAccounts = async (): Promise<Account[]> => {
+  const accounts = await getAccountDetails()
+  return accounts.map((account) => ({
+    ...account,
+    cookie: account.cookie || '',
+    use_ai_reply: account.use_ai_reply || false,
+    use_default_reply: account.use_default_reply || false,
+    auto_confirm: account.auto_confirm || false,
+  }))
+}
+
 // 账号筛选参数
 export interface AccountFilterParams {
   status?: 'active' | 'inactive' | null  // 状态筛选
@@ -39,7 +51,6 @@ export interface AccountFilterParams {
   auto_polish?: boolean | null           // 商品擦亮
   auto_confirm?: boolean | null          // 自动确认收货
   has_password?: boolean | null          // 是否配置密码
-  online?: boolean | null                // 在线状态（true=在线/false=离线）
   disable_reason?: string | null         // 禁用原因关键词（模糊搜索）
   account_id?: string | null             // 账号ID关键词（模糊搜索）
 }
@@ -61,7 +72,6 @@ export const getAccountDetailsPaginated = async (
     id: string
     value: string
     enabled: boolean
-    online?: boolean
     auto_confirm: boolean
     scheduled_redelivery?: boolean
     scheduled_rate?: boolean
@@ -107,7 +117,6 @@ export const getAccountDetailsPaginated = async (
     if (filters.auto_polish !== null && filters.auto_polish !== undefined) params.append('auto_polish', String(filters.auto_polish))
     if (filters.auto_confirm !== null && filters.auto_confirm !== undefined) params.append('auto_confirm', String(filters.auto_confirm))
     if (filters.has_password !== null && filters.has_password !== undefined) params.append('has_password', String(filters.has_password))
-    if (filters.online !== null && filters.online !== undefined) params.append('online', String(filters.online))
     // 禁用原因：模糊搜索关键词，去除前后空白后再判断是否传参，避免发送空字符串
     if (filters.disable_reason && filters.disable_reason.trim()) {
       params.append('disable_reason', filters.disable_reason.trim())
@@ -133,7 +142,6 @@ export const getAccountDetailsPaginated = async (
       id: item.id,
       cookie: item.value,
       enabled: item.enabled,
-      online: item.online ?? false,
       auto_confirm: item.auto_confirm,
       scheduled_redelivery: item.scheduled_redelivery || false,
       scheduled_rate: item.scheduled_rate || false,
@@ -364,6 +372,8 @@ export const checkQRLoginStatus = async (sessionId: string): Promise<{
   success: boolean
   status: 'pending' | 'scanned' | 'success' | 'failed' | 'expired' | 'cancelled' | 'verification_required' | 'processing' | 'already_processed' | 'error'
   message?: string
+  verification_url?: string
+  verification_screenshot_path?: string
   account_info?: {
     account_id: string
     is_new_account: boolean
@@ -388,16 +398,40 @@ export const checkQRLoginStatus = async (sessionId: string): Promise<{
   }
 }
 
+export const checkQRLoginStatusNow = checkQRLoginStatus
+
+export const cancelQRLogin = (sessionId: string): Promise<{ success: boolean; status?: string; message?: string }> => {
+  return post(`/qr-login/cancel/${sessionId}`)
+}
+
+export const openQRVerificationBrowser = (sessionId: string): Promise<{ success: boolean; message?: string }> => {
+  return post(`/qr-login/open-verification/${sessionId}`)
+}
+
+export const getQRVerificationScreenshot = (sessionId: string): Promise<{
+  success: boolean
+  message?: string
+  screenshot?: {
+    filename: string
+    path: string
+    size: number
+    created_time: number
+  }
+}> => {
+  return get(`/qr-login/verification-screenshot/${sessionId}`)
+}
+
 // 检查密码登录状态
 export const checkPasswordLoginStatus = async (sessionId: string): Promise<{
   success: boolean
-  status: 'pending' | 'processing' | 'success' | 'failed' | 'verification_required' | 'not_found'
+  status: 'pending' | 'processing' | 'success' | 'failed' | 'verification_required' | 'not_found' | 'forbidden' | 'error'
   message?: string
   account_id?: string
   is_new_account?: boolean
   cookie_count?: number
   verification_url?: string
   screenshot_path?: string
+  qr_code_url?: string
   error?: string
 }> => {
   const result = await get<{
@@ -408,19 +442,43 @@ export const checkPasswordLoginStatus = async (sessionId: string): Promise<{
     cookie_count?: number
     verification_url?: string
     screenshot_path?: string
+    qr_code_url?: string
     error?: string
   }>(`${PASSWORD_LOGIN_PREFIX}/check/${sessionId}`)
   return {
     success: result.status === 'success',
-    status: result.status as 'pending' | 'processing' | 'success' | 'failed' | 'verification_required' | 'not_found',
+    status: result.status as 'pending' | 'processing' | 'success' | 'failed' | 'verification_required' | 'not_found' | 'forbidden' | 'error',
     message: result.message,
     account_id: result.account_id,
     is_new_account: result.is_new_account,
     cookie_count: result.cookie_count,
     verification_url: result.verification_url,
     screenshot_path: result.screenshot_path,
+    qr_code_url: result.qr_code_url,
     error: result.error,
   }
+}
+
+export const cancelPasswordLogin = (sessionId: string): Promise<{ success: boolean; status?: string; message?: string }> => {
+  return del(`${PASSWORD_LOGIN_PREFIX}/cancel/${sessionId}`)
+}
+
+export interface AccountStatusCheck {
+  success: boolean
+  ok: boolean
+  cookie_id: string
+  enabled: boolean
+  task_running: boolean
+  cookie_length: number
+  cookie_field_count: number
+  present_fields: string[]
+  missing_fields: string[]
+  checks: Array<{ name: string; ok: boolean; message: string }>
+  message: string
+}
+
+export const checkAccountStatus = (id: string): Promise<AccountStatusCheck> => {
+  return get(`${COOKIE_PREFIX}/${id}/status-check`)
 }
 
 // AI 服务商类型
@@ -720,4 +778,24 @@ export const importAccountsExcel = async (file: File, enableAll: boolean): Promi
     body: formData,
   })
   return response.json()
+}
+
+// ==================== Legacy custom auto-review settings ====================
+
+export interface AutoReviewSettings {
+  enabled: boolean
+  review_text: string
+  review_mode: 'fixed' | 'auto'
+  review_word_count: number
+  delay_seconds: number
+  auto_send_flower: boolean
+  only_completed_orders: boolean
+}
+
+export const getAutoReviewSettings = (cookieId: string): Promise<AutoReviewSettings> => {
+  return get(`/auto-review-settings/${cookieId}`)
+}
+
+export const updateAutoReviewSettings = (cookieId: string, data: AutoReviewSettings): Promise<ApiResponse> => {
+  return put(`/auto-review-settings/${cookieId}`, data)
 }

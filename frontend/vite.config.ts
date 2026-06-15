@@ -1,69 +1,264 @@
 import { defineConfig } from 'vite'
-import type { Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
-/**
- * 拦截非法 URI 编码的请求插件
- * 背景：当浏览器或外部探测请求发来包含非法百分号编码（如单独的 % 或不合法的 %xx）的 URL 时，
- *      Vite 内部中间件在调用 decodeURI(req.url) 时会抛出 "URI malformed"，
- *      并触发 HMR 错误遮罩导致开发页面报错崩溃。
- * 方案：在所有中间件最前面校验 req.url，对非法编码直接返回 400，避免错误向上冒泡。
- */
-function rejectMalformedURI(): Plugin {
-  return {
-    name: 'reject-malformed-uri',
-    configureServer(server) {
-      server.middlewares.use((req, res, next) => {
-        try {
-          // 提前尝试解码，能解码说明 URL 合法
-          if (req.url) {
-            decodeURI(req.url)
-          }
-          next()
-        } catch {
-          // 非法 URI 编码，直接返回 400，不再继续后续中间件
-          res.statusCode = 400
-          res.end('Bad Request: malformed URI')
-        }
-      })
-    },
-  }
-}
-
 // https://vitejs.dev/config/
-export default defineConfig({
-  plugins: [rejectMalformedURI(), react()],
+export default defineConfig(({ command }) => ({
+  plugins: [react()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
   },
   server: {
-    port: 9000,
-    host: '0.0.0.0', // 允许外部访问
-    allowedHosts: [
-      'localhost',
-      '127.0.0.1',
-      'xy.zhinianboke.com',
-      'xy-back.zhinianboke.com'
-    ],
+    port: 3000,
     proxy: {
-      // 所有 API 请求统一代理到后端（含WebSocket升级）
-      '/api': {
-        target: 'http://localhost:8089',
+      '/api/v1': {
+        target: 'http://127.0.0.1:8089',
         changeOrigin: true,
         ws: true,
       },
-      // 静态文件代理到后端（包含上传的图片）
+      '/api': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/login': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+        bypass: (req) => {
+          if (req.method === 'GET') {
+            return '/index.html'
+          }
+        },
+      },
+      '/verify': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/cookies': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/delivery-rules': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/system-settings': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/logs': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/users': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      // 管理员API - 前端有 /admin/* 路由，需要区分浏览器访问和 API 请求
+      '/admin': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+        bypass: (req) => {
+          // 浏览器直接访问（Accept 包含 text/html）时，让前端路由处理
+          if (req.headers.accept?.includes('text/html')) {
+            return '/index.html'
+          }
+        },
+      },
+      '/risk-control-logs': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/qrcode': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/generate-captcha': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/verify-captcha': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/send-verification-code': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/registration-status': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/login-info-status': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/geetest': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/register': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+        bypass: (req) => {
+          // 浏览器直接访问时返回前端页面，只有 POST 请求才代理到后端
+          if (req.method === 'GET' && req.headers.accept?.includes('text/html')) {
+            return '/index.html'
+          }
+        },
+      },
+      '/itemReplays': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/item-reply': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/default-replies': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/ai-reply-settings': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/ai-reply-test': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/password-login': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/qr-login': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/keywords-export': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/keywords-import': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/upload-image': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/default-reply': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/reply': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
       '/static': {
-        target: 'http://localhost:8089',
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/backup': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/project-stats': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/change-password': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/change-admin-password': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/check-default-password': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/logout': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/user-settings': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/search': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      // 商品管理 - 前端有 /items 路由，需要区分浏览器访问和 API 请求
+      '/items': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+        bypass: (req) => {
+          // 只有浏览器直接访问 /items 路径时才返回前端页面
+          // API 请求通常是 /items/xxx 或带有 application/json
+          const isApiRequest = req.url !== '/items' ||
+            req.headers.accept?.includes('application/json') ||
+            req.headers['content-type']?.includes('application/json')
+          if (!isApiRequest && req.headers.accept?.includes('text/html')) {
+            return '/index.html'
+          }
+        },
+      },
+      // 卡券管理 - 前端有 /cards 路由
+      '/cards': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+        bypass: (req) => {
+          if (req.headers.accept?.includes('text/html')) {
+            return '/index.html'
+          }
+        },
+      },
+      // 通知渠道 - 前端有 /notification-channels 路由
+      '/notification-channels': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+        bypass: (req) => {
+          if (req.headers.accept?.includes('text/html')) {
+            return '/index.html'
+          }
+        },
+      },
+      // 消息通知 - 前端有 /message-notifications 路由
+      '/message-notifications': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+        bypass: (req) => {
+          if (req.headers.accept?.includes('text/html')) {
+            return '/index.html'
+          }
+        },
+      },
+      // 关键词 - 前端有 /keywords 路由
+      '/keywords': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+        bypass: (req) => {
+          if (req.headers.accept?.includes('text/html')) {
+            return '/index.html'
+          }
+        },
+      },
+      // 订单 API - 后端路径是 /api/orders
+      '/api/orders': {
+        target: 'http://127.0.0.1:8080',
         changeOrigin: true,
       },
     },
   },
   build: {
     outDir: 'dist',
+    // 资源放在 assets 目录，通过 base 配置让引用路径为 /static/assets/
     assetsDir: 'assets',
   },
-})
+  // 只在生产构建时使用 /static/ 作为 base，开发模式使用 /
+  base: process.env.VITE_PUBLIC_BASE || (command === 'build' ? '/static/' : '/'),
+}))

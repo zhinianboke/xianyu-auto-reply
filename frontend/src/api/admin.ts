@@ -25,9 +25,9 @@ export interface CreateAdminUserPayload {
   email: string
   phone?: string
   password: string
-  role: UserRole
-  status: UserStatus
-  account_limit: number | null
+  role?: UserRole
+  status?: UserStatus
+  account_limit?: number | null
 }
 
 export interface UpdateAdminUserPayload {
@@ -114,24 +114,6 @@ export const clearSystemLogs = (): Promise<ApiResponse> => {
   return post(`${ADMIN_PREFIX}/logs/clear`)
 }
 
-// 测试远程过滑块服务连通性（服务端代理，规避跨域）
-export const testRemoteSliderSolve = async (
-  url: string,
-  secret_key: string,
-): Promise<ApiResponse> => {
-  return post(`${API_PREFIX}/captcha/slider-solve/test`, { url, secret_key })
-}
-
-// 读取远程过滑块全局配置（仅管理员）
-export const getRemoteCaptchaConfig = async (): Promise<ApiResponse<{ url: string; secret_key: string }>> => {
-  return get(`${API_PREFIX}/captcha/remote-config`)
-}
-
-// 保存远程过滑块全局配置（仅管理员）
-export const saveRemoteCaptchaConfig = async (url: string, secret_key: string): Promise<ApiResponse> => {
-  return put(`${API_PREFIX}/captcha/remote-config`, { url, secret_key })
-}
-
 // ========== 风控日志 ==========
 
 export interface RiskLog {
@@ -142,8 +124,6 @@ export interface RiskLog {
   processing_result: string
   processing_status: string
   captcha_engine: string | null
-  call_type: string | null
-  call_user: string | null
   error_message: string | null
   created_at: string
   updated_at: string
@@ -176,8 +156,6 @@ export const getRiskLogs = async (params?: {
     processing_result: string
     processing_status: string
     captcha_engine: string | null
-    call_type: string | null
-    call_user: string | null
     error_message: string | null
     created_at: string
     updated_at: string
@@ -192,8 +170,6 @@ export const getRiskLogs = async (params?: {
     processing_result: item.processing_result || '',
     processing_status: item.processing_status || '',
     captcha_engine: item.captcha_engine ?? null,
-    call_type: item.call_type ?? null,
-    call_user: item.call_user ?? null,
     error_message: item.error_message,
     created_at: item.created_at,
     updated_at: item.updated_at,
@@ -408,4 +384,79 @@ export const getTodayStats = async (): Promise<{ success: boolean; data?: TodayS
   } catch {
     return { success: false }
   }
+}
+
+// ========== Legacy local operations pages ==========
+
+export const exportLogs = (): string => {
+  return '/admin/logs/export'
+}
+
+export interface AccountException {
+  cookie_id: string
+  remark?: string
+  severity: 'danger' | 'warning' | 'normal'
+  issues: string[]
+  enabled: boolean
+  pause_duration?: number
+}
+
+export const getAccountExceptions = (): Promise<{ success: boolean; data?: AccountException[] }> => {
+  return get(`${ADMIN_PREFIX}/accounts/exceptions`)
+}
+
+export interface OpsHealth {
+  status: string
+  system: {
+    cpu_percent: number
+    memory_percent: number
+    database_size: number
+  }
+  services: Record<string, string>
+  accounts: {
+    total: number
+    enabled: number
+  }
+  risks: {
+    recent_total: number
+    failed: number
+    processing: number
+    recent: Record<string, unknown>[]
+  }
+}
+
+export const getOpsHealth = async (): Promise<OpsHealth> => {
+  const result = await get<OpsHealth>(`${ADMIN_PREFIX}/ops/health`)
+  if (!result || typeof result !== 'object' || !('system' in result)) {
+    throw new Error('Invalid system health response')
+  }
+  return result
+}
+
+export interface ReplySimulationStep {
+  name: string
+  status: string
+  detail?: string
+  hit?: boolean
+  matched?: boolean
+}
+
+export interface ReplySimulationResult {
+  success: boolean
+  reply_type: string
+  reply?: string
+  blocked?: boolean
+  reason?: string
+  steps: ReplySimulationStep[]
+  [key: string]: unknown
+}
+
+export const simulateReply = (payload: {
+  cookie_id: string
+  message: string
+  chat_id?: string
+  item_id?: string
+  include_ai?: boolean
+}): Promise<ReplySimulationResult> => {
+  return post('/reply/simulate', payload)
 }

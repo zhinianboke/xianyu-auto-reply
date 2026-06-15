@@ -2,6 +2,8 @@
  * 闲鱼黑名单Tab页（仅展示，无操作）
  */
 import { useState, useEffect, useCallback, type MutableRefObject } from 'react'
+import { Empty, Pagination, Table, type TableColumnProps } from '@arco-design/web-react'
+import { Ban } from 'lucide-react'
 import { getPlatformBlacklist, type PlatformBlacklistItem } from '@/api/blacklist'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
@@ -52,70 +54,63 @@ export function PlatformBlacklist({ onRefreshRef }: Props) {
     return <PageLoading />
   }
 
+  const columns: TableColumnProps<PlatformBlacklistItem>[] = [
+    { title: 'ID', dataIndex: 'id', width: 80 },
+    {
+      title: '拉黑用户',
+      dataIndex: 'owner_username',
+      width: 160,
+      render: (_value, item) => item.owner_username || item.owner_id,
+    },
+    { title: '买家ID', dataIndex: 'buyer_id', width: 180 },
+    { title: '买家昵称', dataIndex: 'buyer_nick', width: 180, render: (value?: string) => value || '-' },
+    {
+      title: '创建时间',
+      dataIndex: 'created_at',
+      width: 180,
+      render: (value?: string) => (
+        <span className="text-xs text-slate-500">{value ? new Date(value).toLocaleString() : '-'}</span>
+      ),
+    },
+    {
+      title: '更新时间',
+      dataIndex: 'updated_at',
+      width: 180,
+      render: (value?: string) => (
+        <span className="text-xs text-slate-500">{value ? new Date(value).toLocaleString() : '-'}</span>
+      ),
+    },
+  ]
+
   return (
     <div className="space-y-4">
-      {/* 表格 */}
-      <div className="overflow-x-auto bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 dark:bg-slate-700/50">
-            <tr>
-              <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">ID</th>
-              <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">拉黑用户</th>
-              <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">买家ID</th>
-              <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">买家昵称</th>
-              <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">创建时间</th>
-              <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">更新时间</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-            {items.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="px-3 py-8 text-center text-slate-400 dark:text-slate-500">
-                  暂无数据
-                </td>
-              </tr>
-            ) : (
-              items.map((item) => (
-                <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{item.id}</td>
-                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{item.owner_username || item.owner_id}</td>
-                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{item.buyer_id}</td>
-                  <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{item.buyer_nick || '-'}</td>
-                  <td className="px-3 py-2 text-slate-500 dark:text-slate-400 text-xs whitespace-nowrap">
-                    {item.created_at ? new Date(item.created_at).toLocaleString() : '-'}
-                  </td>
-                  <td className="px-3 py-2 text-slate-500 dark:text-slate-400 text-xs whitespace-nowrap">
-                    {item.updated_at ? new Date(item.updated_at).toLocaleString() : '-'}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+      <Table
+        rowKey="id"
+        columns={columns}
+        data={items}
+        loading={loading}
+        border={false}
+        scroll={{ x: 960 }}
+        pagination={false}
+        className="accounts-arco-table table-main"
+        noDataElement={(
+          <Empty
+            icon={<Ban className="w-12 h-12 text-gray-300" />}
+            description="暂无黑名单数据"
+          />
+        )}
+      />
 
-      {/* 分页 */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-slate-500 dark:text-slate-400">
-            共 {total} 条，第 {page}/{totalPages} 页
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPage(Math.max(1, page - 1))}
-              disabled={page <= 1}
-              className="px-3 py-1 text-sm border border-slate-300 dark:border-slate-600 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300"
-            >
-              上一页
-            </button>
-            <button
-              onClick={() => setPage(Math.min(totalPages, page + 1))}
-              disabled={page >= totalPages}
-              className="px-3 py-1 text-sm border border-slate-300 dark:border-slate-600 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300"
-            >
-              下一页
-            </button>
-          </div>
+        <div className="flex justify-end">
+          <Pagination
+            total={total}
+            current={page}
+            pageSize={pageSize}
+            sizeCanChange={false}
+            showTotal
+            onChange={setPage}
+          />
         </div>
       )}
     </div>

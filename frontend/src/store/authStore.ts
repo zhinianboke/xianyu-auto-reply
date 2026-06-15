@@ -8,7 +8,7 @@ interface AuthState {
   user: User | null
   isAuthenticated: boolean
   _hasHydrated: boolean
-  setAuth: (token: string, refreshToken: string, user: User) => void
+  setAuth: (token: string, refreshTokenOrUser: string | User, user?: User) => void
   clearAuth: () => void
   updateUser: (user: Partial<User>) => void
   setHasHydrated: (state: boolean) => void
@@ -24,9 +24,16 @@ export const useAuthStore = create<AuthState>()(
       isAuthenticated: false,
       _hasHydrated: false,
 
-      setAuth: (token, refreshToken, user) => {
+      setAuth: (token, refreshTokenOrUser, userArg) => {
+        const refreshToken = typeof refreshTokenOrUser === 'string' ? refreshTokenOrUser : ''
+        const user = typeof refreshTokenOrUser === 'string' ? userArg : refreshTokenOrUser
+        if (!user) {
+          return
+        }
         localStorage.setItem('auth_token', token)
-        localStorage.setItem('refresh_token', refreshToken)
+        if (refreshToken) {
+          localStorage.setItem('refresh_token', refreshToken)
+        }
         localStorage.setItem('user_info', JSON.stringify(user))
         set({ token, refreshToken, user, isAuthenticated: true })
       },
