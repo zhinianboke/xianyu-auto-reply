@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
 from app.api import deps
+from app.services.websocket_client import websocket_client
+from common.models.user import User
 from common.schemas.common import ApiResponse
 
 router = APIRouter(prefix="/captcha", tags=["验证码"])
@@ -39,6 +41,31 @@ class SendCodeRequest(BaseModel):
     email: EmailStr
     session_id: Optional[str] = None
     type: str = "register"  # register, login 或 reset_password
+
+
+class SliderSolveRequest(BaseModel):
+    """过滑块请求（模式B，外部使用）"""
+    secret_key: str                      # 用户个人设置中的秘钥（用于身份校验，查到用户名）
+    account_id: str = ""                 # 外部账号标识（仅用于日志/浏览器实例隔离，本系统不查库）
+    url: str                             # punish 验证链接（punish?x5secdata=...）
+    browser_timeout: int = 40            # 单次浏览器超时（秒），范围 20~120
+
+
+class TestRemoteSolveRequest(BaseModel):
+    """测试远程过滑块服务连通性请求"""
+    url: str                             # 远程过滑块服务URL
+    secret_key: str = ""                 # 秘钥（用于校验远程是否接受该秘钥）
+
+
+class RemoteConfigUpdate(BaseModel):
+    """远程过滑块全局配置（仅管理员）"""
+    url: str = ""
+    secret_key: str = ""
+
+
+# 远程过滑块全局配置存储 key（system_settings，全局唯一，仅管理员可读写）
+REMOTE_CONFIG_URL_KEY = "captcha.remote_service_url"
+REMOTE_CONFIG_SECRET_KEY = "captcha.remote_secret_key"
 
 
 # ==================== 工具函数 ====================
@@ -380,3 +407,126 @@ def check_email_code(email: str, code: str, code_type: str = "login") -> tuple[b
     del email_code_store[email]
 
     return True, "验证码验证成功"
+
+
+# ==================== 过滑块（外部接口，模式B） ====================
+
+@router.post("/slider-solve")
+async def slider_solve(
+    request: SliderSolveRequest,
+    db: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """过滑块（供外部系统调用）。
+
+    模式B：仅凭传入的 punish 链接求解，本系统不查账号库、不回填 cookies。
+    - 鉴权：必须传入有效的用户秘钥（个人设置中的秘钥），校验存在即放行，并据此记录调用用户。
+    - 成功：data = { engine, cookies: { x5sec, ... } }
+    - 失败：success=false
+    """
+    from sqlalchemy import select
+    from common.models.user import User
+
+    secret_key = (request.secret_key or "").strip()
+    if not secret_key:
+        return ApiResponse(success=False, message="缺少秘钥")
+
+    # 校验秘钥是否存在（个人设置中的用户秘钥），并查出用户名
+    result = await db.execute(select(User).where(User.secret_key == secret_key))
+    user = result.scalar_one_or_none()
+    if not user:
+        return ApiResponse(success=False, message="无效的秘钥")
+
+    url = (request.url or "").strip()
+    if not url:
+        return ApiResponse(success=False, message="punish 链接不能为空")
+
+    timeout = max(20, min(int(request.browser_timeout or 40), 120))
+    result_data = await websocket_client.solve_captcha(
+        account_id=(request.account_id or "external"),
+        url=url,
+        browser_timeout=timeout,
+        call_type="remote",
+        call_user=user.username,
+    )
+
+    if isinstance(result_data, dict) and result_data.get("success"):
+        return ApiResponse(success=True, message="过滑块成功", data=result_data.get("data"))
+    message = (result_data or {}).get("message") if isinstance(result_data, dict) else None
+    data = (result_data or {}).get("data") if isinstance(result_data, dict) else None
+    return ApiResponse(success=False, message=message or "过滑块失败", data=data)
+
+
+@router.post("/slider-solve/test")
+async def test_remote_slider_solve(
+    request: TestRemoteSolveRequest,
+    current_user: User = Depends(deps.get_current_admin_user),  # 仅管理员可发起（也避免被滥用做 SSRF）
+) -> ApiResponse:
+    """测试远程过滑块服务连通性与秘钥有效性（服务端代理请求，规避浏览器跨域）。
+
+    以一个“空 punish 链接”探测：远程会先校验秘钥，再校验链接，据此判断：
+    - 秘钥无效 → 连接成功但秘钥无效
+    - 提示缺少链接/其它正常业务响应 → 连接成功且秘钥有效
+    - 网络异常 → 无法连接
+    """
+    import aiohttp
+
+    url = (request.url or "").strip()
+    if not url:
+        return ApiResponse(success=False, message="请先填写远程服务URL")
+    if not url.lower().startswith(("http://", "https://")):
+        return ApiResponse(success=False, message="远程服务URL 必须以 http:// 或 https:// 开头")
+
+    payload = {
+        "secret_key": (request.secret_key or "").strip(),
+        "account_id": "connectivity-test",
+        "url": "",  # 故意留空：只测连通+秘钥，不真正过滑块
+    }
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            async with session.post(url, json=payload) as resp:
+                try:
+                    body = await resp.json(content_type=None)
+                except Exception:
+                    body = {}
+                msg = ((body or {}).get("message") or "").strip()
+                if "秘钥" in msg and ("无效" in msg or "缺少" in msg):
+                    return ApiResponse(success=False, message=f"连接成功，但秘钥无效（远程：{msg}）")
+                return ApiResponse(success=True, message=f"连接成功（远程返回：{msg or '正常'}）")
+    except Exception as e:
+        return ApiResponse(success=False, message=f"无法连接到远程服务：{str(e)}")
+
+
+@router.get("/remote-config")
+async def get_remote_config(
+    current_user: User = Depends(deps.get_current_admin_user),  # 仅管理员可读
+    db: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """读取远程过滑块全局配置（仅管理员）。"""
+    from sqlalchemy import select
+    from common.models.system_setting import SystemSetting
+
+    rows = (await db.execute(
+        select(SystemSetting).where(
+            SystemSetting.key.in_([REMOTE_CONFIG_URL_KEY, REMOTE_CONFIG_SECRET_KEY])
+        )
+    )).scalars().all()
+    m = {r.key: (r.value or "") for r in rows}
+    return ApiResponse(success=True, data={
+        "url": m.get(REMOTE_CONFIG_URL_KEY, ""),
+        "secret_key": m.get(REMOTE_CONFIG_SECRET_KEY, ""),
+    })
+
+
+@router.put("/remote-config")
+async def update_remote_config(
+    request: RemoteConfigUpdate,
+    current_user: User = Depends(deps.get_current_admin_user),  # 仅管理员可写
+    db: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """保存远程过滑块全局配置（仅管理员，存于 system_settings，全局唯一）。"""
+    from app.services.system_setting_service import SystemSettingService
+
+    svc = SystemSettingService(db)
+    await svc.set_setting(REMOTE_CONFIG_URL_KEY, (request.url or "").strip(), "远程过滑块服务URL")
+    await svc.set_setting(REMOTE_CONFIG_SECRET_KEY, (request.secret_key or "").strip(), "远程过滑块秘钥")
+    return ApiResponse(success=True, message="保存成功")

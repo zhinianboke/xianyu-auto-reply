@@ -101,6 +101,8 @@ class RiskControlLogService:
                 "processing_result": log.processing_result,
                 "processing_status": log.processing_status,
                 "captcha_engine": log.captcha_engine,
+                "call_type": log.call_type,
+                "call_user": log.call_user,
                 "error_message": log.error_message,
                 "created_at": safe_isoformat(log.created_at),
                 "updated_at": safe_isoformat(log.updated_at),

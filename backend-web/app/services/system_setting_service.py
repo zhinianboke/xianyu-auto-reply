@@ -96,6 +96,9 @@ NO_ESCAPE_KEYS = {
     # 代理设置：URL 含 :、/、?、&、= 等字符不能被 XSS 转义；布尔字符串"true"/"false"也无需转义
     "proxy.api_url",
     "proxy.enabled",
+    # 远程过滑块配置：URL 含 :// 等字符、秘钥为随机串，均不能被 XSS 转义
+    "captcha.remote_service_url",
+    "captcha.remote_secret_key",
 }
 
 

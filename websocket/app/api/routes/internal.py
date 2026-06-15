@@ -70,6 +70,15 @@ class LogRetentionRequest(BaseModel):
     retention_days: int
 
 
+class SolveCaptchaRequest(BaseModel):
+    """过滑块请求（模式B：仅凭 punish 链接求解，不依赖账号/数据库）"""
+    account_id: str = ""          # 外部标识，仅用于日志与浏览器实例隔离
+    url: str                      # punish 验证链接（punish?x5secdata=...）
+    browser_timeout: int = 40     # 单次浏览器超时（秒）
+    call_type: str = "remote"     # 调用类型：local-本机 / remote-远程
+    call_user: str | None = None  # 调用用户（远程调用按秘钥查到的用户名）
+
+
 @router.post("/logs/retention")
 async def refresh_log_retention(request: LogRetentionRequest):
     """实时刷新日志保留天数"""
@@ -302,6 +311,85 @@ async def restart_account(account_id: str, request: StartAccountRequest):
             "message": f"重启账号任务失败: {str(e)}",
             "data": None,
         }
+
+
+@router.post("/captcha/solve")
+async def solve_captcha(request: SolveCaptchaRequest):
+    """过滑块（独立/无状态）：仅凭传入的 punish 链接求解滑块。
+
+    模式B：不依赖账号是否运行、不查数据库、不注入/回填 cookies。
+    成功返回解出的 x5* cookies，失败直接返回 success=false（供外部系统使用）。
+    远程调用会记录风控日志（call_type=remote，call_user=调用用户）。
+    """
+    import re
+    import time as _time
+    from loguru import logger
+
+    url = (request.url or "").strip()
+    if not url:
+        return {"success": False, "code": 400, "message": "punish 链接不能为空", "data": None}
+
+    # 清洗 account_id（外部传入，仅用于日志与浏览器实例目录隔离，防止路径注入）
+    raw_id = (request.account_id or "external").strip()
+    safe_id = re.sub(r"[^A-Za-z0-9_-]", "", raw_id)[:64] or "external"
+    timeout = max(20, min(int(request.browser_timeout or 40), 120))
+    call_type = (request.call_type or "remote").strip() or "remote"
+    call_user = (request.call_user or "").strip() or None
+
+    # 记录风控日志（处理中）
+    log_id = None
+    start_ts = _time.time()
+    try:
+        from common.db.compat import db_manager
+        log_id = db_manager.add_risk_control_log(
+            cookie_id=safe_id,
+            event_type="slider_captcha",
+            event_description=f"触发场景: 远程过滑块接口, URL: {url}",
+            processing_status="processing",
+            call_type=call_type,
+            call_user=call_user,
+        )
+    except Exception as log_e:
+        logger.error(f"【过滑块接口】记录风控日志失败: {log_e}")
+
+    def _update_log(status: str, result: str, engine: str | None = None, error: str | None = None):
+        if not log_id:
+            return
+        try:
+            from common.db.compat import db_manager as _dm
+            kwargs = {"processing_status": status, "processing_result": result}
+            if engine is not None:
+                kwargs["captcha_engine"] = engine
+            if error is not None:
+                kwargs["error_message"] = error
+            _dm.update_risk_control_log(log_id=log_id, **kwargs)
+        except Exception as ue:
+            logger.error(f"【过滑块接口】更新风控日志失败: {ue}")
+
+    try:
+        from app.services.captcha.slider_stealth import run_slider_verification_with_fallback
+        from common.services.captcha.concurrency import run_browser_task
+
+        # enable_learning=True, headless=False, existing_cookies_str="", url_provider=None
+        # 不传 cookies / url_provider：链接过期或失败时直接判失败（符合模式B“失败即返回失败”）
+        success, cookies, engine = await run_browser_task(
+            run_slider_verification_with_fallback,
+            safe_id, url, True, False, timeout, "", None,
+        )
+    except Exception as e:
+        logger.error(f"【过滑块接口】account_id={safe_id} 执行异常: {e}")
+        _update_log("error", f"过滑块执行异常，耗时: {_time.time() - start_ts:.2f}秒", error=str(e))
+        return {"success": False, "code": 500, "message": f"过滑块执行异常: {str(e)}", "data": None}
+
+    duration = _time.time() - start_ts
+    if success and cookies:
+        _update_log("success", f"远程过滑块成功，耗时: {duration:.2f}秒", engine=engine)
+        return {
+            "success": True, "code": 200, "message": "过滑块成功",
+            "data": {"engine": engine, "cookies": cookies},
+        }
+    _update_log("failed", f"远程过滑块失败，耗时: {duration:.2f}秒", engine=engine)
+    return {"success": False, "code": 200, "message": "过滑块失败", "data": {"engine": engine}}
 
 
 @router.get("/accounts/connection-stats")

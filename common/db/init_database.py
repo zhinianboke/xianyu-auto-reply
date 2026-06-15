@@ -543,6 +543,8 @@ class DatabaseInitializer:
                 processing_result TEXT COMMENT '处理结果',
                 processing_status VARCHAR(32) DEFAULT 'processing' COMMENT '处理状态',
                 captcha_engine VARCHAR(32) DEFAULT NULL COMMENT '验证通过引擎：playwright-主引擎/drissionpage-兜底引擎/real_mouse-真人鼠标引擎',
+                call_type VARCHAR(16) DEFAULT 'local' COMMENT '调用类型：local-本机/remote-远程(外部凭秘钥调用)',
+                call_user VARCHAR(128) DEFAULT NULL COMMENT '调用用户：仅远程调用记录(按秘钥查到的用户名)',
                 error_message TEXT COMMENT '错误信息',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -1420,6 +1422,8 @@ class DatabaseInitializer:
         ],
         "xy_risk_control_logs": [
             ("captcha_engine", "VARCHAR(32) DEFAULT NULL COMMENT '验证通过引擎：playwright-主引擎/drissionpage-兜底引擎/real_mouse-真人鼠标引擎'", "processing_status"),
+            ("call_type", "VARCHAR(16) DEFAULT 'local' COMMENT '调用类型：local-本机/remote-远程(外部凭秘钥调用)'", "captcha_engine"),
+            ("call_user", "VARCHAR(128) DEFAULT NULL COMMENT '调用用户：仅远程调用记录(按秘钥查到的用户名)'", "call_type"),
         ],
         "xy_accounts": [
             ("proxy_type", "VARCHAR(20) DEFAULT 'none' COMMENT '代理类型'", "last_refresh_at"),

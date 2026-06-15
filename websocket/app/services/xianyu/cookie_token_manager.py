@@ -453,6 +453,34 @@ class CookieTokenManager:
             logger.warning(f"【{self.cookie_id}】重新获取滑块验证链接失败，沿用原链接: {self._safe_str(e)}")
             return None
 
+    async def _load_remote_captcha_config(self) -> tuple[str, str] | None:
+        """读取全局"远程过滑块"配置（system_settings，仅管理员可配）。
+
+        Returns:
+            (url, secret) 二元组；未配置或读取失败返回 None（此时走本机逻辑）。
+        """
+        try:
+            from common.db.session import async_session_maker
+            from common.models.system_setting import SystemSetting
+            from sqlalchemy import select
+
+            async with async_session_maker() as session:
+                rows = (await session.execute(
+                    select(SystemSetting).where(
+                        SystemSetting.key.in_(
+                            ["captcha.remote_service_url", "captcha.remote_secret_key"]
+                        )
+                    )
+                )).scalars().all()
+            m = {r.key: (r.value or "") for r in rows}
+            url = (m.get("captcha.remote_service_url") or "").strip()
+            secret = (m.get("captcha.remote_secret_key") or "").strip()
+            if url and secret:
+                return url, secret
+        except Exception as e:
+            logger.warning(f"【{self.cookie_id}】读取远程过滑块配置失败（走本机逻辑）: {self._safe_str(e)}")
+        return None
+
     async def handle_captcha_verification(self, res_json: dict) -> str:
         """处理滑块验证，返回新的cookies字符串"""
         try:
@@ -506,10 +534,14 @@ class CookieTokenManager:
                 self._refetch_new_token = None
                 self._refetch_new_cookies = {}
 
+                # 读取全局"远程过滑块"配置（system_settings，仅管理员可配）。
+                # 配置了则优先走远程接口；远程超时/不可用时回退本机逻辑。
+                remote_config = await self._load_remote_captcha_config()
+
                 # 在浏览器任务专用线程池中运行同步的 Playwright 代码（不能用 asyncio.to_thread，
                 # 否则会占用默认线程池、饿死 aiohttp 的 DNS 解析，导致所有 token 请求集体超时）
-                # run_slider_verification_with_fallback: 主引擎(Playwright)失败后自动用 DrissionPage 兜底
-                # 返回 (是否成功, cookies, 通过引擎: playwright/drissionpage/None)
+                # run_slider_verification_with_fallback: 远程(可选)→真人/主引擎(Playwright)→DrissionPage 兜底
+                # 返回 (是否成功, cookies, 通过引擎: remote/real_mouse/playwright/drissionpage/None)
                 success, cookies, captcha_engine = await run_browser_task(
                     run_slider_verification_with_fallback,
                     f"{self.cookie_id}",
@@ -519,6 +551,7 @@ class CookieTokenManager:
                     20,     # browser_timeout（主引擎）
                     self.cookies_str,  # existing_cookies_str，供 DrissionPage 兜底注入
                     self._request_captcha_url_sync,  # url_provider：浏览器就绪后重新取链接，规避过期
+                    remote_config,  # 远程过滑块配置 (url, secret) | None
                 )
 
                 # 重取链接时发现 token 已可用（风控解除，无需滑块）：直接采用，跳过滑块结果处理。
@@ -566,6 +599,7 @@ class CookieTokenManager:
                             engine_label_map = {
                                 'drissionpage': '兜底引擎(DrissionPage)',
                                 'real_mouse': '真人鼠标引擎(RealMouse)',
+                                'remote': '远程接口(Remote)',
                                 'playwright': '主引擎(Playwright)',
                             }
                             engine_label = engine_label_map.get(captcha_engine, '主引擎(Playwright)')

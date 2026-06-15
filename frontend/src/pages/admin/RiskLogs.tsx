@@ -11,7 +11,7 @@
  */
 import { useState, useEffect } from 'react'
 import { ShieldAlert, RefreshCw, Trash2, ChevronLeft, ChevronRight, Loader2, Calendar } from 'lucide-react'
-import { getRiskLogs, clearRiskLogs, type RiskLog } from '@/api/admin'
+import { getRiskLogs, clearRiskLogs, testRemoteSliderSolve, getRemoteCaptchaConfig, saveRemoteCaptchaConfig, type RiskLog } from '@/api/admin'
 import { getAccountDetails } from '@/api/accounts'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
@@ -46,6 +46,12 @@ export function RiskLogs() {
   const [clearConfirm, setClearConfirm] = useState(false)
   const [clearing, setClearing] = useState(false)
 
+  // 远程过滑块配置（与个人设置一致，按用户存储于 user-settings）
+  const [remoteUrl, setRemoteUrl] = useState('')
+  const [remoteSecret, setRemoteSecret] = useState('')
+  const [savingConfig, setSavingConfig] = useState(false)
+  const [testing, setTesting] = useState(false)
+
   const loadLogs = async (nextPage: number = currentPage, nextPageSize: number = pageSize) => {
     if (!_hasHydrated || !isAuthenticated || !token) return
     try {
@@ -77,6 +83,54 @@ export function RiskLogs() {
     }
   }
 
+  // 远程过滑块全局配置（仅管理员，存于 system_settings）
+  const loadRemoteConfig = async () => {
+    if (!_hasHydrated || !isAuthenticated || !token) return
+    if (!user?.is_admin) return  // 仅管理员可查看/回显远程过滑块配置
+    try {
+      const res = await getRemoteCaptchaConfig()
+      if (res.success && res.data) {
+        setRemoteUrl(res.data.url || '')
+        setRemoteSecret(res.data.secret_key || '')
+      }
+    } catch {
+      // 回显失败不阻断页面
+    }
+  }
+
+  const handleSaveRemoteConfig = async () => {
+    try {
+      setSavingConfig(true)
+      const res = await saveRemoteCaptchaConfig(remoteUrl.trim(), remoteSecret.trim())
+      if (res.success) {
+        addToast({ type: 'success', message: '远程过滑块配置已保存' })
+      } else {
+        addToast({ type: 'error', message: res.message || '保存失败' })
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '保存失败') })
+    } finally {
+      setSavingConfig(false)
+    }
+  }
+
+  const handleTestRemoteConfig = async () => {
+    const url = remoteUrl.trim()
+    if (!url) {
+      addToast({ type: 'error', message: '请先填写远程服务URL' })
+      return
+    }
+    try {
+      setTesting(true)
+      const res = await testRemoteSliderSolve(url, remoteSecret.trim())
+      addToast({ type: res.success ? 'success' : 'error', message: res.message || (res.success ? '连接成功' : '连接失败') })
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '测试失败') })
+    } finally {
+      setTesting(false)
+    }
+  }
+
   const loadAccounts = async () => {
     if (!_hasHydrated || !isAuthenticated || !token) return
     try {
@@ -91,6 +145,7 @@ export function RiskLogs() {
     if (!_hasHydrated || !isAuthenticated || !token) return
     loadAccounts()
     loadLogs(1, pageSize)
+    loadRemoteConfig()
   }, [_hasHydrated, isAuthenticated, token])
 
   // 查询按钮点击
@@ -134,6 +189,52 @@ export function RiskLogs() {
 
   return (
     <div className="space-y-4">
+      {/* 远程过滑块配置（仅管理员可见可操作；按用户保存/回显，存储逻辑与个人设置一致） */}
+      {user?.is_admin && (
+      <div className="vben-card">
+        <div className="vben-card-body">
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="input-group flex-1 min-w-[260px]">
+              <label className="input-label">远程服务URL</label>
+              <input
+                type="text"
+                value={remoteUrl}
+                onChange={(e) => setRemoteUrl(e.target.value)}
+                placeholder="例如：https://your-host/api/v1/captcha/slider-solve"
+                className="input-ios"
+              />
+            </div>
+            <div className="input-group flex-1 min-w-[260px]">
+              <label className="input-label">秘钥</label>
+              <input
+                type="text"
+                value={remoteSecret}
+                onChange={(e) => setRemoteSecret(e.target.value)}
+                placeholder="个人设置中的秘钥"
+                className="input-ios"
+              />
+            </div>
+            <button
+              onClick={handleSaveRemoteConfig}
+              disabled={savingConfig}
+              className="btn-ios-primary disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {savingConfig ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+              保存
+            </button>
+            <button
+              onClick={handleTestRemoteConfig}
+              disabled={testing}
+              className="btn-ios-secondary disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+              测试
+            </button>
+          </div>
+        </div>
+      </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -235,6 +336,8 @@ export function RiskLogs() {
                 <th>处理结果</th>
                 <th>处理状态</th>
                 <th>验证引擎</th>
+                <th>调用类型</th>
+                <th>调用用户</th>
                 <th>创建时间</th>
                 <th>更新时间</th>
               </tr>
@@ -242,7 +345,7 @@ export function RiskLogs() {
             <tbody>
               {logs.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-8 text-slate-500 dark:text-slate-400">
+                  <td colSpan={9} className="text-center py-8 text-slate-500 dark:text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <ShieldAlert className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>暂无风控日志</p>
@@ -300,9 +403,27 @@ export function RiskLogs() {
                         <span className="text-xs px-2 py-1 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
                           真人鼠标
                         </span>
+                      ) : log.captcha_engine === 'remote' ? (
+                        <span className="text-xs px-2 py-1 rounded bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400">
+                          远程接口
+                        </span>
                       ) : (
                         <span className="text-slate-400 dark:text-slate-500">-</span>
                       )}
+                    </td>
+                    <td>
+                      {log.call_type === 'remote' ? (
+                        <span className="text-xs px-2 py-1 rounded bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">
+                          远程
+                        </span>
+                      ) : (
+                        <span className="text-xs px-2 py-1 rounded bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                          本机
+                        </span>
+                      )}
+                    </td>
+                    <td className="text-slate-500 dark:text-slate-400 text-sm whitespace-nowrap">
+                      {log.call_user || '-'}
                     </td>
                     <td className="text-slate-500 dark:text-slate-400 text-sm whitespace-nowrap">
                       {new Date(log.created_at).toLocaleString()}

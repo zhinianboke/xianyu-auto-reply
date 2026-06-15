@@ -449,7 +449,9 @@ class DBManagerCompat:
                     account_identifier=cookie_id,
                     event_type=event_type,
                     event_description=event_description,
-                    processing_status=processing_status
+                    processing_status=processing_status,
+                    call_type=kwargs.get('call_type', 'local'),
+                    call_user=kwargs.get('call_user'),
                 )
                 session.add(log)
                 await session.commit()
@@ -606,6 +608,8 @@ class DBManagerCompat:
                         'processing_status': log.processing_status,
                         'processing_result': log.processing_result,
                         'captcha_engine': log.captcha_engine,
+                        'call_type': log.call_type,
+                        'call_user': log.call_user,
                         'error_message': log.error_message,
                         'created_at': log.created_at.strftime('%Y-%m-%d %H:%M:%S') if log.created_at else None
                     }

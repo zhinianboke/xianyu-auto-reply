@@ -39,6 +39,10 @@ class XYRiskControlLog(Base):
     processing_status: Mapped[str] = mapped_column(String(32), default="processing")
     # 验证通过的引擎：playwright-主引擎 / drissionpage-兜底引擎 / real_mouse-真人鼠标引擎；未涉及验证或失败时为 NULL
     captcha_engine: Mapped[str | None] = mapped_column(String(32))
+    # 调用类型：local-本机（系统内部触发）/ remote-远程（外部凭秘钥调用过滑块接口）
+    call_type: Mapped[str] = mapped_column(String(16), default="local")
+    # 调用用户：仅远程调用时记录，按传入秘钥查到的用户名；本机调用为 NULL
+    call_user: Mapped[str | None] = mapped_column(String(128))
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
