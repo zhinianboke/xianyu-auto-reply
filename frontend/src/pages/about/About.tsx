@@ -1,96 +1,129 @@
-/**
- * 关于页面
- * 
- * 功能：
- * 1. 显示系统信息与当前版本
- * 2. 检查是否有新版本，并展示更新详情
- * 3. 显示联系方式（微信群、QQ群）
- * 4. 显示主要功能介绍
- * 5. 显示贡献者和相关链接
- */
 import { useCallback, useEffect, useState } from 'react'
-import {
-  ArrowUpCircle, BarChart3, Bell, Bot, Code, Github, Gift,
-  Globe, Loader2, MessageCircle, MessageSquare, RefreshCw, Truck,
-  UserCheck, Users, X,
-} from 'lucide-react'
-import { getQrcodeUrl } from '@/api/settings'
-import { checkUpdate, type VersionCheckResult } from '@/api/version'
-import { useUIStore } from '@/store/uiStore'
-import { UpdateModal } from './UpdateModal'
+import { ArrowUpCircle, BarChart3, Bell, Bot, CheckCircle, Code, FileText, Github, Globe, Heart, Loader2, MessageCircle, MessageSquare, RefreshCw, Truck, UserCheck, Users, X } from 'lucide-react'
+
+interface UpdateInfo {
+  version: string
+  date?: string
+  changes?: string[]
+  download_url?: string
+}
+
+// 版本比较函数
+function compareVersions(v1: string, v2: string): number {
+  const normalize = (v: string) => v.replace(/^v/, '').split('.').map(Number)
+  const parts1 = normalize(v1)
+  const parts2 = normalize(v2)
+  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+    const p1 = parts1[i] || 0
+    const p2 = parts2[i] || 0
+    if (p1 > p2) return 1
+    if (p1 < p2) return -1
+  }
+  return 0
+}
 
 export function About() {
-  const { addToast } = useUIStore()
-
   const [previewImage, setPreviewImage] = useState<string | null>(null)
+  const [version, setVersion] = useState('加载中...')
   const [totalUsers, setTotalUsers] = useState(0)
 
-  // 群二维码
-  const [wechatQrcode, setWechatQrcode] = useState<string | null>(null)
-  const [qqQrcode, setQqQrcode] = useState<string | null>(null)
-  const [wechatOfficialQrcode, setWechatOfficialQrcode] = useState<string | null>(null)
-  const [telegramQrcode, setTelegramQrcode] = useState<string | null>(null)
-  const [rewardQrcode, setRewardQrcode] = useState<string | null>(null)
-
-  // 版本检测状态
-  const [currentVersion, setCurrentVersion] = useState('')
-  const [updateInfo, setUpdateInfo] = useState<VersionCheckResult | null>(null)
+  // 更新检查相关状态
+  const [latestVersion, setLatestVersion] = useState<string | null>(null)
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [hasUpdate, setHasUpdate] = useState(false)
   const [checkingUpdate, setCheckingUpdate] = useState(false)
   const [showUpdateModal, setShowUpdateModal] = useState(false)
+  const [showChangelogModal, setShowChangelogModal] = useState(false)
+  const [changelog, setChangelog] = useState<UpdateInfo[]>([])
+  const [changelogHtml, setChangelogHtml] = useState<string | null>(null)
+  const [loadingChangelog, setLoadingChangelog] = useState(false)
 
-  /**
-   * 检查是否有新版本
-   *
-   * @param silent 静默模式。true=页面挂载时自动检查不弹 toast；false=用户手动点击需弹提示
-   */
-  const handleCheckUpdate = useCallback(async (silent = false) => {
+  // 检查更新
+  const checkForUpdate = useCallback(async (showToast = false) => {
     setCheckingUpdate(true)
     try {
-      const result = await checkUpdate()
-      const data = result.data
+      const response = await fetch('/api/version/check')
+      const result = await response.json()
 
-      // 无论成功或失败，后端都会返回 current_version，优先更新本地显示
-      if (data?.current_version) {
-        setCurrentVersion(data.current_version)
-      }
-
-      if (!result.success) {
-        if (!silent) {
-          addToast({ type: 'error', message: result.message || '检查更新失败' })
+      if (result.error) {
+        if (showToast) {
+          console.error('获取版本信息失败:', result.message)
         }
         return
       }
 
-      if (!data) {
-        if (!silent) {
-          addToast({ type: 'error', message: '更新服务器未返回有效数据' })
-        }
-        return
-      }
+      // 支持 {data: "v1.0.5"} 格式
+      const remoteVersion = result.data || result.version || result.latest_version
+      if (remoteVersion) {
+        setLatestVersion(remoteVersion)
+        setUpdateInfo({
+          version: remoteVersion,
+          date: result.date || result.release_date,
+          changes: result.changes || result.changelog || [],
+          download_url: result.download_url,
+        })
 
-      if (data.has_update) {
-        setUpdateInfo(data)
-        setHasUpdate(true)
-        if (!silent) {
-          setShowUpdateModal(true)
-        }
-      } else {
-        setHasUpdate(false)
-        setUpdateInfo(null)
-        if (!silent) {
-          addToast({
-            type: 'success',
-            message: `当前已是最新版本 v${data.current_version}`,
-          })
+        if (compareVersions(remoteVersion, version) > 0) {
+          setHasUpdate(true)
+          if (showToast) {
+            setShowUpdateModal(true)
+          }
+        } else if (showToast) {
+          // 已是最新版本的提示
+          setHasUpdate(false)
         }
       }
+    } catch (error) {
+      console.error('检查更新失败:', error)
     } finally {
       setCheckingUpdate(false)
     }
-  }, [addToast])
+  }, [version])
+
+  // 获取更新日志
+  const loadChangelog = useCallback(async () => {
+    setLoadingChangelog(true)
+    setChangelogHtml(null)
+    setChangelog([])
+    try {
+      const response = await fetch('/api/version/changelog')
+      const result = await response.json()
+
+      if (result.error) {
+        console.error('获取更新日志失败:', result.message)
+        return
+      }
+
+      // 支持 {data: {updates: [...]}} 格式
+      if (result.data && result.data.updates && Array.isArray(result.data.updates)) {
+        // 将 updates 数组合并成 HTML 字符串
+        const htmlContent = result.data.updates.join('<br/>')
+        setChangelogHtml(htmlContent)
+      } else if (result.html) {
+        setChangelogHtml(result.html)
+      } else if (result.changelog) {
+        setChangelog(result.changelog)
+      } else if (Array.isArray(result)) {
+        setChangelog(result)
+      }
+    } catch (error) {
+      console.error('获取更新日志失败:', error)
+    } finally {
+      setLoadingChangelog(false)
+    }
+  }, [])
 
   useEffect(() => {
+    // 获取版本信息
+    fetch('/static/version.txt')
+      .then(res => res.ok ? res.text() : null)
+      .then(text => {
+        if (text && text.trim().startsWith('v')) {
+          setVersion(text.trim())
+        }
+      })
+      .catch(() => {})
+
     // 获取使用人数
     fetch('/project-stats')
       .then(res => res.ok ? res.json() : null)
@@ -101,36 +134,9 @@ export function About() {
       })
       .catch(() => {})
 
-    // 加载群二维码
-    getQrcodeUrl('wechat').then(res => {
-      if (res.success && res.data?.image_url) {
-        setWechatQrcode(res.data.image_url)
-      }
-    }).catch(() => {})
-    getQrcodeUrl('qq').then(res => {
-      if (res.success && res.data?.image_url) {
-        setQqQrcode(res.data.image_url)
-      }
-    }).catch(() => {})
-    getQrcodeUrl('wechat_official').then(res => {
-      if (res.success && res.data?.image_url) {
-        setWechatOfficialQrcode(res.data.image_url)
-      }
-    }).catch(() => {})
-    getQrcodeUrl('telegram').then(res => {
-      if (res.success && res.data?.image_url) {
-        setTelegramQrcode(res.data.image_url)
-      }
-    }).catch(() => {})
-    getQrcodeUrl('reward').then(res => {
-      if (res.success && res.data?.image_url) {
-        setRewardQrcode(res.data.image_url)
-      }
-    }).catch(() => {})
-
-    // 页面挂载时静默检查版本（失败不弹 toast，避免无网环境干扰用户）
-    handleCheckUpdate(true)
-  }, [handleCheckUpdate])
+    // 自动检查更新
+    checkForUpdate(false)
+  }, [checkForUpdate])
 
   return (
     <div className="max-w-5xl mx-auto space-y-4">
@@ -147,20 +153,17 @@ export function About() {
         </p>
         {/* 版本和使用人数 */}
         <div className="flex items-center justify-center gap-3 mt-3 flex-wrap">
-          {currentVersion && (
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-gradient-to-r from-emerald-500/10 to-teal-500/10 text-emerald-600 dark:from-emerald-500/20 dark:to-teal-500/20 dark:text-emerald-400 border border-emerald-200/50 dark:border-emerald-500/30">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span>v{currentVersion}</span>
-            </div>
-          )}
-          {hasUpdate && updateInfo && (
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-gradient-to-r from-emerald-500/10 to-teal-500/10 text-emerald-600 dark:from-emerald-500/20 dark:to-teal-500/20 dark:text-emerald-400 border border-emerald-200/50 dark:border-emerald-500/30">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span>{version}</span>
+          </div>
+          {hasUpdate && latestVersion && (
             <button
-              type="button"
               onClick={() => setShowUpdateModal(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-gradient-to-r from-amber-500/10 to-orange-500/10 text-amber-600 dark:from-amber-500/20 dark:to-orange-500/20 dark:text-amber-400 border border-amber-200/50 dark:border-amber-500/30 hover:from-amber-500/20 hover:to-orange-500/20 transition-all cursor-pointer"
             >
               <ArrowUpCircle className="w-3.5 h-3.5" />
-              <span>有更新 v{updateInfo.remote_version}</span>
+              <span>有更新 {latestVersion}</span>
             </button>
           )}
           {totalUsers > 0 && (
@@ -173,10 +176,9 @@ export function About() {
         {/* 操作按钮 */}
         <div className="flex items-center justify-center gap-2 mt-3">
           <button
-            type="button"
-            onClick={() => handleCheckUpdate(false)}
+            onClick={() => checkForUpdate(true)}
             disabled={checkingUpdate}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors disabled:opacity-50"
           >
             {checkingUpdate ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -185,11 +187,21 @@ export function About() {
             )}
             <span>{checkingUpdate ? '检查中...' : '检查更新'}</span>
           </button>
+          <button
+            onClick={() => {
+              setShowChangelogModal(true)
+              loadChangelog()
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>更新日志</span>
+          </button>
         </div>
       </div>
 
       {/* Contact Groups */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="vben-card">
           <div className="vben-card-header">
             <h2 className="vben-card-title">
@@ -199,27 +211,23 @@ export function About() {
           </div>
           <div className="vben-card-body text-center">
             <div
-              className="w-[140px] h-[140px] mx-auto overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 cursor-pointer transition-all duration-200 hover:scale-105 hover:shadow-lg hover:border-green-400"
-              onClick={() => wechatQrcode && setPreviewImage(wechatQrcode)}
+              className="w-[160px] h-[160px] mx-auto overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 cursor-pointer transition-all duration-200 hover:scale-105 hover:shadow-lg hover:border-green-400"
+              onClick={() => setPreviewImage('/static/wechat-group.png')}
             >
-              {wechatQrcode ? (
-                <img
-                  src={wechatQrcode}
-                  alt="微信群二维码"
-                  className="w-full h-full object-cover object-center"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = 'none'
-                    const parent = (e.target as HTMLImageElement).parentElement
-                    if (parent) {
-                      parent.innerHTML = '<p class="text-slate-400 dark:text-slate-500 py-12 text-sm">二维码未配置</p>'
-                    }
-                  }}
-                />
-              ) : (
-                <p className="text-slate-400 dark:text-slate-500 py-14 text-sm">二维码未配置</p>
-              )}
+              <img
+                src="/static/wechat-group.png"
+                alt="微信群二维码"
+                className="w-full h-full object-cover object-center"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none'
+                  const parent = (e.target as HTMLImageElement).parentElement
+                  if (parent) {
+                    parent.innerHTML = '<p class="text-slate-400 dark:text-slate-500 py-12 text-sm">二维码未配置</p>'
+                  }
+                }}
+              />
             </div>
-            <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">扫码加入微信交流群</p>
+            <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">扫码加入微信技术交流群</p>
           </div>
         </div>
         <div className="vben-card">
@@ -231,123 +239,23 @@ export function About() {
           </div>
           <div className="vben-card-body text-center">
             <div
-              className="w-[140px] h-[140px] mx-auto overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 cursor-pointer transition-all duration-200 hover:scale-105 hover:shadow-lg hover:border-blue-400"
-              onClick={() => qqQrcode && setPreviewImage(qqQrcode)}
+              className="w-[160px] h-[160px] mx-auto overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 cursor-pointer transition-all duration-200 hover:scale-105 hover:shadow-lg hover:border-blue-400"
+              onClick={() => setPreviewImage('/static/qq-group.png')}
             >
-              {qqQrcode ? (
-                <img
-                  src={qqQrcode}
-                  alt="QQ群二维码"
-                  className="w-full h-full object-cover object-center"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = 'none'
-                    const parent = (e.target as HTMLImageElement).parentElement
-                    if (parent) {
-                      parent.innerHTML = '<p class="text-slate-400 dark:text-slate-500 py-12 text-sm">二维码未配置</p>'
-                    }
-                  }}
-                />
-              ) : (
-                <p className="text-slate-400 dark:text-slate-500 py-14 text-sm">二维码未配置</p>
-              )}
+              <img
+                src="/static/qq-group.png"
+                alt="QQ群二维码"
+                className="w-full h-full object-cover object-center"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none'
+                  const parent = (e.target as HTMLImageElement).parentElement
+                  if (parent) {
+                    parent.innerHTML = '<p class="text-slate-400 dark:text-slate-500 py-12 text-sm">二维码未配置</p>'
+                  }
+                }}
+              />
             </div>
-            <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">扫码加入QQ交流群</p>
-          </div>
-        </div>
-        <div className="vben-card">
-          <div className="vben-card-header">
-            <h2 className="vben-card-title">
-              <MessageCircle className="w-4 h-4 text-green-600" />
-              微信公众号
-            </h2>
-          </div>
-          <div className="vben-card-body text-center">
-            <div
-              className="w-[140px] h-[140px] mx-auto overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 cursor-pointer transition-all duration-200 hover:scale-105 hover:shadow-lg hover:border-green-500"
-              onClick={() => wechatOfficialQrcode && setPreviewImage(wechatOfficialQrcode)}
-            >
-              {wechatOfficialQrcode ? (
-                <img
-                  src={wechatOfficialQrcode}
-                  alt="微信公众号二维码"
-                  className="w-full h-full object-cover object-center"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = 'none'
-                    const parent = (e.target as HTMLImageElement).parentElement
-                    if (parent) {
-                      parent.innerHTML = '<p class="text-slate-400 dark:text-slate-500 py-12 text-sm">二维码未配置</p>'
-                    }
-                  }}
-                />
-              ) : (
-                <p className="text-slate-400 dark:text-slate-500 py-14 text-sm">二维码未配置</p>
-              )}
-            </div>
-            <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">关注公众号发送 最新源码 获取最新代码</p>
-          </div>
-        </div>
-        <div className="vben-card">
-          <div className="vben-card-header">
-            <h2 className="vben-card-title">
-              <MessageCircle className="w-4 h-4 text-blue-400" />
-              Telegram
-            </h2>
-          </div>
-          <div className="vben-card-body text-center">
-            <div
-              className="w-[140px] h-[140px] mx-auto overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 cursor-pointer transition-all duration-200 hover:scale-105 hover:shadow-lg hover:border-blue-400"
-              onClick={() => telegramQrcode && setPreviewImage(telegramQrcode)}
-            >
-              {telegramQrcode ? (
-                <img
-                  src={telegramQrcode}
-                  alt="Telegram二维码"
-                  className="w-full h-full object-cover object-center"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = 'none'
-                    const parent = (e.target as HTMLImageElement).parentElement
-                    if (parent) {
-                      parent.innerHTML = '<p class="text-slate-400 dark:text-slate-500 py-12 text-sm">二维码未配置</p>'
-                    }
-                  }}
-                />
-              ) : (
-                <p className="text-slate-400 dark:text-slate-500 py-14 text-sm">二维码未配置</p>
-              )}
-            </div>
-            <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">扫码加入Telegram群</p>
-          </div>
-        </div>
-        <div className="vben-card">
-          <div className="vben-card-header">
-            <h2 className="vben-card-title">
-              <Gift className="w-4 h-4 text-red-500" />
-              赞赏支持
-            </h2>
-          </div>
-          <div className="vben-card-body text-center">
-            <div
-              className="w-[140px] h-[140px] mx-auto overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 cursor-pointer transition-all duration-200 hover:scale-105 hover:shadow-lg hover:border-red-400"
-              onClick={() => rewardQrcode && setPreviewImage(rewardQrcode)}
-            >
-              {rewardQrcode ? (
-                <img
-                  src={rewardQrcode}
-                  alt="赞赏码"
-                  className="w-full h-full object-cover object-center"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = 'none'
-                    const parent = (e.target as HTMLImageElement).parentElement
-                    if (parent) {
-                      parent.innerHTML = '<p class="text-slate-400 dark:text-slate-500 py-12 text-sm">赞赏码未配置</p>'
-                    }
-                  }}
-                />
-              ) : (
-                <p className="text-slate-400 dark:text-slate-500 py-14 text-sm">赞赏码未配置</p>
-              )}
-            </div>
-            <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">如果觉得好用，请作者喝杯咖啡</p>
+            <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">扫码加入QQ技术交流群</p>
           </div>
         </div>
       </div>
@@ -405,13 +313,13 @@ export function About() {
               <span className="text-xs text-slate-500 dark:text-slate-400">项目作者</span>
             </a>
             <a
-              href="https://github.com/legeling"
+              href="https://github.com/arkleselect"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
             >
               <Github className="w-4 h-4 text-slate-600 dark:text-slate-300" />
-              <span className="text-sm font-medium text-slate-700 dark:text-slate-200">legeling</span>
+              <span className="text-sm font-medium text-slate-700 dark:text-slate-200">arkleselect</span>
               <span className="text-xs text-slate-500 dark:text-slate-400">前端重构</span>
             </a>
           </div>
@@ -440,13 +348,21 @@ export function About() {
 
       {/* Footer */}
       <div className="text-center py-4 text-slate-500 dark:text-slate-400 text-sm">
-        
+        <p className="flex items-center justify-center gap-1">
+          Made with <Heart className="w-3.5 h-3.5 text-red-500" /> by Open Source Community
+        </p>
+        <p className="mt-1 text-xs">
+          赞助商：
+          <a
+            href="https://www.hsykj.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-500 dark:text-blue-400 hover:underline ml-1"
+          >
+            划算云服务器
+          </a>
+        </p>
       </div>
-
-      {/* 更新详情弹窗（组件内已处理仅关闭按钮退出） */}
-      {showUpdateModal && updateInfo && (
-        <UpdateModal info={updateInfo} onClose={() => setShowUpdateModal(false)} />
-      )}
 
       {/* 图片预览弹窗 */}
       {previewImage && (
@@ -467,6 +383,148 @@ export function About() {
               className="max-w-full max-h-[85vh] rounded-lg shadow-2xl"
               onClick={(e) => e.stopPropagation()}
             />
+          </div>
+        </div>
+      )}
+
+      {/* 更新详情弹窗 */}
+      {showUpdateModal && updateInfo && (
+        <div className="modal-overlay" onClick={() => setShowUpdateModal(false)}>
+          <div className="modal-content max-w-lg" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="modal-title flex items-center gap-2">
+                <ArrowUpCircle className="w-5 h-5 text-amber-500" />
+                发现新版本
+              </h2>
+              <button onClick={() => setShowUpdateModal(false)} className="modal-close">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="modal-body space-y-4">
+              <div className="flex items-center justify-between p-4 bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 rounded-lg">
+                <div>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">当前版本</p>
+                  <p className="text-lg font-bold text-slate-700 dark:text-slate-200">{version}</p>
+                </div>
+                <div className="text-2xl text-slate-400">→</div>
+                <div>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">最新版本</p>
+                  <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">{updateInfo.version}</p>
+                </div>
+              </div>
+
+              {updateInfo.date && (
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  发布日期：{updateInfo.date}
+                </p>
+              )}
+
+              {updateInfo.changes && updateInfo.changes.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">更新内容：</h3>
+                  <ul className="space-y-1.5">
+                    {updateInfo.changes.map((change, index) => (
+                      <li key={index} className="flex items-start gap-2 text-sm text-slate-600 dark:text-slate-400">
+                        <CheckCircle className="w-4 h-4 text-emerald-500 mt-0.5 flex-shrink-0" />
+                        <span>{change}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                <p className="text-xs text-blue-600 dark:text-blue-400">
+                  <strong>提示：</strong>请前往 GitHub 下载最新版本，或使用 git pull 更新代码。
+                </p>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button onClick={() => setShowUpdateModal(false)} className="btn-ios-secondary">
+                稍后再说
+              </button>
+              <a
+                href={updateInfo.download_url || 'https://github.com/zhinianboke/xianyu-auto-reply/releases'}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-ios-primary"
+              >
+                <Github className="w-4 h-4" />
+                前往下载
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 更新日志弹窗 */}
+      {showChangelogModal && (
+        <div className="modal-overlay" onClick={() => setShowChangelogModal(false)}>
+          <div className="modal-content max-w-2xl max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="modal-title flex items-center gap-2">
+                <FileText className="w-5 h-5 text-blue-500" />
+                更新日志
+              </h2>
+              <button onClick={() => setShowChangelogModal(false)} className="modal-close">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="modal-body flex-1 overflow-y-auto">
+              {loadingChangelog ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+                </div>
+              ) : changelogHtml ? (
+                <div 
+                  className="changelog-html prose prose-sm dark:prose-invert max-w-none"
+                  dangerouslySetInnerHTML={{ __html: changelogHtml }}
+                />
+              ) : changelog.length === 0 ? (
+                <div className="text-center py-12 text-slate-500 dark:text-slate-400">
+                  <FileText className="w-12 h-12 mx-auto mb-3 text-slate-300 dark:text-slate-600" />
+                  <p>暂无更新日志</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {changelog.map((item, index) => (
+                    <div
+                      key={index}
+                      className="p-4 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-medium text-slate-900 dark:text-slate-100">
+                          {item.version}
+                        </span>
+                        {item.date && (
+                          <span className="text-xs text-slate-500 dark:text-slate-400">
+                            {item.date}
+                          </span>
+                        )}
+                      </div>
+                      {item.changes && item.changes.length > 0 && (
+                        <ul className="space-y-1">
+                          {item.changes.map((change, changeIndex) => (
+                            <li
+                              key={changeIndex}
+                              className="flex items-start gap-2 text-sm text-slate-600 dark:text-slate-400"
+                            >
+                              <span className="text-emerald-500 mt-1">•</span>
+                              <span>{change}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button onClick={() => setShowChangelogModal(false)} className="btn-ios-secondary">
+                关闭
+              </button>
+            </div>
           </div>
         </div>
       )}

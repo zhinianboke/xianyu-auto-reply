@@ -4,7 +4,7 @@
  * 提供账号连接管理、会话列表、聊天记录等接口，
  * 以及 WebSocket 实时消息推送连接
  */
-import { del, get, post, put } from '@/utils/request'
+import { API_BASE_URL, del, get, post, put } from '@/utils/request'
 
 const PREFIX = '/api/v1/chat-new'
 
@@ -291,7 +291,7 @@ export interface WsPushMessage {
 function getChatNewWsBaseUrl(): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
-  return `${protocol}//${host}`
+  return `${protocol}//${host}${API_BASE_URL}`
 }
 
 /**

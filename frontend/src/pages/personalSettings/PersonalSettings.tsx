@@ -433,27 +433,27 @@ export function PersonalSettings() {
 
   return (
     <div className="space-y-4">
-      {/* 页头 */}
-      <div className="page-header flex-between flex-wrap gap-4">
-        <div>
-          <h1 className="page-title">个人设置</h1>
-          <p className="page-description">管理个人账户信息和偏好设置</p>
+      <div className="vben-card personal-settings-card">
+        <div className="accounts-page-intro personal-settings-intro">
+          <div>
+            <h1>个人设置</h1>
+            <p>管理个人账户信息和偏好设置</p>
+          </div>
+          <button onClick={loadSettings} className="btn-ios-secondary accounts-header-btn">
+            <RefreshCw className="w-4 h-4" />
+            刷新
+          </button>
         </div>
-        <button onClick={loadSettings} className="btn-ios-secondary">
-          <RefreshCw className="w-4 h-4" />
-          刷新
-        </button>
-      </div>
 
-      {/* 账户信息 */}
-      <div className="vben-card">
-        <div className="vben-card-header">
-          <h2 className="vben-card-title">
-            <User className="w-4 h-4" />
-            账户信息
-          </h2>
-        </div>
-        <div className="vben-card-body space-y-4">
+        {/* 账户信息 */}
+        <section className="personal-settings-section">
+          <div className="personal-settings-section-header">
+            <h2 className="vben-card-title">
+              <User className="w-4 h-4" />
+              账户信息
+            </h2>
+          </div>
+          <div className="personal-settings-section-body space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="input-label">用户名</label>
@@ -474,12 +474,12 @@ export function PersonalSettings() {
               />
             </div>
           </div>
-        </div>
-      </div>
+          </div>
+        </section>
 
-      {/* 余额管理 */}
-      <div className="vben-card">
-        <div className="vben-card-header flex items-center justify-between">
+        {/* 余额管理 */}
+        <section className="personal-settings-section">
+        <div className="personal-settings-section-header">
           <h2 className="vben-card-title">
             <Wallet className="w-4 h-4" />
             余额管理
@@ -537,7 +537,7 @@ export function PersonalSettings() {
             </button>
           </div>
         </div>
-        <div className="vben-card-body space-y-4">
+        <div className="personal-settings-section-body space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="input-label">当前余额（元）</label>
@@ -563,17 +563,17 @@ export function PersonalSettings() {
             </div>
           </div>
         </div>
-      </div>
+        </section>
 
-      {/* 分销管理 */}
-      <div className="vben-card">
-        <div className="vben-card-header">
+        {/* 分销管理 */}
+        <section className="personal-settings-section">
+        <div className="personal-settings-section-header">
           <h2 className="vben-card-title">
             <Link2 className="w-4 h-4" />
             分销管理
           </h2>
         </div>
-        <div className="vben-card-body space-y-4">
+        <div className="personal-settings-section-body space-y-4">
           <div>
             <label className="input-label">对接码</label>
             <p className="text-xs text-gray-500 mb-2">对接码用于分销商识别您的身份，分享给下级分销商即可对接您的卡券</p>
@@ -711,17 +711,17 @@ export function PersonalSettings() {
             </button>
           </div>
         </div>
-      </div>
+        </section>
 
-      {/* 重发货触发关键字 */}
-      <div className="vben-card">
-        <div className="vben-card-header">
+        {/* 重发货触发关键字 */}
+        <section className="personal-settings-section">
+        <div className="personal-settings-section-header">
           <h2 className="vben-card-title">
             <Package className="w-4 h-4" />
             重发货触发关键字
           </h2>
         </div>
-        <div className="vben-card-body space-y-4">
+        <div className="personal-settings-section-body space-y-4">
           <p className="text-xs text-slate-500 dark:text-slate-400">
             设置后，在闲鱼聊天中自己发送「关键字+订单号」即可触发自动重新发货。例如关键字为「重新触发」，发送「4502144774044041438重新触发」将提取订单号并自动发货。
             <br />
@@ -747,17 +747,17 @@ export function PersonalSettings() {
             保存
           </button>
         </div>
-      </div>
+        </section>
 
-      {/* 修改密码 */}
-      <div className="vben-card">
-        <div className="vben-card-header">
+        {/* 修改密码 */}
+        <section className="personal-settings-section">
+        <div className="personal-settings-section-header">
           <h2 className="vben-card-title">
             <Key className="w-4 h-4" />
             修改密码
           </h2>
         </div>
-        <div className="vben-card-body space-y-4">
+        <div className="personal-settings-section-body space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="input-group">
               <label className="input-label">当前密码</label>
@@ -800,6 +800,7 @@ export function PersonalSettings() {
             修改密码
           </button>
         </div>
+        </section>
       </div>
 
       {/* 重置对接码确认弹窗 */}

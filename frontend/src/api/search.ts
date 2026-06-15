@@ -21,18 +21,62 @@ export interface SearchResultItem {
 export const searchItems = async (
   keyword: string, 
   page: number = 1, 
-  pageSize: number = 20
+  pageSize: number = 20,
+  cookieId?: string
 ): Promise<{ success: boolean; data: SearchResultItem[]; total?: number; error?: string }> => {
   const result = await post<{ 
     success: boolean
     data?: SearchResultItem[]
     total?: number
     error?: string 
-  }>(`${SEARCH_PREFIX}/search`, { keyword, page, page_size: pageSize })
+  }>(`${SEARCH_PREFIX}/search`, { keyword, page, page_size: pageSize, cookie_id: cookieId })
   return { 
     success: result.success, 
     data: result.data || [], 
     total: result.total,
     error: result.error
   }
+}
+
+export interface InteractionDraftOptions {
+  cookie_id: string
+  item: SearchResultItem
+  word_count: number
+  tone: 'friendly' | 'question' | 'concise'
+  include_detail: boolean
+}
+
+export interface InteractionDraftResult {
+  success: boolean
+  draft: string
+  usage?: {
+    prompt_tokens?: number
+    completion_tokens?: number
+    total_tokens?: number
+    estimated?: boolean
+  }
+  included_detail?: boolean
+}
+
+export const generateInteractionCommentDraft = (
+  data: InteractionDraftOptions
+): Promise<InteractionDraftResult> => {
+  return post('/items/interaction-comment-draft', data)
+}
+
+export interface InteractionCommentOptions {
+  cookie_id: string
+  item: SearchResultItem
+  comment: string
+}
+
+export interface InteractionCommentResult {
+  success: boolean
+  item_url?: string
+}
+
+export const publishInteractionComment = (
+  data: InteractionCommentOptions
+): Promise<InteractionCommentResult> => {
+  return post('/items/interaction-comment', data)
 }

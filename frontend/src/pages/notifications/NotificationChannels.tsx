@@ -1,98 +1,37 @@
 import { useState, useEffect } from 'react'
-import type { FormEvent } from 'react'
-import { motion } from 'framer-motion'
-import { Bell, RefreshCw, Plus, Edit2, Trash2, Send, Settings, MessageCircle, Mail, Link, Smartphone, X, Loader2 } from 'lucide-react'
-import { getNotificationChannels, deleteNotificationChannel, updateNotificationChannel, testNotificationChannel, addNotificationChannel } from '@/api/notifications'
+import {
+  Button,
+  Card,
+  Empty,
+  Input,
+  Modal,
+  Space,
+  Switch,
+  Tag,
+  Typography,
+} from '@arco-design/web-react'
+import { Bell, CheckCircle, PlayCircle, Plus, Edit2, Send, MessageCircle, Mail, Link, Smartphone, Power, Users } from 'lucide-react'
+import { getNotificationChannels, updateNotificationChannel, testNotificationChannel, addNotificationChannel, deleteNotificationChannel } from '@/api/notifications'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { PageLoading } from '@/components/common/Loading'
-import { ConfirmModal } from '@/components/common/ConfirmModal'
 import type { NotificationChannel } from '@/types'
+
+const { Text } = Typography
 
 // 所有支持的渠道类型配置
 const channelTypes = [
-  { 
-    type: 'dingtalk', 
-    label: '钉钉通知', 
-    desc: '钉钉机器人消息', 
-    icon: Bell, 
-    placeholder: '{"webhook_url": "https://oapi.dingtalk.com/robot/send?access_token=..."}',
-    defaultConfig: {
-      webhook_url: "https://oapi.dingtalk.com/robot/send?access_token=你的access_token",
-      secret: ""
-    }
-  },
-  { 
-    type: 'feishu', 
-    label: '飞书通知', 
-    desc: '飞书机器人消息', 
-    icon: Send, 
-    placeholder: '{"webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/..."}',
-    defaultConfig: {
-      webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/你的hook_id"
-    }
-  },
-  { 
-    type: 'bark', 
-    label: 'Bark通知', 
-    desc: 'iOS推送通知', 
-    icon: Smartphone, 
-    placeholder: '{"device_key": "xxx", "server_url": "https://api.day.app"}',
-    defaultConfig: {
-      device_key: "你的设备密钥",
-      server_url: "https://api.day.app"
-    }
-  },
-  { 
-    type: 'email', 
-    label: '邮件通知', 
-    desc: 'SMTP邮件发送', 
-    icon: Mail, 
-    placeholder: '{"smtp_server": "...", "smtp_port": 587, "email_user": "...", "email_password": "...", "recipient_email": "..."}',
-    defaultConfig: {
-      smtp_server: "smtp.qq.com",
-      smtp_port: 587,
-      email_user: "你的邮箱@qq.com",
-      email_password: "你的授权码",
-      recipient_email: "接收邮箱@example.com"
-    }
-  },
-  { 
-    type: 'webhook', 
-    label: 'Webhook', 
-    desc: '自定义HTTP请求', 
-    icon: Link, 
-    placeholder: '{"webhook_url": "https://..."}',
-    defaultConfig: {
-      webhook_url: "https://你的webhook地址",
-      method: "POST",
-      headers: {}
-    }
-  },
-  { 
-    type: 'wechat', 
-    label: '微信通知', 
-    desc: '企业微信机器人', 
-    icon: MessageCircle, 
-    placeholder: '{"webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."}',
-    defaultConfig: {
-      webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=你的key"
-    }
-  },
-  { 
-    type: 'telegram', 
-    label: 'Telegram', 
-    desc: 'Telegram机器人', 
-    icon: Send, 
-    placeholder: '{"bot_token": "...", "chat_id": "..."}',
-    defaultConfig: {
-      bot_token: "你的Bot_Token",
-      chat_id: "你的Chat_ID"
-    }
-  },
+  { type: 'dingtalk', label: '钉钉通知', desc: '钉钉机器人消息', icon: Bell, placeholder: '{"webhook_url": "https://oapi.dingtalk.com/robot/send?access_token=..."}' },
+  { type: 'feishu', label: '飞书通知', desc: '飞书机器人消息', icon: Send, placeholder: '{"webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/..."}' },
+  { type: 'bark', label: 'Bark通知', desc: 'iOS推送通知', icon: Smartphone, placeholder: '{"device_key": "xxx", "server_url": "https://api.day.app"}' },
+  { type: 'email', label: '邮件通知', desc: 'SMTP邮件发送', icon: Mail, placeholder: '{"smtp_server": "...", "smtp_port": 587, "email_user": "...", "email_password": "...", "recipient_email": "..."}' },
+  { type: 'webhook', label: 'Webhook', desc: '自定义HTTP请求', icon: Link, placeholder: '{"webhook_url": "https://..."}' },
+  { type: 'wechat', label: '微信通知', desc: '企业微信机器人', icon: MessageCircle, placeholder: '{"webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."}' },
+  { type: 'telegram', label: 'Telegram', desc: 'Telegram机器人', icon: Send, placeholder: '{"bot_token": "...", "chat_id": "..."}' },
 ] as const
 
 type ChannelType = typeof channelTypes[number]['type']
+type ChannelFilter = 'all' | 'configured' | 'unconfigured' | 'enabled' | 'disabled'
 
 const channelTypeLabels: Record<string, string> = Object.fromEntries(
   channelTypes.map(c => [c.type, c.label])
@@ -110,10 +49,8 @@ export function NotificationChannels() {
   const [formConfig, setFormConfig] = useState('')
   const [formEnabled, setFormEnabled] = useState(true)
   const [saving, setSaving] = useState(false)
-
-  // 删除确认弹窗状态
-  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
-  const [deleting, setDeleting] = useState(false)
+  const [activeFilter, setActiveFilter] = useState<ChannelFilter>('all')
+  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null)
 
   const loadChannels = async () => {
     if (!_hasHydrated || !isAuthenticated || !token) {
@@ -168,6 +105,35 @@ export function NotificationChannels() {
     }
   }
 
+  const handleDeleteChannel = (channel: NotificationChannel) => {
+    Modal.confirm({
+      title: '删除通知配置',
+      content: `确定要删除「${channel.name || channelTypeLabels[channel.type]}」吗？删除后该渠道会恢复为未配置状态。`,
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { status: 'danger' },
+      onOk: async () => {
+        try {
+          await deleteNotificationChannel(channel.id)
+          addToast({ type: 'success', message: '通知配置已删除' })
+          setSelectedChannelId(null)
+          await loadChannels()
+        } catch {
+          addToast({ type: 'error', message: '删除失败' })
+        }
+      },
+    })
+  }
+
+  const handleDeleteSelectedChannel = () => {
+    const selectedChannel = channels.find(channel => channel.id === selectedChannelId)
+    if (!selectedChannel) {
+      addToast({ type: 'warning', message: '请先选择要删除的通知配置' })
+      return
+    }
+    handleDeleteChannel(selectedChannel)
+  }
+
   const handleTest = async (id: string) => {
     try {
       const result = await testNotificationChannel(id)
@@ -181,50 +147,23 @@ export function NotificationChannels() {
     }
   }
 
-  const handleDelete = async (id: string) => {
-    setDeleting(true)
-    try {
-      await deleteNotificationChannel(id)
-      addToast({ type: 'success', message: '删除成功' })
-      setDeleteConfirm({ open: false, id: null })
-      loadChannels()
-    } catch {
-      addToast({ type: 'error', message: '删除失败' })
-    } finally {
-      setDeleting(false)
-    }
-  }
-
   // 打开配置弹窗（新建）
   const openConfigModal = (type: ChannelType) => {
     const typeConfig = channelTypes.find(c => c.type === type)
     setSelectedType(type)
     setEditingChannel(null)
     setFormName(typeConfig?.label || '')
-    // 新建时默认填充样例配置
-    if (typeConfig?.defaultConfig) {
-      setFormConfig(JSON.stringify(typeConfig.defaultConfig, null, 2))
-    } else {
-      setFormConfig('')
-    }
+    setFormConfig('')
     setFormEnabled(true)
     setIsModalOpen(true)
   }
 
   // 打开编辑弹窗
   const openEditModal = (channel: NotificationChannel) => {
-    const typeConfig = channelTypes.find(c => c.type === channel.type)
     setSelectedType(channel.type as ChannelType)
     setEditingChannel(channel)
     setFormName(channel.name)
-    // 编辑时如果配置为空，也填充默认样例
-    if (channel.config && Object.keys(channel.config).length > 0) {
-      setFormConfig(JSON.stringify(channel.config, null, 2))
-    } else if (typeConfig?.defaultConfig) {
-      setFormConfig(JSON.stringify(typeConfig.defaultConfig, null, 2))
-    } else {
-      setFormConfig('')
-    }
+    setFormConfig(JSON.stringify(channel.config || {}, null, 2))
     setFormEnabled(channel.enabled)
     setIsModalOpen(true)
   }
@@ -235,8 +174,7 @@ export function NotificationChannels() {
     setSelectedType(null)
   }
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault()
+  const handleSubmit = async () => {
     if (!formName.trim()) {
       addToast({ type: 'warning', message: '请输入渠道名称' })
       return
@@ -298,237 +236,195 @@ export function NotificationChannels() {
     return <PageLoading />
   }
 
+  const configuredCount = channels.length
+  const enabledCount = channels.filter(channel => channel.enabled).length
+  const filteredChannelTypes = channelTypes.filter((ct) => {
+    const existingChannel = getChannelByType(ct.type)
+    if (activeFilter === 'configured') return Boolean(existingChannel)
+    if (activeFilter === 'unconfigured') return !existingChannel
+    if (activeFilter === 'enabled') return Boolean(existingChannel?.enabled)
+    if (activeFilter === 'disabled') return Boolean(existingChannel && !existingChannel.enabled)
+    return true
+  })
+  const filters: Array<{ key: ChannelFilter; label: string }> = [
+    { key: 'all', label: '全部' },
+    { key: 'configured', label: '已配置' },
+    { key: 'unconfigured', label: '未配置' },
+    { key: 'enabled', label: '已启用' },
+    { key: 'disabled', label: '已禁用' },
+  ]
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="page-title">通知渠道</h1>
-          <p className="page-description">管理消息通知渠道，支持钉钉、飞书、邮件等多种方式</p>
+    <div className="notification-channel-page">
+      <Card
+        className="xianyu-arco-page-card notification-channel-shell"
+        bordered={false}
+      >
+        <div className="accounts-page-intro">
+          <h1>通知渠道管理</h1>
+          <p>统一管理各类通知渠道的配置、测试与启停状态</p>
         </div>
-        <button onClick={loadChannels} className="btn-ios-secondary">
-          <RefreshCw className="w-4 h-4" />
-          刷新
-        </button>
-      </div>
+        {/* <div className="notification-channel-hero">
+          <Button
+            className="notification-refresh-btn"
+            onClick={loadChannels}>
+            <RefreshCw className="w-4 h-4 shrink-0" />
+            刷新
+          </Button>
+        </div> */}
 
-      {/* 渠道类型网格 */}
-      <div className="vben-card">
-        <div className="vben-card-header">
-          <h2 className="vben-card-title">
-            <Settings className="w-4 h-4" />
-            选择通知方式
-          </h2>
-        </div>
-        <div className="vben-card-body">
-          <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">点击下方按钮选择您要配置的通知渠道类型</p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-            {channelTypes.map((ct, index) => {
-              const existingChannel = getChannelByType(ct.type)
-              const Icon = ct.icon
-              return (
-                <motion.div
-                  key={ct.type}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.03 }}
-                  className={`relative p-4 rounded-xl border-2 transition-all ${
-                    existingChannel
-                      ? existingChannel.enabled
-                        ? 'border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-900/20'
-                        : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50'
-                      : 'border-slate-200 dark:border-slate-700 hover:border-blue-300 dark:hover:border-blue-600'
-                  }`}
-                >
-                  <div className="text-center">
-                    <div className={`w-10 h-10 mx-auto mb-2 rounded-lg flex items-center justify-center ${
-                      existingChannel?.enabled ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400' : 'bg-slate-100 dark:bg-slate-700 text-slate-500'
-                    }`}>
-                      <Icon className="w-5 h-5" />
-                    </div>
-                    <h3 className="font-medium text-slate-900 dark:text-slate-100 text-sm">{ct.label}</h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{ct.desc}</p>
-                    
-                    {existingChannel ? (
-                      <div className="mt-3 flex items-center justify-center gap-1">
-                        <button
-                          onClick={() => openEditModal(existingChannel)}
-                          className="text-xs px-2 py-1 rounded bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-800"
-                        >
-                          编辑
-                        </button>
-                        <button
-                          onClick={() => handleToggleEnabled(existingChannel)}
-                          className={`text-xs px-2 py-1 rounded ${
-                            existingChannel.enabled
-                              ? 'bg-green-100 dark:bg-green-900/50 text-green-600 dark:text-green-400'
-                              : 'bg-slate-100 dark:bg-slate-700 text-slate-500'
-                          }`}
-                        >
-                          {existingChannel.enabled ? '已启用' : '已禁用'}
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => openConfigModal(ct.type)}
-                        className="mt-3 text-xs px-3 py-1 rounded border border-blue-300 dark:border-blue-600 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30"
-                      >
-                        <Plus className="w-3 h-3 inline mr-1" />
-                        配置
-                      </button>
-                    )}
-                  </div>
-                </motion.div>
-              )
-            })}
+        <div className="notification-channel-stats">
+          <div className="notification-stat-pill">
+            <Users className="w-4 h-4" />
+            <span>共 {channelTypes.length} 种渠道</span>
+          </div>
+          <div className="notification-stat-pill">
+            <CheckCircle className="w-4 h-4" />
+            <span>已配置 {configuredCount}</span>
+          </div>
+          <div className="notification-stat-pill">
+            <PlayCircle className="w-4 h-4" />
+            <span>已启用 {enabledCount}</span>
           </div>
         </div>
-      </div>
 
-      {/* 已配置的渠道列表 */}
-      {channels.length > 0 && (
-        <div className="vben-card">
-          <div className="vben-card-header">
-            <h2 className="vben-card-title">
-              <Bell className="w-4 h-4" />
-              已配置渠道
-            </h2>
-          </div>
-          <div className="vben-card-body">
-            <div className="divide-y divide-slate-100 dark:divide-slate-700">
-              {channels.map(channel => (
-                <div key={channel.id} className="flex items-center justify-between py-3">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                      channel.enabled ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600' : 'bg-slate-100 dark:bg-slate-700 text-slate-500'
-                    }`}>
-                      <Bell className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <p className="font-medium text-slate-900 dark:text-slate-100">{channel.name}</p>
-                      <p className="text-xs text-slate-500">{channelTypeLabels[channel.type] || channel.type}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`text-xs px-2 py-0.5 rounded ${
-                      channel.enabled ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400' : 'bg-slate-100 text-slate-500 dark:bg-slate-700'
-                    }`}>
-                      {channel.enabled ? '启用' : '禁用'}
-                    </span>
-                    <button
-                      onClick={() => handleTest(channel.id)}
-                      className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500"
-                      title="测试"
-                    >
-                      <Send className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => openEditModal(channel)}
-                      className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500"
-                      title="编辑"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => setDeleteConfirm({ open: true, id: channel.id })}
-                      className="p-1.5 rounded hover:bg-red-50 dark:hover:bg-red-900/30 text-red-500"
-                      title="删除"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 配置弹窗 */}
-      {isModalOpen && selectedType && (
-        <div className="modal-overlay">
-          <div className="modal-content max-w-lg">
-            <div className="modal-header flex items-center justify-between">
-              <h2 className="text-lg font-semibold">
-                {editingChannel ? '编辑' : '配置'}{channelTypeLabels[selectedType]}
-              </h2>
-              <button onClick={closeModal} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg">
-                <X className="w-4 h-4 text-slate-500" />
+        <div className="notification-filter-row">
+          <div className="notification-filter-tabs">
+            {filters.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={activeFilter === item.key ? 'is-active' : ''}
+                onClick={() => setActiveFilter(item.key)}
+              >
+                {item.label}
               </button>
-            </div>
-            <form onSubmit={handleSubmit}>
-              <div className="modal-body space-y-4">
-                <div>
-                  <label className="input-label">渠道名称</label>
-                  <input
-                    type="text"
-                    value={formName}
-                    onChange={(e) => setFormName(e.target.value)}
-                    className="input-ios"
-                    placeholder={`如：我的${channelTypeLabels[selectedType]}`}
-                  />
+            ))}
+          </div>
+          <Button
+            className="notification-delete-config-btn"
+            status="danger"
+            onClick={handleDeleteSelectedChannel}
+          >
+            删除配置
+          </Button>
+        </div>
+
+        <div className="notification-channel-grid">
+          {filteredChannelTypes.map((ct) => {
+            const existingChannel = getChannelByType(ct.type)
+            const Icon = ct.icon
+            return (
+              <Card
+                key={ct.type}
+                hoverable
+                className={[
+                  'notification-channel-card',
+                  existingChannel?.enabled ? 'is-enabled' : '',
+                  existingChannel?.id === selectedChannelId ? 'is-selected' : '',
+                ].filter(Boolean).join(' ')}
+                onClick={() => setSelectedChannelId(existingChannel?.id || null)}
+              >
+                <div className="notification-channel-card-main">
+                  <div className="notification-channel-icon">
+                    <Icon className="w-7 h-7" />
+                  </div>
+                  <div>
+                    <div className="notification-channel-title">{ct.label}</div>
+                    <Text type="secondary" className="notification-channel-desc">{ct.desc}</Text>
+                    <Tag className="notification-status-tag" color={existingChannel ? (existingChannel.enabled ? 'green' : 'gray') : 'gray'}>
+                      {existingChannel ? (existingChannel.enabled ? '已启用' : '已禁用') : '未配置'}
+                    </Tag>
+                  </div>
                 </div>
-                <div>
-                  <label className="input-label">配置 (JSON)</label>
-                  <textarea
-                    value={formConfig}
-                    onChange={(e) => setFormConfig(e.target.value)}
-                    className="input-ios h-32 resize-none font-mono text-sm"
-                    placeholder={channelTypes.find(c => c.type === selectedType)?.placeholder}
-                  />
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                    {getConfigHint(selectedType)}
-                  </p>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-slate-700 dark:text-slate-200">启用此渠道</span>
-                  <button
-                    type="button"
-                    onClick={() => setFormEnabled(!formEnabled)}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                      formEnabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                        formEnabled ? 'translate-x-6' : 'translate-x-1'
-                      }`}
-                    />
-                  </button>
-                </div>
-              </div>
-              <div className="modal-footer">
-                <button type="button" onClick={closeModal} className="btn-ios-secondary" disabled={saving}>
-                  取消
-                </button>
-                <button type="submit" className="btn-ios-primary" disabled={saving}>
-                  {saving ? (
+
+                <div className="notification-channel-actions">
+                  {existingChannel ? (
                     <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      保存中...
+                      <Button
+                        className="notification-action-btn"
+                        type="outline"
+                        onClick={() => openEditModal(existingChannel)}
+                      >
+                        <Edit2 />
+                        <span>编辑</span>
+                      </Button>
+                      <Button
+                        className="notification-action-btn"
+                        onClick={() => handleTest(existingChannel.id)}
+                      >
+                        <Send />
+                        <span>测试</span>
+                      </Button>
+                      <Button
+                        className="notification-action-btn"
+                        status={existingChannel.enabled ? 'danger' : 'success'}
+                        type="outline"
+                        onClick={() => handleToggleEnabled(existingChannel)}
+                      >
+                        {existingChannel.enabled ? <Power /> : <PlayCircle />}
+                        <span>{existingChannel.enabled ? '禁用' : '启用'}</span>
+                      </Button>
                     </>
                   ) : (
-                    '保存'
+                    <Button
+                      type="outline"
+                      className="notification-config-btn"
+                      onClick={() => openConfigModal(ct.type)}>
+                      <Plus className="w-4 h-4" />
+                      配置
+                    </Button>
                   )}
-                </button>
-              </div>
-            </form>
-          </div>
+                </div>
+              </Card>
+            )
+          })}
         </div>
-      )}
+        {!filteredChannelTypes.length && (
+          <Empty className="notification-empty" description="当前筛选下暂无通知渠道" />
+        )}
+      </Card>
 
-      {/* 删除确认弹窗 */}
-      <ConfirmModal
-        isOpen={deleteConfirm.open}
-        title="删除确认"
-        message="确定要删除这个通知渠道吗？删除后无法恢复。"
-        confirmText="删除"
+      {/* 配置弹窗 */}
+      <Modal
+        visible={isModalOpen && Boolean(selectedType)}
+        title={selectedType ? `${editingChannel ? '编辑' : '配置'}${channelTypeLabels[selectedType]}` : ''}
+        okText="保存"
         cancelText="取消"
-        type="danger"
-        loading={deleting}
-        onConfirm={() => deleteConfirm.id && handleDelete(deleteConfirm.id)}
-        onCancel={() => setDeleteConfirm({ open: false, id: null })}
-      />
+        confirmLoading={saving}
+        onCancel={closeModal}
+        onOk={handleSubmit}
+        style={{ width: 560 }}
+      >
+        {selectedType && (
+          <Space direction="vertical" size={16} className="w-full">
+            <div>
+              <Text className="notification-form-label">渠道名称</Text>
+              <Input
+                value={formName}
+                onChange={setFormName}
+                placeholder={`如：我的${channelTypeLabels[selectedType]}`}
+              />
+            </div>
+            <div>
+              <Text className="notification-form-label">配置 (JSON)</Text>
+              <Input.TextArea
+                value={formConfig}
+                onChange={setFormConfig}
+                autoSize={{ minRows: 5, maxRows: 8 }}
+                placeholder={channelTypes.find(c => c.type === selectedType)?.placeholder}
+              />
+              <Text type="secondary" className="notification-form-hint">
+                {getConfigHint(selectedType)}
+              </Text>
+            </div>
+            <div className="notification-form-switch">
+              <Text>启用此渠道</Text>
+              <Switch checked={formEnabled} onChange={setFormEnabled} />
+            </div>
+          </Space>
+        )}
+      </Modal>
     </div>
   )
 }

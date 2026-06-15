@@ -2,15 +2,14 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/deving.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>闲鱼自动回复管理系统</title>
-    <!-- 在页面加载前立即设置主题，避免闪白 -->
+    <!-- 在页面加载前立即设置主题，默认使用 MyWMS 风格的浅色后台 -->
     <script>
       (function() {
-        var theme = localStorage.getItem('theme');
-        var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        if (theme === 'dark' || (!theme && prefersDark)) {
+        var theme = localStorage.getItem('theme') || 'light';
+        if (theme === 'dark') {
           document.documentElement.classList.add('dark');
         }
       })();

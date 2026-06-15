@@ -179,13 +179,15 @@ export function DbBackupLogs() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="page-title">数据库备份日志</h1>
-          <p className="page-description">查看数据库自动备份的执行结果，支持下载备份文件</p>
-        </div>
-        <div className="flex gap-3 flex-wrap">
+      <div
+        className="vben-card flex flex-col"
+        style={{ height: 'calc(100vh - 180px)', minHeight: '520px' }}
+      >
+        <div className="accounts-page-intro blacklist-page-intro">
+          <div>
+            <h1>数据库备份日志</h1>
+            <p>查看数据库自动备份的执行结果，支持下载备份文件</p>
+          </div>
           <button onClick={() => loadLogs()} disabled={loading} className="btn-ios-secondary">
             {loading ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -195,12 +197,10 @@ export function DbBackupLogs() {
             刷新
           </button>
         </div>
-      </div>
 
-      {/* Filter */}
-      <div className="vben-card">
-        <div className="vben-card-body">
-          <div className="flex flex-wrap items-end gap-4">
+        <div className="table-toolbar">
+          <div className="table-filter-row table-filter-row--lined flex-wrap">
+            <div className="flex flex-wrap items-end gap-4">
             <div className="input-group">
               <label className="input-label">开始日期</label>
               <input
@@ -235,21 +235,15 @@ export function DbBackupLogs() {
               <Calendar className="w-4 h-4" />
               查询
             </button>
+            </div>
+            <div className="table-toolbar-right">
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-300">
+                <Database className="w-4 h-4 text-blue-500" />
+                备份执行记录
+              </div>
+              <span className="badge-primary">{total} 条记录</span>
+            </div>
           </div>
-        </div>
-      </div>
-
-      {/* Logs List */}
-      <div
-        className="vben-card flex flex-col"
-        style={{ height: 'calc(100vh - 380px)', minHeight: '400px' }}
-      >
-        <div className="vben-card-header flex-shrink-0">
-          <h2 className="vben-card-title">
-            <Database className="w-4 h-4 text-blue-500" />
-            备份执行记录
-          </h2>
-          <span className="badge-primary">{total} 条记录</span>
         </div>
         <div className="flex-1 overflow-x-auto overflow-y-auto">
           <table className="table-ios">

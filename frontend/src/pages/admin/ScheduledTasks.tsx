@@ -123,13 +123,12 @@ export function ScheduledTasks() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="page-title">定时任务管理</h1>
-          <p className="page-description">管理系统定时任务的执行间隔和启用状态</p>
-        </div>
-        <div className="flex gap-3">
+      <div className="vben-card">
+        <div className="accounts-page-intro blacklist-page-intro">
+          <div>
+            <h1>定时任务管理</h1>
+            <p>管理系统定时任务的执行间隔和启用状态</p>
+          </div>
           <button onClick={loadTasks} disabled={loading} className="btn-ios-secondary">
             {loading ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -139,17 +138,17 @@ export function ScheduledTasks() {
             刷新
           </button>
         </div>
-      </div>
 
-      {/* Tasks List */}
-      <div className="vben-card">
-        <div className="vben-card-header flex items-center justify-between">
-          <h2 className="vben-card-title">
-            <Clock className="w-4 h-4" />
-            定时任务列表
-          </h2>
-          <span className="badge-primary">{tasks.length} 个任务</span>
+        <div className="table-toolbar">
+          <div className="table-filter-row table-filter-row--lined">
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-300">
+              <Clock className="w-4 h-4" />
+              定时任务列表
+            </div>
+            <span className="badge-primary">{tasks.length} 个任务</span>
+          </div>
         </div>
+
         <div className="overflow-x-auto">
           <table className="table-ios">
             <thead>
@@ -277,11 +276,7 @@ export function ScheduledTasks() {
             </tbody>
           </table>
         </div>
-      </div>
-
-      {/* 提示信息 */}
-      <div className="vben-card">
-        <div className="vben-card-body">
+        <div className="mt-4 border-t border-slate-200 pt-4 dark:border-slate-700">
           <p className="text-sm text-slate-500 dark:text-slate-400">
             提示：修改定时任务配置后会立即生效。禁用任务后，该任务将不再执行，但调度器仍会按间隔时间检查任务状态。
           </p>

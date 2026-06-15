@@ -1,9 +1,20 @@
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, AxiosResponse, InternalAxiosRequestConfig } from 'axios'
 import { useAuthStore } from '@/store/authStore'
 
+const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_PUBLIC_BASE || ''
+
+export const API_BASE_URL = configuredApiBaseUrl.replace(/\/$/, '')
+
+export const withApiBase = (url: string): string => {
+  if (!API_BASE_URL || /^https?:\/\//i.test(url) || url.startsWith('//')) {
+    return url
+  }
+  return `${API_BASE_URL}${url.startsWith('/') ? url : `/${url}`}`
+}
+
 // 创建 axios 实例
 const request: AxiosInstance = axios.create({
-  baseURL: '',
+  baseURL: API_BASE_URL,
   timeout: 90000,
   headers: {
     'Content-Type': 'application/json',
@@ -75,7 +86,7 @@ request.interceptors.response.use(
 
         try {
           // 调用刷新Token接口
-          const response = await axios.post('/api/v1/auth/refresh', {}, {
+          const response = await axios.post(withApiBase('/api/v1/auth/refresh'), {}, {
             headers: {
               Authorization: `Bearer ${refreshToken}`
             }

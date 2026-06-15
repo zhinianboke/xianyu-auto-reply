@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { motion } from 'framer-motion'
 import { Search, ShoppingBag, ExternalLink, MapPin, Heart } from 'lucide-react'
 import { searchItems, SearchResultItem } from '@/api/search'
 import { useUIStore } from '@/store/uiStore'
@@ -61,9 +60,7 @@ export function ItemSearch() {
       </div>
 
       {/* Search Bar */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
+      <div
         className="vben-card"
       >
         <div className="vben-card-body">
@@ -87,25 +84,19 @@ export function ItemSearch() {
             </button>
           </form>
         </div>
-      </motion.div>
+      </div>
 
       {/* Results */}
       {results.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
+        <div
+        className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
         >
           {results.map((item, index) => (
-            <motion.a
+            <a
               key={item.item_id || index}
               href={item.item_url || `https://www.goofish.com/item?id=${item.item_id}`}
               target="_blank"
               rel="noopener noreferrer"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: index * 0.03 }}
               className="vben-card group hover:shadow-lg transition-all duration-300 overflow-hidden"
             >
               {/* 商品图片 */}
@@ -166,9 +157,9 @@ export function ItemSearch() {
                   </div>
                 )}
               </div>
-            </motion.a>
+            </a>
           ))}
-        </motion.div>
+        </div>
       )}
 
       {/* Empty State */}

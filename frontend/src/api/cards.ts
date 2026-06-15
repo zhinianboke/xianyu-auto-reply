@@ -32,6 +32,7 @@ export interface CardData {
   data_content?: string
   image_url?: string
   image_urls?: string[]  // 多图片URL列表，最多3张
+  data_total_count?: number
   created_at?: string
   updated_at?: string
   user_id?: number
@@ -50,6 +51,8 @@ export interface CardQueryParams {
 
 // 卡券分页响应
 export interface CardPaginatedResult {
+  success?: boolean
+  data?: CardData[]
   list: CardData[]
   total: number
   page: number
@@ -66,7 +69,14 @@ export const getCards = async (params?: CardQueryParams): Promise<CardPaginatedR
   if (params?.type) query.set('type', params.type)
   const qs = query.toString()
   const url = qs ? `${CARD_PREFIX}?${qs}` : CARD_PREFIX
-  return get<CardPaginatedResult>(url)
+  const result = await get<CardPaginatedResult>(url)
+  const list = result.list || result.data || []
+  return {
+    ...result,
+    success: true,
+    data: list,
+    list,
+  }
 }
 
 // 获取全部卡券（不分页，用于关联弹窗等场景）

@@ -1,4 +1,4 @@
-import { get, post, put } from '@/utils/request'
+import { get, post, put, withApiBase } from '@/utils/request'
 import type {
   ApiResponse,
   AuthFooterAdSettings,
@@ -284,6 +284,24 @@ export const testEmailSend = async (email: string): Promise<ApiResponse> => {
   return post(`${SYSTEM_SETTINGS_PREFIX}/test-email?email=${encodeURIComponent(email)}`)
 }
 
+export const checkDefaultPassword = async (): Promise<ApiResponse<{ is_default: boolean }> & { using_default: boolean }> => {
+  const result = await get<ApiResponse<{ is_default: boolean }> & { using_default?: boolean; is_default?: boolean }>('/api/v1/auth/check-default-password')
+  const usingDefault = Boolean(result.using_default ?? result.data?.is_default ?? result.is_default)
+  return { ...result, using_default: usingDefault }
+}
+
+export const reloadSystemCache = (): Promise<ApiResponse> => {
+  return post('/admin/reload-cache')
+}
+
+export const runDatabaseBackup = (): Promise<ApiResponse> => {
+  return post('/admin/backup/run')
+}
+
+export const testAIConnection = (cookieId: string): Promise<ApiResponse> => {
+  return post(`/api/v1/ai-reply-test/${cookieId}`)
+}
+
 // ========== 代理设置（独立保存） ==========
 
 export interface ProxySettingsPayload {
@@ -390,7 +408,7 @@ export const uploadDatabaseBackup = async (file: File): Promise<ApiResponse> => 
 // 导出用户备份
 export const exportUserBackup = (): string => {
   const token = localStorage.getItem('auth_token')
-  return `/api/v1/backup/export?token=${token}`
+  return withApiBase(`/api/v1/backup/export?token=${token}`)
 }
 
 // 导入用户备份
