@@ -10,7 +10,7 @@
  * 6. 支持清空日志
  */
 import { useState, useEffect } from 'react'
-import { ShieldAlert, RefreshCw, Trash2, ChevronLeft, ChevronRight, Loader2, Calendar } from 'lucide-react'
+import { ShieldAlert, RefreshCw, Trash2, ChevronLeft, ChevronRight, Loader2, Calendar, Info } from 'lucide-react'
 import { getRiskLogs, clearRiskLogs, testRemoteSliderSolve, getRemoteCaptchaConfig, saveRemoteCaptchaConfig, type RiskLog } from '@/api/admin'
 import { getAccountDetails } from '@/api/accounts'
 import { useUIStore } from '@/store/uiStore'
@@ -193,6 +193,14 @@ export function RiskLogs() {
       {user?.is_admin && (
       <div className="vben-card">
         <div className="vben-card-body">
+          {/* 配置说明提示条 */}
+          <div className="flex items-start gap-2 mb-4 px-3 py-2.5 rounded-lg bg-blue-50 dark:bg-blue-500/10 border border-blue-100 dark:border-blue-500/20">
+            <Info className="w-4 h-4 mt-0.5 shrink-0 text-blue-500 dark:text-blue-400" />
+            <div className="text-xs leading-relaxed text-blue-700 dark:text-blue-300 space-y-0.5">
+              <p>填写 <span className="font-medium">https://xy-wss.zhinianboke.com/api/v1/captcha/slider-solve</span> 使用远程服务过滑块验证，提高成功率。</p>
+              <p>秘钥请在 <span className="font-medium">xy.zhinianboke.com</span> 注册账号后，于个人设置中获取。</p>
+            </div>
+          </div>
           <div className="flex flex-wrap items-end gap-4">
             <div className="input-group flex-1 min-w-[260px]">
               <label className="input-label">远程服务URL</label>
