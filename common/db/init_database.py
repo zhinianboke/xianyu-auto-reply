@@ -262,6 +262,27 @@ class DatabaseInitializer:
             True,
             "定时将超过阈值仍处于 unknown 的自动发货消息日志标记为 timeout",
         ),
+        (
+            "listing_monitor",
+            "商品监控任务",
+            60,
+            True,
+            "定时执行商品监控：按监控类型调用闲鱼搜索接口采集商品并入库，每次记录监控日志",
+        ),
+        (
+            "seller_fill",
+            "采集商品卖家ID补全",
+            60,
+            True,
+            "定时查询采集商品中卖家ID为空的数据，调用商品详情接口补全卖家真实ID与详情",
+        ),
+        (
+            "dm_send",
+            "采集商品发送私信",
+            60,
+            True,
+            "定时查询卖家ID已补全且未私信的采集商品，用监控任务配置的私信账号发起私信",
+        ),
     )
     
     # ========== 所有数据表的DDL定义 ==========
@@ -1305,6 +1326,89 @@ class DatabaseInitializer:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品发布日志表';
         """,
 
+        # 45.1 商品上新监控任务表
+        "xy_listing_monitor_tasks": """
+            CREATE TABLE IF NOT EXISTS xy_listing_monitor_tasks (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                owner_id BIGINT DEFAULT NULL COMMENT '归属用户ID，用于多用户数据隔离',
+                monitor_type VARCHAR(20) NOT NULL DEFAULT 'listing' COMMENT '监控类型：listing-上新监控，price_drop-降价监控',
+                keyword VARCHAR(200) NOT NULL COMMENT '商品监控关键字',
+                price_min DECIMAL(12,2) DEFAULT NULL COMMENT '商品价格区间最低值',
+                price_max DECIMAL(12,2) DEFAULT NULL COMMENT '商品价格区间最高值',
+                interval_minutes INT NOT NULL DEFAULT 5 COMMENT '任务执行间隔（分钟）',
+                collect_pages INT NOT NULL DEFAULT 1 COMMENT '每次采集页数',
+                account_ids JSON DEFAULT NULL COMMENT '关联的闲鱼账号ID列表（JSON数组）',
+                dm_account_id VARCHAR(80) DEFAULT NULL COMMENT '私信账号ID（单选）',
+                dm_content VARCHAR(1000) DEFAULT NULL COMMENT '私信内容（填写私信账号后必填）',
+                order_account_id VARCHAR(80) DEFAULT NULL COMMENT '下单账号ID（单选）',
+                is_enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用监控任务',
+                is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）',
+                last_run_at DATETIME DEFAULT NULL COMMENT '最近一次执行时间',
+                created_by BIGINT DEFAULT NULL COMMENT '创建人用户ID',
+                remark VARCHAR(500) DEFAULT NULL COMMENT '备注',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX idx_lmt_owner_enabled (owner_id, is_enabled),
+                INDEX idx_lmt_owner_deleted (owner_id, is_deleted),
+                INDEX idx_lmt_created_at (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品上新监控任务表';
+        """,
+
+        # 45.2 商品监控采集商品信息表
+        "xy_listing_monitor_items": """
+            CREATE TABLE IF NOT EXISTS xy_listing_monitor_items (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                monitor_task_id BIGINT NOT NULL COMMENT '关联的商品监控任务ID',
+                owner_id BIGINT DEFAULT NULL COMMENT '归属用户ID',
+                item_id VARCHAR(64) NOT NULL COMMENT '闲鱼商品ID',
+                title VARCHAR(500) DEFAULT NULL COMMENT '商品标题',
+                price VARCHAR(32) DEFAULT NULL COMMENT '商品价格（展示文本）',
+                area VARCHAR(120) DEFAULT NULL COMMENT '商品所在地区',
+                pic_url VARCHAR(1000) DEFAULT NULL COMMENT '商品主图URL',
+                seller_id VARCHAR(120) DEFAULT NULL COMMENT '卖家ID（搜索返回，可能为加密串）',
+                seller_user_id VARCHAR(64) DEFAULT NULL COMMENT '卖家真实用户ID（商品详情接口补全）',
+                seller_nick VARCHAR(120) DEFAULT NULL COMMENT '卖家昵称',
+                want_count VARCHAR(32) DEFAULT NULL COMMENT '想要数',
+                publish_time DATETIME DEFAULT NULL COMMENT '商品发布时间',
+                target_url VARCHAR(1000) DEFAULT NULL COMMENT '商品详情跳转URL',
+                raw_json TEXT DEFAULT NULL COMMENT '商品原始数据（搜索结果项JSON，兜底）',
+                detail_json MEDIUMTEXT DEFAULT NULL COMMENT '商品详情数据（详情接口返回JSON）',
+                is_dm_sent TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已私信',
+                is_ordered TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已下单',
+                last_seen_at DATETIME DEFAULT NULL COMMENT '最近一次采集到的时间',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                UNIQUE KEY uk_lmi_task_item (monitor_task_id, item_id),
+                INDEX idx_lmi_task (monitor_task_id),
+                INDEX idx_lmi_owner (owner_id),
+                INDEX idx_lmi_publish_time (publish_time)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品监控采集商品信息表';
+        """,
+
+        # 45.3 商品监控执行日志表
+        "xy_listing_monitor_logs": """
+            CREATE TABLE IF NOT EXISTS xy_listing_monitor_logs (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                monitor_task_id BIGINT NOT NULL COMMENT '关联的商品监控任务ID',
+                owner_id BIGINT DEFAULT NULL COMMENT '归属用户ID',
+                monitor_type VARCHAR(20) DEFAULT NULL COMMENT '监控类型：listing-上新监控，price_drop-降价监控',
+                keyword VARCHAR(200) DEFAULT NULL COMMENT '监控关键字',
+                account_id VARCHAR(80) DEFAULT NULL COMMENT '本次实际使用的主账号ID',
+                used_account_ids JSON DEFAULT NULL COMMENT '本次执行实际使用过的账号ID列表（可能多个）',
+                pages INT NOT NULL DEFAULT 0 COMMENT '本次采集页数',
+                fetched_count INT NOT NULL DEFAULT 0 COMMENT '本次获取的商品数',
+                inserted_count INT NOT NULL DEFAULT 0 COMMENT '本次新增的商品数',
+                updated_count INT NOT NULL DEFAULT 0 COMMENT '本次更新的商品数',
+                status VARCHAR(20) NOT NULL DEFAULT 'success' COMMENT '执行状态：success/failed/partial',
+                message VARCHAR(1000) DEFAULT NULL COMMENT '执行结果说明',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX idx_lml_task (monitor_task_id),
+                INDEX idx_lml_owner (owner_id),
+                INDEX idx_lml_created_at (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品监控执行日志表';
+        """,
+
         # 46. 共享扫码登录会话表
         "xy_shared_scan_sessions": """
             CREATE TABLE IF NOT EXISTS xy_shared_scan_sessions (
@@ -1413,6 +1517,22 @@ class DatabaseInitializer:
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
     COLUMN_MIGRATIONS = {
+        "xy_listing_monitor_tasks": [
+            ("monitor_type", "VARCHAR(20) NOT NULL DEFAULT 'listing' COMMENT '监控类型：listing-上新监控，price_drop-降价监控'", "owner_id"),
+            ("collect_pages", "INT NOT NULL DEFAULT 1 COMMENT '每次采集页数'", "interval_minutes"),
+            ("dm_account_id", "VARCHAR(80) DEFAULT NULL COMMENT '私信账号ID（单选）'", "account_ids"),
+            ("dm_content", "VARCHAR(1000) DEFAULT NULL COMMENT '私信内容（填写私信账号后必填）'", "dm_account_id"),
+            ("order_account_id", "VARCHAR(80) DEFAULT NULL COMMENT '下单账号ID（单选）'", "dm_content"),
+        ],
+        "xy_listing_monitor_logs": [
+            ("used_account_ids", "JSON DEFAULT NULL COMMENT '本次执行实际使用过的账号ID列表（可能多个）'", "account_id"),
+        ],
+        "xy_listing_monitor_items": [
+            ("is_dm_sent", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已私信'", "raw_json"),
+            ("is_ordered", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已下单'", "is_dm_sent"),
+            ("seller_user_id", "VARCHAR(64) DEFAULT NULL COMMENT '卖家真实用户ID（商品详情接口补全）'", "seller_id"),
+            ("detail_json", "MEDIUMTEXT DEFAULT NULL COMMENT '商品详情数据（详情接口返回JSON）'", "raw_json"),
+        ],
         "xy_auto_reply_message_logs": [
             ("send_status", "VARCHAR(20) NOT NULL DEFAULT 'unknown' COMMENT '发送状态：success-发送成功/failed-发送失败/unknown-未知(无响应)/timeout-超时(无响应超过阈值)'", "error_message"),
             ("send_fail_reason", "TEXT COMMENT '发送失败原因（如被安全拦截的明文文案）'", "send_status"),
