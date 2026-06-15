@@ -2118,7 +2118,7 @@ export function Accounts() {
               <RefreshCw className="w-6 h-6 animate-spin text-blue-500" />
             </div>
           ) : (
-            <table className="table-ios min-w-[1400px]">
+            <table className="table-ios min-w-[1600px]">
               <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
                 <tr>
                   <th className="w-10">
@@ -2138,7 +2138,7 @@ export function Accounts() {
                   <th className="whitespace-nowrap min-w-[120px]">状态</th>
                   <th className="whitespace-nowrap min-w-[90px]">在线状态</th>
                   <th className="whitespace-nowrap min-w-[90px]">配置密码</th>
-                  <th className="whitespace-nowrap min-w-[280px]">功能开关</th>
+                  <th className="whitespace-nowrap min-w-[340px]">功能开关</th>
                   <th className="whitespace-nowrap min-w-[90px]">暂停时间</th>
                   <th className="whitespace-nowrap min-w-[160px] sticky right-0 bg-slate-50 dark:bg-slate-800 z-20">操作</th>
                 </tr>
