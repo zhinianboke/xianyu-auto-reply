@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Header
 from pydantic import BaseModel
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,10 +19,17 @@ from common.models.user import User
 from common.models.announcement import Announcement
 from common.schemas.common import ApiResponse
 from common.utils.text_utils import escape_xss
+from app.services.remote_content_service import (
+    fetch_remote_public_announcements,
+    is_remote_fetch_request,
+)
 
 from common.utils.time_utils import safe_isoformat
 from common.utils.pagination import execute_paginated_with_filters
 router = APIRouter(tags=["announcements"])
+
+# 顶部公告展示的最大条数
+_PUBLIC_ANNOUNCEMENT_LIMIT = 10
 
 
 class AnnouncementCreate(BaseModel):
@@ -35,6 +42,55 @@ class AnnouncementUpdate(BaseModel):
     """更新公告请求"""
     title: str
     content: str
+
+
+def _serialize_announcement(ann: Announcement) -> dict:
+    """序列化本地公告对象（来源标记为 local）"""
+    return {
+        "id": ann.id,
+        "title": ann.title,
+        "content": ann.content,
+        "source": "local",
+        "created_at": safe_isoformat(ann.created_at),
+        "updated_at": safe_isoformat(ann.updated_at),
+    }
+
+
+@router.get("/public", response_model=ApiResponse)
+async def get_public_announcements(
+    user_agent: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    获取公告列表（公开接口，用于系统顶部公告展示）
+
+    返回内容 = 本地最新公告 + 远程官方服务器的公开公告（与桌面版同源），
+    远程公告以 source=remote 标记、ID 取负，避免与本地公告冲突。
+    远程拉取失败时静默降级，仅返回本地公告。
+    """
+    # 查询本地最新公告（过滤已删除）
+    result = await db.execute(
+        select(Announcement)
+        .where(Announcement.is_deleted == False)
+        .order_by(desc(Announcement.created_at))
+        .limit(_PUBLIC_ANNOUNCEMENT_LIMIT)
+    )
+    announcements = result.scalars().all()
+
+    items = []
+    # 本地去重键（标题, 内容），用于过滤远程重复公告
+    dedup_keys: set[tuple[str | None, str | None]] = set()
+    for ann in announcements:
+        items.append(_serialize_announcement(ann))
+        dedup_keys.add((ann.title, ann.content))
+
+    # 合并远程官方公告（失败时返回空，不影响本地展示）；
+    # 若请求本身来自服务器间远程拉取，则不再二次拉取，避免递归自调用
+    if not is_remote_fetch_request(user_agent):
+        remote_items = await fetch_remote_public_announcements(local_dedup_keys=dedup_keys)
+        items.extend(remote_items)
+
+    return ApiResponse(success=True, data={"items": items})
 
 
 @router.get("", response_model=ApiResponse)
@@ -54,13 +110,7 @@ async def get_announcements(
     
     items = []
     for ann in announcements:
-        items.append({
-            "id": ann.id,
-            "title": ann.title,
-            "content": ann.content,
-            "created_at": safe_isoformat(ann.created_at),
-            "updated_at": safe_isoformat(ann.updated_at),
-        })
+        items.append(_serialize_announcement(ann))
     
     return ApiResponse(
         success=True,

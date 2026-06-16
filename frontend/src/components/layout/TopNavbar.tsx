@@ -4,7 +4,7 @@ import { Sun, Moon, LogOut, ChevronDown, Megaphone, X, Eye, UserCog } from 'luci
 import { useAuthStore } from '@/store/authStore'
 import { cn } from '@/utils/cn'
 import { initializeThemeMode, toggleThemeMode } from '@/utils/theme'
-import { getAnnouncements } from '@/api/announcements'
+import { getPublicAnnouncements } from '@/api/announcements'
 import type { Announcement } from '@/api/announcements'
 
 interface TopNavbarProps {
@@ -31,7 +31,7 @@ export function TopNavbar({ systemName = '闲鱼管理系统' }: TopNavbarProps)
     if (!_hasHydrated || !isAuthenticated || !token) return
     const loadAnnouncements = async () => {
       try {
-        const result = await getAnnouncements({ page: 1, page_size: 10 })
+        const result = await getPublicAnnouncements()
         if (result.success && result.data?.items) {
           setAnnouncements(result.data.items)
         }
@@ -86,6 +86,9 @@ export function TopNavbar({ systemName = '闲鱼管理系统' }: TopNavbarProps)
                 key={currentIndex}
                 className="announcement-vertical-scroll text-sm truncate"
               >
+                {currentAnnouncement.source === 'remote' && (
+                  <span className="inline-flex flex-shrink-0 px-1.5 py-0.5 mr-1.5 text-[10px] leading-none rounded bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300 align-middle">官方</span>
+                )}
                 <span className="font-medium text-orange-600 dark:text-orange-400">
                   {currentAnnouncement.title}
                 </span>
@@ -217,7 +220,12 @@ export function TopNavbar({ systemName = '闲鱼管理系统' }: TopNavbarProps)
                       announcements.map((ann) => (
                         <tr key={ann.id}>
                           <td className="font-medium text-slate-900 dark:text-slate-100">
-                            {ann.title}
+                            <span className="inline-flex items-center gap-1.5">
+                              {ann.source === 'remote' && (
+                                <span className="flex-shrink-0 px-1.5 py-0.5 text-[10px] leading-none rounded bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300">官方</span>
+                              )}
+                              {ann.title}
+                            </span>
                           </td>
                           <td className="text-slate-500 dark:text-slate-400">
                             {new Date(ann.created_at).toLocaleString('zh-CN')}

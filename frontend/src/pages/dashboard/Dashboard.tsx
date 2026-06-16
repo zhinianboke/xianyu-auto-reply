@@ -318,8 +318,11 @@ export function Dashboard() {
                     )}
                     {/* 底部标题和正文 */}
                     <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-3">
-                      <h3 className="text-white font-medium text-sm truncate">
-                        {adsData.carousel[carouselIndex]?.title}
+                      <h3 className="text-white font-medium text-sm truncate flex items-center gap-1.5">
+                        {adsData.carousel[carouselIndex]?.source === 'remote' && (
+                          <span className="flex-shrink-0 px-1.5 py-0.5 text-[10px] leading-none rounded bg-blue-500/90 text-white">官方</span>
+                        )}
+                        <span className="truncate">{adsData.carousel[carouselIndex]?.title}</span>
                       </h3>
                       {adsData.carousel[carouselIndex]?.content && (
                         <p className="text-white/80 text-xs mt-1 line-clamp-2">
@@ -376,6 +379,9 @@ export function Dashboard() {
                         rel="noopener noreferrer"
                         className="flex-1 text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline truncate flex items-center gap-1"
                       >
+                        {ad.source === 'remote' && (
+                          <span className="flex-shrink-0 px-1.5 py-0.5 text-[10px] leading-none rounded bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300">官方</span>
+                        )}
                         {ad.title}
                         <ExternalLink className="w-3 h-3 flex-shrink-0" />
                       </a>

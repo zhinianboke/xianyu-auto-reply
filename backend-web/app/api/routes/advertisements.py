@@ -12,7 +12,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from dateutil.relativedelta import relativedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Header
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +25,10 @@ from common.models.user_setting import UserSetting
 from common.schemas.common import ApiResponse
 from common.utils.text_utils import escape_xss
 from app.services.alipay_service import AlipayService
+from app.services.remote_content_service import (
+    fetch_remote_public_ads,
+    is_remote_fetch_request,
+)
 
 from common.utils.time_utils import safe_isoformat
 from common.utils.pagination import execute_paginated_with_filters
@@ -42,34 +46,48 @@ router = APIRouter(tags=["advertisements"])
 
 @router.get("/public", response_model=ApiResponse)
 async def get_public_ads(
+    user_agent: str | None = Header(default=None),
     db: AsyncSession = Depends(get_db_session),
 ):
     """
     获取已复核的广告列表（公开接口，用于仪表盘展示）
-    返回未过期且已复核的广告，按类型分组
+
+    返回内容 = 本地已复核且未过期的广告 + 远程官方服务器的公开广告（与桌面版同源），
+    远程广告以 source=remote 标记、ID 取负，避免与本地广告冲突。
+    远程拉取失败时静默降级，仅返回本地广告。
     """
     today = date.today()
-    
-    # 查询已复核且未过期的广告
+
+    # 查询已复核且未过期的本地广告
     query = select(Advertisement).where(
         Advertisement.status == AdStatus.APPROVED,
         (Advertisement.expire_date >= today) | (Advertisement.expire_date.is_(None))
     ).order_by(desc(Advertisement.created_at))
-    
+
     result = await db.execute(query)
     ads = result.scalars().all()
-    
-    # 按类型分组
+
+    # 本地广告按类型分组
     carousel_ads = []
     text_ads = []
-    
+    # 本地去重键（标题, 链接），用于过滤远程重复广告
+    dedup_keys: set[tuple[str | None, str | None]] = set()
+
     for ad in ads:
         ad_data = serialize_ad(ad)
+        dedup_keys.add((ad.title, ad.link))
         if ad.ad_type == AdType.CAROUSEL:
             carousel_ads.append(ad_data)
         else:
             text_ads.append(ad_data)
-    
+
+    # 合并远程官方广告（失败时返回空，不影响本地展示）；
+    # 若请求本身来自服务器间远程拉取，则不再二次拉取，避免递归自调用
+    if not is_remote_fetch_request(user_agent):
+        remote = await fetch_remote_public_ads(local_dedup_keys=dedup_keys)
+        carousel_ads.extend(remote.get("carousel", []))
+        text_ads.extend(remote.get("text", []))
+
     return ApiResponse(
         success=True,
         data={
@@ -93,6 +111,7 @@ def serialize_ad(ad: Advertisement) -> dict:
         "months": ad.months,
         "total_amount": ad.total_amount,
         "status": ad.status.value if ad.status else "unpaid",
+        "source": "local",
         "created_at": safe_isoformat(ad.created_at),
         "updated_at": safe_isoformat(ad.updated_at),
     }
