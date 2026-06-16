@@ -209,6 +209,19 @@ export const clearRiskLogs = async (cookieId?: string): Promise<ApiResponse> => 
   return del(`${ADMIN_PREFIX}/risk-control-logs${query}`)
 }
 
+// 当日风控成功率
+export interface RiskTodaySuccessRate {
+  date: string
+  total: number
+  success: number
+  rate: number
+}
+
+// 获取当日风控成功率（当日成功记录数 / 当日总记录数）
+export const getRiskTodaySuccessRate = async (): Promise<{ success: boolean; data?: RiskTodaySuccessRate; message?: string }> => {
+  return get<{ success: boolean; data?: RiskTodaySuccessRate; message?: string }>(`${API_PREFIX}/risk-control-logs/today-success-rate`)
+}
+
 // ========== 账号登录日志 ==========
 
 export interface AccountLoginLog {

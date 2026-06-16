@@ -10,8 +10,8 @@
  * 6. 支持清空日志
  */
 import { useState, useEffect } from 'react'
-import { ShieldAlert, RefreshCw, Trash2, ChevronLeft, ChevronRight, Loader2, Calendar, Info } from 'lucide-react'
-import { getRiskLogs, clearRiskLogs, testRemoteSliderSolve, getRemoteCaptchaConfig, saveRemoteCaptchaConfig, type RiskLog } from '@/api/admin'
+import { ShieldAlert, RefreshCw, Trash2, ChevronLeft, ChevronRight, Loader2, Calendar, Info, TrendingUp } from 'lucide-react'
+import { getRiskLogs, clearRiskLogs, testRemoteSliderSolve, getRemoteCaptchaConfig, saveRemoteCaptchaConfig, getRiskTodaySuccessRate, type RiskLog, type RiskTodaySuccessRate } from '@/api/admin'
 import { getAccountDetails } from '@/api/accounts'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
@@ -44,6 +44,9 @@ export function RiskLogs() {
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [total, setTotal] = useState(0)
+
+  // 当日成功率
+  const [todayRate, setTodayRate] = useState<RiskTodaySuccessRate | null>(null)
 
   // 清空确认弹窗状态
   const [clearConfirm, setClearConfirm] = useState(false)
@@ -84,6 +87,19 @@ export function RiskLogs() {
       addToast({ type: 'error', message: getApiErrorMessage(error, '加载风控日志失败') })
     } finally {
       setLoading(false)
+    }
+  }
+
+  // 加载当日成功率（独立于筛选条件，统计北京时间当天）
+  const loadTodayRate = async () => {
+    if (!_hasHydrated || !isAuthenticated || !token) return
+    try {
+      const res = await getRiskTodaySuccessRate()
+      if (res.success && res.data) {
+        setTodayRate(res.data)
+      }
+    } catch {
+      // 成功率加载失败不阻断页面
     }
   }
 
@@ -149,12 +165,14 @@ export function RiskLogs() {
     if (!_hasHydrated || !isAuthenticated || !token) return
     loadAccounts()
     loadLogs(1, pageSize)
+    loadTodayRate()
     loadRemoteConfig()
   }, [_hasHydrated, isAuthenticated, token])
 
   // 查询按钮点击
   const handleSearch = () => {
     loadLogs(1, pageSize)
+    loadTodayRate()
   }
 
   const handlePageChange = (nextPage: number) => {
@@ -175,6 +193,7 @@ export function RiskLogs() {
       addToast({ type: 'success', message: '日志已清空' })
       setClearConfirm(false)
       loadLogs(1, pageSize)
+      loadTodayRate()
     } catch (error) {
       addToast({ type: 'error', message: getApiErrorMessage(error, '清空失败') })
     } finally {
@@ -260,7 +279,7 @@ export function RiskLogs() {
               清空日志
             </button>
           ) : null}
-          <button onClick={() => loadLogs()} disabled={loading} className="btn-ios-secondary ">
+          <button onClick={() => { loadLogs(); loadTodayRate() }} disabled={loading} className="btn-ios-secondary ">
             {loading ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
@@ -338,6 +357,32 @@ export function RiskLogs() {
               <Calendar className="w-4 h-4" />
               查询
             </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 当日成功率 */}
+      <div className="vben-card">
+        <div className="vben-card-body">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center shrink-0">
+                <TrendingUp className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+              </div>
+              <div>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  当日成功率{todayRate?.date ? `（${todayRate.date}）` : ''}
+                </p>
+                <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+                  {todayRate ? `${todayRate.rate}%` : '-'}
+                </p>
+              </div>
+            </div>
+            <div className="text-sm text-slate-500 dark:text-slate-400 sm:ml-auto">
+              当日成功 <span className="font-medium text-slate-700 dark:text-slate-200">{todayRate?.success ?? '-'}</span> 条
+              {' / '}
+              当日共 <span className="font-medium text-slate-700 dark:text-slate-200">{todayRate?.total ?? '-'}</span> 条
+            </div>
           </div>
         </div>
       </div>

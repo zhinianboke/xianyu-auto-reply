@@ -45,3 +45,17 @@ async def list_risk_logs(
         return {"success": True, "data": items, "total": total, "limit": limit, "offset": offset}
     except Exception as exc:
         return {"success": False, "message": f"加载风控日志失败: {str(exc)}", "data": [], "total": 0, "limit": limit, "offset": offset}
+
+
+@router.get("/risk-control-logs/today-success-rate")
+async def get_today_success_rate(
+    current_user: User = Depends(deps.get_current_active_user),
+    risk_log_service: RiskControlLogService = Depends(deps.get_risk_log_service),
+) -> dict:
+    """查询当日（北京时间）风控处理成功率，普通用户只统计自己的数据，管理员统计全部数据。"""
+    try:
+        owner_id, _ = resolve_owner_scope(current_user)
+        data = await risk_log_service.get_today_success_rate(owner_id=owner_id)
+        return {"success": True, "data": data}
+    except Exception as exc:
+        return {"success": False, "message": f"加载当日成功率失败: {str(exc)}", "data": None}

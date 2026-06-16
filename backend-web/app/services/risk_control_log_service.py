@@ -13,13 +13,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.risk_control_log import XYRiskControlLog
 from common.utils.pagination import execute_paginated_with_filters
 
 
-from common.utils.time_utils import safe_isoformat
+from common.utils.time_utils import safe_isoformat, get_beijing_now_naive
 class RiskControlLogService:
     """Read-only access to risk control logs."""
 
@@ -116,3 +117,47 @@ class RiskControlLogService:
             for log in logs
         ]
         return items, total
+
+    async def get_today_success_rate(self, *, owner_id: int | None = None) -> dict:
+        """
+        统计当日（北京时间）风控处理成功率
+
+        成功率 = 当日处理成功记录数 / 当日总记录数。
+        普通用户仅统计自己的账号数据，管理员统计全部数据（由 owner_id 控制）。
+
+        Args:
+            owner_id: 所有者ID筛选，None 表示不限制（管理员）
+
+        Returns:
+            {"date": "YYYY-MM-DD", "total": 总数, "success": 成功数, "rate": 成功率(%)}
+        """
+        now = get_beijing_now_naive()
+        start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_dt = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+        # 当日范围过滤条件（成功数与总数共用）
+        base_filters = [
+            XYRiskControlLog.created_at >= start_dt,
+            XYRiskControlLog.created_at <= end_dt,
+        ]
+        if owner_id is not None:
+            base_filters.append(XYRiskControlLog.owner_id == owner_id)
+
+        total_stmt = select(func.count()).select_from(XYRiskControlLog).where(*base_filters)
+        total = (await self.session.execute(total_stmt)).scalar() or 0
+
+        success_stmt = (
+            select(func.count())
+            .select_from(XYRiskControlLog)
+            .where(*base_filters, XYRiskControlLog.processing_status == "success")
+        )
+        success = (await self.session.execute(success_stmt)).scalar() or 0
+
+        rate = round(success / total * 100, 2) if total > 0 else 0.0
+
+        return {
+            "date": start_dt.strftime("%Y-%m-%d"),
+            "total": total,
+            "success": success,
+            "rate": rate,
+        }
