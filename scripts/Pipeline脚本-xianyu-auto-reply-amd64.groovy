@@ -102,6 +102,50 @@ pipeline {
             }
         }
 
+        stage('预拉取基础镜像') {
+            steps {
+                // 关键：legacy builder（DOCKER_BUILDKIT=0）在 docker build --platform 时会解析
+                //       多平台 index，并尝试拉取官方镜像携带的 provenance/SBOM 证明清单
+                //       （media type application/vnd.in-toto+json）。国内镜像加速源通常不提供
+                //       这些证明 blob，导致 "could not fetch content descriptor ... not found" 报错。
+                //       而普通 docker pull 只解析当前主机架构(amd64)清单，不会拉取证明清单，因此不受影响。
+                //       这里先把所有基础镜像 pull 到本地并打成官方 tag，后续 FROM 直接命中本地缓存，
+                //       绕开会触发证明清单解析的 index 路径。
+                echo '预拉取基础镜像（绕开 legacy builder 证明清单拉取 bug）...'
+                sh '''
+                    set -e
+
+                    # 镜像加速源前缀（官方镜像位于 library/ 命名空间），最后空字符串为 docker.io 直连兜底
+                    MIRRORS="docker.1ms.run/library/ docker.xuanyuan.me/library/ dockerpull.com/library/ "
+
+                    pull_base() {
+                        IMG="$1"   # 形如 node:18-alpine
+                        for M in ${MIRRORS}; do
+                            SRC="${M}${IMG}"
+                            echo "尝试拉取基础镜像: ${SRC}"
+                            if docker pull "${SRC}"; then
+                                # 若走加速源拉取成功，重命名为官方名，确保 Dockerfile 中 FROM 能命中本地缓存
+                                if [ "${SRC}" != "${IMG}" ]; then
+                                    docker tag "${SRC}" "${IMG}"
+                                fi
+                                echo "✓ 基础镜像就绪: ${IMG}"
+                                return 0
+                            fi
+                            echo "✗ 拉取失败，切换下一个加速源..."
+                        done
+                        echo "✗ 基础镜像拉取失败: ${IMG}"
+                        return 1
+                    }
+
+                    # 本项目所有 Dockerfile 用到的基础镜像
+                    pull_base "node:18-alpine"
+                    pull_base "nginx:alpine"
+                    pull_base "python:3.11-slim"
+                '''
+                echo '✓ 基础镜像预拉取完成！'
+            }
+        }
+
         stage('构建并推送前端镜像') {
             steps {
                 echo "开始构建前端镜像（${PLATFORM}）..."
