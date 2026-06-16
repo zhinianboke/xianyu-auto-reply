@@ -361,27 +361,43 @@ export function RiskLogs() {
         </div>
       </div>
 
-      {/* 当日成功率 */}
+      {/* 当日成功率（总体 / 本机 / 远程，紧凑展示） */}
       <div className="vben-card">
-        <div className="vben-card-body">
-          <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-11 h-11 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center shrink-0">
-                <TrendingUp className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-              </div>
-              <div>
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  当日成功率{todayRate?.date ? `（${todayRate.date}）` : ''}
-                </p>
-                <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
-                  {todayRate ? `${todayRate.rate}%` : '-'}
-                </p>
-              </div>
+        <div className="vben-card-body !py-3">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+            <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+              <TrendingUp className="w-4 h-4 text-emerald-500 dark:text-emerald-400" />
+              <span>当日成功率{todayRate?.date ? `（${todayRate.date}）` : ''}</span>
             </div>
-            <div className="text-sm text-slate-500 dark:text-slate-400 sm:ml-auto">
-              当日成功 <span className="font-medium text-slate-700 dark:text-slate-200">{todayRate?.success ?? '-'}</span> 条
-              {' / '}
-              当日共 <span className="font-medium text-slate-700 dark:text-slate-200">{todayRate?.total ?? '-'}</span> 条
+            {/* 总体 */}
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-sm text-slate-500 dark:text-slate-400">总体</span>
+              <span className="text-lg font-bold text-emerald-600 dark:text-emerald-400">
+                {todayRate ? `${todayRate.rate}%` : '-'}
+              </span>
+              <span className="text-xs text-slate-400 dark:text-slate-500">
+                ({todayRate?.success ?? '-'}/{todayRate?.total ?? '-'})
+              </span>
+            </div>
+            {/* 本机 */}
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-sm text-slate-500 dark:text-slate-400">本机</span>
+              <span className="text-lg font-bold text-blue-600 dark:text-blue-400">
+                {todayRate ? `${todayRate.local_rate}%` : '-'}
+              </span>
+              <span className="text-xs text-slate-400 dark:text-slate-500">
+                ({todayRate?.local_success ?? '-'}/{todayRate?.local_total ?? '-'})
+              </span>
+            </div>
+            {/* 远程 */}
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-sm text-slate-500 dark:text-slate-400">远程</span>
+              <span className="text-lg font-bold text-orange-600 dark:text-orange-400">
+                {todayRate ? `${todayRate.remote_rate}%` : '-'}
+              </span>
+              <span className="text-xs text-slate-400 dark:text-slate-500">
+                ({todayRate?.remote_success ?? '-'}/{todayRate?.remote_total ?? '-'})
+              </span>
             </div>
           </div>
         </div>

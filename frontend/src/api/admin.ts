@@ -209,12 +209,18 @@ export const clearRiskLogs = async (cookieId?: string): Promise<ApiResponse> => 
   return del(`${ADMIN_PREFIX}/risk-control-logs${query}`)
 }
 
-// 当日风控成功率
+// 当日风控成功率（含总体 / 本机 / 远程三个维度）
 export interface RiskTodaySuccessRate {
   date: string
   total: number
   success: number
   rate: number
+  local_total: number
+  local_success: number
+  local_rate: number
+  remote_total: number
+  remote_success: number
+  remote_rate: number
 }
 
 // 获取当日风控成功率（当日成功记录数 / 当日总记录数）
