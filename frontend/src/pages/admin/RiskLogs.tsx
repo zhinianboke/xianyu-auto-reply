@@ -37,6 +37,9 @@ export function RiskLogs() {
   // 状态筛选
   const [selectedStatus, setSelectedStatus] = useState('')
 
+  // 调用类型筛选（''-全部 / local-本机 / remote-远程）
+  const [selectedCallType, setSelectedCallType] = useState('')
+
   // 分页状态
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -63,6 +66,7 @@ export function RiskLogs() {
         start_date: startDate || undefined,
         end_date: endDate || undefined,
         processing_status: selectedStatus || undefined,
+        call_type: selectedCallType || undefined,
       })
       if (result.success) {
         setLogs(result.data || [])
@@ -300,6 +304,18 @@ export function RiskLogs() {
                 <option value="success">成功</option>
                 <option value="failed">失败</option>
                 <option value="processing">处理中</option>
+              </select>
+            </div>
+            <div className="input-group">
+              <label className="input-label">调用类型</label>
+              <select
+                value={selectedCallType}
+                onChange={(e) => setSelectedCallType(e.target.value)}
+                className="input-ios"
+              >
+                <option value="">全部类型</option>
+                <option value="local">本机</option>
+                <option value="remote">远程</option>
               </select>
             </div>
             <div className="input-group min-w-[200px]">

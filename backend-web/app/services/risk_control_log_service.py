@@ -34,6 +34,7 @@ class RiskControlLogService:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         processing_status: Optional[str] = None,
+        call_type: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[list[dict], int]:
@@ -46,6 +47,7 @@ class RiskControlLogService:
             start_date: 开始日期（格式：YYYY-MM-DD）
             end_date: 结束日期（格式：YYYY-MM-DD）
             processing_status: 处理状态筛选（success/failed/processing）
+            call_type: 调用类型筛选（local-本机/remote-远程）
             limit: 每页数量
             offset: 偏移量
             
@@ -81,6 +83,10 @@ class RiskControlLogService:
         # 处理状态筛选
         if processing_status:
             filters.append(XYRiskControlLog.processing_status == processing_status)
+
+        # 调用类型筛选（local-本机/remote-远程）
+        if call_type:
+            filters.append(XYRiskControlLog.call_type == call_type)
 
         logs, total = await execute_paginated_with_filters(
             self.session,

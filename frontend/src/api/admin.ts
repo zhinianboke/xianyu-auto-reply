@@ -157,6 +157,7 @@ export const getRiskLogs = async (params?: {
   start_date?: string
   end_date?: string
   processing_status?: string
+  call_type?: string
 }): Promise<{ success: boolean; data?: RiskLog[]; total?: number; message?: string }> => {
   const query = new URLSearchParams()
   const page = params?.page || 1
@@ -168,6 +169,7 @@ export const getRiskLogs = async (params?: {
   if (params?.start_date) query.set('start_date', params.start_date)
   if (params?.end_date) query.set('end_date', params.end_date)
   if (params?.processing_status) query.set('processing_status', params.processing_status)
+  if (params?.call_type) query.set('call_type', params.call_type)
   const result = await get<{ success: boolean; message?: string; data?: Array<{
     id: number
     cookie_id: string

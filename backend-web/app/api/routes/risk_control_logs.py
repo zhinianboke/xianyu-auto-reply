@@ -25,6 +25,7 @@ async def list_risk_logs(
     start_date: str | None = None,
     end_date: str | None = None,
     processing_status: str | None = None,
+    call_type: str | None = None,
     current_user: User = Depends(deps.get_current_active_user),
     risk_log_service: RiskControlLogService = Depends(deps.get_risk_log_service),
 ) -> dict:
@@ -37,6 +38,7 @@ async def list_risk_logs(
             start_date=start_date,
             end_date=end_date,
             processing_status=processing_status,
+            call_type=call_type,
             limit=limit,
             offset=offset,
         )
