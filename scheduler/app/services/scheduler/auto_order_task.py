@@ -2,9 +2,9 @@
 采集商品自动下单定时任务
 
 功能：
-1. 查询采集商品表中"已私信(is_dm_sent=1) 且 未下单(is_ordered=0)"的数据
-2. 优先使用该商品成功私信的账号(dm_account_id)下单；该账号不可用时，回退到所属监控任务
-   配置的下单账号列表(order_account_ids)中的其他账号轮换下单
+1. 查询采集商品表中"未下单(is_ordered=0)"的数据（不再要求已私信，只要没下单就下单）
+2. 优先使用该商品成功私信的账号(dm_account_id)下单；无私信账号或不可用时，回退到所属监控任务
+   配置的下单账号列表(order_account_ids)中的账号轮换下单
 3. order.render 渲染 -> order.create 创建订单（拍下）
 4. 下单成功后记录订单ID并标记 is_ordered=1
 
@@ -133,7 +133,7 @@ class AutoOrderTaskService:
             logger.error(f"【{self.task_name}】执行异常: {exc}")
 
     async def _get_items_to_order(self) -> List[Tuple[int, str, int, Optional[str]]]:
-        """查询已私信且未下单的采集商品。
+        """查询未下单的采集商品（不再要求已私信）。
 
         Returns: (主键id, item_id, monitor_task_id, dm_account_id) 列表
         """
@@ -147,7 +147,6 @@ class AutoOrderTaskService:
                 )
                 .where(
                     and_(
-                        ListingMonitorItem.is_dm_sent.is_(True),
                         ListingMonitorItem.is_ordered.is_(False),
                         ListingMonitorItem.order_attempts < _MAX_ORDER_ATTEMPTS,
                     )
