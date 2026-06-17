@@ -39,8 +39,9 @@ class XianyuSearchClient:
         price_max: Optional[float],
         publish_days: Optional[int] = None,
     ) -> str:
-        """构造 searchFilter（上新天数 + 价格区间），多个条件以分号拼接。"""
-        parts: List[str] = []
+        """构造 searchFilter（个人闲置 + 上新天数 + 价格区间），多个条件以分号拼接。"""
+        # 固定只采集个人卖家闲置（quickFilter:filterPersonal;）
+        parts: List[str] = ["quickFilter:filterPersonal;"]
         # 上新天数筛选：publishDays:N;
         if publish_days:
             try:
