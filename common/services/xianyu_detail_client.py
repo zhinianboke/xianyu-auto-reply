@@ -25,10 +25,11 @@ DETAIL_VERSION = "1.0"
 class XianyuItemDetailClient:
     """闲鱼商品详情客户端（单账号）"""
 
-    def __init__(self, cookie_id: str, cookies_str: str, owner_id: Optional[int] = None):
+    def __init__(self, cookie_id: str, cookies_str: str, owner_id: Optional[int] = None, proxy: Optional[str] = None):
         self.cookie_id = cookie_id
         self.cookies_str = cookies_str
         self.owner_id = owner_id
+        self.proxy = proxy
 
     async def get_detail(self, item_id: str) -> Dict[str, Any]:
         """调用商品详情接口。

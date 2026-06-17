@@ -2,9 +2,9 @@
 采集商品自动下单定时任务
 
 功能：
-1. 查询采集商品表中"已私信(is_dm_sent=1) 且 未下单(is_ordered=0)"的数据
-2. 优先使用该商品成功私信的账号(dm_account_id)下单；该账号不可用时，回退到所属监控任务
-   配置的下单账号列表(order_account_ids)中的其他账号轮换下单
+1. 查询采集商品表中"未下单(is_ordered=0)"的数据（不再要求已私信，只要没下单就下单）
+2. 优先使用该商品成功私信的账号(dm_account_id)下单；无私信账号或不可用时，回退到所属监控任务
+   配置的下单账号列表(order_account_ids)中的账号轮换下单
 3. order.render 渲染 -> order.create 创建订单（拍下）
 4. 下单成功后记录订单ID并标记 is_ordered=1
 
@@ -133,7 +133,7 @@ class AutoOrderTaskService:
             logger.error(f"【{self.task_name}】执行异常: {exc}")
 
     async def _get_items_to_order(self) -> List[Tuple[int, str, int, Optional[str]]]:
-        """查询已私信且未下单的采集商品。
+        """查询未下单的采集商品（不再要求已私信）。
 
         Returns: (主键id, item_id, monitor_task_id, dm_account_id) 列表
         """
@@ -147,7 +147,6 @@ class AutoOrderTaskService:
                 )
                 .where(
                     and_(
-                        ListingMonitorItem.is_dm_sent.is_(True),
                         ListingMonitorItem.is_ordered.is_(False),
                         ListingMonitorItem.order_attempts < _MAX_ORDER_ATTEMPTS,
                     )
@@ -267,31 +266,21 @@ class AutoOrderTaskService:
         Returns: (status, 订单ID, 失败原因)，status ∈ {"success","account_invalid","failed"}
         """
         client = XianyuOrderClient(account.account_id, account.cookie, owner_id=account.owner_id)
-
-        render = await client.render(item_id)
+        result = await client.place_order(item_id)
         # 令牌可能已刷新：回写内存账号Cookie，供同账号后续商品复用
         account.cookie = client.cookies_str
-        if not render.get("success"):
-            reason = render.get("error")
-            if render.get("account_invalid"):
-                return "account_invalid", None, reason
+
+        status = result.get("status")
+        reason = result.get("error")
+        if status == "account_invalid":
+            return "account_invalid", None, reason
+        if status != "success":
             logger.warning(
-                f"【{self.task_name}】商品 {item_id} 下单渲染失败（账号 {account.account_id}）：{reason}"
+                f"【{self.task_name}】商品 {item_id} 下单失败（账号 {account.account_id}）：{reason}"
             )
             return "failed", None, reason
 
-        create = await client.create(render["item_buy_info"])
-        account.cookie = client.cookies_str
-        if not create.get("success"):
-            reason = create.get("error")
-            if create.get("account_invalid"):
-                return "account_invalid", None, reason
-            logger.warning(
-                f"【{self.task_name}】商品 {item_id} 创建订单失败（账号 {account.account_id}）：{reason}"
-            )
-            return "failed", None, reason
-
-        biz_order_id = create.get("biz_order_id")
+        biz_order_id = result.get("order_id")
         logger.info(
             f"【{self.task_name}】商品 {item_id} 下单成功（拍下）："
             f"账号={account.account_id}，订单ID={biz_order_id}"

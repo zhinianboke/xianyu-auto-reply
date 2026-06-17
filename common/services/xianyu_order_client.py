@@ -77,5 +77,24 @@ class XianyuOrderClient:
             "error": "",
         }
 
+    async def place_order(self, item_id: str) -> Dict[str, Any]:
+        """对单个商品下单（render -> create）的完整封装，供下单/采集直接下单复用。
+
+        Returns: {status: 'success'|'account_invalid'|'failed', order_id, error}
+        """
+        render = await self.render(item_id)
+        if not render.get("success"):
+            if render.get("account_invalid"):
+                return {"status": "account_invalid", "order_id": None, "error": render.get("error")}
+            return {"status": "failed", "order_id": None, "error": render.get("error")}
+
+        create = await self.create(render["item_buy_info"])
+        if not create.get("success"):
+            if create.get("account_invalid"):
+                return {"status": "account_invalid", "order_id": None, "error": create.get("error")}
+            return {"status": "failed", "order_id": None, "error": create.get("error")}
+
+        return {"status": "success", "order_id": create.get("biz_order_id"), "error": ""}
+
 
 __all__ = ["XianyuOrderClient"]

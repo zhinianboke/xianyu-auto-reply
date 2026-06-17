@@ -27,10 +27,11 @@ SEARCH_VERSION = "1.0"
 class XianyuSearchClient:
     """闲鱼商品搜索客户端（单账号）"""
 
-    def __init__(self, cookie_id: str, cookies_str: str, owner_id: Optional[int] = None):
+    def __init__(self, cookie_id: str, cookies_str: str, owner_id: Optional[int] = None, proxy: Optional[str] = None):
         self.cookie_id = cookie_id
         self.cookies_str = cookies_str
         self.owner_id = owner_id
+        self.proxy = proxy
 
     def _build_search_filter(
         self,
@@ -93,6 +94,7 @@ class XianyuSearchClient:
             self.cookie_id, self.cookies_str, SEARCH_API, SEARCH_VERSION, data,
             owner_id=self.owner_id,
             extra_params={"spm_cnt": "a21ybx.search.0.0", "spm_pre": "a21ybx.home.searchInput.0"},
+            proxy=self.proxy,
         )
         # 令牌刷新后回写实例 Cookie
         self.cookies_str = result.get("cookies_str", self.cookies_str)

@@ -324,6 +324,7 @@ export function ListingMonitor() {
                 <th>下单条数</th>
                 <th>已私信数</th>
                 <th>已下单数</th>
+                <th>直接下单</th>
                 <th>关联账号</th>
                 <th>状态</th>
                 <th>更新时间</th>
@@ -333,13 +334,13 @@ export function ListingMonitor() {
             <tbody>
               {tableLoading ? (
                 <tr>
-                  <td colSpan={15} className="text-center py-12">
+                  <td colSpan={16} className="text-center py-12">
                     <Loader2 className="w-6 h-6 animate-spin text-blue-500 mx-auto" />
                   </td>
                 </tr>
               ) : tasks.length === 0 ? (
                 <tr>
-                  <td colSpan={15} className="text-center py-12 text-slate-400">
+                  <td colSpan={16} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <PackageSearch className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>暂无监控任务，点击右上角新建</p>
@@ -374,6 +375,13 @@ export function ListingMonitor() {
                     <td>{item.order_batch_size ?? 5}</td>
                     <td className="text-green-600 dark:text-green-400">{item.dm_sent_count ?? 0}</td>
                     <td className="text-blue-600 dark:text-blue-400">{item.ordered_count ?? 0}</td>
+                    <td className="whitespace-nowrap">
+                      {item.direct_order ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">开启</span>
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">关闭</span>
+                      )}
+                    </td>
                     <td className="whitespace-nowrap">
                       {item.account_ids && item.account_ids.length > 0 ? `${item.account_ids.length} 个账号` : '不限'}
                     </td>

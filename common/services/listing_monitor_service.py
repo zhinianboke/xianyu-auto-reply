@@ -59,11 +59,13 @@ def _task_to_dict(task: ListingMonitorTask) -> Dict[str, Any]:
         "publish_days": task.publish_days,
         "interval_minutes": task.interval_minutes,
         "collect_pages": task.collect_pages,
+        "proxy_url": task.proxy_url,
         "account_ids": list(task.account_ids or []),
         "order_account_ids": list(task.order_account_ids or []),
         "dm_content": task.dm_content,
         "dm_batch_size": task.dm_batch_size,
         "order_batch_size": task.order_batch_size,
+        "direct_order": bool(task.direct_order),
         "is_enabled": bool(task.is_enabled),
         "last_run_at": safe_isoformat(task.last_run_at),
         "remark": task.remark,
@@ -214,6 +216,16 @@ class ListingMonitorService:
                 raise ValueError("采集页数必须大于等于1")
             payload["collect_pages"] = collect_pages
 
+        # 代理API地址（可选；空=不使用代理）。调用该API返回代理IP列表，采集/详情时取一个作HTTP代理
+        if "proxy_url" in data or not partial:
+            proxy_url = (data.get("proxy_url") or "").strip()
+            if proxy_url:
+                if len(proxy_url) > 255:
+                    raise ValueError("代理API地址长度不能超过255个字符")
+                if not proxy_url.lower().startswith(("http://", "https://")):
+                    raise ValueError("代理API地址格式不正确，需以 http:// 或 https:// 开头")
+            payload["proxy_url"] = proxy_url or None
+
         # 账号列表（多选，必填：至少关联一个账号）
         if "account_ids" in data or not partial:
             account_ids = await self._normalize_account_ids(owner_id, data.get("account_ids"))
@@ -263,9 +275,17 @@ class ListingMonitorService:
                 raise ValueError("每次下单处理条数不能超过100")
             payload["order_batch_size"] = order_batch_size
 
-        # 创建时校验：配置了下单账号则私信内容必填（更新走 update() 的有效值校验）
-        if not partial and payload.get("order_account_ids") and not payload.get("dm_content"):
-            raise ValueError("配置了下单账号后，私信内容必填")
+        # 采集后直接下单开关
+        if "direct_order" in data or not partial:
+            payload["direct_order"] = bool(data.get("direct_order"))
+
+        # 创建时校验：配置了下单账号则私信内容必填（开启"采集后直接下单"时跳过私信，无需私信内容）
+        if not partial and payload.get("order_account_ids") and not payload.get("dm_content") and not payload.get("direct_order"):
+            raise ValueError("配置了下单账号后，私信内容必填（或开启采集后直接下单）")
+
+        # 创建时校验：开启采集后直接下单需配置下单账号
+        if not partial and payload.get("direct_order") and not payload.get("order_account_ids"):
+            raise ValueError("开启采集后直接下单需配置下单账号")
 
         # 备注
         if "remark" in data:
@@ -411,11 +431,14 @@ class ListingMonitorService:
         if effective_min is not None and effective_max is not None and Decimal(str(effective_min)) > Decimal(str(effective_max)):
             raise ValueError("最低价格不能大于最高价格")
 
-        # 私信内容必填校验：用"新值优先、否则沿用库中旧值"的有效值
+        # 私信内容必填校验：用"新值优先、否则沿用库中旧值"的有效值（开启直接下单则跳过私信，无需私信内容）
         effective_order_accounts = payload.get("order_account_ids") if "order_account_ids" in payload else task.order_account_ids
         effective_dm_content = payload.get("dm_content") if "dm_content" in payload else task.dm_content
-        if effective_order_accounts and not effective_dm_content:
-            raise ValueError("配置了下单账号后，私信内容必填")
+        effective_direct_order = payload.get("direct_order") if "direct_order" in payload else task.direct_order
+        if effective_order_accounts and not effective_dm_content and not effective_direct_order:
+            raise ValueError("配置了下单账号后，私信内容必填（或开启采集后直接下单）")
+        if effective_direct_order and not effective_order_accounts:
+            raise ValueError("开启采集后直接下单需配置下单账号")
 
         for field_name, field_value in payload.items():
             setattr(task, field_name, field_value)
