@@ -6,7 +6,7 @@
  * 2. 支持按监控任务、商品标题筛选
  */
 import { useEffect, useState } from 'react'
-import { ChevronLeft, ChevronRight, Loader2, PackageSearch, RefreshCw, Search } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Eye, Loader2, PackageSearch, RefreshCw, Search } from 'lucide-react'
 import {
   getListingMonitorItems,
   getListingMonitorTaskOptions,
@@ -15,6 +15,7 @@ import {
   type ListingMonitorTaskOption,
 } from '@/api/listingMonitor'
 import { PageLoading } from '@/components/common/Loading'
+import { MonitorItemDetailModal } from './MonitorItemDetailModal'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/apiError'
 
@@ -29,10 +30,16 @@ export function MonitorItems() {
   const [keyword, setKeyword] = useState('')
   const [area, setArea] = useState('')
   const [sellerNick, setSellerNick] = useState('')
+  const [itemId, setItemId] = useState('')
+  const [dmSent, setDmSent] = useState('')
+  const [ordered, setOrdered] = useState('')
+  const [sellerFill, setSellerFill] = useState('')
+  const [hasDetail, setHasDetail] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(0)
+  const [detailItemPk, setDetailItemPk] = useState<number | null>(null)
 
   const loadTaskOptions = async () => {
     try {
@@ -53,6 +60,11 @@ export function MonitorItems() {
         keyword: keyword.trim() || undefined,
         area: area.trim() || undefined,
         sellerNick: sellerNick.trim() || undefined,
+        itemId: itemId.trim() || undefined,
+        isDmSent: dmSent === '' ? undefined : dmSent === 'true',
+        isOrdered: ordered === '' ? undefined : ordered === 'true',
+        sellerFill: sellerFill || undefined,
+        hasDetail: hasDetail === '' ? undefined : hasDetail === 'true',
       })
       if (!result.success || !result.data) {
         setItems([])
@@ -80,7 +92,7 @@ export function MonitorItems() {
   useEffect(() => {
     void loadItems(page, pageSize)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, pageSize, taskId])
+  }, [page, pageSize, taskId, dmSent, ordered, sellerFill, hasDetail])
 
   const handleSearch = () => {
     if (page === 1) {
@@ -167,6 +179,79 @@ export function MonitorItems() {
                 }}
               />
             </div>
+            <div className="input-group min-w-[160px]">
+              <label className="input-label">商品ID</label>
+              <input
+                className="input-ios"
+                placeholder="输入商品ID精确查询"
+                value={itemId}
+                onChange={(e) => setItemId(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleSearch()
+                }}
+              />
+            </div>
+            <div className="input-group min-w-[130px]">
+              <label className="input-label">是否已私信</label>
+              <select
+                className="input-ios"
+                value={dmSent}
+                onChange={(e) => {
+                  setDmSent(e.target.value)
+                  setPage(1)
+                }}
+              >
+                <option value="">全部</option>
+                <option value="true">已私信</option>
+                <option value="false">未私信</option>
+              </select>
+            </div>
+            <div className="input-group min-w-[130px]">
+              <label className="input-label">是否已下单</label>
+              <select
+                className="input-ios"
+                value={ordered}
+                onChange={(e) => {
+                  setOrdered(e.target.value)
+                  setPage(1)
+                }}
+              >
+                <option value="">全部</option>
+                <option value="true">已下单</option>
+                <option value="false">未下单</option>
+              </select>
+            </div>
+            <div className="input-group min-w-[140px]">
+              <label className="input-label">卖家补全状态</label>
+              <select
+                className="input-ios"
+                value={sellerFill}
+                onChange={(e) => {
+                  setSellerFill(e.target.value)
+                  setPage(1)
+                }}
+              >
+                <option value="">全部</option>
+                <option value="filled">已补全</option>
+                <option value="pending">待补全</option>
+                <option value="failed">补全失败</option>
+              </select>
+            </div>
+            <div className="input-group min-w-[130px]">
+              <label className="input-label">是否已获取详情</label>
+              <select
+                className="input-ios"
+                value={hasDetail}
+                onChange={(e) => {
+                  setHasDetail(e.target.value)
+                  setPage(1)
+                }}
+              >
+                <option value="">全部</option>
+                <option value="true">已获取</option>
+                <option value="false">未获取</option>
+              </select>
+            </div>
             <button className="btn-ios-primary" onClick={handleSearch}>
               <Search className="w-4 h-4" />查询
             </button>
@@ -184,33 +269,51 @@ export function MonitorItems() {
         </div>
 
         <div className="flex-1 overflow-auto">
-          <table className="table-ios min-w-[900px]">
+          <table className="table-ios min-w-[2800px]">
             <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
               <tr>
+                <th>ID</th>
+                <th>所属任务</th>
+                <th>商品ID</th>
                 <th>图片</th>
+                <th>卖家头像</th>
                 <th>商品标题</th>
                 <th>价格</th>
+                <th>标签</th>
                 <th>地区</th>
-                <th>卖家</th>
+                <th>卖家昵称</th>
+                <th>卖家ID</th>
                 <th>卖家真实ID</th>
+                <th>补全状态</th>
+                <th>补全失败原因</th>
                 <th>想要</th>
                 <th>发布时间</th>
                 <th>已私信</th>
+                <th>私信账号</th>
+                <th>私信会话ID</th>
+                <th>私信失败原因</th>
+                <th>私信次数</th>
                 <th>已下单</th>
+                <th>订单ID</th>
+                <th>下单失败原因</th>
+                <th>下单次数</th>
                 <th>详情</th>
+                <th>最近采集</th>
+                <th>采集时间</th>
+                <th>更新时间</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody>
               {tableLoading ? (
                 <tr>
-                  <td colSpan={12} className="text-center py-12">
+                  <td colSpan={30} className="text-center py-12">
                     <Loader2 className="w-6 h-6 animate-spin text-blue-500 mx-auto" />
                   </td>
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="text-center py-12 text-slate-400">
+                  <td colSpan={30} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <PackageSearch className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>暂无采集商品</p>
@@ -220,6 +323,9 @@ export function MonitorItems() {
               ) : (
                 items.map((item) => (
                   <tr key={item.id}>
+                    <td className="whitespace-nowrap text-slate-500 dark:text-slate-400">{item.id}</td>
+                    <td className="whitespace-nowrap text-slate-500 dark:text-slate-400">{item.monitor_task_id}</td>
+                    <td className="whitespace-nowrap text-slate-600 dark:text-slate-300">{item.item_id}</td>
                     <td>
                       {item.pic_url ? (
                         <img src={item.pic_url} alt="" className="w-12 h-12 object-cover rounded" loading="lazy" />
@@ -227,49 +333,103 @@ export function MonitorItems() {
                         <div className="w-12 h-12 rounded bg-slate-100 dark:bg-slate-700" />
                       )}
                     </td>
+                    <td>
+                      {item.seller_avatar ? (
+                        <img src={item.seller_avatar} alt="" className="w-9 h-9 object-cover rounded-full" loading="lazy" />
+                      ) : (
+                        '-'
+                      )}
+                    </td>
                     <td className="max-w-[280px] font-medium text-slate-800 dark:text-slate-100">
                       <span className="truncate block" title={item.title || ''}>{item.title || '-'}</span>
                     </td>
                     <td className="whitespace-nowrap text-red-600 dark:text-red-400">{item.price != null ? `¥${item.price}` : '-'}</td>
+                    <td className="max-w-[160px]"><span className="truncate block" title={item.tags || ''}>{item.tags || '-'}</span></td>
                     <td className="whitespace-nowrap">{item.area || '-'}</td>
                     <td className="max-w-[120px]"><span className="truncate block" title={item.seller_nick || ''}>{item.seller_nick || '-'}</span></td>
+                    <td className="max-w-[140px]"><span className="truncate block" title={item.seller_id || ''}>{item.seller_id || '-'}</span></td>
                     <td className="whitespace-nowrap text-slate-600 dark:text-slate-300">{item.seller_user_id || '-'}</td>
+                    <td className="whitespace-nowrap">
+                      {item.seller_fill_status === 'failed' ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">补全失败</span>
+                      ) : item.seller_user_id ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">已补全</span>
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">待补全</span>
+                      )}
+                    </td>
+                    <td className="max-w-[200px]"><span className="truncate block" title={item.seller_fill_fail_reason || ''}>{item.seller_fill_fail_reason || '-'}</span></td>
                     <td>{item.want_count || '-'}</td>
                     <td className="whitespace-nowrap text-slate-500 dark:text-slate-400">{item.publish_time ? new Date(item.publish_time).toLocaleString('zh-CN') : '-'}</td>
                     <td className="whitespace-nowrap">
-                      {item.is_dm_sent ? (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">已私信</span>
+                      {item.dm_status === 'failed' ? (
+                        (item.dm_attempts || 0) >= 3 ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">私信失败(已放弃)</span>
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">私信失败(重试中)</span>
+                        )
+                      ) : item.is_dm_sent ? (
+                        item.dm_status === 'success' ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">私信成功</span>
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">已发待确认</span>
+                        )
                       ) : (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">未私信</span>
                       )}
                     </td>
+                    <td className="whitespace-nowrap text-slate-600 dark:text-slate-300">{item.dm_account_id || '-'}</td>
+                    <td className="max-w-[160px]"><span className="truncate block" title={item.dm_chat_id || ''}>{item.dm_chat_id || '-'}</span></td>
+                    <td className="max-w-[200px]"><span className="truncate block" title={item.dm_fail_reason || ''}>{item.dm_fail_reason || '-'}</span></td>
+                    <td className="text-center">{item.dm_attempts || 0}</td>
                     <td className="whitespace-nowrap">
-                      {item.is_ordered ? (
+                      {item.order_status === 'failed' && !item.is_ordered ? (
+                        (item.order_attempts || 0) >= 3 ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">下单失败(已放弃)</span>
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">下单失败(重试中)</span>
+                        )
+                      ) : item.is_ordered ? (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">已下单</span>
                       ) : (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">未下单</span>
                       )}
                     </td>
-                    <td>
+                    <td className="whitespace-nowrap text-slate-600 dark:text-slate-300">{item.order_id || '-'}</td>
+                    <td className="max-w-[200px]"><span className="truncate block" title={item.order_fail_reason || ''}>{item.order_fail_reason || '-'}</span></td>
+                    <td className="text-center">{item.order_attempts || 0}</td>
+                    <td className="whitespace-nowrap">
                       {item.has_detail ? (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">已获取</span>
                       ) : (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">未获取</span>
                       )}
                     </td>
+                    <td className="whitespace-nowrap text-slate-500 dark:text-slate-400">{item.last_seen_at ? new Date(item.last_seen_at).toLocaleString('zh-CN') : '-'}</td>
+                    <td className="whitespace-nowrap text-slate-500 dark:text-slate-400">{item.created_at ? new Date(item.created_at).toLocaleString('zh-CN') : '-'}</td>
+                    <td className="whitespace-nowrap text-slate-500 dark:text-slate-400">{item.updated_at ? new Date(item.updated_at).toLocaleString('zh-CN') : '-'}</td>
                     <td>
-                      {item.target_url ? (
-                        <a
-                          href={`https://www.goofish.com/item?id=${item.item_id}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-600 dark:text-blue-400 hover:underline"
+                      <div className="flex items-center gap-2 whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => setDetailItemPk(item.id)}
+                          className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline"
                         >
-                          查看
-                        </a>
-                      ) : (
-                        '-'
-                      )}
+                          <Eye className="w-4 h-4" />详情
+                        </button>
+                        {item.target_url ? (
+                          <a
+                            href={`https://www.goofish.com/item?id=${item.item_id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 dark:text-blue-400 hover:underline"
+                          >
+                            查看
+                          </a>
+                        ) : (
+                          '-'
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -318,6 +478,10 @@ export function MonitorItems() {
           </div>
         )}
       </div>
+
+      {detailItemPk !== null && (
+        <MonitorItemDetailModal itemPk={detailItemPk} onClose={() => setDetailItemPk(null)} />
+      )}
     </div>
   )
 }

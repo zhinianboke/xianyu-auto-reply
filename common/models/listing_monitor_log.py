@@ -29,6 +29,7 @@ class ListingMonitorLog(TimestampMixin, Base):
     owner_id: Mapped[int | None] = mapped_column(BigInteger, comment="归属用户ID")
     monitor_type: Mapped[str | None] = mapped_column(String(20), comment="监控类型：listing-上新监控，price_drop-降价监控")
     keyword: Mapped[str | None] = mapped_column(String(200), comment="监控关键字")
+    trigger_type: Mapped[str] = mapped_column(String(10), nullable=False, default="auto", server_default="auto", comment="触发方式：auto-定时自动，manual-手动")
     account_id: Mapped[str | None] = mapped_column(String(80), comment="本次实际使用的主账号ID")
     used_account_ids: Mapped[list | None] = mapped_column(JSON, comment="本次执行实际使用过的账号ID列表（可能多个）")
     pages: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", comment="本次采集页数")

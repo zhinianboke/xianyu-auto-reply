@@ -32,15 +32,19 @@ export interface ListingMonitorTask {
   keyword: string
   price_min?: number | null
   price_max?: number | null
+  publish_days?: number | null
   interval_minutes: number
   collect_pages: number
   account_ids: string[]
-  dm_account_id?: string | null
+  order_account_ids?: string[]
   dm_content?: string | null
-  order_account_id?: string | null
+  dm_batch_size?: number
+  order_batch_size?: number
   is_enabled: boolean
   last_run_at?: string | null
   remark?: string | null
+  dm_sent_count?: number
+  ordered_count?: number
   created_at?: string | null
   updated_at?: string | null
 }
@@ -58,12 +62,14 @@ export interface ListingMonitorTaskSaveParams {
   keyword: string
   price_min?: number | null
   price_max?: number | null
+  publish_days?: number | null
   interval_minutes: number
   collect_pages: number
   account_ids: string[]
-  dm_account_id?: string | null
+  order_account_ids?: string[]
   dm_content?: string | null
-  order_account_id?: string | null
+  dm_batch_size?: number
+  order_batch_size?: number
   is_enabled?: boolean
   remark?: string | null
 }
@@ -116,6 +122,13 @@ export const batchDeleteListingMonitorTasks = (
   return post(`${PREFIX}/batch-delete`, { ids: taskIds })
 }
 
+// 手动执行单个监控任务采集（立即执行一次）
+export const runListingMonitorTask = (
+  taskId: number
+): Promise<ApiResponse<null>> => {
+  return post(`${PREFIX}/${taskId}/run`, {})
+}
+
 // ==================== 监控任务下拉选项 ====================
 
 export interface ListingMonitorTaskOption {
@@ -135,6 +148,7 @@ export interface ListingMonitorLog {
   monitor_task_id: number
   monitor_type?: MonitorType | null
   keyword?: string | null
+  trigger_type?: string | null
   account_id?: string | null
   used_account_ids: string[]
   pages: number
@@ -179,12 +193,25 @@ export interface ListingMonitorItem {
   seller_id?: string | null
   seller_user_id?: string | null
   seller_nick?: string | null
+  seller_avatar?: string | null
   want_count?: string | null
+  tags?: string | null
   publish_time?: string | null
   target_url?: string | null
   has_detail?: boolean
+  seller_fill_status?: string | null
+  seller_fill_fail_reason?: string | null
   is_dm_sent: boolean
+  dm_account_id?: string | null
+  dm_chat_id?: string | null
+  dm_status?: string | null
+  dm_fail_reason?: string | null
+  dm_attempts?: number
   is_ordered: boolean
+  order_id?: string | null
+  order_status?: string | null
+  order_fail_reason?: string | null
+  order_attempts?: number
   last_seen_at?: string | null
   created_at?: string | null
   updated_at?: string | null
@@ -201,12 +228,39 @@ export interface ListingMonitorItemListData {
 export const getListingMonitorItems = (
   page = 1,
   pageSize = 20,
-  params?: { monitorTaskId?: number; keyword?: string; area?: string; sellerNick?: string }
+  params?: {
+    monitorTaskId?: number
+    keyword?: string
+    area?: string
+    sellerNick?: string
+    itemId?: string
+    isDmSent?: boolean
+    isOrdered?: boolean
+    sellerFill?: string
+    hasDetail?: boolean
+  }
 ): Promise<ApiResponse<ListingMonitorItemListData>> => {
   const searchParams = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
   if (params?.monitorTaskId) searchParams.append('monitor_task_id', String(params.monitorTaskId))
   if (params?.keyword) searchParams.append('keyword', params.keyword)
   if (params?.area) searchParams.append('area', params.area)
   if (params?.sellerNick) searchParams.append('seller_nick', params.sellerNick)
+  if (params?.itemId) searchParams.append('item_id', params.itemId)
+  if (params?.isDmSent !== undefined) searchParams.append('is_dm_sent', String(params.isDmSent))
+  if (params?.isOrdered !== undefined) searchParams.append('is_ordered', String(params.isOrdered))
+  if (params?.sellerFill) searchParams.append('seller_fill', params.sellerFill)
+  if (params?.hasDetail !== undefined) searchParams.append('has_detail', String(params.hasDetail))
   return get(`${PREFIX}/items?${searchParams.toString()}`)
+}
+
+// 采集商品完整详情（含数据库存储的原始详情/搜索数据）
+export interface ListingMonitorItemDetail extends ListingMonitorItem {
+  detail_json?: unknown
+  raw_json?: unknown
+}
+
+export const getListingMonitorItemDetail = (
+  itemPk: number
+): Promise<ApiResponse<{ item: ListingMonitorItemDetail }>> => {
+  return get(`${PREFIX}/items/${itemPk}`)
 }

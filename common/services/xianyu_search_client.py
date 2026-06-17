@@ -12,38 +12,48 @@
 """
 from __future__ import annotations
 
-import asyncio
 import json
-import time
+import re
 from typing import Any, Dict, List, Optional
 
-import aiohttp
 from loguru import logger
 
-from common.utils.xianyu_utils import generate_sign, trans_cookies
+from common.services.xianyu_mtop import mtop_call
 
 SEARCH_API = "mtop.taobao.idlemtopsearch.pc.search"
-SEARCH_URL = f"https://h5api.m.goofish.com/h5/{SEARCH_API}/1.0/"
+SEARCH_VERSION = "1.0"
 
 
 class XianyuSearchClient:
     """闲鱼商品搜索客户端（单账号）"""
 
-    def __init__(self, cookie_id: str, cookies_str: str):
+    def __init__(self, cookie_id: str, cookies_str: str, owner_id: Optional[int] = None):
         self.cookie_id = cookie_id
         self.cookies_str = cookies_str
+        self.owner_id = owner_id
 
     def _build_search_filter(
         self,
         price_min: Optional[float],
         price_max: Optional[float],
+        publish_days: Optional[int] = None,
     ) -> str:
-        """构造价格区间筛选条件 searchFilter。"""
-        if price_min is None and price_max is None:
-            return ""
-        lo = "" if price_min is None else (str(int(price_min)) if float(price_min).is_integer() else str(price_min))
-        hi = "undefined" if price_max is None else (str(int(price_max)) if float(price_max).is_integer() else str(price_max))
-        return f"priceRange:{lo},{hi};"
+        """构造 searchFilter（上新天数 + 价格区间），多个条件以分号拼接。"""
+        parts: List[str] = []
+        # 上新天数筛选：publishDays:N;
+        if publish_days:
+            try:
+                days = int(publish_days)
+                if days > 0:
+                    parts.append(f"publishDays:{days};")
+            except (TypeError, ValueError):
+                pass
+        # 价格区间筛选：priceRange:lo,hi;
+        if price_min is not None or price_max is not None:
+            lo = "" if price_min is None else (str(int(price_min)) if float(price_min).is_integer() else str(price_min))
+            hi = "undefined" if price_max is None else (str(int(price_max)) if float(price_max).is_integer() else str(price_max))
+            parts.append(f"priceRange:{lo},{hi};")
+        return "".join(parts)
 
     async def search(
         self,
@@ -54,17 +64,15 @@ class XianyuSearchClient:
         rows_per_page: int = 30,
         price_min: Optional[float] = None,
         price_max: Optional[float] = None,
-        retry_count: int = 0,
+        publish_days: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """调用搜索接口。
+        """调用搜索接口（令牌过期自动刷新重试、Session/风控切换账号）。
 
         Returns:
-            {success: bool, items: list(resultList原始项), has_next_page: bool, error: str}
+            {success: bool, items: list(resultList原始项), has_next_page: bool,
+             account_invalid: bool, error: str}
         """
-        if retry_count >= 3:
-            return {"success": False, "items": [], "has_next_page": False, "error": "搜索失败，重试次数过多"}
-
-        search_filter = self._build_search_filter(price_min, price_max)
+        search_filter = self._build_search_filter(price_min, price_max, publish_days)
         data = {
             "pageNumber": page_number,
             "keyword": keyword,
@@ -81,69 +89,35 @@ class XianyuSearchClient:
             "userPositionJson": "{}",
         }
 
-        try:
-            cookies = trans_cookies(self.cookies_str)
-        except Exception as exc:  # noqa: BLE001
-            return {"success": False, "items": [], "has_next_page": False, "error": f"Cookie解析失败: {exc}"}
+        result = await mtop_call(
+            self.cookie_id, self.cookies_str, SEARCH_API, SEARCH_VERSION, data,
+            owner_id=self.owner_id,
+            extra_params={"spm_cnt": "a21ybx.search.0.0", "spm_pre": "a21ybx.home.searchInput.0"},
+        )
+        # 令牌刷新后回写实例 Cookie
+        self.cookies_str = result.get("cookies_str", self.cookies_str)
 
-        token = cookies.get("_m_h5_tk", "").split("_")[0] if cookies.get("_m_h5_tk") else ""
-        t = str(int(time.time()) * 1000)
-        data_val = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
-        sign = generate_sign(t, token, data_val)
+        res_json = result.get("res")
+        if res_json is not None:
+            # 打印搜索接口完整返回结果（便于排查风控/验证等问题）
+            logger.info(
+                f"【{self.cookie_id}】搜索接口返回（关键字={keyword}，第{page_number}页）: "
+                f"{json.dumps(res_json, ensure_ascii=False)}"
+            )
 
-        params = {
-            "jsv": "2.7.2",
-            "appKey": "34839810",
-            "t": t,
-            "sign": sign,
-            "v": "1.0",
-            "type": "originaljson",
-            "accountSite": "xianyu",
-            "dataType": "json",
-            "timeout": "20000",
-            "api": SEARCH_API,
-            "sessionOption": "AutoLoginOnly",
-            "spm_cnt": "a21ybx.search.0.0",
-            "spm_pre": "a21ybx.home.searchInput.0",
-        }
-
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Origin": "https://www.goofish.com",
-            "Referer": "https://www.goofish.com/",
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            ),
-            "Cookie": self.cookies_str,
-        }
-
-        try:
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(SEARCH_URL, params=params, data={"data": data_val}, headers=headers) as resp:
-                    res_json = await resp.json(content_type=None)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"【{self.cookie_id}】搜索接口请求异常: {exc}")
-            await asyncio.sleep(0.5)
-            return await self.search(keyword, page_number, sort_field, sort_value, rows_per_page, price_min, price_max, retry_count + 1)
-
-        ret = res_json.get("ret") or [""]
-        ret_msg = ret[0] if ret else ""
-        if "SUCCESS::" in ret_msg:
-            data_node = res_json.get("data", {}) or {}
+        if result.get("success"):
+            data_node = (res_json or {}).get("data", {}) or {}
             result_list = data_node.get("resultList", []) or []
             result_info = data_node.get("resultInfo", {}) or {}
             has_next = bool(result_info.get("hasNextPage"))
-            return {"success": True, "items": result_list, "has_next_page": has_next, "error": ""}
+            return {"success": True, "items": result_list, "has_next_page": has_next,
+                    "account_invalid": False, "error": ""}
 
-        if "FAIL_SYS_TOKEN_EXOIRED" in ret_msg or "令牌" in ret_msg or "token" in ret_msg.lower():
-            logger.warning(f"【{self.cookie_id}】搜索token失效，重试: {ret_msg}")
-            await asyncio.sleep(0.5)
-            return await self.search(keyword, page_number, sort_field, sort_value, rows_per_page, price_min, price_max, retry_count + 1)
-
-        return {"success": False, "items": [], "has_next_page": False, "error": ret_msg or "搜索失败"}
+        return {
+            "success": False, "items": [], "has_next_page": False,
+            "account_invalid": bool(result.get("account_invalid")),
+            "error": result.get("error") or "搜索失败",
+        }
 
 
 def parse_search_item(result_entry: dict) -> Optional[Dict[str, Any]]:
@@ -189,9 +163,34 @@ def parse_search_item(result_entry: dict) -> Optional[Dict[str, Any]]:
     pic_url = ex_content.get("picUrl")
     seller_nick = ex_content.get("userNickName") or (ex_content.get("detailParams") or {}).get("userNick")
     seller_id = click_args.get("seller_id")
-    want_count = click_args.get("wantNum")
+    seller_avatar = ex_content.get("userAvatarUrl")
     publish_time = click_args.get("publishTime")
     target_url = main.get("targetUrl")
+
+    # 营销标签与真实想要数：搜索结果的 wantNum 恒为 0 不可靠，
+    # 真实想要数与"X天内上新/降价"等标签藏在 clickParam.args.serviceUtParams 的 content 中。
+    tags: List[str] = []
+    want_count: Optional[str] = None
+    service_ut = click_args.get("serviceUtParams")
+    if service_ut:
+        try:
+            ut_list = json.loads(service_ut) if isinstance(service_ut, str) else service_ut
+        except (ValueError, TypeError):
+            ut_list = None
+        for ut in ut_list or []:
+            content = ((ut or {}).get("args") or {}).get("content")
+            if not content:
+                continue
+            content = str(content).strip()
+            if content and content not in tags:
+                tags.append(content)
+            # 从"235人想要"中提取真实想要数
+            if want_count is None:
+                matched = re.search(r"(\d+)\s*人?想要", content)
+                if matched:
+                    want_count = matched.group(1)
+    # 标签兜底：部分商品想要数也可能在 fishTags 文本中，这里仅以 serviceUtParams 为准
+    tags_text = ",".join(tags) if tags else None
 
     return {
         "item_id": item_id,
@@ -201,7 +200,9 @@ def parse_search_item(result_entry: dict) -> Optional[Dict[str, Any]]:
         "pic_url": str(pic_url) if pic_url is not None else None,
         "seller_id": str(seller_id) if seller_id is not None else None,
         "seller_nick": str(seller_nick) if seller_nick is not None else None,
-        "want_count": str(want_count) if want_count is not None else None,
+        "seller_avatar": str(seller_avatar) if seller_avatar is not None else None,
+        "want_count": want_count,
+        "tags": tags_text,
         "publish_time_ms": str(publish_time) if publish_time is not None else None,
         "target_url": str(target_url) if target_url is not None else None,
         "raw_main": main,

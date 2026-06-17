@@ -180,6 +180,7 @@ export function MonitorLogs() {
               <tr>
                 <th>执行时间</th>
                 <th>监控类型</th>
+                <th>触发方式</th>
                 <th>关键字</th>
                 <th>使用账号</th>
                 <th>页数</th>
@@ -193,13 +194,13 @@ export function MonitorLogs() {
             <tbody>
               {tableLoading ? (
                 <tr>
-                  <td colSpan={10} className="text-center py-12">
+                  <td colSpan={11} className="text-center py-12">
                     <Loader2 className="w-6 h-6 animate-spin text-blue-500 mx-auto" />
                   </td>
                 </tr>
               ) : logs.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="text-center py-12 text-slate-400">
+                  <td colSpan={11} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <ScrollText className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>暂无监控日志</p>
@@ -214,6 +215,13 @@ export function MonitorLogs() {
                     <tr key={item.id}>
                       <td className="whitespace-nowrap text-slate-500 dark:text-slate-400">{item.created_at ? new Date(item.created_at).toLocaleString('zh-CN') : '-'}</td>
                       <td className="whitespace-nowrap">{item.monitor_type ? (MONITOR_TYPE_LABELS[item.monitor_type] || item.monitor_type) : '-'}</td>
+                      <td className="whitespace-nowrap">
+                        {item.trigger_type === 'manual' ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">手动</span>
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">自动</span>
+                        )}
+                      </td>
                       <td className="max-w-[160px]"><span className="truncate block" title={item.keyword || ''}>{item.keyword || '-'}</span></td>
                       <td className="max-w-[200px]"><span className="truncate block" title={accounts}>{accounts}</span></td>
                       <td>{item.pages}</td>

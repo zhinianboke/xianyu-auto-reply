@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 
 from common.db.session import async_session_maker
 from common.models.listing_monitor_item import ListingMonitorItem
@@ -109,9 +109,16 @@ class SellerFillTaskService:
                     ListingMonitorItem.monitor_task_id,
                 )
                 .where(
-                    or_(
-                        ListingMonitorItem.seller_user_id.is_(None),
-                        ListingMonitorItem.seller_user_id == "",
+                    and_(
+                        or_(
+                            ListingMonitorItem.seller_user_id.is_(None),
+                            ListingMonitorItem.seller_user_id == "",
+                        ),
+                        # 排除已明确失败、不再补全的商品（如跨境商品/已下架）
+                        or_(
+                            ListingMonitorItem.seller_fill_status.is_(None),
+                            ListingMonitorItem.seller_fill_status != "failed",
+                        ),
                     )
                 )
                 .order_by(ListingMonitorItem.id.asc())
@@ -121,11 +128,15 @@ class SellerFillTaskService:
             return [(r[0], r[1], r[2]) for r in rows]
 
     async def _load_task_accounts(self, task_id: int) -> List[XYAccount]:
-        """加载监控任务配置的可用账号（保持配置顺序、过滤禁用/空Cookie）。"""
+        """加载监控任务配置的可用账号（任务须未删除且启用；保持配置顺序、过滤禁用/空Cookie）。"""
         async with async_session_maker() as session:
             task = (
                 await session.execute(
-                    select(ListingMonitorTask).where(ListingMonitorTask.id == task_id)
+                    select(ListingMonitorTask).where(
+                        ListingMonitorTask.id == task_id,
+                        ListingMonitorTask.is_deleted.is_(False),
+                        ListingMonitorTask.is_enabled.is_(True),
+                    )
                 )
             ).scalar_one_or_none()
             if not task:
@@ -171,8 +182,10 @@ class SellerFillTaskService:
             if acc.account_id in disabled_accounts:
                 continue
             tried += 1
-            client = XianyuItemDetailClient(acc.account_id, acc.cookie)
+            client = XianyuItemDetailClient(acc.account_id, acc.cookie, owner_id=acc.owner_id)
             result = await client.get_detail(item_id)
+            # 令牌可能已刷新：回写内存账号Cookie，供同账号后续商品复用
+            acc.cookie = client.cookies_str
 
             if result.get("success"):
                 await self._save_detail(pk, result)
@@ -190,11 +203,20 @@ class SellerFillTaskService:
                 )
                 continue
 
-            # 商品级失败（下架/不存在等），不停用账号，留待下次重试
+            if result.get("item_invalid"):
+                # 商品级明确失败（跨境商品/下架/不存在等）：记录失败原因并标记不再补全
+                reason = result.get("error")
+                await self._mark_failed(pk, reason)
+                logger.info(
+                    f"【{self.task_name}】商品 {item_id} 详情获取失败（账号 {acc.account_id}）：{reason}，已标记不再补全"
+                )
+                return "item_failed"
+
+            # 临时失败（网络异常/重试耗尽等）：不标记，换下一个账号重试，留待本轮其他账号或下次任务
             logger.info(
-                f"【{self.task_name}】商品 {item_id} 详情获取失败（账号 {acc.account_id}）：{result.get('error')}"
+                f"【{self.task_name}】商品 {item_id} 临时获取失败（账号 {acc.account_id}）：{result.get('error')}，尝试下一个账号"
             )
-            return "item_failed"
+            continue
 
         # 所有账号都被停用
         return "no_account" if tried == 0 else "item_failed"
@@ -220,6 +242,20 @@ class SellerFillTaskService:
                 item.seller_nick = seller_nick[:120]
             if detail_json is not None:
                 item.detail_json = detail_json
+            await session.commit()
+
+    async def _mark_failed(self, pk: int, reason) -> None:
+        """记录卖家ID补全的明确业务失败原因，并标记后续不再补全。"""
+        async with async_session_maker() as session:
+            item = (
+                await session.execute(
+                    select(ListingMonitorItem).where(ListingMonitorItem.id == pk)
+                )
+            ).scalar_one_or_none()
+            if not item:
+                return
+            item.seller_fill_status = "failed"
+            item.seller_fill_fail_reason = str(reason)[:500] if reason else None
             await session.commit()
 
     @staticmethod

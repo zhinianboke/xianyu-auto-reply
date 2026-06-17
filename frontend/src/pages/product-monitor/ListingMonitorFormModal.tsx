@@ -38,12 +38,14 @@ interface ListingMonitorFormState {
   keyword: string
   priceMin: string
   priceMax: string
+  publishDays: string
   intervalMinutes: string
   collectPages: string
   accountIds: string[]
-  dmAccountId: string
+  orderAccountIds: string[]
   dmContent: string
-  orderAccountId: string
+  dmBatchSize: string
+  orderBatchSize: string
 }
 
 const buildInitialState = (initial?: ListingMonitorTask | null): ListingMonitorFormState => ({
@@ -51,12 +53,14 @@ const buildInitialState = (initial?: ListingMonitorTask | null): ListingMonitorF
   keyword: initial?.keyword ?? '',
   priceMin: initial?.price_min != null ? String(initial.price_min) : '',
   priceMax: initial?.price_max != null ? String(initial.price_max) : '',
+  publishDays: initial?.publish_days != null ? String(initial.publish_days) : '',
   intervalMinutes: initial?.interval_minutes != null ? String(initial.interval_minutes) : '5',
   collectPages: initial?.collect_pages != null ? String(initial.collect_pages) : '1',
   accountIds: initial?.account_ids ? [...initial.account_ids] : [],
-  dmAccountId: initial?.dm_account_id ?? '',
+  orderAccountIds: initial?.order_account_ids ? [...initial.order_account_ids] : [],
   dmContent: initial?.dm_content ?? '',
-  orderAccountId: initial?.order_account_id ?? '',
+  dmBatchSize: initial?.dm_batch_size != null ? String(initial.dm_batch_size) : '5',
+  orderBatchSize: initial?.order_batch_size != null ? String(initial.order_batch_size) : '5',
 })
 
 export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMonitorFormModalProps) {
@@ -68,6 +72,7 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
   const [accountOptions, setAccountOptions] = useState<AccountOption[]>([])
   const [accountLoading, setAccountLoading] = useState(false)
   const [accountDropdownOpen, setAccountDropdownOpen] = useState(false)
+  const [orderAccountDropdownOpen, setOrderAccountDropdownOpen] = useState(false)
 
   // 加载账号下拉选项
   useEffect(() => {
@@ -97,11 +102,17 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
     return form.accountIds.map((id) => labelMap.get(id) || id).join('，')
   }, [form.accountIds, accountOptions])
 
-  // 私信账号/下单账号取启用账号，单选，含"不使用"空选项
-  const enabledAccountSelectOptions = useMemo(() => {
-    const opts = accountOptions.filter((o) => o.enabled).map((o) => ({ value: o.value, label: o.label }))
-    return [{ value: '', label: '不使用' }, ...opts]
-  }, [accountOptions])
+  // 下单账号取启用账号（多选，私信与下单共用）
+  const enabledAccountOptions = useMemo(
+    () => accountOptions.filter((o) => o.enabled),
+    [accountOptions]
+  )
+
+  const selectedOrderAccountLabels = useMemo(() => {
+    if (form.orderAccountIds.length === 0) return ''
+    const labelMap = new Map(accountOptions.map((opt) => [opt.value, opt.label]))
+    return form.orderAccountIds.map((id) => labelMap.get(id) || id).join('，')
+  }, [form.orderAccountIds, accountOptions])
 
   const toggleAccount = (accountId: string) => {
     setForm((prev) => {
@@ -120,7 +131,27 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
   }
 
   const handleSelectAllAccounts = () => {
-    setForm((prev) => ({ ...prev, accountIds: accountOptions.map((opt) => opt.value) }))
+    setForm((prev) => ({ ...prev, accountIds: enabledAccountOptions.map((opt) => opt.value) }))
+  }
+
+  const toggleOrderAccount = (accountId: string) => {
+    setForm((prev) => {
+      const exists = prev.orderAccountIds.includes(accountId)
+      return {
+        ...prev,
+        orderAccountIds: exists
+          ? prev.orderAccountIds.filter((id) => id !== accountId)
+          : [...prev.orderAccountIds, accountId],
+      }
+    })
+  }
+
+  const handleClearOrderAccounts = () => {
+    setForm((prev) => ({ ...prev, orderAccountIds: [] }))
+  }
+
+  const handleSelectAllOrderAccounts = () => {
+    setForm((prev) => ({ ...prev, orderAccountIds: enabledAccountOptions.map((opt) => opt.value) }))
   }
 
   const handleSubmit = async () => {
@@ -162,8 +193,20 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
       return
     }
 
-    if (form.dmAccountId && !form.dmContent.trim()) {
-      addToast({ type: 'warning', message: '填写了私信账号后，私信内容必填' })
+    if (form.orderAccountIds.length > 0 && !form.dmContent.trim()) {
+      addToast({ type: 'warning', message: '配置了下单账号后，私信内容必填' })
+      return
+    }
+
+    const dmBatchSize = Number(form.dmBatchSize)
+    if (!Number.isInteger(dmBatchSize) || dmBatchSize < 1 || dmBatchSize > 100) {
+      addToast({ type: 'warning', message: '每次私信处理条数必须为 1~100 的整数' })
+      return
+    }
+
+    const orderBatchSize = Number(form.orderBatchSize)
+    if (!Number.isInteger(orderBatchSize) || orderBatchSize < 1 || orderBatchSize > 100) {
+      addToast({ type: 'warning', message: '每次下单处理条数必须为 1~100 的整数' })
       return
     }
 
@@ -174,12 +217,16 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
         keyword,
         price_min: priceMin,
         price_max: priceMax,
+        publish_days: form.monitorType === 'listing'
+          ? (form.publishDays === '' ? null : Number(form.publishDays))
+          : null,
         interval_minutes: intervalMinutes,
         collect_pages: collectPages,
         account_ids: form.accountIds,
-        dm_account_id: form.dmAccountId || null,
+        order_account_ids: form.orderAccountIds,
         dm_content: form.dmContent.trim() || null,
-        order_account_id: form.orderAccountId || null,
+        dm_batch_size: dmBatchSize,
+        order_batch_size: orderBatchSize,
       }
       const result = isEditMode && initial
         ? await updateListingMonitorTask(initial.id, payload)
@@ -262,6 +309,27 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
               </div>
             </div>
 
+            {form.monitorType === 'listing' && (
+              <div className="input-group">
+                <label className="input-label">
+                  监控天数 <span className="text-red-500">*</span>
+                  <span className="text-xs text-slate-400 ml-1">（上新监控按发布时间筛选；"最新"为不限天数仅按上新排序）</span>
+                </label>
+                <Select
+                  value={form.publishDays}
+                  onChange={(value) => setForm((prev) => ({ ...prev, publishDays: value }))}
+                  options={[
+                    { value: '', label: '最新' },
+                    { value: '1', label: '1天内' },
+                    { value: '3', label: '3天内' },
+                    { value: '7', label: '7天内' },
+                    { value: '14', label: '14天内' },
+                  ]}
+                  placeholder="最新"
+                />
+              </div>
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="input-group">
                 <label className="input-label">任务间隔（分钟） <span className="text-red-500">*</span></label>
@@ -316,19 +384,19 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
               {accountDropdownOpen && (
                 <div className="mt-1 border border-slate-200 dark:border-slate-700 rounded-md bg-white dark:bg-slate-800">
                   <div className="flex items-center justify-between px-3 py-2 border-b border-slate-200 dark:border-slate-700">
-                    <span className="text-xs text-slate-500 dark:text-slate-400">共 {accountOptions.length} 个账号</span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">共 {enabledAccountOptions.length} 个启用账号</span>
                     <div className="flex items-center gap-3">
-                      <button type="button" onClick={handleSelectAllAccounts} className="text-xs text-blue-600 dark:text-blue-400 hover:underline" disabled={accountOptions.length === 0}>全选</button>
+                      <button type="button" onClick={handleSelectAllAccounts} className="text-xs text-blue-600 dark:text-blue-400 hover:underline" disabled={enabledAccountOptions.length === 0}>全选</button>
                       <button type="button" onClick={handleClearAccounts} className="text-xs text-slate-500 dark:text-slate-400 hover:underline" disabled={form.accountIds.length === 0}>清空</button>
                     </div>
                   </div>
                   <div className="max-h-48 overflow-auto">
-                    {accountOptions.length === 0 ? (
+                    {enabledAccountOptions.length === 0 ? (
                       <div className="px-3 py-2 text-sm text-slate-400 text-center">
-                        {accountLoading ? '正在加载...' : '暂无可用账号'}
+                        {accountLoading ? '正在加载...' : '暂无启用账号'}
                       </div>
                     ) : (
-                      accountOptions.map((option) => {
+                      enabledAccountOptions.map((option) => {
                         const checked = form.accountIds.includes(option.value)
                         return (
                           <button
@@ -352,22 +420,74 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
             </div>
 
             <div className="input-group">
-              <label className="input-label">
-                私信账号
-                <span className="text-xs text-slate-400 ml-1">（启用账号，单选，非必填）</span>
-              </label>
-              <Select
-                value={form.dmAccountId}
-                onChange={(value) => setForm((prev) => ({ ...prev, dmAccountId: value }))}
-                options={enabledAccountSelectOptions}
-                placeholder="不使用"
-              />
+              <div className="flex items-center justify-between">
+                <label className="input-label mb-0">
+                  下单账号（可多选）
+                  <span className="text-xs text-slate-400 ml-1">（启用账号，私信与下单共用，非必填）</span>
+                </label>
+                {form.orderAccountIds.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClearOrderAccounts}
+                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    清空选中（{form.orderAccountIds.length}）
+                  </button>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setOrderAccountDropdownOpen((prev) => !prev)}
+                className="mt-1 w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md text-sm text-left bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 hover:border-blue-400 dark:hover:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <span className={selectedOrderAccountLabels ? 'truncate text-slate-900 dark:text-slate-100' : 'truncate text-slate-400'}>
+                  {selectedOrderAccountLabels || (accountLoading ? '正在加载账号...' : '不使用（请选择下单账号）')}
+                </span>
+                <ChevronDown className={`w-4 h-4 text-slate-400 flex-shrink-0 transition-transform duration-200 ${orderAccountDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {orderAccountDropdownOpen && (
+                <div className="mt-1 border border-slate-200 dark:border-slate-700 rounded-md bg-white dark:bg-slate-800">
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-slate-200 dark:border-slate-700">
+                    <span className="text-xs text-slate-500 dark:text-slate-400">共 {enabledAccountOptions.length} 个启用账号</span>
+                    <div className="flex items-center gap-3">
+                      <button type="button" onClick={handleSelectAllOrderAccounts} className="text-xs text-blue-600 dark:text-blue-400 hover:underline" disabled={enabledAccountOptions.length === 0}>全选</button>
+                      <button type="button" onClick={handleClearOrderAccounts} className="text-xs text-slate-500 dark:text-slate-400 hover:underline" disabled={form.orderAccountIds.length === 0}>清空</button>
+                    </div>
+                  </div>
+                  <div className="max-h-48 overflow-auto">
+                    {enabledAccountOptions.length === 0 ? (
+                      <div className="px-3 py-2 text-sm text-slate-400 text-center">
+                        {accountLoading ? '正在加载...' : '暂无启用账号'}
+                      </div>
+                    ) : (
+                      enabledAccountOptions.map((option) => {
+                        const checked = form.orderAccountIds.includes(option.value)
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => toggleOrderAccount(option.value)}
+                            className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-left transition-colors duration-100 text-slate-700 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-slate-700 ${checked ? 'bg-blue-50 dark:bg-slate-700 text-blue-600 dark:text-blue-400' : ''}`}
+                          >
+                            <span className="truncate">{option.label}</span>
+                            {checked && <Check className="w-4 h-4 text-blue-500 flex-shrink-0" />}
+                          </button>
+                        )
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+              {form.orderAccountIds.length > 0 && (
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">已选择 {form.orderAccountIds.length} 个账号（私信成功后优先用该账号下单）</p>
+              )}
             </div>
 
             <div className="input-group">
               <label className="input-label">
                 私信内容
-                {form.dmAccountId ? <span className="text-red-500 ml-1">*</span> : <span className="text-xs text-slate-400 ml-1">（填写私信账号后必填）</span>}
+                {form.orderAccountIds.length > 0 ? <span className="text-red-500 ml-1">*</span> : <span className="text-xs text-slate-400 ml-1">（配置下单账号后必填）</span>}
               </label>
               <textarea
                 className="input-ios"
@@ -380,14 +500,35 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
 
             <div className="input-group">
               <label className="input-label">
-                下单账号
-                <span className="text-xs text-slate-400 ml-1">（启用账号，单选，非必填）</span>
+                每次私信处理条数 <span className="text-red-500">*</span>
+                <span className="text-xs text-slate-400 ml-1">（定时私信任务每轮最多处理的商品数，1~100）</span>
               </label>
-              <Select
-                value={form.orderAccountId}
-                onChange={(value) => setForm((prev) => ({ ...prev, orderAccountId: value }))}
-                options={enabledAccountSelectOptions}
-                placeholder="不使用"
+              <input
+                className="input-ios"
+                type="number"
+                min={1}
+                max={100}
+                step="1"
+                placeholder="默认 5"
+                value={form.dmBatchSize}
+                onChange={(e) => setForm((prev) => ({ ...prev, dmBatchSize: e.target.value }))}
+              />
+            </div>
+
+            <div className="input-group">
+              <label className="input-label">
+                每次下单处理条数 <span className="text-red-500">*</span>
+                <span className="text-xs text-slate-400 ml-1">（定时下单任务每轮最多处理的商品数，1~100）</span>
+              </label>
+              <input
+                className="input-ios"
+                type="number"
+                min={1}
+                max={100}
+                step="1"
+                placeholder="默认 5"
+                value={form.orderBatchSize}
+                onChange={(e) => setForm((prev) => ({ ...prev, orderBatchSize: e.target.value }))}
               />
             </div>
           </div>

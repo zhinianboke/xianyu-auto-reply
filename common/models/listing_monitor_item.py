@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Index, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base, TimestampMixin
@@ -38,11 +38,24 @@ class ListingMonitorItem(TimestampMixin, Base):
     seller_id: Mapped[str | None] = mapped_column(String(120), comment="卖家ID（搜索返回，可能为加密串）")
     seller_user_id: Mapped[str | None] = mapped_column(String(64), comment="卖家真实用户ID（商品详情接口补全）")
     seller_nick: Mapped[str | None] = mapped_column(String(120), comment="卖家昵称")
-    want_count: Mapped[str | None] = mapped_column(String(32), comment="想要数")
+    seller_avatar: Mapped[str | None] = mapped_column(String(1000), comment="卖家头像URL")
+    want_count: Mapped[str | None] = mapped_column(String(32), comment="想要数（从营销标签解析的真实想要人数）")
+    tags: Mapped[str | None] = mapped_column(String(500), comment="商品营销标签（逗号分隔，如：4天内上新,235人想要）")
     publish_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="商品发布时间")
     target_url: Mapped[str | None] = mapped_column(String(1000), comment="商品详情跳转URL")
     raw_json: Mapped[str | None] = mapped_column(Text, comment="商品原始数据（搜索结果项JSON，兜底）")
     detail_json: Mapped[str | None] = mapped_column(Text, comment="商品详情数据（详情接口返回JSON）")
-    is_dm_sent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0", comment="是否已私信")
-    is_ordered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0", comment="是否已下单")
+    seller_fill_status: Mapped[str | None] = mapped_column(String(20), comment="卖家ID补全结果：failed-明确失败不再补全（如跨境商品/已下架）")
+    seller_fill_fail_reason: Mapped[str | None] = mapped_column(String(500), comment="卖家ID补全失败原因（明确业务失败的原文）")
+    is_dm_sent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0", comment="是否已发起私信（已处理，避免重复发送）")
+    dm_account_id: Mapped[str | None] = mapped_column(String(80), comment="成功私信使用的账号ID（后续优先用该账号下单）")
+    dm_chat_id: Mapped[str | None] = mapped_column(String(80), comment="私信会话ID（create-chat 返回的 chat_id）")
+    dm_status: Mapped[str | None] = mapped_column(String(20), comment="私信发送结果：success-成功，failed-失败(被拦截)，unknown-未确认")
+    dm_fail_reason: Mapped[str | None] = mapped_column(String(500), comment="私信发送失败原因（如安全拦截文案）")
+    dm_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", comment="私信发送尝试次数（失败重试用，达上限后不再重试）")
+    is_ordered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0", comment="是否已下单成功")
+    order_id: Mapped[str | None] = mapped_column(String(64), comment="下单成功的订单ID（拍下）")
+    order_status: Mapped[str | None] = mapped_column(String(20), comment="下单结果：success-成功，failed-失败")
+    order_fail_reason: Mapped[str | None] = mapped_column(String(500), comment="下单失败原因")
+    order_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", comment="下单尝试次数（失败重试用，达上限后不再重试）")
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="最近一次采集到的时间")

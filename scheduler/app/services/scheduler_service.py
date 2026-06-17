@@ -35,6 +35,7 @@ from app.services.scheduler.delivery_timeout_task import delivery_timeout_task_s
 from app.services.scheduler.listing_monitor_task import listing_monitor_task_service
 from app.services.scheduler.seller_fill_task import seller_fill_task_service
 from app.services.scheduler.dm_send_task import dm_send_task_service
+from app.services.scheduler.auto_order_task import auto_order_task_service
 from app.services.scheduled_task_service import (
     ScheduledTaskService,
     TASK_CODE_REDELIVERY,
@@ -55,6 +56,7 @@ from app.services.scheduled_task_service import (
     TASK_CODE_LISTING_MONITOR,
     TASK_CODE_SELLER_FILL,
     TASK_CODE_DM_SEND,
+    TASK_CODE_AUTO_ORDER,
 )
 from common.db.session import async_session_maker
 
@@ -84,6 +86,7 @@ class SchedulerService:
         self._listing_monitor_task_handle: Optional[asyncio.Task] = None
         self._seller_fill_task_handle: Optional[asyncio.Task] = None
         self._dm_send_task_handle: Optional[asyncio.Task] = None
+        self._auto_order_task_handle: Optional[asyncio.Task] = None
         self._redelivery_task = RedeliveryTask()
         self._rate_task = RateTask()
         self._polish_task = polish_task_service
@@ -102,6 +105,7 @@ class SchedulerService:
         self._listing_monitor_task = listing_monitor_task_service
         self._seller_fill_task = seller_fill_task_service
         self._dm_send_task = dm_send_task_service
+        self._auto_order_task = auto_order_task_service
     
     @classmethod
     def get_instance(cls) -> "SchedulerService":
@@ -132,7 +136,7 @@ class SchedulerService:
         """重新加载所有任务配置"""
         for task_code in [TASK_CODE_REDELIVERY, TASK_CODE_RATE, TASK_CODE_POLISH, TASK_CODE_DAY_SWITCH, TASK_CODE_CLEANUP_BROWSER_DATA, TASK_CODE_FETCH_ORDERS, TASK_CODE_FETCH_PENDING_ORDERS, TASK_CODE_FETCH_ITEMS, TASK_CODE_LOGIN_RENEW, TASK_CODE_COOKIES_REFRESH, TASK_CODE_API_COOKIE_RENEW, TASK_CODE_CLOSE_NOTICE, TASK_CODE_RED_FLOWER, TASK_CODE_DB_BACKUP]:
             await self.reload_task_config(task_code)
-        for task_code in [TASK_CODE_DELIVERY_TIMEOUT, TASK_CODE_LISTING_MONITOR, TASK_CODE_SELLER_FILL, TASK_CODE_DM_SEND]:
+        for task_code in [TASK_CODE_DELIVERY_TIMEOUT, TASK_CODE_LISTING_MONITOR, TASK_CODE_SELLER_FILL, TASK_CODE_DM_SEND, TASK_CODE_AUTO_ORDER]:
             await self.reload_task_config(task_code)
     
     def start(self) -> None:
@@ -161,6 +165,7 @@ class SchedulerService:
         self._listing_monitor_task_handle = asyncio.create_task(self._run_listing_monitor_loop())
         self._seller_fill_task_handle = asyncio.create_task(self._run_seller_fill_loop())
         self._dm_send_task_handle = asyncio.create_task(self._run_dm_send_loop())
+        self._auto_order_task_handle = asyncio.create_task(self._run_auto_order_loop())
         logger.info("[定时任务调度] 已启动")
     
     def stop(self) -> None:
@@ -224,6 +229,9 @@ class SchedulerService:
         if self._dm_send_task_handle:
             self._dm_send_task_handle.cancel()
             self._dm_send_task_handle = None
+        if self._auto_order_task_handle:
+            self._auto_order_task_handle.cancel()
+            self._auto_order_task_handle = None
         logger.info("[定时任务调度] 已停止")
     
     def get_task_status(self) -> dict:
@@ -246,6 +254,7 @@ class SchedulerService:
         listing_monitor_config = ScheduledTaskService.get_cached_config(TASK_CODE_LISTING_MONITOR)
         seller_fill_config = ScheduledTaskService.get_cached_config(TASK_CODE_SELLER_FILL)
         dm_send_config = ScheduledTaskService.get_cached_config(TASK_CODE_DM_SEND)
+        auto_order_config = ScheduledTaskService.get_cached_config(TASK_CODE_AUTO_ORDER)
         
         return {
             "running": self._running,
@@ -376,6 +385,13 @@ class SchedulerService:
                         and not self._dm_send_task_handle.done()
                     ),
                 },
+                TASK_CODE_AUTO_ORDER: {
+                    "config": auto_order_config or {"interval_seconds": 60, "enabled": True},
+                    "task_running": (
+                        self._auto_order_task_handle is not None
+                        and not self._auto_order_task_handle.done()
+                    ),
+                },
             }
         }
     
@@ -433,13 +449,16 @@ class SchedulerService:
             await self._delivery_timeout_task.execute()
         elif task_code == TASK_CODE_LISTING_MONITOR:
             logger.info("[定时任务调度] 手动触发商品监控任务")
-            await self._listing_monitor_task.execute(force=True)
+            await self._listing_monitor_task.execute(force=True, trigger_type="manual")
         elif task_code == TASK_CODE_SELLER_FILL:
             logger.info("[定时任务调度] 手动触发采集商品卖家ID补全任务")
             await self._seller_fill_task.execute()
         elif task_code == TASK_CODE_DM_SEND:
             logger.info("[定时任务调度] 手动触发采集商品发送私信任务")
             await self._dm_send_task.execute()
+        elif task_code == TASK_CODE_AUTO_ORDER:
+            logger.info("[定时任务调度] 手动触发采集商品自动下单任务")
+            await self._auto_order_task.execute()
         else:
             logger.warning(f"[定时任务调度] 未知的任务代码: {task_code}")
     
@@ -1035,6 +1054,39 @@ class SchedulerService:
                 break
 
         logger.info("[定时任务调度] 采集商品发送私信任务循环结束")
+
+    async def _run_auto_order_loop(self) -> None:
+        """采集商品自动下单任务执行循环"""
+        logger.info("[定时任务调度] 采集商品自动下单任务循环开始")
+
+        # 初始加载配置
+        await self.reload_task_config(TASK_CODE_AUTO_ORDER)
+
+        while self._running:
+            config = ScheduledTaskService.get_cached_config(TASK_CODE_AUTO_ORDER)
+            if not config:
+                config = {"interval_seconds": 60, "enabled": True}
+
+            interval = config.get("interval_seconds", 60)
+            enabled = config.get("enabled", True)
+
+            if enabled:
+                try:
+                    await self._auto_order_task.execute()
+                except asyncio.CancelledError:
+                    logger.info("[定时任务调度] 采集商品自动下单任务被取消")
+                    break
+                except Exception as e:
+                    logger.error(f"[定时任务调度] 采集商品自动下单任务执行异常: {e}")
+
+            # 等待下一次执行
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                logger.info("[定时任务调度] 采集商品自动下单任务等待被取消")
+                break
+
+        logger.info("[定时任务调度] 采集商品自动下单任务循环结束")
 
 
 # 全局实例获取函数

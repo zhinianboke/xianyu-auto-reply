@@ -13,6 +13,7 @@ import {
   Loader2,
   PackageSearch,
   Pencil,
+  Play,
   Plus,
   RefreshCw,
   Search,
@@ -22,6 +23,7 @@ import {
 import {
   batchDeleteListingMonitorTasks,
   getListingMonitorTasks,
+  runListingMonitorTask,
   updateListingMonitorTaskStatus,
   MONITOR_TYPE_LABELS,
   type ListingMonitorTask,
@@ -58,6 +60,7 @@ export function ListingMonitor() {
   const [editingTask, setEditingTask] = useState<ListingMonitorTask | null>(null)
   const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false)
   const [statusUpdatingId, setStatusUpdatingId] = useState<number | null>(null)
+  const [runningId, setRunningId] = useState<number | null>(null)
 
   const loadTasks = async (nextPage = page, nextPageSize = pageSize) => {
     try {
@@ -156,6 +159,23 @@ export function ListingMonitor() {
       addToast({ type: 'error', message: getApiErrorMessage(error, '更新状态失败') })
     } finally {
       setStatusUpdatingId(null)
+    }
+  }
+
+  const handleRunNow = async (task: ListingMonitorTask) => {
+    setRunningId(task.id)
+    try {
+      const result = await runListingMonitorTask(task.id)
+      if (result.success) {
+        addToast({ type: 'success', message: result.message || '已发起采集' })
+        void loadTasks(page, pageSize)
+      } else {
+        addToast({ type: 'error', message: result.message || '采集执行失败' })
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '采集执行失败') })
+    } finally {
+      setRunningId(null)
     }
   }
 
@@ -297,8 +317,13 @@ export function ListingMonitor() {
                 <th>监控类型</th>
                 <th>商品关键字</th>
                 <th>价格区间</th>
+                <th>监控天数</th>
                 <th>间隔(分钟)</th>
                 <th>采集页数</th>
+                <th>私信条数</th>
+                <th>下单条数</th>
+                <th>已私信数</th>
+                <th>已下单数</th>
                 <th>关联账号</th>
                 <th>状态</th>
                 <th>更新时间</th>
@@ -308,13 +333,13 @@ export function ListingMonitor() {
             <tbody>
               {tableLoading ? (
                 <tr>
-                  <td colSpan={10} className="text-center py-12">
+                  <td colSpan={15} className="text-center py-12">
                     <Loader2 className="w-6 h-6 animate-spin text-blue-500 mx-auto" />
                   </td>
                 </tr>
               ) : tasks.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="text-center py-12 text-slate-400">
+                  <td colSpan={15} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <PackageSearch className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>暂无监控任务，点击右上角新建</p>
@@ -342,8 +367,13 @@ export function ListingMonitor() {
                       <span className="truncate block" title={item.keyword}>{item.keyword}</span>
                     </td>
                     <td className="whitespace-nowrap">{formatPriceRange(item)}</td>
+                    <td className="whitespace-nowrap">{item.monitor_type === 'price_drop' ? '-' : (item.publish_days ? `${item.publish_days}天内` : '最新')}</td>
                     <td>{item.interval_minutes}</td>
                     <td>{item.collect_pages}</td>
+                    <td>{item.dm_batch_size ?? 5}</td>
+                    <td>{item.order_batch_size ?? 5}</td>
+                    <td className="text-green-600 dark:text-green-400">{item.dm_sent_count ?? 0}</td>
+                    <td className="text-blue-600 dark:text-blue-400">{item.ordered_count ?? 0}</td>
                     <td className="whitespace-nowrap">
                       {item.account_ids && item.account_ids.length > 0 ? `${item.account_ids.length} 个账号` : '不限'}
                     </td>
@@ -362,6 +392,15 @@ export function ListingMonitor() {
                           className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400 transition-colors"
                         >
                           <Pencil className="w-4 h-4" />编辑
+                        </button>
+                        <button
+                          onClick={() => void handleRunNow(item)}
+                          disabled={runningId === item.id || !item.is_enabled}
+                          title={item.is_enabled ? '立即执行一次采集' : '请先启用任务'}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg hover:bg-green-50 dark:hover:bg-green-900/20 text-green-600 dark:text-green-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {runningId === item.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                          立即采集
                         </button>
                         <button
                           onClick={() => void handleToggleStatus(item)}

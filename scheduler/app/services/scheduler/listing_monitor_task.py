@@ -45,7 +45,9 @@ _ITEM_FIELD_LIMITS = {
     "pic_url": 1000,
     "seller_id": 120,
     "seller_nick": 120,
+    "seller_avatar": 1000,
     "want_count": 32,
+    "tags": 500,
     "target_url": 1000,
 }
 
@@ -81,15 +83,26 @@ class ListingMonitorTaskService:
 
     def __init__(self, task_name: str = "商品监控任务"):
         self.task_name = task_name
+        self._lock = asyncio.Lock()
 
-    async def execute(self, force: bool = False):
+    async def execute(self, force: bool = False, trigger_type: str = "auto"):
         """执行商品监控任务：遍历所有启用的监控任务并采集。
 
         Args:
             force: 是否强制执行（手动触发时为 True，忽略每个任务自身的间隔）。
                    定时调度时为 False，仅执行"距上次执行已达到自身 interval_minutes"的任务。
+            trigger_type: 触发方式，auto-定时自动，manual-手动（写入监控日志）。
+
+        并发保护：同一时刻只允许一个采集执行（含定时与手动），正在执行时本次直接跳过。
         """
-        logger.info(f"【{self.task_name}】开始执行（force={force}）")
+        if self._lock.locked():
+            logger.info(f"【{self.task_name}】已有采集任务正在执行，跳过本次（force={force}）")
+            return
+        async with self._lock:
+            await self._execute_inner(force, trigger_type)
+
+    async def _execute_inner(self, force: bool, trigger_type: str):
+        logger.info(f"【{self.task_name}】开始执行（force={force}，trigger_type={trigger_type}）")
         start_time = datetime.now()
 
         try:
@@ -108,7 +121,7 @@ class ListingMonitorTaskService:
             logger.info(f"【{self.task_name}】启用任务 {len(tasks)} 个，本次执行 {len(due_tasks)} 个")
             for index, task in enumerate(due_tasks):
                 try:
-                    await self._process_task(task)
+                    await self._process_task(task, trigger_type=trigger_type)
                 except Exception as exc:  # noqa: BLE001
                     logger.error(f"【{self.task_name}】监控任务 {task.id} 执行异常: {exc}")
                 # 任务间隔，避免请求过密
@@ -119,6 +132,34 @@ class ListingMonitorTaskService:
             logger.info(f"【{self.task_name}】执行完成，共处理 {len(due_tasks)} 个监控任务，耗时 {elapsed:.2f}秒")
         except Exception as exc:  # noqa: BLE001
             logger.error(f"【{self.task_name}】执行异常: {exc}")
+
+    async def run_single(self, task_id: int, trigger_type: str = "manual") -> dict:
+        """手动执行单个监控任务的采集（忽略间隔，立即执行一次）。
+
+        Returns: {"success": bool, "message": str}
+        """
+        logger.info(f"【{self.task_name}】手动执行单个任务 task_id={task_id}")
+        if self._lock.locked():
+            return {"success": False, "message": "采集任务正在执行中，请稍后再试"}
+        async with self._lock:
+            async with async_session_maker() as session:
+                task = (
+                    await session.execute(
+                        select(ListingMonitorTask).where(
+                            ListingMonitorTask.id == task_id,
+                            ListingMonitorTask.is_deleted.is_(False),
+                            ListingMonitorTask.is_enabled.is_(True),
+                        )
+                    )
+                ).scalar_one_or_none()
+            if not task:
+                return {"success": False, "message": "监控任务不存在、已删除或未启用"}
+            try:
+                await self._process_task(task, trigger_type=trigger_type)
+                return {"success": True, "message": "采集已执行"}
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"【{self.task_name}】手动执行任务 {task_id} 异常: {exc}")
+                return {"success": False, "message": f"采集执行失败: {exc}"}
 
     @staticmethod
     def _is_due(task: ListingMonitorTask, now_naive: datetime) -> bool:
@@ -187,7 +228,7 @@ class ListingMonitorTaskService:
                             rank[aid] = idx
         return rank
 
-    async def _process_task(self, task: ListingMonitorTask):
+    async def _process_task(self, task: ListingMonitorTask, trigger_type: str = "auto"):
         """处理单个监控任务：采集 + 入库 + 写日志 + 更新执行时间。"""
         sort_field, sort_value = _MONITOR_SORT_MAP.get(task.monitor_type, _MONITOR_SORT_MAP["listing"])
         accounts = await self._load_accounts(list(task.account_ids or []))
@@ -227,7 +268,7 @@ class ListingMonitorTaskService:
                 for offset in range(len(accounts)):
                     idx = (working_idx + offset) % len(accounts)
                     acc = accounts[idx]
-                    client = XianyuSearchClient(acc.account_id, acc.cookie)
+                    client = XianyuSearchClient(acc.account_id, acc.cookie, owner_id=acc.owner_id)
                     res = await client.search(
                         keyword=task.keyword,
                         page_number=page,
@@ -236,7 +277,10 @@ class ListingMonitorTaskService:
                         rows_per_page=_ROWS_PER_PAGE,
                         price_min=price_min,
                         price_max=price_max,
+                        publish_days=task.publish_days,
                     )
+                    # 令牌可能已刷新：回写内存账号Cookie，供同账号后续页复用，避免重复刷新
+                    acc.cookie = client.cookies_str
                     if res.get("success"):
                         working_idx = idx
                         used_account_id = acc.account_id
@@ -283,6 +327,7 @@ class ListingMonitorTaskService:
             updated=updated_count,
             status=status,
             message=message,
+            trigger_type=trigger_type,
         )
         await self._update_last_run(task.id)
 
@@ -326,7 +371,9 @@ class ListingMonitorTaskService:
                     row.pic_url = fields["pic_url"]
                     row.seller_id = fields["seller_id"]
                     row.seller_nick = fields["seller_nick"]
+                    row.seller_avatar = fields["seller_avatar"]
                     row.want_count = fields["want_count"]
+                    row.tags = fields["tags"]
                     if publish_time is not None:
                         row.publish_time = publish_time
                     row.target_url = fields["target_url"]
@@ -345,7 +392,9 @@ class ListingMonitorTaskService:
                             pic_url=fields["pic_url"],
                             seller_id=fields["seller_id"],
                             seller_nick=fields["seller_nick"],
+                            seller_avatar=fields["seller_avatar"],
                             want_count=fields["want_count"],
+                            tags=fields["tags"],
                             publish_time=publish_time,
                             target_url=fields["target_url"],
                             raw_json=raw_json,
@@ -384,6 +433,7 @@ class ListingMonitorTaskService:
         updated: int,
         status: str,
         message: str,
+        trigger_type: str = "auto",
     ):
         """写入一条监控执行日志。"""
         async with async_session_maker() as session:
@@ -393,6 +443,7 @@ class ListingMonitorTaskService:
                     owner_id=task.owner_id,
                     monitor_type=task.monitor_type,
                     keyword=task.keyword,
+                    trigger_type=trigger_type,
                     account_id=account_id,
                     used_account_ids=list(used_account_ids or []),
                     pages=pages,
