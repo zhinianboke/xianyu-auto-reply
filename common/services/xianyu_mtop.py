@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from typing import Any, Dict, Optional
 
@@ -59,6 +60,49 @@ _VALIDATE_MARKERS = (
 _MAX_ATTEMPTS = 3
 
 
+async def fetch_proxy_from_api(api_url: str, account_id: str = "") -> Optional[str]:
+    """调用代理 API 获取一个 HTTP 代理，返回 'http://host:port'，失败返回 None（直连）。
+
+    参照系统设置中的代理使用方式：GET api_url，响应为纯文本 IP:PORT（多行时取第一非空行），
+    严格解析 host:port 后拼成 http 代理 URL。失败（非200/空/格式异常/超时）统一返回 None。
+    """
+    if not api_url:
+        return None
+    try:
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(api_url) as resp:
+                if resp.status != 200:
+                    logger.warning(f"【{account_id}】代理API返回状态码 {resp.status}，本次直连")
+                    return None
+                text = (await resp.text() or "").strip()
+        if not text:
+            logger.warning(f"【{account_id}】代理API返回内容为空，本次直连")
+            return None
+        # 取第一非空行（兼容多行返回的代理供应商）
+        first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+        if not first_line:
+            return None
+        # 严格解析 host:port，避免误返回 HTML/JSON 被错误使用
+        matched = re.match(r"^([^\s:]+):(\d{1,5})$", first_line)
+        if not matched:
+            logger.warning(f"【{account_id}】代理API返回格式无法解析: {first_line!r}，本次直连")
+            return None
+        host = matched.group(1)
+        port = int(matched.group(2))
+        if not (1 <= port <= 65535):
+            logger.warning(f"【{account_id}】代理端口非法: {port}，本次直连")
+            return None
+        logger.info(f"【{account_id}】代理API获取成功: http://{host}:{port}")
+        return f"http://{host}:{port}"
+    except asyncio.TimeoutError:
+        logger.warning(f"【{account_id}】代理API调用超时（10s），本次直连")
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"【{account_id}】代理API调用异常: {exc}，本次直连")
+        return None
+
+
 async def mtop_call(
     account_id: str,
     cookies_str: str,
@@ -68,8 +112,12 @@ async def mtop_call(
     *,
     owner_id: Optional[int] = None,
     extra_params: Optional[Dict[str, str]] = None,
+    proxy: Optional[str] = None,
 ) -> Dict[str, Any]:
     """调用闲鱼 mtop 接口，统一处理令牌过期/Session过期/风控。
+
+    Args:
+        proxy: 代理地址URL（http://host:port 或 socks5://user:pass@host:port），空则直连。
 
     Returns:
         {
@@ -131,7 +179,10 @@ async def mtop_call(
         try:
             timeout = aiohttp.ClientTimeout(total=30)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(url, params=params, data={"data": data_val}, headers=headers) as resp:
+                # 代理为 HTTP 代理（来自代理API的 http://host:port），aiohttp 原生支持，无需额外依赖
+                async with session.post(
+                    url, params=params, data={"data": data_val}, headers=headers, proxy=proxy or None
+                ) as resp:
                     res_json = await resp.json(content_type=None)
                     set_cookies = extract_cookies_from_response(resp)
         except Exception as exc:  # noqa: BLE001
@@ -191,4 +242,4 @@ async def mtop_call(
     }
 
 
-__all__ = ["mtop_call"]
+__all__ = ["mtop_call", "fetch_proxy_from_api"]

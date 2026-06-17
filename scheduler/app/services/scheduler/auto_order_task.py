@@ -267,31 +267,21 @@ class AutoOrderTaskService:
         Returns: (status, 订单ID, 失败原因)，status ∈ {"success","account_invalid","failed"}
         """
         client = XianyuOrderClient(account.account_id, account.cookie, owner_id=account.owner_id)
-
-        render = await client.render(item_id)
+        result = await client.place_order(item_id)
         # 令牌可能已刷新：回写内存账号Cookie，供同账号后续商品复用
         account.cookie = client.cookies_str
-        if not render.get("success"):
-            reason = render.get("error")
-            if render.get("account_invalid"):
-                return "account_invalid", None, reason
+
+        status = result.get("status")
+        reason = result.get("error")
+        if status == "account_invalid":
+            return "account_invalid", None, reason
+        if status != "success":
             logger.warning(
-                f"【{self.task_name}】商品 {item_id} 下单渲染失败（账号 {account.account_id}）：{reason}"
+                f"【{self.task_name}】商品 {item_id} 下单失败（账号 {account.account_id}）：{reason}"
             )
             return "failed", None, reason
 
-        create = await client.create(render["item_buy_info"])
-        account.cookie = client.cookies_str
-        if not create.get("success"):
-            reason = create.get("error")
-            if create.get("account_invalid"):
-                return "account_invalid", None, reason
-            logger.warning(
-                f"【{self.task_name}】商品 {item_id} 创建订单失败（账号 {account.account_id}）：{reason}"
-            )
-            return "failed", None, reason
-
-        biz_order_id = create.get("biz_order_id")
+        biz_order_id = result.get("order_id")
         logger.info(
             f"【{self.task_name}】商品 {item_id} 下单成功（拍下）："
             f"账号={account.account_id}，订单ID={biz_order_id}"

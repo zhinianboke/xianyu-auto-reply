@@ -38,9 +38,13 @@ PYPROJECT_FILES = [
 ]
 
 # 额外需要包含的依赖（编译工具等）
+# 说明：部分包（pyautogui/pyscreeze/pytweening）在 PyPI 上只有源码包(.tar.gz)，
+#       离线机器安装时需要现场编译，编译隔离环境依赖 setuptools 和 wheel，
+#       因此必须把它们一并打进离线包，否则会报 "Could not find ... wheel"。
 EXTRA_DEPS = [
     "cython>=3.0.0",
     "setuptools>=68.0",
+    "wheel>=0.40.0",
 ]
 
 
@@ -138,17 +142,21 @@ def write_requirements(deps, output_path):
 
 def download_packages(requirements_path, output_dir):
     """
-    使用 pip download 下载所有依赖的 wheel 包
+    使用 pip wheel 将所有依赖（含仅有源码包的依赖）预编译为 wheel 包
+
+    说明：
+        使用 pip wheel 而非 pip download，可在联网机器上把 pyautogui/pyscreeze/
+        pytweening 等仅提供源码包(.tar.gz)的依赖直接编译成 .whl，
+        从而保证离线机器安装时无需任何编译，避免缺少 wheel/编译工具导致失败。
 
     Args:
         requirements_path: requirements.txt 路径
-        output_dir: 下载目标目录
+        output_dir: 输出（wheel）目标目录
     """
     cmd = [
-        sys.executable, '-m', 'pip', 'download',
+        sys.executable, '-m', 'pip', 'wheel',
         '-r', str(requirements_path),
-        '-d', str(output_dir),
-        '--prefer-binary',
+        '-w', str(output_dir),
     ]
 
     print(f"  执行: {' '.join(cmd)}")
@@ -158,7 +166,7 @@ def download_packages(requirements_path, output_dir):
 
     if result.returncode != 0:
         print()
-        print("  [错误] 部分依赖下载失败，请检查网络连接和依赖版本")
+        print("  [错误] 部分依赖编译/下载失败，请检查网络连接和依赖版本")
         return False
 
     return True

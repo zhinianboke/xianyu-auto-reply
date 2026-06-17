@@ -23,6 +23,7 @@ from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_task import ListingMonitorTask
 from common.models.xy_account import XYAccount
 from common.services.xianyu_detail_client import XianyuItemDetailClient
+from common.services.xianyu_mtop import fetch_proxy_from_api
 
 _INACTIVE_STATUSES = {"inactive", "disabled", "suspended", "deleted"}
 # 单次任务最多处理的待补全商品数，避免单次运行过久
@@ -52,6 +53,8 @@ class SellerFillTaskService:
 
             # 任务ID -> 该任务可用账号列表（缓存，避免重复查询）
             task_accounts_cache: Dict[int, List[XYAccount]] = {}
+            # 任务ID -> 实际代理URL（本轮该任务复用，None=直连）
+            task_proxy_cache: Dict[int, Optional[str]] = {}
             # 任务ID -> 轮换指针（让同一任务的多条商品轮换使用不同账号）
             task_rr: Dict[int, int] = {}
             # 本次运行被判定不可用的账号（停用至本次结束）
@@ -64,8 +67,12 @@ class SellerFillTaskService:
             for pk, item_id, task_id in items:
                 accounts = task_accounts_cache.get(task_id)
                 if accounts is None:
-                    accounts = await self._load_task_accounts(task_id)
+                    accounts, proxy_api = await self._load_task_accounts(task_id)
                     task_accounts_cache[task_id] = accounts
+                    # 任务配置了代理API地址时，取一个HTTP代理供本任务本轮使用（失败则直连）
+                    task_proxy_cache[task_id] = (
+                        await fetch_proxy_from_api(proxy_api, account_id=str(task_id)) if proxy_api else None
+                    )
 
                 usable = [a for a in accounts if a.account_id not in disabled_accounts]
                 if not usable:
@@ -78,6 +85,7 @@ class SellerFillTaskService:
                     accounts=usable,
                     rr_start=task_rr.get(task_id, 0),
                     disabled_accounts=disabled_accounts,
+                    proxy=task_proxy_cache.get(task_id),
                 )
                 # 轮换指针前移
                 task_rr[task_id] = task_rr.get(task_id, 0) + 1
@@ -127,8 +135,11 @@ class SellerFillTaskService:
             rows = (await session.execute(stmt)).all()
             return [(r[0], r[1], r[2]) for r in rows]
 
-    async def _load_task_accounts(self, task_id: int) -> List[XYAccount]:
-        """加载监控任务配置的可用账号（任务须未删除且启用；保持配置顺序、过滤禁用/空Cookie）。"""
+    async def _load_task_accounts(self, task_id: int) -> Tuple[List[XYAccount], Optional[str]]:
+        """加载监控任务配置的可用账号与代理API地址（任务须未删除且启用；保持配置顺序、过滤禁用/空Cookie）。
+
+        Returns: (可用账号列表, 代理API地址或None)
+        """
         async with async_session_maker() as session:
             task = (
                 await session.execute(
@@ -140,10 +151,11 @@ class SellerFillTaskService:
                 )
             ).scalar_one_or_none()
             if not task:
-                return []
+                return [], None
+            proxy_api = task.proxy_url
             account_ids = list(task.account_ids or [])
             if not account_ids:
-                return []
+                return [], proxy_api
             rows = list(
                 (
                     await session.execute(
@@ -161,7 +173,7 @@ class SellerFillTaskService:
             if (acc.status or "active").strip().lower() in _INACTIVE_STATUSES:
                 continue
             ordered.append(acc)
-        return ordered
+        return ordered, proxy_api
 
     async def _fill_one_item(
         self,
@@ -170,6 +182,7 @@ class SellerFillTaskService:
         accounts: List[XYAccount],
         rr_start: int,
         disabled_accounts: set[str],
+        proxy: Optional[str] = None,
     ) -> str:
         """补全单个商品的卖家ID与详情。
 
@@ -182,7 +195,7 @@ class SellerFillTaskService:
             if acc.account_id in disabled_accounts:
                 continue
             tried += 1
-            client = XianyuItemDetailClient(acc.account_id, acc.cookie, owner_id=acc.owner_id)
+            client = XianyuItemDetailClient(acc.account_id, acc.cookie, owner_id=acc.owner_id, proxy=proxy)
             result = await client.get_detail(item_id)
             # 令牌可能已刷新：回写内存账号Cookie，供同账号后续商品复用
             acc.cookie = client.cookies_str

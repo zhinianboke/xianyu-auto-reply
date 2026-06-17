@@ -41,11 +41,13 @@ interface ListingMonitorFormState {
   publishDays: string
   intervalMinutes: string
   collectPages: string
+  proxyUrl: string
   accountIds: string[]
   orderAccountIds: string[]
   dmContent: string
   dmBatchSize: string
   orderBatchSize: string
+  directOrder: boolean
 }
 
 const buildInitialState = (initial?: ListingMonitorTask | null): ListingMonitorFormState => ({
@@ -56,11 +58,13 @@ const buildInitialState = (initial?: ListingMonitorTask | null): ListingMonitorF
   publishDays: initial?.publish_days != null ? String(initial.publish_days) : '',
   intervalMinutes: initial?.interval_minutes != null ? String(initial.interval_minutes) : '5',
   collectPages: initial?.collect_pages != null ? String(initial.collect_pages) : '1',
+  proxyUrl: initial?.proxy_url ?? '',
   accountIds: initial?.account_ids ? [...initial.account_ids] : [],
   orderAccountIds: initial?.order_account_ids ? [...initial.order_account_ids] : [],
   dmContent: initial?.dm_content ?? '',
   dmBatchSize: initial?.dm_batch_size != null ? String(initial.dm_batch_size) : '5',
   orderBatchSize: initial?.order_batch_size != null ? String(initial.order_batch_size) : '5',
+  directOrder: Boolean(initial?.direct_order),
 })
 
 export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMonitorFormModalProps) {
@@ -193,8 +197,13 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
       return
     }
 
-    if (form.orderAccountIds.length > 0 && !form.dmContent.trim()) {
-      addToast({ type: 'warning', message: '配置了下单账号后，私信内容必填' })
+    if (form.orderAccountIds.length > 0 && !form.dmContent.trim() && !form.directOrder) {
+      addToast({ type: 'warning', message: '配置了下单账号后，私信内容必填（或开启采集后直接下单）' })
+      return
+    }
+
+    if (form.directOrder && form.orderAccountIds.length === 0) {
+      addToast({ type: 'warning', message: '开启采集后直接下单需配置下单账号' })
       return
     }
 
@@ -222,11 +231,13 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
           : null,
         interval_minutes: intervalMinutes,
         collect_pages: collectPages,
+        proxy_url: form.proxyUrl.trim() || null,
         account_ids: form.accountIds,
         order_account_ids: form.orderAccountIds,
         dm_content: form.dmContent.trim() || null,
         dm_batch_size: dmBatchSize,
         order_batch_size: orderBatchSize,
+        direct_order: form.directOrder,
       }
       const result = isEditMode && initial
         ? await updateListingMonitorTask(initial.id, payload)
@@ -355,6 +366,19 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
                   onChange={(e) => setForm((prev) => ({ ...prev, collectPages: e.target.value }))}
                 />
               </div>
+            </div>
+
+            <div className="input-group">
+              <label className="input-label">
+                代理API地址
+                <span className="text-xs text-slate-400 ml-1">（选填；调用该API获取代理IP，采集与详情请求走代理。留空=直连）</span>
+              </label>
+              <input
+                className="input-ios"
+                placeholder="如：http://proxy-provider.com/get?type=text  （留空不使用代理）"
+                value={form.proxyUrl}
+                onChange={(e) => setForm((prev) => ({ ...prev, proxyUrl: e.target.value }))}
+              />
             </div>
 
             <div className="input-group">
@@ -530,6 +554,19 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
                 value={form.orderBatchSize}
                 onChange={(e) => setForm((prev) => ({ ...prev, orderBatchSize: e.target.value }))}
               />
+            </div>
+
+            <div className="input-group">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  checked={form.directOrder}
+                  onChange={(e) => setForm((prev) => ({ ...prev, directOrder: e.target.checked }))}
+                />
+                <span className="input-label mb-0">采集后直接下单</span>
+              </label>
+              <p className="text-xs text-slate-400 mt-1">开启后，新采集到的商品立即用下单账号下单（跳过私信），下单完成后再入库，避免与定时下单任务并发。需配置下单账号。</p>
             </div>
           </div>
         </div>

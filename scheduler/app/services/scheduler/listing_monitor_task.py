@@ -24,6 +24,8 @@ from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_log import ListingMonitorLog
 from common.models.listing_monitor_task import ListingMonitorTask
 from common.models.xy_account import XYAccount
+from common.services.xianyu_mtop import fetch_proxy_from_api
+from common.services.xianyu_order_client import XianyuOrderClient
 from common.services.xianyu_search_client import XianyuSearchClient, parse_search_item
 from common.utils.time_utils import BEIJING_TZ, get_beijing_now_naive
 
@@ -259,6 +261,8 @@ class ListingMonitorTaskService:
         else:
             price_min = float(task.price_min) if task.price_min is not None else None
             price_max = float(task.price_max) if task.price_max is not None else None
+            # 任务配置了代理API地址时，取一个HTTP代理供本次采集使用（失败则直连）
+            task_proxy = await fetch_proxy_from_api(task.proxy_url, account_id=str(task.id)) if task.proxy_url else None
             working_idx = 0
             page_failed = False
 
@@ -268,7 +272,7 @@ class ListingMonitorTaskService:
                 for offset in range(len(accounts)):
                     idx = (working_idx + offset) % len(accounts)
                     acc = accounts[idx]
-                    client = XianyuSearchClient(acc.account_id, acc.cookie, owner_id=acc.owner_id)
+                    client = XianyuSearchClient(acc.account_id, acc.cookie, owner_id=acc.owner_id, proxy=task_proxy)
                     res = await client.search(
                         keyword=task.keyword,
                         page_number=page,
@@ -350,6 +354,14 @@ class ListingMonitorTaskService:
         inserted = 0
         updated = 0
 
+        # 采集后直接下单：预加载下单账号（order_account_ids），新商品入库前先下单
+        direct_order = bool(task.direct_order)
+        order_accounts: List[XYAccount] = []
+        if direct_order:
+            order_accounts = await self._load_accounts(list(task.order_account_ids or []))
+        order_disabled: set[str] = set()
+        order_rr = [0]
+
         async with async_session_maker() as session:
             item_ids = list(dedup.keys())
             existing_stmt = select(ListingMonitorItem).where(
@@ -381,30 +393,92 @@ class ListingMonitorTaskService:
                     row.last_seen_at = now
                     updated += 1
                 else:
-                    session.add(
-                        ListingMonitorItem(
-                            monitor_task_id=task.id,
-                            owner_id=task.owner_id,
-                            item_id=item_id,
-                            title=fields["title"],
-                            price=fields["price"],
-                            area=fields["area"],
-                            pic_url=fields["pic_url"],
-                            seller_id=fields["seller_id"],
-                            seller_nick=fields["seller_nick"],
-                            seller_avatar=fields["seller_avatar"],
-                            want_count=fields["want_count"],
-                            tags=fields["tags"],
-                            publish_time=publish_time,
-                            target_url=fields["target_url"],
-                            raw_json=raw_json,
-                            last_seen_at=now,
-                        )
+                    new_item = ListingMonitorItem(
+                        monitor_task_id=task.id,
+                        owner_id=task.owner_id,
+                        item_id=item_id,
+                        title=fields["title"],
+                        price=fields["price"],
+                        area=fields["area"],
+                        pic_url=fields["pic_url"],
+                        seller_id=fields["seller_id"],
+                        seller_nick=fields["seller_nick"],
+                        seller_avatar=fields["seller_avatar"],
+                        want_count=fields["want_count"],
+                        tags=fields["tags"],
+                        publish_time=publish_time,
+                        target_url=fields["target_url"],
+                        raw_json=raw_json,
+                        last_seen_at=now,
                     )
+                    # 开启直接下单且配置了下单账号：先下单再入库（入库即终态，避免与定时下单并发）
+                    if direct_order and order_accounts:
+                        try:
+                            await self._direct_order_item(new_item, item_id, order_accounts, order_disabled, order_rr)
+                        except Exception as exc:  # noqa: BLE001
+                            # 下单过程异常也要把商品入库并保存失败原因，避免漏采集
+                            logger.error(f"【{self.task_name}】商品 {item_id} 采集后直接下单异常: {exc}")
+                            new_item.is_dm_sent = True
+                            new_item.order_status = "failed"
+                            new_item.order_fail_reason = str(exc)[:500]
+                            new_item.order_attempts = 1
+                    session.add(new_item)
                     inserted += 1
 
             await session.commit()
         return inserted, updated
+
+    async def _direct_order_item(
+        self,
+        item: ListingMonitorItem,
+        item_id: str,
+        accounts: List[XYAccount],
+        disabled: set,
+        rr: List[int],
+    ) -> None:
+        """采集后直接下单：用下单账号轮换对该商品下单，结果写入 item（随后随采集一起入库）。
+
+        直接下单跳过私信环节（置 is_dm_sent=true）：
+        - 下单成功：is_ordered=true，记录 order_id；
+        - 业务失败：order_status=failed、order_attempts=1，后续由定时下单任务重试；
+        - 账号不可用：本次停用换号；全部不可用则不下单（is_ordered=false、order_attempts=0），
+          交由定时下单任务后续重试。
+        """
+        item.is_dm_sent = True  # 直接下单跳过私信
+        n = len(accounts)
+        start = rr[0]  # 固定本次起点，避免循环内修改导致索引跳跃
+        for offset in range(n):
+            acc = accounts[(start + offset) % n]
+            if acc.account_id in disabled:
+                continue
+            client = XianyuOrderClient(acc.account_id, acc.cookie, owner_id=acc.owner_id)
+            result = await client.place_order(item_id)
+            acc.cookie = client.cookies_str  # 令牌刷新回写
+            status = result.get("status")
+            if status == "account_invalid":
+                disabled.add(acc.account_id)
+                logger.warning(
+                    f"【{self.task_name}】直接下单账号 {acc.account_id} 不可用（{result.get('error')}），换下一个账号"
+                )
+                continue
+            # 确定使用该账号：推进轮换指针到下一个账号
+            rr[0] = start + offset + 1
+            item.dm_account_id = acc.account_id
+            item.order_attempts = 1
+            if status == "success":
+                item.is_ordered = True
+                item.order_status = "success"
+                order_id = result.get("order_id")
+                item.order_id = str(order_id)[:64] if order_id else None
+                logger.info(f"【{self.task_name}】商品 {item_id} 采集后直接下单成功（拍下）：账号={acc.account_id}，订单ID={item.order_id}")
+            else:
+                item.order_status = "failed"
+                item.order_fail_reason = str(result.get("error"))[:500] if result.get("error") else None
+                logger.warning(f"【{self.task_name}】商品 {item_id} 采集后直接下单失败（账号 {acc.account_id}）：{result.get('error')}")
+            return
+        # 所有下单账号本次都不可用：推进一格避免下个商品仍从同一坏账号开始，交由定时下单任务后续重试
+        rr[0] = start + 1
+        logger.warning(f"【{self.task_name}】商品 {item_id} 采集后直接下单无可用账号，留待定时下单任务重试")
 
     @staticmethod
     def _dump_raw(raw_main) -> Optional[str]:
