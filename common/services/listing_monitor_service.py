@@ -622,6 +622,52 @@ class ListingMonitorService:
         await self.session.commit()
         return len(tasks)
 
+    async def batch_update_accounts(
+        self,
+        owner_id: Optional[int],
+        task_ids: Sequence[int],
+        field: str,
+        account_ids: Any,
+    ) -> int:
+        """批量修改监控任务的账号字段（监控账号 account_ids 或下单账号 order_account_ids）。
+
+        Args:
+            field: 仅允许 "account_ids"（监控/采集账号）或 "order_account_ids"（下单账号）
+            account_ids: 选择的账号ID列表（会校验归属，普通用户只能选自己的账号）
+
+        Returns: 实际更新的任务数
+        """
+        if field not in ("account_ids", "order_account_ids"):
+            raise ValueError("不支持的批量修改字段")
+
+        normalized_ids: List[int] = []
+        for raw_id in task_ids:
+            try:
+                task_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if task_id > 0 and task_id not in normalized_ids:
+                normalized_ids.append(task_id)
+        if not normalized_ids:
+            raise ValueError("请选择要修改的监控任务")
+
+        valid_account_ids = await self._normalize_account_ids(owner_id, account_ids)
+        if not valid_account_ids:
+            label = "监控账号" if field == "account_ids" else "下单账号"
+            raise ValueError(f"请至少选择一个{label}")
+
+        conditions = self._scope_conditions(owner_id)
+        conditions.append(ListingMonitorTask.id.in_(normalized_ids))
+        stmt = select(ListingMonitorTask).where(*conditions)
+        tasks = (await self.session.execute(stmt)).scalars().all()
+        now = get_beijing_now_naive()
+        for task in tasks:
+            setattr(task, field, valid_account_ids)
+            task.updated_at = now
+
+        await self.session.commit()
+        return len(tasks)
+
     async def list_task_options(self, owner_id: Optional[int]) -> List[Dict[str, Any]]:
         """查询监控任务下拉选项（用于日志/采集商品页按任务筛选）。"""
         conditions = self._scope_conditions(owner_id)

@@ -19,6 +19,8 @@ import {
   Search,
   Square,
   Trash2,
+  Users,
+  ShoppingCart,
 } from 'lucide-react'
 import {
   batchDeleteListingMonitorTasks,
@@ -33,6 +35,7 @@ import { PageLoading } from '@/components/common/Loading'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ListingMonitorFormModal } from './ListingMonitorFormModal'
+import { BatchAccountsModal, type BatchAccountField } from './BatchAccountsModal'
 
 const formatPriceRange = (task: ListingMonitorTask): string => {
   const min = task.price_min
@@ -59,6 +62,7 @@ export function ListingMonitor() {
   const [showFormModal, setShowFormModal] = useState(false)
   const [editingTask, setEditingTask] = useState<ListingMonitorTask | null>(null)
   const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false)
+  const [batchAccountsField, setBatchAccountsField] = useState<BatchAccountField | null>(null)
   const [statusUpdatingId, setStatusUpdatingId] = useState<number | null>(null)
   const [runningId, setRunningId] = useState<number | null>(null)
 
@@ -245,12 +249,22 @@ export function ListingMonitor() {
           <h1 className="page-title">商品监控</h1>
           <p className="page-description">按关键字与价格区间监控闲鱼商品上新或降价，可设置任务间隔并关联指定账号。</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex gap-3 flex-wrap">
           {selectedIds.size > 0 && (
-            <button className="btn-ios-danger" onClick={() => setBatchDeleteConfirmOpen(true)} disabled={tableLoading || deleting}>
-              <Trash2 className="w-4 h-4" />
-              删除选中 ({selectedIds.size})
-            </button>
+            <>
+              <button className="btn-ios-secondary" onClick={() => setBatchAccountsField('account_ids')} disabled={tableLoading || deleting}>
+                <Users className="w-4 h-4" />
+                批量改监控账号 ({selectedIds.size})
+              </button>
+              <button className="btn-ios-secondary" onClick={() => setBatchAccountsField('order_account_ids')} disabled={tableLoading || deleting}>
+                <ShoppingCart className="w-4 h-4" />
+                批量改下单账号 ({selectedIds.size})
+              </button>
+              <button className="btn-ios-danger" onClick={() => setBatchDeleteConfirmOpen(true)} disabled={tableLoading || deleting}>
+                <Trash2 className="w-4 h-4" />
+                删除选中 ({selectedIds.size})
+              </button>
+            </>
           )}
           <button className="btn-ios-primary" onClick={handleOpenCreate}>
             <Plus className="w-4 h-4" />
@@ -397,8 +411,8 @@ export function ListingMonitor() {
                       )}
                     </td>
                     <td className="whitespace-nowrap text-slate-500 dark:text-slate-400">{item.updated_at ? new Date(item.updated_at).toLocaleString('zh-CN') : '-'}</td>
-                    <td>
-                      <div className="flex flex-wrap gap-2">
+                    <td className="whitespace-nowrap">
+                      <div className="flex items-center gap-1">
                         <button
                           onClick={() => handleOpenEdit(item)}
                           className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400 transition-colors"
@@ -480,6 +494,18 @@ export function ListingMonitor() {
             setEditingTask(null)
           }}
           onSaved={handleSaved}
+        />
+      )}
+
+      {batchAccountsField && (
+        <BatchAccountsModal
+          field={batchAccountsField}
+          taskIds={Array.from(selectedIds)}
+          onClose={() => setBatchAccountsField(null)}
+          onSaved={async () => {
+            setBatchAccountsField(null)
+            await loadTasks(page, pageSize)
+          }}
         />
       )}
 

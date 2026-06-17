@@ -152,6 +152,15 @@ export const batchDeleteListingMonitorTasks = (
   return post(`${PREFIX}/batch-delete`, { ids: taskIds })
 }
 
+// 批量修改监控任务的账号（监控账号 account_ids 或下单账号 order_account_ids）
+export const batchUpdateListingMonitorAccounts = (
+  taskIds: number[],
+  field: 'account_ids' | 'order_account_ids',
+  accountIds: string[]
+): Promise<ApiResponse<ListingMonitorBatchDeleteResult>> => {
+  return post(`${PREFIX}/batch-update-accounts`, { ids: taskIds, field, account_ids: accountIds })
+}
+
 // 手动执行单个监控任务采集（立即执行一次）
 export const runListingMonitorTask = (
   taskId: number

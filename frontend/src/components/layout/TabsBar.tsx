@@ -82,6 +82,10 @@ const routeTitles: Record<string, string> = {
   '/product-publish/batch': '批量发布',
   '/product-publish/addresses': '随机地址库',
   '/product-publish/logs': '发布日志',
+  '/product-monitor/overview': '监控总览',
+  '/product-monitor/listing': '商品监控',
+  '/product-monitor/logs': '监控日志',
+  '/product-monitor/items': '采集商品',
   '/blacklist': '黑名单管理',
 }
 

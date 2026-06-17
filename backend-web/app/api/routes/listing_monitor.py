@@ -79,6 +79,14 @@ class ListingMonitorBatchDeleteRequest(BaseModel):
     ids: List[int] = Field(default_factory=list, description="监控任务ID列表")
 
 
+class ListingMonitorBatchAccountsRequest(BaseModel):
+    """批量修改上新监控任务账号请求"""
+
+    ids: List[int] = Field(default_factory=list, description="监控任务ID列表")
+    field: str = Field(..., description="要修改的账号字段：account_ids-监控账号，order_account_ids-下单账号")
+    account_ids: List[str] = Field(default_factory=list, description="选择的账号ID列表")
+
+
 @router.get("", response_model=ApiResponse)
 async def list_listing_monitor_tasks(
     page: int = Query(1, ge=1, description="页码"),
@@ -208,6 +216,27 @@ async def batch_delete_listing_monitor_tasks(
     return ApiResponse(
         success=True,
         message=f"成功删除 {success_count} 条监控任务",
+        data={"success_count": success_count, "total_count": len(req.ids)},
+    )
+
+
+@router.post("/batch-update-accounts", response_model=ApiResponse)
+async def batch_update_listing_monitor_accounts(
+    req: ListingMonitorBatchAccountsRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """批量修改监控任务的监控账号或下单账号"""
+    owner_id, _ = resolve_owner_scope(current_user)
+    svc = ListingMonitorService(session)
+    try:
+        success_count = await svc.batch_update_accounts(owner_id, req.ids, req.field, req.account_ids)
+    except ValueError as exc:
+        return ApiResponse(success=False, message=str(exc))
+    field_label = "监控账号" if req.field == "account_ids" else "下单账号"
+    return ApiResponse(
+        success=True,
+        message=f"成功为 {success_count} 条监控任务修改{field_label}",
         data={"success_count": success_count, "total_count": len(req.ids)},
     )
 

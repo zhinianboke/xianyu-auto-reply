@@ -77,11 +77,37 @@ async def _fetch_remote_json(path: str) -> dict[str, Any] | None:
 
 # ==================== 远程广告 ====================
 
-def _normalize_remote_ad(ad: dict[str, Any], seq: int) -> dict[str, Any]:
-    """规范化单条远程广告：标记来源为 remote，并将 ID 取负避免与本地正数 ID 冲突"""
+def _to_absolute_remote_url(url: str | None, base_url: str) -> str | None:
+    """
+    将远程内容中的相对资源路径转换为远程官方服务器的绝对地址
+
+    远程广告的 image_url 多为相对路径（如 /static/uploads/images/xxx.jpg），
+    它相对的是远程服务器；若不转换，前端 <img src> 会按本地源解析导致图片 404。
+    已是绝对地址（http/https）或为空时原样返回。
+
+    Args:
+        url: 原始 URL（可能是相对路径、绝对地址或 None）
+        base_url: 远程官方服务器基址（不含末尾斜杠）
+
+    Returns:
+        绝对地址，或原值
+    """
+    if not url:
+        return url
+    if url.startswith(("http://", "https://")):
+        return url
+    if url.startswith("/") and base_url:
+        return f"{base_url}{url}"
+    return url
+
+
+def _normalize_remote_ad(ad: dict[str, Any], seq: int, base_url: str) -> dict[str, Any]:
+    """规范化单条远程广告：标记来源为 remote、ID 取负避免与本地正数 ID 冲突，
+    并将相对图片路径补全为远程官方服务器的绝对地址。"""
     item = dict(ad)
     item["source"] = "remote"
     item["id"] = -seq
+    item["image_url"] = _to_absolute_remote_url(item.get("image_url"), base_url)
     return item
 
 
@@ -99,8 +125,11 @@ async def fetch_remote_public_ads(
         {"carousel": [...], "text": [...]}，失败或未启用时返回空分组
     """
     empty: dict[str, list[dict[str, Any]]] = {"carousel": [], "text": []}
-    if not get_settings().enable_remote_ads:
+    settings = get_settings()
+    if not settings.enable_remote_ads:
         return empty
+
+    base_url = (settings.remote_official_base_url or "").strip().rstrip("/")
 
     data = await _fetch_remote_json(_REMOTE_ADS_PATH)
     if not data or not data.get("success") or not data.get("data"):
@@ -119,13 +148,13 @@ async def fetch_remote_public_ads(
         if (ad.get("title"), ad.get("link")) in dedup:
             continue
         seq += 1
-        carousel.append(_normalize_remote_ad(ad, seq))
+        carousel.append(_normalize_remote_ad(ad, seq, base_url))
 
     for ad in raw_text:
         if (ad.get("title"), ad.get("link")) in dedup:
             continue
         seq += 1
-        text.append(_normalize_remote_ad(ad, seq))
+        text.append(_normalize_remote_ad(ad, seq, base_url))
 
     return {"carousel": carousel, "text": text}
 

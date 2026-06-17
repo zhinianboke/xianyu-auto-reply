@@ -255,18 +255,18 @@ class ListingMonitorTaskService:
                 )
 
         # 风控冷却过滤：去掉处于冷却期（被挤爆/触发验证后10分钟内）的账号；
-        # 若全部都在冷却期，则兜底使用"最先进入冷却"的账号（最接近冷却结束）。
+        # 若全部都在冷却期，则本次不采集，并在监控日志记录失败原因。
+        cooldown_blocked = False
         if accounts:
             all_ids = [a.account_id for a in accounts]
             available_ids = set(account_cooldown_manager.filter_available(all_ids))
             if available_ids:
                 accounts = [a for a in accounts if a.account_id in available_ids]
             else:
-                earliest = account_cooldown_manager.earliest_cooling(all_ids)
-                accounts = [a for a in accounts if a.account_id == earliest] or accounts[:1]
+                cooldown_blocked = True
+                accounts = []
                 logger.warning(
-                    f"【{self.task_name}】监控任务 {task.id} 所有账号均在风控冷却期，"
-                    f"兜底使用最先进入冷却的账号 {accounts[0].account_id if accounts else None}"
+                    f"【{self.task_name}】监控任务 {task.id} 所有关联账号均在风控冷却期，本次跳过采集"
                 )
 
         used_account_id: Optional[str] = None
@@ -278,7 +278,10 @@ class ListingMonitorTaskService:
 
         if not accounts:
             status = "failed"
-            message = "无可用账号（账号不存在/禁用/Cookie为空）"
+            if cooldown_blocked:
+                message = "所有关联账号都在风控冷却期，本次跳过采集"
+            else:
+                message = "无可用账号（账号不存在/禁用/Cookie为空）"
             logger.warning(f"【{self.task_name}】监控任务 {task.id}({task.keyword}) {message}")
         else:
             price_min = float(task.price_min) if task.price_min is not None else None
