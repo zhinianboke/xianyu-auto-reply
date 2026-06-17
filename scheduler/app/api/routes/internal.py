@@ -13,6 +13,7 @@ from fastapi import APIRouter
 from loguru import logger
 from pydantic import BaseModel
 
+from app.services.scheduler.listing_monitor_task import listing_monitor_task_service
 from app.services.scheduler_service import get_scheduler_service
 from common.utils.time_utils import get_beijing_now_naive
 
@@ -124,7 +125,7 @@ async def trigger_task(task_code: str):
     """
     try:
         # 验证任务代码
-        if task_code not in ["redelivery", "rate", "polish", "day_switch", "cleanup_browser_data", "fetch_orders", "fetch_pending_orders", "fetch_items", "login_renew", "cookies_refresh", "api_cookie_renew", "close_notice", "red_flower", "db_backup", "delivery_timeout"]:
+        if task_code not in ["redelivery", "rate", "polish", "day_switch", "cleanup_browser_data", "fetch_orders", "fetch_pending_orders", "fetch_items", "login_renew", "cookies_refresh", "api_cookie_renew", "close_notice", "red_flower", "db_backup", "delivery_timeout", "listing_monitor", "seller_fill", "dm_send", "auto_order"]:
             return {
                 "success": False,
                 "code": 400,
@@ -150,5 +151,26 @@ async def trigger_task(task_code: str):
             "success": False,
             "code": 500,
             "message": f"触发任务执行失败: {str(e)}",
+            "data": None,
+        }
+
+
+@router.post("/tasks/listing_monitor/run/{task_id}")
+async def run_listing_monitor_single(task_id: int):
+    """手动执行单个商品监控任务的采集（忽略间隔，立即执行一次，日志记为手动触发）"""
+    try:
+        result = await listing_monitor_task_service.run_single(task_id, trigger_type="manual")
+        return {
+            "success": bool(result.get("success")),
+            "code": 200 if result.get("success") else 400,
+            "message": result.get("message") or "",
+            "data": {"task_id": task_id, "triggered_at": get_beijing_now_naive().isoformat()},
+        }
+    except Exception as e:
+        logger.error(f"[内部API] 手动执行商品监控任务失败: {e}")
+        return {
+            "success": False,
+            "code": 500,
+            "message": f"手动执行商品监控任务失败: {str(e)}",
             "data": None,
         }

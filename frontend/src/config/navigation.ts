@@ -114,6 +114,16 @@ export const mainNavItems: NavEntry[] = [
       { key: 'product-publish-logs', icon: ScrollText, label: '发布日志', path: '/product-publish/logs' },
     ],
   },
+  {
+    key: 'product-monitor',
+    icon: PackageSearch,
+    label: '商品监控',
+    children: [
+      { key: 'product-monitor-listing', icon: PackageSearch, label: '商品监控', path: '/product-monitor/listing' },
+      { key: 'product-monitor-logs', icon: ScrollText, label: '监控日志', path: '/product-monitor/logs' },
+      { key: 'product-monitor-items', icon: Package, label: '采集商品', path: '/product-monitor/items' },
+    ],
+  },
   { key: 'keywords', icon: MessageSquare, label: '自动回复', path: '/keywords' },
   { key: 'message-logs', icon: ScrollText, label: '消息日志', path: '/message-logs' },
   { key: 'risk-logs', icon: Shield, label: '风控日志', path: '/risk-logs' },

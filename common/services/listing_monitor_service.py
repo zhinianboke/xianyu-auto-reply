@@ -1,0 +1,616 @@
+"""
+公共商品上新监控任务服务
+
+功能：
+1. 提供上新监控任务的分页查询与维护能力
+2. 处理多用户数据隔离（owner_id）与软删除（is_deleted）
+3. 校验关键字、价格区间、任务间隔、账号列表等业务规则
+"""
+from __future__ import annotations
+
+import json
+from decimal import Decimal, InvalidOperation
+from typing import Any, Dict, List, Optional, Sequence
+
+from sqlalchemy import case, desc, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from common.models.listing_monitor_task import ListingMonitorTask
+from common.models.listing_monitor_item import ListingMonitorItem
+from common.models.listing_monitor_log import ListingMonitorLog
+from common.models.xy_account import XYAccount
+from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
+
+# 合法分页大小
+_VALID_PAGE_SIZES = (10, 20, 50, 100)
+
+# 合法监控类型：listing-上新监控，price_drop-降价监控
+_VALID_MONITOR_TYPES = ("listing", "price_drop")
+
+
+def _to_decimal(value: Any) -> Optional[Decimal]:
+    """将输入安全转换为两位小数的 Decimal，空值返回 None。"""
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError, TypeError):
+        raise ValueError("价格格式不正确")
+
+
+def _safe_json_loads(text: Optional[str]) -> Any:
+    """安全解析 JSON 字符串，失败或空返回 None。"""
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except (ValueError, TypeError):
+        return None
+
+
+def _task_to_dict(task: ListingMonitorTask) -> Dict[str, Any]:
+    """将监控任务模型转换为前端可用的字典。"""
+    return {
+        "id": task.id,
+        "monitor_type": task.monitor_type,
+        "keyword": task.keyword,
+        "price_min": float(task.price_min) if task.price_min is not None else None,
+        "price_max": float(task.price_max) if task.price_max is not None else None,
+        "publish_days": task.publish_days,
+        "interval_minutes": task.interval_minutes,
+        "collect_pages": task.collect_pages,
+        "account_ids": list(task.account_ids or []),
+        "order_account_ids": list(task.order_account_ids or []),
+        "dm_content": task.dm_content,
+        "dm_batch_size": task.dm_batch_size,
+        "order_batch_size": task.order_batch_size,
+        "is_enabled": bool(task.is_enabled),
+        "last_run_at": safe_isoformat(task.last_run_at),
+        "remark": task.remark,
+        "created_at": safe_isoformat(task.created_at),
+        "updated_at": safe_isoformat(task.updated_at),
+    }
+
+
+def _log_to_dict(log: ListingMonitorLog) -> Dict[str, Any]:
+    """将监控日志模型转换为前端可用的字典。"""
+    return {
+        "id": log.id,
+        "monitor_task_id": log.monitor_task_id,
+        "monitor_type": log.monitor_type,
+        "keyword": log.keyword,
+        "trigger_type": log.trigger_type,
+        "account_id": log.account_id,
+        "used_account_ids": list(log.used_account_ids or []),
+        "pages": log.pages,
+        "fetched_count": log.fetched_count,
+        "inserted_count": log.inserted_count,
+        "updated_count": log.updated_count,
+        "status": log.status,
+        "message": log.message,
+        "created_at": safe_isoformat(log.created_at),
+    }
+
+
+def _item_to_dict(item: ListingMonitorItem) -> Dict[str, Any]:
+    """将采集商品模型转换为前端可用的字典。"""
+    return {
+        "id": item.id,
+        "monitor_task_id": item.monitor_task_id,
+        "item_id": item.item_id,
+        "title": item.title,
+        "price": item.price,
+        "area": item.area,
+        "pic_url": item.pic_url,
+        "seller_id": item.seller_id,
+        "seller_user_id": item.seller_user_id,
+        "seller_nick": item.seller_nick,
+        "seller_avatar": item.seller_avatar,
+        "want_count": item.want_count,
+        "tags": item.tags,
+        "publish_time": safe_isoformat(item.publish_time),
+        "target_url": item.target_url,
+        "has_detail": bool(item.detail_json),
+        "seller_fill_status": item.seller_fill_status,
+        "seller_fill_fail_reason": item.seller_fill_fail_reason,
+        "is_dm_sent": bool(item.is_dm_sent),
+        "dm_account_id": item.dm_account_id,
+        "dm_chat_id": item.dm_chat_id,
+        "dm_status": item.dm_status,
+        "dm_fail_reason": item.dm_fail_reason,
+        "dm_attempts": item.dm_attempts,
+        "is_ordered": bool(item.is_ordered),
+        "order_id": item.order_id,
+        "order_status": item.order_status,
+        "order_fail_reason": item.order_fail_reason,
+        "order_attempts": item.order_attempts,
+        "last_seen_at": safe_isoformat(item.last_seen_at),
+        "created_at": safe_isoformat(item.created_at),
+        "updated_at": safe_isoformat(item.updated_at),
+    }
+
+
+class ListingMonitorService:
+    """商品上新监控任务服务。"""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def _normalize_payload(self, owner_id: Optional[int], data: dict, partial: bool) -> Dict[str, Any]:
+        """校验并规整请求数据。partial=True 时仅处理传入的字段（用于更新）。"""
+        payload: Dict[str, Any] = {}
+
+        # 监控类型（必填）
+        if "monitor_type" in data or not partial:
+            monitor_type = (data.get("monitor_type") or "").strip()
+            if not monitor_type:
+                raise ValueError("请选择监控类型")
+            if monitor_type not in _VALID_MONITOR_TYPES:
+                raise ValueError("监控类型不正确")
+            payload["monitor_type"] = monitor_type
+
+        # 关键字（必填）
+        if "keyword" in data or not partial:
+            keyword = (data.get("keyword") or "").strip()
+            if not keyword:
+                raise ValueError("商品关键字不能为空")
+            if len(keyword) > 200:
+                raise ValueError("商品关键字长度不能超过200个字符")
+            payload["keyword"] = keyword
+
+        # 价格区间
+        price_min = _to_decimal(data["price_min"]) if "price_min" in data else None
+        price_max = _to_decimal(data["price_max"]) if "price_max" in data else None
+        if "price_min" in data:
+            if price_min is not None and price_min < 0:
+                raise ValueError("最低价格不能小于0")
+            payload["price_min"] = price_min
+        if "price_max" in data:
+            if price_max is not None and price_max < 0:
+                raise ValueError("最高价格不能小于0")
+            payload["price_max"] = price_max
+        if price_min is not None and price_max is not None and price_min > price_max:
+            raise ValueError("最低价格不能大于最高价格")
+
+        # 上新天数筛选（publishDays，可选；空/0=不限）
+        if "publish_days" in data or not partial:
+            raw_days = data.get("publish_days")
+            if raw_days is None or raw_days == "" or raw_days == 0:
+                payload["publish_days"] = None
+            else:
+                try:
+                    publish_days = int(raw_days)
+                except (TypeError, ValueError):
+                    raise ValueError("上新天数必须为整数")
+                if publish_days < 1 or publish_days > 365:
+                    raise ValueError("上新天数必须为 1~365 之间的整数")
+                payload["publish_days"] = publish_days
+
+        # 降价监控不使用上新天数筛选（仅上新监控有效）
+        if payload.get("monitor_type") == "price_drop" and "publish_days" in payload:
+            payload["publish_days"] = None
+
+        # 任务间隔
+        if "interval_minutes" in data or not partial:
+            raw_interval = data.get("interval_minutes")
+            try:
+                interval = int(raw_interval)
+            except (TypeError, ValueError):
+                raise ValueError("任务间隔必须为整数分钟")
+            if interval < 1:
+                raise ValueError("任务间隔必须大于等于1分钟")
+            payload["interval_minutes"] = interval
+
+        # 采集页数（必填，至少1页）
+        if "collect_pages" in data or not partial:
+            raw_pages = data.get("collect_pages")
+            if raw_pages is None or raw_pages == "":
+                raw_pages = 1
+            try:
+                collect_pages = int(raw_pages)
+            except (TypeError, ValueError):
+                raise ValueError("采集页数必须为整数")
+            if collect_pages < 1:
+                raise ValueError("采集页数必须大于等于1")
+            payload["collect_pages"] = collect_pages
+
+        # 账号列表（多选，必填：至少关联一个账号）
+        if "account_ids" in data or not partial:
+            account_ids = await self._normalize_account_ids(owner_id, data.get("account_ids"))
+            if not account_ids:
+                raise ValueError("请至少选择一个关联账号")
+            payload["account_ids"] = account_ids
+
+        # 下单账号列表（多选，非必填；私信与下单共用，轮换使用）
+        if "order_account_ids" in data or not partial:
+            order_account_ids = await self._normalize_account_ids(owner_id, data.get("order_account_ids"))
+            payload["order_account_ids"] = order_account_ids
+
+        # 私信内容（配置下单账号后必填）
+        if "dm_content" in data or not partial:
+            dm_content = (data.get("dm_content") or "").strip()
+            if len(dm_content) > 1000:
+                raise ValueError("私信内容长度不能超过1000个字符")
+            payload["dm_content"] = dm_content or None
+
+        # 每次定时私信最多处理条数（默认5，1~100）
+        if "dm_batch_size" in data or not partial:
+            raw_batch = data.get("dm_batch_size")
+            if raw_batch is None or raw_batch == "":
+                raw_batch = 5
+            try:
+                dm_batch_size = int(raw_batch)
+            except (TypeError, ValueError):
+                raise ValueError("每次私信处理条数必须为整数")
+            if dm_batch_size < 1:
+                raise ValueError("每次私信处理条数必须大于等于1")
+            if dm_batch_size > 100:
+                raise ValueError("每次私信处理条数不能超过100")
+            payload["dm_batch_size"] = dm_batch_size
+
+        # 每次定时下单最多处理条数（默认5，1~100）
+        if "order_batch_size" in data or not partial:
+            raw_order_batch = data.get("order_batch_size")
+            if raw_order_batch is None or raw_order_batch == "":
+                raw_order_batch = 5
+            try:
+                order_batch_size = int(raw_order_batch)
+            except (TypeError, ValueError):
+                raise ValueError("每次下单处理条数必须为整数")
+            if order_batch_size < 1:
+                raise ValueError("每次下单处理条数必须大于等于1")
+            if order_batch_size > 100:
+                raise ValueError("每次下单处理条数不能超过100")
+            payload["order_batch_size"] = order_batch_size
+
+        # 创建时校验：配置了下单账号则私信内容必填（更新走 update() 的有效值校验）
+        if not partial and payload.get("order_account_ids") and not payload.get("dm_content"):
+            raise ValueError("配置了下单账号后，私信内容必填")
+
+        # 备注
+        if "remark" in data:
+            remark = (data.get("remark") or "").strip()
+            payload["remark"] = remark or None
+
+        return payload
+
+    async def _normalize_account_ids(self, owner_id: Optional[int], raw_ids: Any) -> List[str]:
+        """规整账号ID列表，并校验账号归属（普通用户只能选自己的账号）。"""
+        if not raw_ids:
+            return []
+        if not isinstance(raw_ids, (list, tuple, set)):
+            raise ValueError("账号列表格式不正确")
+
+        cleaned: List[str] = []
+        for item in raw_ids:
+            account_id = str(item).strip()
+            if account_id and account_id not in cleaned:
+                cleaned.append(account_id)
+        if not cleaned:
+            return []
+
+        # 校验账号是否存在且归属当前用户
+        stmt = select(XYAccount.account_id).where(XYAccount.account_id.in_(cleaned))
+        if owner_id is not None:
+            stmt = stmt.where(XYAccount.owner_id == owner_id)
+        valid_ids = {row for row in (await self.session.execute(stmt)).scalars().all()}
+        invalid = [account_id for account_id in cleaned if account_id not in valid_ids]
+        if invalid:
+            raise ValueError(f"以下账号不存在或无权限使用：{', '.join(invalid)}")
+        return cleaned
+
+    def _scope_conditions(self, owner_id: Optional[int]) -> list:
+        """构造数据隔离与软删除过滤条件。"""
+        conditions = [ListingMonitorTask.is_deleted.is_(False)]
+        if owner_id is not None:
+            conditions.append(ListingMonitorTask.owner_id == owner_id)
+        return conditions
+
+    async def _batch_item_stats(self, task_ids: List[int]) -> Dict[int, Dict[str, int]]:
+        """批量统计若干监控任务下采集商品的已私信、已下单数量。
+
+        Returns: {task_id: {"dm_sent": int, "ordered": int}}
+        """
+        if not task_ids:
+            return {}
+        stmt = (
+            select(
+                ListingMonitorItem.monitor_task_id,
+                func.sum(case((ListingMonitorItem.is_dm_sent.is_(True), 1), else_=0)).label("dm_sent"),
+                func.sum(case((ListingMonitorItem.is_ordered.is_(True), 1), else_=0)).label("ordered"),
+            )
+            .where(ListingMonitorItem.monitor_task_id.in_(task_ids))
+            .group_by(ListingMonitorItem.monitor_task_id)
+        )
+        result = (await self.session.execute(stmt)).all()
+        return {
+            row.monitor_task_id: {"dm_sent": int(row.dm_sent or 0), "ordered": int(row.ordered or 0)}
+            for row in result
+        }
+
+    async def list_tasks(
+        self,
+        owner_id: Optional[int],
+        page: int = 1,
+        page_size: int = 20,
+        keyword: Optional[str] = None,
+        is_enabled: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """分页查询上新监控任务列表。"""
+        page = max(page, 1)
+        page_size = page_size if page_size in _VALID_PAGE_SIZES else 20
+
+        conditions = self._scope_conditions(owner_id)
+        if keyword:
+            conditions.append(ListingMonitorTask.keyword.like(f"%{keyword.strip()}%"))
+        if is_enabled is not None:
+            conditions.append(ListingMonitorTask.is_enabled.is_(is_enabled))
+
+        count_stmt = select(func.count()).select_from(ListingMonitorTask).where(*conditions)
+        total = (await self.session.execute(count_stmt)).scalar() or 0
+
+        stmt = (
+            select(ListingMonitorTask)
+            .where(*conditions)
+            .order_by(desc(ListingMonitorTask.updated_at), desc(ListingMonitorTask.id))
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        rows = (await self.session.execute(stmt)).scalars().all()
+
+        # 统计每个任务下采集商品的已私信、已下单数量
+        stats_map = await self._batch_item_stats([row.id for row in rows])
+        task_list = []
+        for row in rows:
+            task_dict = _task_to_dict(row)
+            stat = stats_map.get(row.id, {})
+            task_dict["dm_sent_count"] = stat.get("dm_sent", 0)
+            task_dict["ordered_count"] = stat.get("ordered", 0)
+            task_list.append(task_dict)
+
+        return {
+            "list": task_list,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if total else 0,
+        }
+
+    async def get(self, owner_id: Optional[int], task_id: int) -> ListingMonitorTask | None:
+        """按主键查询监控任务（带数据隔离与软删除过滤）。"""
+        conditions = self._scope_conditions(owner_id)
+        conditions.append(ListingMonitorTask.id == task_id)
+        stmt = select(ListingMonitorTask).where(*conditions)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def create(self, owner_id: Optional[int], operator_user_id: int, data: dict) -> ListingMonitorTask:
+        """创建上新监控任务。"""
+        payload = await self._normalize_payload(owner_id, data, partial=False)
+        task = ListingMonitorTask(
+            owner_id=owner_id if owner_id is not None else operator_user_id,
+            created_by=operator_user_id,
+            is_enabled=bool(data.get("is_enabled", True)),
+            **payload,
+        )
+        self.session.add(task)
+        await self.session.commit()
+        await self.session.refresh(task)
+        return task
+
+    async def update(self, owner_id: Optional[int], task_id: int, data: dict) -> ListingMonitorTask | None:
+        """更新上新监控任务。"""
+        task = await self.get(owner_id, task_id)
+        if not task:
+            return None
+
+        payload = await self._normalize_payload(owner_id, data, partial=True)
+
+        # 部分更新时用“新值优先、否则沿用库中旧值”的有效值，校验价格区间，避免绕过交叉校验
+        effective_min = payload.get("price_min", task.price_min) if "price_min" in payload else task.price_min
+        effective_max = payload.get("price_max", task.price_max) if "price_max" in payload else task.price_max
+        if effective_min is not None and effective_max is not None and Decimal(str(effective_min)) > Decimal(str(effective_max)):
+            raise ValueError("最低价格不能大于最高价格")
+
+        # 私信内容必填校验：用"新值优先、否则沿用库中旧值"的有效值
+        effective_order_accounts = payload.get("order_account_ids") if "order_account_ids" in payload else task.order_account_ids
+        effective_dm_content = payload.get("dm_content") if "dm_content" in payload else task.dm_content
+        if effective_order_accounts and not effective_dm_content:
+            raise ValueError("配置了下单账号后，私信内容必填")
+
+        for field_name, field_value in payload.items():
+            setattr(task, field_name, field_value)
+        if "is_enabled" in data:
+            task.is_enabled = bool(data["is_enabled"])
+
+        await self.session.commit()
+        await self.session.refresh(task)
+        return task
+
+    async def update_status(self, owner_id: Optional[int], task_id: int, is_enabled: bool) -> ListingMonitorTask | None:
+        """启用/停用监控任务。"""
+        task = await self.get(owner_id, task_id)
+        if not task:
+            return None
+        task.is_enabled = bool(is_enabled)
+        await self.session.commit()
+        await self.session.refresh(task)
+        return task
+
+    async def batch_delete(self, owner_id: Optional[int], task_ids: Sequence[int]) -> int:
+        """批量软删除监控任务。"""
+        normalized_ids: List[int] = []
+        for raw_id in task_ids:
+            try:
+                task_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if task_id > 0 and task_id not in normalized_ids:
+                normalized_ids.append(task_id)
+
+        if not normalized_ids:
+            raise ValueError("请选择要删除的监控任务")
+
+        conditions = self._scope_conditions(owner_id)
+        conditions.append(ListingMonitorTask.id.in_(normalized_ids))
+        stmt = select(ListingMonitorTask).where(*conditions)
+        tasks = (await self.session.execute(stmt)).scalars().all()
+        now = get_beijing_now_naive()
+        for task in tasks:
+            task.is_deleted = True
+            task.updated_at = now
+
+        await self.session.commit()
+        return len(tasks)
+
+    async def list_task_options(self, owner_id: Optional[int]) -> List[Dict[str, Any]]:
+        """查询监控任务下拉选项（用于日志/采集商品页按任务筛选）。"""
+        conditions = self._scope_conditions(owner_id)
+        stmt = (
+            select(ListingMonitorTask.id, ListingMonitorTask.keyword, ListingMonitorTask.monitor_type)
+            .where(*conditions)
+            .order_by(desc(ListingMonitorTask.id))
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return [{"id": row.id, "keyword": row.keyword, "monitor_type": row.monitor_type} for row in rows]
+
+    async def list_logs(
+        self,
+        owner_id: Optional[int],
+        page: int = 1,
+        page_size: int = 20,
+        monitor_task_id: Optional[int] = None,
+        status: Optional[str] = None,
+        monitor_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """分页查询监控执行日志。"""
+        page = max(page, 1)
+        page_size = page_size if page_size in _VALID_PAGE_SIZES else 20
+
+        conditions = []
+        if owner_id is not None:
+            conditions.append(ListingMonitorLog.owner_id == owner_id)
+        if monitor_task_id:
+            conditions.append(ListingMonitorLog.monitor_task_id == monitor_task_id)
+        if status:
+            conditions.append(ListingMonitorLog.status == status.strip())
+        if monitor_type:
+            conditions.append(ListingMonitorLog.monitor_type == monitor_type.strip())
+
+        count_stmt = select(func.count()).select_from(ListingMonitorLog).where(*conditions)
+        total = (await self.session.execute(count_stmt)).scalar() or 0
+
+        stmt = (
+            select(ListingMonitorLog)
+            .where(*conditions)
+            .order_by(desc(ListingMonitorLog.id))
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        rows = (await self.session.execute(stmt)).scalars().all()
+
+        return {
+            "list": [_log_to_dict(row) for row in rows],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if total else 0,
+        }
+
+    async def list_items(
+        self,
+        owner_id: Optional[int],
+        page: int = 1,
+        page_size: int = 20,
+        monitor_task_id: Optional[int] = None,
+        keyword: Optional[str] = None,
+        area: Optional[str] = None,
+        seller_nick: Optional[str] = None,
+        item_id: Optional[str] = None,
+        is_dm_sent: Optional[bool] = None,
+        is_ordered: Optional[bool] = None,
+        seller_fill: Optional[str] = None,
+        has_detail: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """分页查询采集商品信息。"""
+        page = max(page, 1)
+        page_size = page_size if page_size in _VALID_PAGE_SIZES else 20
+
+        conditions = []
+        if owner_id is not None:
+            conditions.append(ListingMonitorItem.owner_id == owner_id)
+        if monitor_task_id:
+            conditions.append(ListingMonitorItem.monitor_task_id == monitor_task_id)
+        if keyword:
+            conditions.append(ListingMonitorItem.title.like(f"%{keyword.strip()}%"))
+        if area:
+            conditions.append(ListingMonitorItem.area.like(f"%{area.strip()}%"))
+        if seller_nick:
+            conditions.append(ListingMonitorItem.seller_nick.like(f"%{seller_nick.strip()}%"))
+        if item_id:
+            conditions.append(ListingMonitorItem.item_id == item_id.strip())
+        if is_dm_sent is not None:
+            conditions.append(ListingMonitorItem.is_dm_sent.is_(is_dm_sent))
+        if is_ordered is not None:
+            conditions.append(ListingMonitorItem.is_ordered.is_(is_ordered))
+        if has_detail is not None:
+            if has_detail:
+                conditions.append(ListingMonitorItem.detail_json.isnot(None))
+            else:
+                conditions.append(ListingMonitorItem.detail_json.is_(None))
+        # 卖家补全状态：filled-已补全 / pending-待补全 / failed-补全失败
+        if seller_fill == "filled":
+            conditions.append(ListingMonitorItem.seller_user_id.isnot(None))
+            conditions.append(ListingMonitorItem.seller_user_id != "")
+        elif seller_fill == "failed":
+            conditions.append(ListingMonitorItem.seller_fill_status == "failed")
+        elif seller_fill == "pending":
+            conditions.append(
+                or_(
+                    ListingMonitorItem.seller_user_id.is_(None),
+                    ListingMonitorItem.seller_user_id == "",
+                )
+            )
+            conditions.append(
+                or_(
+                    ListingMonitorItem.seller_fill_status.is_(None),
+                    ListingMonitorItem.seller_fill_status != "failed",
+                )
+            )
+
+        count_stmt = select(func.count()).select_from(ListingMonitorItem).where(*conditions)
+        total = (await self.session.execute(count_stmt)).scalar() or 0
+
+        stmt = (
+            select(ListingMonitorItem)
+            .where(*conditions)
+            .order_by(desc(ListingMonitorItem.publish_time), desc(ListingMonitorItem.id))
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        rows = (await self.session.execute(stmt)).scalars().all()
+
+        return {
+            "list": [_item_to_dict(row) for row in rows],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if total else 0,
+        }
+
+    async def get_item(self, owner_id: Optional[int], item_pk: int) -> Optional[Dict[str, Any]]:
+        """查询单条采集商品的完整信息（含详情/原始JSON），用于详情弹窗展示。"""
+        conditions = [ListingMonitorItem.id == item_pk]
+        if owner_id is not None:
+            conditions.append(ListingMonitorItem.owner_id == owner_id)
+        stmt = select(ListingMonitorItem).where(*conditions)
+        item = (await self.session.execute(stmt)).scalar_one_or_none()
+        if not item:
+            return None
+        data = _item_to_dict(item)
+        # 附带数据库中存储的原始详情与搜索原始数据（解析为对象，便于前端展示）
+        data["detail_json"] = _safe_json_loads(item.detail_json)
+        data["raw_json"] = _safe_json_loads(item.raw_json)
+        return data
+
+
+__all__ = ["ListingMonitorService", "_task_to_dict"]

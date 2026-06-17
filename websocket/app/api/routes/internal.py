@@ -26,6 +26,9 @@ class SendMessageRequest(BaseModel):
     """发送消息请求"""
     chat_id: str
     message: str
+    # 是否等待服务端发送结果（识别 CSI_FORBID 等安全拦截）。默认 False 保持既有调用方零影响。
+    wait_result: bool = False
+    wait_timeout: float = 10.0
 
 
 class DeliverOrderRequest(BaseModel):
@@ -493,15 +496,43 @@ async def send_message(account_id: str, request: SendMessageRequest):
             }
         
         # 发送消息
-        await instance.send_msg(
+        send_result = await instance.send_msg(
             websocket=instance.ws,
             chat_id=request.chat_id,
             send_user_id=None,  # 由实例内部获取
-            content=request.message
+            content=request.message,
         )
-        
-        logger.info(f"【{account_id}】消息发送成功: chat_id={request.chat_id}")
-        
+
+        # WebSocket 发送层失败：直接判失败
+        if not isinstance(send_result, dict) or not send_result.get("success"):
+            err = send_result.get("error_message") if isinstance(send_result, dict) else None
+            return {
+                "success": False,
+                "code": 500,
+                "message": f"消息发送失败: {err or '未知错误'}",
+                "data": {"send_status": "failed", "send_fail_reason": err},
+            }
+
+        # 可选：等待服务端响应，识别是否被安全拦截（CSI_FORBID 等）
+        send_status = "unknown"
+        send_fail_reason = None
+        if request.wait_result:
+            try:
+                reason = await instance.wait_send_reject_reason(
+                    send_result.get("send_future"),
+                    send_result.get("mid"),
+                    request.wait_timeout,
+                )
+                if reason:
+                    send_status = "failed"
+                    send_fail_reason = reason
+                else:
+                    send_status = "success"
+            except Exception as wait_e:  # noqa: BLE001
+                logger.warning(f"【{account_id}】等待发送结果异常: {wait_e}")
+
+        logger.info(f"【{account_id}】消息发送成功: chat_id={request.chat_id}, send_status={send_status}")
+
         return {
             "success": True,
             "code": 200,
@@ -510,6 +541,8 @@ async def send_message(account_id: str, request: SendMessageRequest):
                 "account_id": account_id,
                 "chat_id": request.chat_id,
                 "message": request.message,
+                "send_status": send_status,
+                "send_fail_reason": send_fail_reason,
             },
         }
     except Exception as e:
