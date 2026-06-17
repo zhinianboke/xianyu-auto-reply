@@ -168,13 +168,11 @@ pipeline {
                                     --cpu-period ${BUILD_CPU_PERIOD} \\
                                     --cpu-quota ${BUILD_CPU_QUOTA} \\
                                     -t ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${FRONTEND_IMAGE_NAME}:latest \\
-                                    -t ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${FRONTEND_IMAGE_NAME}:build-${BUILD_NUMBER} \\
                                     -f docker/frontend/Dockerfile \\
                                     .
 
                                 # 推送镜像
                                 docker push ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${FRONTEND_IMAGE_NAME}:latest
-                                docker push ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${FRONTEND_IMAGE_NAME}:build-${BUILD_NUMBER}
 
                                 # 登出
                                 docker logout ${ALIYUN_REGISTRY}
@@ -208,13 +206,11 @@ pipeline {
                                     --cpu-period ${BUILD_CPU_PERIOD} \\
                                     --cpu-quota ${BUILD_CPU_QUOTA} \\
                                     -t ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${WEBSOCKET_IMAGE_NAME}:latest \\
-                                    -t ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${WEBSOCKET_IMAGE_NAME}:build-${BUILD_NUMBER} \\
                                     -f websocket/Dockerfile \\
                                     .
 
                                 # 推送镜像
                                 docker push ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${WEBSOCKET_IMAGE_NAME}:latest
-                                docker push ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${WEBSOCKET_IMAGE_NAME}:build-${BUILD_NUMBER}
 
                                 # 登出
                                 docker logout ${ALIYUN_REGISTRY}
@@ -248,13 +244,11 @@ pipeline {
                                     --cpu-period ${BUILD_CPU_PERIOD} \\
                                     --cpu-quota ${BUILD_CPU_QUOTA} \\
                                     -t ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${BACKEND_WEB_IMAGE_NAME}:latest \\
-                                    -t ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${BACKEND_WEB_IMAGE_NAME}:build-${BUILD_NUMBER} \\
                                     -f backend-web/Dockerfile \\
                                     .
 
                                 # 推送镜像
                                 docker push ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${BACKEND_WEB_IMAGE_NAME}:latest
-                                docker push ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${BACKEND_WEB_IMAGE_NAME}:build-${BUILD_NUMBER}
 
                                 # 登出
                                 docker logout ${ALIYUN_REGISTRY}
@@ -288,13 +282,11 @@ pipeline {
                                     --cpu-period ${BUILD_CPU_PERIOD} \\
                                     --cpu-quota ${BUILD_CPU_QUOTA} \\
                                     -t ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${SCHEDULER_IMAGE_NAME}:latest \\
-                                    -t ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${SCHEDULER_IMAGE_NAME}:build-${BUILD_NUMBER} \\
                                     -f scheduler/Dockerfile \\
                                     .
 
                                 # 推送镜像
                                 docker push ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${SCHEDULER_IMAGE_NAME}:latest
-                                docker push ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${SCHEDULER_IMAGE_NAME}:build-${BUILD_NUMBER}
 
                                 # 登出
                                 docker logout ${ALIYUN_REGISTRY}
@@ -331,19 +323,15 @@ pipeline {
             ────────────────────────────────────────
             前端镜像:
               ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${FRONTEND_IMAGE_NAME}:latest
-              ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${FRONTEND_IMAGE_NAME}:build-${BUILD_NUMBER}
 
             WebSocket镜像:
               ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${WEBSOCKET_IMAGE_NAME}:latest
-              ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${WEBSOCKET_IMAGE_NAME}:build-${BUILD_NUMBER}
 
             Backend-Web镜像:
               ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${BACKEND_WEB_IMAGE_NAME}:latest
-              ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${BACKEND_WEB_IMAGE_NAME}:build-${BUILD_NUMBER}
 
             Scheduler镜像:
               ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${SCHEDULER_IMAGE_NAME}:latest
-              ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${SCHEDULER_IMAGE_NAME}:build-${BUILD_NUMBER}
 
             支持的架构：
               linux/amd64  (x86_64 - Intel/AMD 处理器)
