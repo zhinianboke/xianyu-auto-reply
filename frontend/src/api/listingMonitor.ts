@@ -47,8 +47,29 @@ export interface ListingMonitorTask {
   proxy_url?: string | null
   dm_sent_count?: number
   ordered_count?: number
+  duplicate_count?: number
+  owner_id?: number | null
+  owner_username?: string | null
   created_at?: string | null
   updated_at?: string | null
+}
+
+// 商品监控总览统计
+export interface ListingMonitorOverview {
+  total_tasks: number
+  enabled_tasks: number
+  disabled_tasks: number
+  today_run_total: number
+  today_run_success: number
+  today_run_partial: number
+  today_run_failed: number
+  today_collected: number
+  today_new: number
+  today_dm: number
+  today_ordered: number
+  total_items: number
+  total_dm: number
+  total_ordered: number
 }
 
 export interface ListingMonitorTaskListData {
@@ -98,6 +119,11 @@ export const getListingMonitorTasks = (
   if (params?.keyword) searchParams.append('keyword', params.keyword)
   if (params?.isEnabled !== undefined) searchParams.append('is_enabled', String(params.isEnabled))
   return get(`${PREFIX}?${searchParams.toString()}`)
+}
+
+// 查询商品监控总览统计
+export const getListingMonitorOverview = (): Promise<ApiResponse<ListingMonitorOverview>> => {
+  return get(`${PREFIX}/overview`)
 }
 
 export const createListingMonitorTask = (

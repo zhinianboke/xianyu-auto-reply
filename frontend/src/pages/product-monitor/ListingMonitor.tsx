@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 上新监控页面
  *
  * 功能：
@@ -315,6 +315,7 @@ export function ListingMonitor() {
                   </button>
                 </th>
                 <th>监控类型</th>
+                <th>所属用户</th>
                 <th>商品关键字</th>
                 <th>价格区间</th>
                 <th>监控天数</th>
@@ -324,6 +325,7 @@ export function ListingMonitor() {
                 <th>下单条数</th>
                 <th>已私信数</th>
                 <th>已下单数</th>
+                <th>重复跳过</th>
                 <th>直接下单</th>
                 <th>关联账号</th>
                 <th>状态</th>
@@ -334,13 +336,13 @@ export function ListingMonitor() {
             <tbody>
               {tableLoading ? (
                 <tr>
-                  <td colSpan={16} className="text-center py-12">
+                  <td colSpan={18} className="text-center py-12">
                     <Loader2 className="w-6 h-6 animate-spin text-blue-500 mx-auto" />
                   </td>
                 </tr>
               ) : tasks.length === 0 ? (
                 <tr>
-                  <td colSpan={16} className="text-center py-12 text-slate-400">
+                  <td colSpan={18} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <PackageSearch className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>暂无监控任务，点击右上角新建</p>
@@ -364,6 +366,7 @@ export function ListingMonitor() {
                         {MONITOR_TYPE_LABELS[item.monitor_type] || item.monitor_type}
                       </span>
                     </td>
+                    <td className="whitespace-nowrap text-slate-600 dark:text-slate-300">{item.owner_username || '-'}</td>
                     <td className="max-w-[220px] font-medium text-slate-800 dark:text-slate-100">
                       <span className="truncate block" title={item.keyword}>{item.keyword}</span>
                     </td>
@@ -375,6 +378,7 @@ export function ListingMonitor() {
                     <td>{item.order_batch_size ?? 5}</td>
                     <td className="text-green-600 dark:text-green-400">{item.dm_sent_count ?? 0}</td>
                     <td className="text-blue-600 dark:text-blue-400">{item.ordered_count ?? 0}</td>
+                    <td className="text-purple-600 dark:text-purple-400">{item.duplicate_count ?? 0}</td>
                     <td className="whitespace-nowrap">
                       {item.direct_order ? (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">开启</span>

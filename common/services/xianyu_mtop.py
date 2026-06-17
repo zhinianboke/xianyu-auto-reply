@@ -44,11 +44,13 @@ _TOKEN_EXPIRED_MARKERS = (
     "令牌为空",
 )
 
-# 触发验证/被挤爆等风控标志（命中则应切换账号）
+# 触发验证/被挤爆/机器检测等风控标志（命中则应切换账号重试）
 _VALIDATE_MARKERS = (
     "FAIL_SYS_USER_VALIDATE",
     "RGV587",
     "FAIL_SYS_ILLEGAL_ACCESS",
+    "FAIL_BIZ_WUA_IS_MACHINE",  # WUA机器检测（下单"无法购买哦"），换账号重试
+    "WUA_IS_MACHINE",
     "哎哟喂",
     "挤爆",
     "punish",

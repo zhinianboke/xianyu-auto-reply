@@ -29,6 +29,7 @@ const dmStatusText = (item: ListingMonitorItemDetail): string => {
 
 // 下单状态文案
 const orderStatusText = (item: ListingMonitorItemDetail): string => {
+  if (item.order_status === 'duplicate') return '重复跳过（其他任务已下单）'
   if (item.is_ordered) return '已下单'
   if (item.order_status === 'failed') return `下单失败（重试 ${item.order_attempts || 0}/3）`
   return '未下单'

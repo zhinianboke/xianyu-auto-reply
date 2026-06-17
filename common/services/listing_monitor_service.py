@@ -19,6 +19,7 @@ from common.models.listing_monitor_task import ListingMonitorTask
 from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_log import ListingMonitorLog
 from common.models.xy_account import XYAccount
+from common.models.user import User
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 
 # 合法分页大小
@@ -52,6 +53,7 @@ def _task_to_dict(task: ListingMonitorTask) -> Dict[str, Any]:
     """将监控任务模型转换为前端可用的字典。"""
     return {
         "id": task.id,
+        "owner_id": task.owner_id,
         "monitor_type": task.monitor_type,
         "keyword": task.keyword,
         "price_min": float(task.price_min) if task.price_min is not None else None,
@@ -327,9 +329,12 @@ class ListingMonitorService:
         return conditions
 
     async def _batch_item_stats(self, task_ids: List[int]) -> Dict[int, Dict[str, int]]:
-        """批量统计若干监控任务下采集商品的已私信、已下单数量。
+        """批量统计若干监控任务下采集商品的已私信、已下单（真实成功）、重复跳过数量。
 
-        Returns: {task_id: {"dm_sent": int, "ordered": int}}
+        - ordered：仅统计真实下单成功（order_status='success'），不含因其他任务已下单而跳过的重复记录；
+        - duplicate：因同用户其他监控任务已下单而跳过的重复记录数（order_status='duplicate'）。
+
+        Returns: {task_id: {"dm_sent": int, "ordered": int, "duplicate": int}}
         """
         if not task_ids:
             return {}
@@ -337,15 +342,143 @@ class ListingMonitorService:
             select(
                 ListingMonitorItem.monitor_task_id,
                 func.sum(case((ListingMonitorItem.is_dm_sent.is_(True), 1), else_=0)).label("dm_sent"),
-                func.sum(case((ListingMonitorItem.is_ordered.is_(True), 1), else_=0)).label("ordered"),
+                func.sum(case((ListingMonitorItem.order_status == "success", 1), else_=0)).label("ordered"),
+                func.sum(case((ListingMonitorItem.order_status == "duplicate", 1), else_=0)).label("duplicate"),
             )
             .where(ListingMonitorItem.monitor_task_id.in_(task_ids))
             .group_by(ListingMonitorItem.monitor_task_id)
         )
         result = (await self.session.execute(stmt)).all()
         return {
-            row.monitor_task_id: {"dm_sent": int(row.dm_sent or 0), "ordered": int(row.ordered or 0)}
+            row.monitor_task_id: {
+                "dm_sent": int(row.dm_sent or 0),
+                "ordered": int(row.ordered or 0),
+                "duplicate": int(row.duplicate or 0),
+            }
             for row in result
+        }
+
+    async def _batch_owner_names(self, owner_ids: Sequence[Optional[int]]) -> Dict[int, str]:
+        """批量查询归属用户ID -> 用户名映射（用于列表展示所属用户）。"""
+        ids = {oid for oid in owner_ids if oid is not None}
+        if not ids:
+            return {}
+        stmt = select(User.id, User.username).where(User.id.in_(ids))
+        return {row.id: row.username for row in (await self.session.execute(stmt)).all()}
+
+    async def get_overview(self, owner_id: Optional[int]) -> Dict[str, Any]:
+        """商品监控总览统计（按用户隔离；管理员 owner_id=None 统计全量）。
+
+        采集/私信/下单数均按商品ID（item_id）去重，避免同商品被多任务重复计数。
+        "今日"以北京时间当天 00:00:00 为界。
+
+        Returns: 各项统计计数字典
+        """
+        today_start = get_beijing_now_naive().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # ---- 任务维度 ----
+        task_cond = [ListingMonitorTask.is_deleted.is_(False)]
+        if owner_id is not None:
+            task_cond.append(ListingMonitorTask.owner_id == owner_id)
+        total_tasks = (
+            await self.session.execute(
+                select(func.count()).select_from(ListingMonitorTask).where(*task_cond)
+            )
+        ).scalar() or 0
+        enabled_tasks = (
+            await self.session.execute(
+                select(func.count())
+                .select_from(ListingMonitorTask)
+                .where(*task_cond, ListingMonitorTask.is_enabled.is_(True))
+            )
+        ).scalar() or 0
+
+        # ---- 今日任务执行日志维度 ----
+        log_cond = [ListingMonitorLog.created_at >= today_start]
+        if owner_id is not None:
+            log_cond.append(ListingMonitorLog.owner_id == owner_id)
+        log_status_rows = (
+            await self.session.execute(
+                select(ListingMonitorLog.status, func.count())
+                .where(*log_cond)
+                .group_by(ListingMonitorLog.status)
+            )
+        ).all()
+        log_status_map = {status: int(cnt or 0) for status, cnt in log_status_rows}
+        today_run_total = sum(log_status_map.values())
+        today_run_success = log_status_map.get("success", 0)
+        today_run_partial = log_status_map.get("partial", 0)
+        today_run_failed = log_status_map.get("failed", 0)
+
+        # ---- 采集商品维度（按 item_id 去重）----
+        def _item_cond(extra=None):
+            cond = []
+            if owner_id is not None:
+                cond.append(ListingMonitorItem.owner_id == owner_id)
+            if extra is not None:
+                cond.extend(extra)
+            return cond
+
+        distinct_item = func.count(func.distinct(ListingMonitorItem.item_id))
+
+        # 累计采集商品数（去重）
+        total_items = (
+            await self.session.execute(
+                select(distinct_item).where(*_item_cond())
+            )
+        ).scalar() or 0
+        # 今日采集数（去重）：今日被采集到（last_seen_at 在今日）
+        today_collected = (
+            await self.session.execute(
+                select(distinct_item).where(*_item_cond([ListingMonitorItem.last_seen_at >= today_start]))
+            )
+        ).scalar() or 0
+        # 今日新增商品数（去重）：今日首次入库
+        today_new = (
+            await self.session.execute(
+                select(distinct_item).where(*_item_cond([ListingMonitorItem.created_at >= today_start]))
+            )
+        ).scalar() or 0
+        # 今日私信数（去重）：今日实际发起私信
+        today_dm = (
+            await self.session.execute(
+                select(distinct_item).where(*_item_cond([ListingMonitorItem.dm_sent_at >= today_start]))
+            )
+        ).scalar() or 0
+        # 今日下单数（去重）：今日下单成功
+        today_ordered = (
+            await self.session.execute(
+                select(distinct_item).where(*_item_cond([ListingMonitorItem.ordered_at >= today_start]))
+            )
+        ).scalar() or 0
+        # 累计私信成功数（去重，按实际发起私信时间，排除直接下单跳过私信的商品）
+        total_dm = (
+            await self.session.execute(
+                select(distinct_item).where(*_item_cond([ListingMonitorItem.dm_sent_at.isnot(None)]))
+            )
+        ).scalar() or 0
+        # 累计下单成功数（去重，仅真实成功）
+        total_ordered = (
+            await self.session.execute(
+                select(distinct_item).where(*_item_cond([ListingMonitorItem.order_status == "success"]))
+            )
+        ).scalar() or 0
+
+        return {
+            "total_tasks": int(total_tasks),
+            "enabled_tasks": int(enabled_tasks),
+            "disabled_tasks": int(total_tasks) - int(enabled_tasks),
+            "today_run_total": today_run_total,
+            "today_run_success": today_run_success,
+            "today_run_partial": today_run_partial,
+            "today_run_failed": today_run_failed,
+            "today_collected": int(today_collected),
+            "today_new": int(today_new),
+            "today_dm": int(today_dm),
+            "today_ordered": int(today_ordered),
+            "total_items": int(total_items),
+            "total_dm": int(total_dm),
+            "total_ordered": int(total_ordered),
         }
 
     async def list_tasks(
@@ -380,12 +513,16 @@ class ListingMonitorService:
 
         # 统计每个任务下采集商品的已私信、已下单数量
         stats_map = await self._batch_item_stats([row.id for row in rows])
+        # 批量查归属用户名（用于管理员视角展示所属用户）
+        owner_name_map = await self._batch_owner_names([row.owner_id for row in rows])
         task_list = []
         for row in rows:
             task_dict = _task_to_dict(row)
             stat = stats_map.get(row.id, {})
             task_dict["dm_sent_count"] = stat.get("dm_sent", 0)
             task_dict["ordered_count"] = stat.get("ordered", 0)
+            task_dict["duplicate_count"] = stat.get("duplicate", 0)
+            task_dict["owner_username"] = owner_name_map.get(row.owner_id)
             task_list.append(task_dict)
 
         return {

@@ -29,7 +29,9 @@ from common.db.session import async_session_maker
 from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_task import ListingMonitorTask
 from common.models.xy_account import XYAccount
+from common.services.listing_monitor_dedup import has_owner_ordered_item
 from common.services.xianyu_order_client import XianyuOrderClient
+from common.utils.time_utils import get_beijing_now_naive
 
 _INACTIVE_STATUSES = {"inactive", "disabled", "suspended", "deleted"}
 # 单次任务最多扫描的待下单商品数（全局安全上限；每个监控任务实际处理条数由任务自身的 order_batch_size 控制）
@@ -82,9 +84,18 @@ class AutoOrderTaskService:
             ordered = 0
             skipped_no_account = 0
             skipped_batch_full = 0
+            skipped_duplicate = 0
             failed = 0
+            # 本轮已下单成功的商品ID集合，避免同一批次内多任务同商品重复下单
+            ordered_item_ids: set[str] = set()
 
-            for pk, item_id, task_id, dm_account_id in items:
+            for pk, item_id, task_id, dm_account_id, owner_id in items:
+                # 去重：同一用户该商品已下单成功（历史已下单 或 本轮已下单），跳过重复下单
+                if item_id in ordered_item_ids or await self._owner_already_ordered(owner_id, item_id):
+                    await self._mark_duplicate(pk)
+                    skipped_duplicate += 1
+                    continue
+
                 if task_id not in task_accounts_cache:
                     accounts_map, order_list, batch_size = await self._load_task_accounts(task_id)
                     task_accounts_cache[task_id] = accounts_map
@@ -113,6 +124,7 @@ class AutoOrderTaskService:
                 result = await self._order_for_item(pk, item_id, usable, disabled_accounts)
                 if result == "ordered":
                     ordered += 1
+                    ordered_item_ids.add(item_id)
                     task_done[task_id] = task_done.get(task_id, 0) + 1
                 elif result == "no_account":
                     skipped_no_account += 1
@@ -126,16 +138,17 @@ class AutoOrderTaskService:
             elapsed = (datetime.now() - start_time).total_seconds()
             logger.info(
                 f"【{self.task_name}】执行完成：待下单{len(items)}，成功{ordered}，"
-                f"达批量上限跳过{skipped_batch_full}，无可用账号跳过{skipped_no_account}，失败{failed}，"
+                f"达批量上限跳过{skipped_batch_full}，无可用账号跳过{skipped_no_account}，"
+                f"重复商品跳过{skipped_duplicate}，失败{failed}，"
                 f"停用账号{len(disabled_accounts)}，耗时{elapsed:.2f}秒"
             )
         except Exception as exc:  # noqa: BLE001
             logger.error(f"【{self.task_name}】执行异常: {exc}")
 
-    async def _get_items_to_order(self) -> List[Tuple[int, str, int, Optional[str]]]:
+    async def _get_items_to_order(self) -> List[Tuple[int, str, int, Optional[str], Optional[int]]]:
         """查询未下单的采集商品（不再要求已私信）。
 
-        Returns: (主键id, item_id, monitor_task_id, dm_account_id) 列表
+        Returns: (主键id, item_id, monitor_task_id, dm_account_id, owner_id) 列表
         """
         async with async_session_maker() as session:
             stmt = (
@@ -144,6 +157,7 @@ class AutoOrderTaskService:
                     ListingMonitorItem.item_id,
                     ListingMonitorItem.monitor_task_id,
                     ListingMonitorItem.dm_account_id,
+                    ListingMonitorItem.owner_id,
                 )
                 .where(
                     and_(
@@ -155,7 +169,30 @@ class AutoOrderTaskService:
                 .limit(_MAX_ITEMS_SCAN_PER_RUN)
             )
             rows = (await session.execute(stmt)).all()
-            return [(r[0], r[1], r[2], r[3]) for r in rows]
+            return [(r[0], r[1], r[2], r[3], r[4]) for r in rows]
+
+    async def _owner_already_ordered(self, owner_id: Optional[int], item_id: str) -> bool:
+        """判断同一用户下该商品是否已有下单成功记录（避免多任务采到同商品重复下单）。"""
+        async with async_session_maker() as session:
+            return await has_owner_ordered_item(session, owner_id, item_id)
+
+    async def _mark_duplicate(self, pk: int) -> None:
+        """将重复商品标记为已下单（duplicate），使其退出待下单查询，不再重复处理。"""
+        try:
+            async with async_session_maker() as session:
+                item = (
+                    await session.execute(
+                        select(ListingMonitorItem).where(ListingMonitorItem.id == pk)
+                    )
+                ).scalar_one_or_none()
+                if not item:
+                    return
+                item.is_ordered = True
+                item.order_status = "duplicate"
+                item.order_fail_reason = "同商品已在其他监控任务下单，跳过重复下单"
+                await session.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"【{self.task_name}】标记重复商品失败 采集商品id={pk}：{exc}")
 
     async def _load_task_accounts(self, task_id: int) -> Tuple[Dict[str, XYAccount], List[str], int]:
         """加载监控任务配置的下单账号（任务须未删除且启用；过滤禁用/空Cookie）。
@@ -311,6 +348,7 @@ class AutoOrderTaskService:
                     item.is_ordered = True
                     item.order_status = "success"
                     item.order_fail_reason = None
+                    item.ordered_at = get_beijing_now_naive()
                     if biz_order_id:
                         item.order_id = biz_order_id[:64]
                 else:

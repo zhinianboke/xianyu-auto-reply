@@ -64,6 +64,7 @@ const BatchPublish = React.lazy(() => import('@/pages/product-publish/BatchPubli
 const PublishAddresses = React.lazy(() => import('@/pages/product-publish/PublishAddresses').then(m => ({ default: m.PublishAddresses })))
 const PublishLogs = React.lazy(() => import('@/pages/product-publish/PublishLogs').then(m => ({ default: m.PublishLogs })))
 const ListingMonitor = React.lazy(() => import('@/pages/product-monitor/ListingMonitor').then(m => ({ default: m.ListingMonitor })))
+const MonitorOverview = React.lazy(() => import('@/pages/product-monitor/MonitorOverview').then(m => ({ default: m.MonitorOverview })))
 const MonitorLogs = React.lazy(() => import('@/pages/product-monitor/MonitorLogs').then(m => ({ default: m.MonitorLogs })))
 const MonitorItems = React.lazy(() => import('@/pages/product-monitor/MonitorItems').then(m => ({ default: m.MonitorItems })))
 
@@ -362,6 +363,7 @@ function App() {
             <Route path="product-publish/addresses" element={<PublishAddresses />} />
             <Route path="product-publish/logs" element={<PublishLogs />} />
             {/* 商品监控 */}
+            <Route path="product-monitor/overview" element={<MonitorOverview />} />
             <Route path="product-monitor/listing" element={<ListingMonitor />} />
             <Route path="product-monitor/logs" element={<MonitorLogs />} />
             <Route path="product-monitor/items" element={<MonitorItems />} />

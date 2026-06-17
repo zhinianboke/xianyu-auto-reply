@@ -34,6 +34,7 @@ from common.db.session import async_session_maker
 from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_task import ListingMonitorTask
 from common.models.xy_account import XYAccount
+from common.utils.time_utils import get_beijing_now_naive
 
 _INACTIVE_STATUSES = {"inactive", "disabled", "suspended", "deleted"}
 # 单次任务最多扫描的待私信商品数（全局安全上限，避免一次性载入过多；
@@ -357,9 +358,10 @@ class DmSendTaskService:
             if chat_id:
                 item.dm_chat_id = str(chat_id)[:80]
             if send_status != "failed":
-                # 成功或超时未确认：标记为已处理终态，记录成功私信账号
+                # 成功或超时未确认：标记为已处理终态，记录成功私信账号与私信时间
                 item.is_dm_sent = True
                 item.dm_account_id = account_id[:80] if account_id else None
+                item.dm_sent_at = get_beijing_now_naive()
             else:
                 # 失败：清空成功私信账号
                 item.dm_account_id = None

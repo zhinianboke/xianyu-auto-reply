@@ -58,4 +58,6 @@ class ListingMonitorItem(TimestampMixin, Base):
     order_status: Mapped[str | None] = mapped_column(String(20), comment="下单结果：success-成功，failed-失败")
     order_fail_reason: Mapped[str | None] = mapped_column(String(500), comment="下单失败原因")
     order_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", comment="下单尝试次数（失败重试用，达上限后不再重试）")
+    dm_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="实际私信成功/发起时间（用于按日统计私信数）")
+    ordered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="下单成功时间（用于按日统计下单数）")
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="最近一次采集到的时间")

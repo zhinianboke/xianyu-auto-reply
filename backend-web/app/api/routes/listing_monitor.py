@@ -101,6 +101,18 @@ async def list_listing_monitor_tasks(
     return ApiResponse(success=True, message="查询成功", data=data)
 
 
+@router.get("/overview", response_model=ApiResponse)
+async def listing_monitor_overview(
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """商品监控总览统计（任务数、今日执行成功/失败、今日采集/私信/下单数等，按用户隔离）"""
+    owner_id, _ = resolve_owner_scope(current_user)
+    svc = ListingMonitorService(session)
+    data = await svc.get_overview(owner_id)
+    return ApiResponse(success=True, message="查询成功", data=data)
+
+
 @router.post("", response_model=ApiResponse)
 async def create_listing_monitor_task(
     req: ListingMonitorCreateRequest,

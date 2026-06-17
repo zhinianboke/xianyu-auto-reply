@@ -24,6 +24,8 @@ from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_log import ListingMonitorLog
 from common.models.listing_monitor_task import ListingMonitorTask
 from common.models.xy_account import XYAccount
+from common.services.account_cooldown import DEFAULT_COOLDOWN_SECONDS, account_cooldown_manager
+from common.services.listing_monitor_dedup import has_owner_ordered_item
 from common.services.xianyu_mtop import fetch_proxy_from_api
 from common.services.xianyu_order_client import XianyuOrderClient
 from common.services.xianyu_search_client import XianyuSearchClient, parse_search_item
@@ -252,6 +254,21 @@ class ListingMonitorTaskService:
                     reverse=True,
                 )
 
+        # 风控冷却过滤：去掉处于冷却期（被挤爆/触发验证后10分钟内）的账号；
+        # 若全部都在冷却期，则兜底使用"最先进入冷却"的账号（最接近冷却结束）。
+        if accounts:
+            all_ids = [a.account_id for a in accounts]
+            available_ids = set(account_cooldown_manager.filter_available(all_ids))
+            if available_ids:
+                accounts = [a for a in accounts if a.account_id in available_ids]
+            else:
+                earliest = account_cooldown_manager.earliest_cooling(all_ids)
+                accounts = [a for a in accounts if a.account_id == earliest] or accounts[:1]
+                logger.warning(
+                    f"【{self.task_name}】监控任务 {task.id} 所有账号均在风控冷却期，"
+                    f"兜底使用最先进入冷却的账号 {accounts[0].account_id if accounts else None}"
+                )
+
         used_account_id: Optional[str] = None
         used_account_ids: set[str] = set()
         status = "success"
@@ -270,6 +287,8 @@ class ListingMonitorTaskService:
             task_proxy = await fetch_proxy_from_api(task.proxy_url, account_id=str(task.id)) if task.proxy_url else None
             working_idx = 0
             page_failed = False
+            # 本次运行中因风控被冷却的账号：后续页不再尝试
+            cooled_this_run: set[str] = set()
 
             for page in range(1, max(task.collect_pages, 1) + 1):
                 page_result = None
@@ -277,6 +296,8 @@ class ListingMonitorTaskService:
                 for offset in range(len(accounts)):
                     idx = (working_idx + offset) % len(accounts)
                     acc = accounts[idx]
+                    if acc.account_id in cooled_this_run:
+                        continue
                     client = XianyuSearchClient(acc.account_id, acc.cookie, owner_id=acc.owner_id, proxy=task_proxy)
                     res = await client.search(
                         keyword=task.keyword,
@@ -296,9 +317,19 @@ class ListingMonitorTaskService:
                         used_account_ids.add(acc.account_id)
                         page_result = res
                         break
-                    logger.warning(
-                        f"【{self.task_name}】任务 {task.id} 第{page}页 账号 {acc.account_id} 调用失败: {res.get('error')}，尝试下一个账号"
-                    )
+                    error_msg = res.get("error")
+                    # 被挤爆/触发验证等风控：将该账号加入10分钟冷却，本次运行后续页不再使用
+                    if account_cooldown_manager.is_risk_control_error(error_msg):
+                        account_cooldown_manager.add(acc.account_id)
+                        cooled_this_run.add(acc.account_id)
+                        logger.warning(
+                            f"【{self.task_name}】任务 {task.id} 第{page}页 账号 {acc.account_id} 触发风控（{error_msg}），"
+                            f"加入冷却 {DEFAULT_COOLDOWN_SECONDS // 60} 分钟，尝试下一个账号"
+                        )
+                    else:
+                        logger.warning(
+                            f"【{self.task_name}】任务 {task.id} 第{page}页 账号 {acc.account_id} 调用失败: {error_msg}，尝试下一个账号"
+                        )
 
                 if not page_result:
                     page_failed = True
@@ -418,15 +449,23 @@ class ListingMonitorTaskService:
                     )
                     # 开启直接下单且配置了下单账号：先下单再入库（入库即终态，避免与定时下单并发）
                     if direct_order and order_accounts:
-                        try:
-                            await self._direct_order_item(new_item, item_id, order_accounts, order_disabled, order_rr)
-                        except Exception as exc:  # noqa: BLE001
-                            # 下单过程异常也要把商品入库并保存失败原因，避免漏采集
-                            logger.error(f"【{self.task_name}】商品 {item_id} 采集后直接下单异常: {exc}")
+                        # 去重：同一用户该商品已被其他监控任务下单成功，则跳过重复下单
+                        if await has_owner_ordered_item(session, task.owner_id, item_id):
                             new_item.is_dm_sent = True
-                            new_item.order_status = "failed"
-                            new_item.order_fail_reason = str(exc)[:500]
-                            new_item.order_attempts = 1
+                            new_item.is_ordered = True
+                            new_item.order_status = "duplicate"
+                            new_item.order_fail_reason = "同商品已在其他监控任务下单，跳过重复下单"
+                            logger.info(f"【{self.task_name}】商品 {item_id} 已被同用户其他任务下单，跳过直接下单")
+                        else:
+                            try:
+                                await self._direct_order_item(new_item, item_id, order_accounts, order_disabled, order_rr)
+                            except Exception as exc:  # noqa: BLE001
+                                # 下单过程异常也要把商品入库并保存失败原因，避免漏采集
+                                logger.error(f"【{self.task_name}】商品 {item_id} 采集后直接下单异常: {exc}")
+                                new_item.is_dm_sent = True
+                                new_item.order_status = "failed"
+                                new_item.order_fail_reason = str(exc)[:500]
+                                new_item.order_attempts = 1
                     session.add(new_item)
                     inserted += 1
 
@@ -473,6 +512,7 @@ class ListingMonitorTaskService:
             if status == "success":
                 item.is_ordered = True
                 item.order_status = "success"
+                item.ordered_at = get_beijing_now_naive()
                 order_id = result.get("order_id")
                 item.order_id = str(order_id)[:64] if order_id else None
                 logger.info(f"【{self.task_name}】商品 {item_id} 采集后直接下单成功（拍下）：账号={acc.account_id}，订单ID={item.order_id}")

@@ -383,7 +383,9 @@ export function MonitorItems() {
                     <td className="max-w-[200px]"><span className="truncate block" title={item.dm_fail_reason || ''}>{item.dm_fail_reason || '-'}</span></td>
                     <td className="text-center">{item.dm_attempts || 0}</td>
                     <td className="whitespace-nowrap">
-                      {item.order_status === 'failed' && !item.is_ordered ? (
+                      {item.order_status === 'duplicate' ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400" title="同商品已在其他监控任务下单，跳过重复下单">重复跳过</span>
+                      ) : item.order_status === 'failed' && !item.is_ordered ? (
                         (item.order_attempts || 0) >= 3 ? (
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">下单失败(已放弃)</span>
                         ) : (
