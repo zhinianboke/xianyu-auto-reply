@@ -203,21 +203,25 @@ class ListingMonitorTaskService:
             ordered.append(acc)
         return ordered
 
-    async def _get_account_usage_rank(self, task_id: int, limit: int = 10) -> Dict[str, int]:
-        """统计该监控任务最近 limit 条日志中各账号的"使用新近度"。
+    async def _get_account_usage_rank(self, owner_id: Optional[int], limit: int = 40) -> Dict[str, int]:
+        """统计该用户最近 limit 条监控日志（跨任务）中各账号的"使用新近度"。
+
+        不限制具体监控任务，仅按归属用户隔离，使同一用户的多个任务共享账号轮换，
+        避免刚被某任务用过的账号立即又被另一任务使用。
 
         Returns:
             account_id -> 最近一次被使用的日志序号（0=最新一条；数值越小表示越近期使用）。
-            未出现在最近日志中的账号不在返回字典中（视为最久未使用）。
+            未出现在最近日志中的账号不在返回字典中（视为最久未使用，优先使用）。
         """
         rank: Dict[str, int] = {}
         async with async_session_maker() as session:
             stmt = (
                 select(ListingMonitorLog.account_id, ListingMonitorLog.used_account_ids)
-                .where(ListingMonitorLog.monitor_task_id == task_id)
                 .order_by(ListingMonitorLog.id.desc())
                 .limit(limit)
             )
+            if owner_id is not None:
+                stmt = stmt.where(ListingMonitorLog.owner_id == owner_id)
             for idx, (account_id, used_ids) in enumerate((await session.execute(stmt)).all()):
                 candidates = list(used_ids or [])
                 if account_id:
@@ -235,12 +239,13 @@ class ListingMonitorTaskService:
         sort_field, sort_value = _MONITOR_SORT_MAP.get(task.monitor_type, _MONITOR_SORT_MAP["listing"])
         accounts = await self._load_accounts(list(task.account_ids or []))
 
-        # 负载均衡：优先使用最近未被使用过的账号；
-        # 全部都用过时，按"上次使用越久远越优先"轮换（避免固定使用同一个账号）。
+        # 负载均衡：跨任务（同用户）查最新40条监控日志，统计用过的账号；
+        # 优先使用未在最近日志中出现的账号（跳过最近用过的），
+        # 仅当未用过的账号都失败时，才轮到用过的账号（按最久未使用优先，即日志时间升序）。
         if accounts:
-            usage_rank = await self._get_account_usage_rank(task.id, limit=10)
+            usage_rank = await self._get_account_usage_rank(task.owner_id, limit=40)
             if usage_rank:
-                _stalest = len(accounts) + 100  # 未出现在最近日志中的账号视为最久未使用，优先级最高
+                _stalest = 10 ** 9  # 未出现在最近日志中的账号视为最久未使用，优先级最高
                 accounts = sorted(
                     accounts,
                     key=lambda a: usage_rank.get(a.account_id, _stalest),
