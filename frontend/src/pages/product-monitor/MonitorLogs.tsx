@@ -20,6 +20,7 @@ import {
 import { PageLoading } from '@/components/common/Loading'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/apiError'
+import { copyToClipboard } from '@/utils/clipboard'
 
 const STATUS_LABELS: Record<string, { text: string; cls: string }> = {
   success: { text: '成功', cls: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
@@ -138,7 +139,11 @@ export function MonitorLogs() {
         return
       }
       const json = JSON.stringify(list, null, 2)
-      await navigator.clipboard.writeText(json)
+      const ok = await copyToClipboard(json)
+      if (!ok) {
+        addToast({ type: 'error', message: '复制失败，请手动复制或检查浏览器权限' })
+        return
+      }
       addToast({ type: 'success', message: `已复制 ${list.length} 个账号的Cookies到剪贴板` })
     } catch (error) {
       addToast({ type: 'error', message: getApiErrorMessage(error, '复制账号Cookies失败') })

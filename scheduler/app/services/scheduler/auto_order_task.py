@@ -354,19 +354,18 @@ class AutoOrderTaskService:
         return accounts_map, account_ids, batch_size, task_name, detail
 
     async def _load_fallback_accounts(self, owner_id: Optional[int]) -> Tuple[Dict[str, XYAccount], str]:
-        """加载用户级兜底下单账号（过滤禁用/空Cookie）。
+        """加载生效的兜底下单账号（过滤禁用/空Cookie）。
 
-        当监控任务自身无可用下单账号时，回退使用该用户配置的兜底下单账号。
+        当监控任务自身无可用下单账号时回退使用：优先商品所属用户配置的兜底账号，
+        该用户未配置（或商品无归属用户）时回退到管理员配置的全局兜底账号。
 
         Returns: ({account_id: XYAccount 仅可用账号}, 不可用/未配置原因明细)
         """
-        if owner_id is None:
-            return {}, "商品无归属用户，无法匹配兜底下单账号"
-
         try:
             async with async_session_maker() as session:
                 svc = OrderFallbackAccountService(session)
-                account_ids = await svc.get_fallback_account_ids(owner_id)
+                # 优先用商品所属用户的兜底；未配置则回退到管理员配置的全局兜底
+                account_ids = await svc.get_effective_fallback_account_ids(owner_id)
                 if not account_ids:
                     return {}, "未配置兜底下单账号"
                 rows = list(

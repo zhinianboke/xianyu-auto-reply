@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.order_fallback_account import OrderFallbackAccount
+from common.models.user import User, UserRole
 from common.models.xy_account import XYAccount
 from common.utils.time_utils import safe_isoformat
 
@@ -76,6 +77,34 @@ class OrderFallbackAccountService:
         if not record:
             return []
         return list(record.account_ids or [])
+
+    async def get_effective_fallback_account_ids(self, owner_id: Optional[int]) -> List[str]:
+        """供定时任务调用：返回"生效"的兜底下单账号ID列表。
+
+        优先使用商品所属用户自己配置的兜底账号；若该用户未配置（或商品无归属用户），
+        则回退到管理员配置的兜底账号作为"全局兜底"，实现管理员配一份全局生效。
+        """
+        if owner_id is not None:
+            own = await self.get_fallback_account_ids(owner_id)
+            if own:
+                return own
+        # 回退：管理员（全局）兜底
+        return await self._get_admin_fallback_account_ids()
+
+    async def _get_admin_fallback_account_ids(self) -> List[str]:
+        """返回所有管理员配置的兜底下单账号ID（去重合并），作为全局兜底。"""
+        admin_ids_subq = select(User.id).where(User.role == UserRole.ADMIN)
+        stmt = select(OrderFallbackAccount.account_ids).where(
+            OrderFallbackAccount.owner_id.in_(admin_ids_subq)
+        )
+        result: List[str] = []
+        seen: set[str] = set()
+        for row in (await self.session.execute(stmt)).all():
+            for aid in (row[0] or []):
+                if aid and aid not in seen:
+                    seen.add(aid)
+                    result.append(aid)
+        return result
 
     # ==================== 内部方法 ====================
 
