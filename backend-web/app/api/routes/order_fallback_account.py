@@ -21,6 +21,7 @@ from app.api.deps import get_current_active_user, get_db_session
 from common.models.user import User
 from common.schemas.common import ApiResponse
 from common.services.order_fallback_account_service import OrderFallbackAccountService
+from common.utils.auth_scope import is_admin_user
 
 router = APIRouter(prefix="/product-monitor/order-fallback-accounts", tags=["兜底下单账号"])
 
@@ -43,7 +44,7 @@ async def get_order_fallback_accounts(
 ) -> Dict[str, Any]:
     """查询当前用户的兜底下单账号配置"""
     svc = OrderFallbackAccountService(session)
-    data = await svc.get_config(_resolve_owner_id(current_user))
+    data = await svc.get_config(_resolve_owner_id(current_user), is_admin_user(current_user))
     return ApiResponse(success=True, message="查询成功", data=data)
 
 
@@ -56,7 +57,9 @@ async def save_order_fallback_accounts(
     """保存（新增/更新）当前用户的兜底下单账号配置"""
     svc = OrderFallbackAccountService(session)
     try:
-        data = await svc.save_config(_resolve_owner_id(current_user), req.account_ids)
+        data = await svc.save_config(
+            _resolve_owner_id(current_user), req.account_ids, is_admin_user(current_user)
+        )
     except ValueError as exc:
         return ApiResponse(success=False, message=str(exc))
     return ApiResponse(success=True, message="兜底下单账号保存成功", data=data)

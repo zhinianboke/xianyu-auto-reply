@@ -36,25 +36,27 @@ class OrderFallbackAccountService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def get_config(self, owner_id: int) -> Dict[str, Any]:
+    async def get_config(self, owner_id: int, is_admin: bool = False) -> Dict[str, Any]:
         """查询指定用户的兜底下单账号配置（含账号有效性信息）。"""
         record = await self._get_record(owner_id)
         data = _to_dict(record)
         # 附带账号有效性，便于前端提示已失效/已删除的账号
-        data["accounts"] = await self._resolve_accounts(owner_id, data["account_ids"])
+        data["accounts"] = await self._resolve_accounts(owner_id, data["account_ids"], is_admin)
         return data
 
-    async def save_config(self, owner_id: int, account_ids: List[str]) -> Dict[str, Any]:
+    async def save_config(self, owner_id: int, account_ids: List[str], is_admin: bool = False) -> Dict[str, Any]:
         """保存（新增或更新）当前用户的兜底下单账号配置。
 
-        - 校验账号必须属于当前用户且存在；
+        - 校验账号必须存在；非管理员还要求账号属于当前用户，管理员可选任意账号；
         - 用户级唯一：存在则更新，不存在则插入。
         """
         cleaned = self._clean_account_ids(account_ids)
         if cleaned:
-            valid_ids = await self._filter_owned_account_ids(owner_id, cleaned)
+            valid_ids = await self._filter_valid_account_ids(owner_id, cleaned, is_admin)
             invalid = [aid for aid in cleaned if aid not in valid_ids]
             if invalid:
+                if is_admin:
+                    raise ValueError(f"以下账号不存在：{('、'.join(invalid))}")
                 raise ValueError(f"以下账号不存在或不属于当前用户：{('、'.join(invalid))}")
             cleaned = [aid for aid in cleaned if aid in valid_ids]
 
@@ -66,7 +68,7 @@ class OrderFallbackAccountService:
             self.session.add(record)
         await self.session.commit()
         await self.session.refresh(record)
-        return await self.get_config(owner_id)
+        return await self.get_config(owner_id, is_admin)
 
     async def get_fallback_account_ids(self, owner_id: int) -> List[str]:
         """供定时任务调用：返回指定用户配置的兜底下单账号ID列表。"""
@@ -94,22 +96,25 @@ class OrderFallbackAccountService:
             result.append(key)
         return result
 
-    async def _filter_owned_account_ids(self, owner_id: int, account_ids: List[str]) -> set[str]:
-        """返回 account_ids 中确实属于该用户且存在的账号ID集合。"""
-        stmt = select(XYAccount.account_id).where(
-            XYAccount.owner_id == owner_id,
-            XYAccount.account_id.in_(account_ids),
-        )
+    async def _filter_valid_account_ids(self, owner_id: int, account_ids: List[str], is_admin: bool) -> set[str]:
+        """返回 account_ids 中存在的账号ID集合；非管理员还要求账号属于该用户。"""
+        conditions = [XYAccount.account_id.in_(account_ids)]
+        if not is_admin:
+            conditions.append(XYAccount.owner_id == owner_id)
+        stmt = select(XYAccount.account_id).where(*conditions)
         return {row[0] for row in (await self.session.execute(stmt)).all()}
 
-    async def _resolve_accounts(self, owner_id: int, account_ids: List[str]) -> List[Dict[str, Any]]:
-        """返回每个已配置账号的有效性信息，供前端展示。"""
+    async def _resolve_accounts(self, owner_id: int, account_ids: List[str], is_admin: bool = False) -> List[Dict[str, Any]]:
+        """返回每个已配置账号的有效性信息，供前端展示。
+
+        管理员不限账号归属；普通用户仅校验自己名下的账号。
+        """
         if not account_ids:
             return []
-        stmt = select(XYAccount.account_id, XYAccount.status, XYAccount.cookie).where(
-            XYAccount.owner_id == owner_id,
-            XYAccount.account_id.in_(account_ids),
-        )
+        conditions = [XYAccount.account_id.in_(account_ids)]
+        if not is_admin:
+            conditions.append(XYAccount.owner_id == owner_id)
+        stmt = select(XYAccount.account_id, XYAccount.status, XYAccount.cookie).where(*conditions)
         rows = {row[0]: (row[1], row[2]) for row in (await self.session.execute(stmt)).all()}
         result: List[Dict[str, Any]] = []
         for aid in account_ids:
