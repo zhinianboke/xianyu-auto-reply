@@ -82,6 +82,14 @@ export function BatchAccountsModal({ field, taskIds, onClose, onSaved }: BatchAc
     )
   }
 
+  const handleSelectAll = () => {
+    setSelectedIds(visibleOptions.map((opt) => opt.value))
+  }
+
+  const handleClearAll = () => {
+    setSelectedIds([])
+  }
+
   const handleSave = async () => {
     if (selectedIds.length === 0) {
       addToast({ type: 'warning', message: `请至少选择一个${label}` })
@@ -140,30 +148,55 @@ export function BatchAccountsModal({ field, taskIds, onClose, onSaved }: BatchAc
               </button>
 
               {dropdownOpen && (
-                <div className="absolute z-10 mt-1 w-full max-h-60 overflow-auto rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 shadow-lg">
-                  {visibleOptions.length === 0 ? (
-                    <div className="px-3 py-3 text-sm text-slate-400 text-center">暂无可选账号</div>
-                  ) : (
-                    visibleOptions.map((opt) => {
-                      const checked = selectedIds.includes(opt.value)
-                      return (
-                        <button
-                          key={opt.value}
-                          type="button"
-                          onClick={() => toggleAccount(opt.value)}
-                          className="w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200"
-                        >
-                          <span className="truncate flex items-center gap-2">
-                            {opt.label}
-                            {!opt.enabled && (
-                              <span className="text-xs text-slate-400">(已停用)</span>
-                            )}
-                          </span>
-                          {checked && <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />}
-                        </button>
-                      )
-                    })
-                  )}
+                <div className="absolute z-10 mt-1 w-full rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 shadow-lg">
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-slate-200 dark:border-slate-700">
+                    <span className="text-xs text-slate-500 dark:text-slate-400">共 {visibleOptions.length} 个账号</span>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={handleSelectAll}
+                        className="text-xs text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
+                        disabled={visibleOptions.length === 0}
+                      >
+                        全选
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleClearAll}
+                        className="text-xs text-slate-500 dark:text-slate-400 hover:underline disabled:opacity-50"
+                        disabled={selectedIds.length === 0}
+                      >
+                        取消全选
+                      </button>
+                    </div>
+                  </div>
+                  <div className="max-h-60 overflow-auto">
+                    {visibleOptions.length === 0 ? (
+                      <div className="px-3 py-3 text-sm text-slate-400 text-center">
+                        {accountLoading ? '正在加载...' : '暂无可选账号'}
+                      </div>
+                    ) : (
+                      visibleOptions.map((opt) => {
+                        const checked = selectedIds.includes(opt.value)
+                        return (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => toggleAccount(opt.value)}
+                            className="w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200"
+                          >
+                            <span className="truncate flex items-center gap-2">
+                              {opt.label}
+                              {!opt.enabled && (
+                                <span className="text-xs text-slate-400">(已停用)</span>
+                              )}
+                            </span>
+                            {checked && <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />}
+                          </button>
+                        )
+                      })
+                    )}
+                  </div>
                 </div>
               )}
             </div>

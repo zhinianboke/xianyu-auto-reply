@@ -21,6 +21,7 @@ from loguru import logger
 
 from common.db.session import async_session_maker
 from common.services.captcha.concurrency import run_browser_task
+from common.services.captcha.token_refetch import request_fresh_captcha_url
 from common.utils.cookie_refresh import get_account_by_identity, update_account_cookies_in_db
 from common.utils.xianyu_utils import trans_cookies, generate_sign
 from common.utils.time_utils import get_beijing_now_naive
@@ -371,93 +372,40 @@ class CookieTokenManager:
             if getattr(self, '_refetch_token_ok', False):
                 return CAPTCHA_NOT_REQUIRED
 
-            timestamp = str(int(time.time() * 1000))
-            params = {
-                'jsv': '2.7.2',
-                'appKey': '34839810',
-                't': timestamp,
-                'sign': '',
-                'v': '1.0',
-                'type': 'originaljson',
-                'accountSite': 'xianyu',
-                'dataType': 'json',
-                'timeout': '20000',
-                'api': 'mtop.taobao.idlemessage.pc.login.token',
-                'sessionOption': 'AutoLoginOnly',
-                'dangerouslySetWindvaneParams': '%5Bobject%20Object%5D',
-                'smToken': 'token',
-                'queryToken': 'sm',
-                'sm': 'sm',
-                'spm_cnt': 'a21ybx.im.0.0',
-                'spm_pre': 'a21ybx.home.sidebar.1.4c053da6vYwnmf',
-                'log_id': '4c053da6vYwnmf'
-            }
-            data_val = '{"appKey":"444e9908a51d1cb236a27862abc769c9","deviceId":"' + self.device_id + '"}'
-            data = {'data': data_val}
-
-            token = self.cookies.get('_m_h5_tk', '').split('_')[0] if self.cookies.get('_m_h5_tk') else ''
-            params['sign'] = generate_sign(params['t'], token, data_val)
-
-            headers = {
-                'accept': 'application/json',
-                'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                'cache-control': 'no-cache',
-                'content-type': 'application/x-www-form-urlencoded',
-                'pragma': 'no-cache',
-                'priority': 'u=1, i',
-                'sec-ch-ua': '"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
-                'sec-ch-ua-mobile': '?0',
-                'sec-ch-ua-platform': '"Windows"',
-                'sec-fetch-dest': 'empty',
-                'sec-fetch-mode': 'cors',
-                'sec-fetch-site': 'same-site',
-                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
-                'referer': 'https://www.goofish.com/',
-                'origin': 'https://www.goofish.com',
-                'cookie': self.cookies_str.replace('\n', '').replace('\r', '') if self.cookies_str else ''
-            }
-            api_url = 'https://h5api.m.goofish.com/h5/mtop.taobao.idlemessage.pc.login.token/1.0/'
-
             logger.info(f"【{self.cookie_id}】浏览器就绪，重新请求新鲜的滑块验证链接...")
-            resp = requests.post(api_url, params=params, data=data, headers=headers, timeout=15)
-            res_json = resp.json()
+            # 与远程过滑块接口共用同一份"凭 Cookie 重取链接"逻辑（common.token_refetch）
+            res = request_fresh_captcha_url(
+                self.cookie_id, self.cookies, self.cookies_str, self.device_id
+            )
 
-            # 优先判断 token 是否已可用：等待槽位/启动浏览器期间风控可能已解除，
-            # 此时接口直接返回成功 accessToken，根本不需要滑块验证。捕获结果并返回哨兵，
-            # 让上层提前结束滑块流程、直接采用新 token，避免把这次成功白白丢弃。
-            if isinstance(res_json, dict):
-                ret_value = res_json.get('ret', []) or []
-                if any('SUCCESS::调用成功' in str(r) for r in ret_value):
-                    data_f = res_json.get('data', {}) if isinstance(res_json.get('data'), dict) else {}
-                    new_token = data_f.get('accessToken')
-                    if new_token:
-                        logger.info(f"【{self.cookie_id}】重新请求 token 已成功（风控已解除），无需滑块验证")
-                        try:
-                            self._refetch_token_ok = True
-                            self._refetch_new_token = new_token
-                            # 捕获接口可能下发的刷新后 cookie
-                            self._refetch_new_cookies = resp.cookies.get_dict() or {}
-                        except Exception:
-                            pass
-                        return CAPTCHA_NOT_REQUIRED
+            # 风控已解除、token 直接可用：缓存结果并返回哨兵，让上层提前结束滑块流程、直接采用新 token
+            if res.get("token_ok"):
+                try:
+                    self._refetch_token_ok = True
+                    self._refetch_new_token = res.get("new_token")
+                    # 捕获接口可能下发的刷新后 cookie
+                    self._refetch_new_cookies = res.get("new_cookies") or {}
+                except Exception:
+                    pass
+                return CAPTCHA_NOT_REQUIRED
 
-            data_field = res_json.get('data', {}) if isinstance(res_json, dict) else {}
-            new_url = data_field.get('url') if isinstance(data_field, dict) else None
-            if new_url:
-                logger.info(f"【{self.cookie_id}】已获取新鲜验证链接")
-                return new_url
+            fresh_url = res.get("fresh_url")
+            if fresh_url:
+                return fresh_url
 
-            logger.info(f"【{self.cookie_id}】重新请求未返回验证链接（可能已不需要验证），沿用原链接")
+            # 未返回新链接：沿用原链接
             return None
         except Exception as e:
             logger.warning(f"【{self.cookie_id}】重新获取滑块验证链接失败，沿用原链接: {self._safe_str(e)}")
             return None
 
-    async def _load_remote_captcha_config(self) -> tuple[str, str] | None:
+    async def _load_remote_captcha_config(self) -> dict | None:
         """读取全局"远程过滑块"配置（system_settings，仅管理员可配）。
 
         Returns:
-            (url, secret) 二元组；未配置或读取失败返回 None（此时走本机逻辑）。
+            dict {url, secret, pass_cookies, device_id}；未配置或读取失败返回 None（此时走本机逻辑）。
+            - pass_cookies 为 True 时表示"调用远程接口时传递账号 Cookie"（默认关闭）；
+            - device_id 仅在 pass_cookies 开启时一并下发，供远程端在链接过期时重取新链接。
         """
         try:
             from common.db.session import async_session_maker
@@ -468,15 +416,26 @@ class CookieTokenManager:
                 rows = (await session.execute(
                     select(SystemSetting).where(
                         SystemSetting.key.in_(
-                            ["captcha.remote_service_url", "captcha.remote_secret_key"]
+                            [
+                                "captcha.remote_service_url",
+                                "captcha.remote_secret_key",
+                                "captcha.remote_pass_cookies",
+                            ]
                         )
                     )
                 )).scalars().all()
             m = {r.key: (r.value or "") for r in rows}
             url = (m.get("captcha.remote_service_url") or "").strip()
             secret = (m.get("captcha.remote_secret_key") or "").strip()
+            pass_cookies = (m.get("captcha.remote_pass_cookies") or "").strip().lower() == "true"
             if url and secret:
-                return url, secret
+                return {
+                    "url": url,
+                    "secret": secret,
+                    "pass_cookies": pass_cookies,
+                    # 仅开启开关时下发 device_id，未开启则不携带任何账号信息
+                    "device_id": (self.device_id or "") if pass_cookies else "",
+                }
         except Exception as e:
             logger.warning(f"【{self.cookie_id}】读取远程过滑块配置失败（走本机逻辑）: {self._safe_str(e)}")
         return None

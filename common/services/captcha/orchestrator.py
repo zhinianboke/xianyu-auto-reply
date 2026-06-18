@@ -78,8 +78,15 @@ def _call_remote_solve(
     user_id: str,
     url: str,
     browser_timeout: int,
+    cookies_str: str = "",
+    device_id: str = "",
 ) -> Tuple[str, Optional[Dict[str, str]]]:
     """调用远程过滑块接口。
+
+    Args:
+        cookies_str: 账号 Cookie（仅当"传递Cookie"开关开启时非空）。传入后远程端在
+            遇到"抱歉，页面访问出现了问题"（链接过期）时，可凭此 Cookie 重取新链接继续处理。
+        device_id: 设备 ID，配合 cookies_str 供远程端重新请求 token 接口使用。
 
     Returns:
         (status, cookies)
@@ -88,15 +95,21 @@ def _call_remote_solve(
     """
     import requests
 
+    payload = {
+        "secret_key": remote_secret,
+        "account_id": str(user_id),
+        "url": url,
+        "browser_timeout": int(browser_timeout),
+    }
+    # 仅在开启"传递Cookie"开关时携带账号 Cookie / 设备 ID（默认不传，保护账号隐私）
+    if cookies_str:
+        payload["cookies"] = cookies_str
+        payload["device_id"] = device_id or ""
+
     try:
         resp = requests.post(
             remote_url,
-            json={
-                "secret_key": remote_secret,
-                "account_id": str(user_id),
-                "url": url,
-                "browser_timeout": int(browser_timeout),
-            },
+            json=payload,
             # 连接 8s 内必须建立，读取给足远程求解时间；超时/连不上 → 回退本机
             timeout=(8, max(90, int(browser_timeout) + 60)),
         )
@@ -126,7 +139,7 @@ def run_slider_verification_with_fallback(
     browser_timeout: int = 20,
     existing_cookies_str: str = "",
     url_provider: Optional[Callable[[], Optional[str]]] = None,
-    remote_config: Optional[Tuple[str, str]] = None,
+    remote_config: Optional[dict] = None,
 ) -> Tuple[bool, Optional[Dict[str, str]], Optional[str]]:
     """主引擎 + DrissionPage 兜底的滑块验证编排。
 
@@ -138,23 +151,36 @@ def run_slider_verification_with_fallback(
         browser_timeout: 主引擎单次超时（秒）
         existing_cookies_str: 现有 cookie 字符串，供兜底引擎注入
         url_provider: 可选回调，浏览器就绪后用于重新获取新鲜验证链接，规避等待槽位导致的链接过期
+        remote_config: 远程过滑块配置 dict {url, secret, pass_cookies, device_id} | None。
+            pass_cookies 为 True 时，会把 existing_cookies_str 与 device_id 一并传给远程端，
+            供其在链接过期时重取新链接继续处理。
 
     Returns:
         (是否成功, cookies 字典 | None, 通过引擎 | None)
         通过引擎取值：'playwright'（主引擎）/ 'drissionpage'（兜底引擎）/ 'real_mouse'（真实鼠标）/ 'remote'（远程接口）/ None（未成功）
     """
-    # -1. 远程过滑块（可选，由全局配置 remote_config=(url, secret) 触发）：
+    # -1. 远程过滑块（可选，由全局配置 remote_config 触发）：
     #     已配置则优先调远程接口求解；超时/网络不可用 → 回退本机逻辑；
     #     非超时（远程有返回，无论成败）→ 直接采用远程结果，不回退。
     #     注意：远程接口自身（/internal/captcha/solve）调用本函数时不传 remote_config，
     #     从而避免“远程地址指回本机”造成的无限递归。
     if remote_config:
-        r_url, r_secret = remote_config
+        r_url = (remote_config.get("url") or "").strip()
+        r_secret = (remote_config.get("secret") or "").strip()
         if r_url and r_secret:
-            status, r_cookies = _call_remote_solve(r_url, r_secret, user_id, url, browser_timeout)
-            if status == "ok" and _has_x5sec(r_cookies):
+            # 仅在开启"传递Cookie"开关时携带账号 Cookie / 设备 ID（默认不传）
+            if remote_config.get("pass_cookies"):
+                r_cookies = existing_cookies_str or ""
+                r_device_id = (remote_config.get("device_id") or "")
+            else:
+                r_cookies = ""
+                r_device_id = ""
+            status, r_cookies_out = _call_remote_solve(
+                r_url, r_secret, user_id, url, browser_timeout, r_cookies, r_device_id
+            )
+            if status == "ok" and _has_x5sec(r_cookies_out):
                 logger.info(f"【{user_id}】远程过滑块成功，采用远程结果")
-                return True, r_cookies, "remote"
+                return True, r_cookies_out, "remote"
             if status == "fail":
                 logger.info(f"【{user_id}】远程过滑块未通过（非超时），按配置不回退本机，返回失败")
                 return False, None, "remote"

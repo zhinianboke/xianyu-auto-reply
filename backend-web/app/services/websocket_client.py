@@ -241,7 +241,8 @@ class WebSocketServiceClient:
 
 
     async def solve_captcha(self, account_id: str, url: str, browser_timeout: int = 40,
-                            call_type: str = "remote", call_user: str | None = None) -> dict:
+                            call_type: str = "remote", call_user: str | None = None,
+                            cookies: str = "", device_id: str = "") -> dict:
         """调用 websocket 服务独立过滑块（模式B：仅凭 punish 链接求解）。
 
         注意：过滑块（含重试/看门狗）耗时可能达数十秒，远超共享 http_client 的 30s 超时，
@@ -253,6 +254,8 @@ class WebSocketServiceClient:
             browser_timeout: 单次浏览器超时（秒）
             call_type: 调用类型（local/remote），用于风控日志
             call_user: 调用用户名（远程调用按秘钥查到），用于风控日志
+            cookies: 可选账号 Cookie（调用方开启"传递Cookie"开关时传入），链接过期时凭此重取新链接
+            device_id: 可选设备 ID，配合 cookies 重新请求 token 接口使用
 
         Returns:
             websocket 返回的响应字典（success / data.engine / data.cookies）
@@ -271,6 +274,8 @@ class WebSocketServiceClient:
                     "browser_timeout": int(browser_timeout),
                     "call_type": call_type,
                     "call_user": call_user,
+                    "cookies": cookies or "",
+                    "device_id": device_id or "",
                 }) as resp:
                     return await resp.json(content_type=None)
         except Exception as e:

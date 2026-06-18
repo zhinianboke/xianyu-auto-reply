@@ -80,6 +80,9 @@ class SolveCaptchaRequest(BaseModel):
     browser_timeout: int = 40     # 单次浏览器超时（秒）
     call_type: str = "remote"     # 调用类型：local-本机 / remote-远程
     call_user: str | None = None  # 调用用户（远程调用按秘钥查到的用户名）
+    cookies: str = ""             # 可选：账号 Cookie（调用方开启"传递Cookie"开关时传入）。
+                                  # 传入后链接过期时可凭此 Cookie 重取新链接继续处理。
+    device_id: str = ""           # 可选：设备 ID，配合 cookies 重新请求 token 接口使用
 
 
 @router.post("/logs/retention")
@@ -377,11 +380,38 @@ async def solve_captcha(request: SolveCaptchaRequest):
         from app.services.captcha.slider_stealth import run_slider_verification_with_fallback
         from common.services.captcha.concurrency import run_browser_task
 
-        # enable_learning=True, headless=False, existing_cookies_str="", url_provider=None
-        # 不传 cookies / url_provider：链接过期或失败时直接判失败（符合模式B“失败即返回失败”）
+        # 若调用方传入了账号 Cookie（开启了"传递Cookie"开关）：
+        #   - 把 Cookie 作为 existing_cookies_str 提供给兜底引擎注入；
+        #   - 构造 url_provider，遇到"抱歉，页面访问出现了问题"（链接过期）时凭 Cookie 重取新链接，
+        #     与本机处理滑块的逻辑保持一致。
+        # 未传 Cookie 时保持原模式B：链接过期或失败直接判失败（cookies="" / url_provider=None）。
+        existing_cookies_str = (request.cookies or "").strip()
+        device_id = (request.device_id or "").strip()
+        url_provider = None
+        if existing_cookies_str:
+            from common.services.captcha.token_refetch import request_fresh_captcha_url
+            from app.services.captcha.slider_stealth import CAPTCHA_NOT_REQUIRED
+            from common.utils.xianyu_utils import trans_cookies
+
+            try:
+                _cookies_dict = trans_cookies(existing_cookies_str)
+            except Exception:
+                _cookies_dict = {}
+
+            def _remote_url_provider():
+                """凭传入的 Cookie 重新请求 token 接口，拿到新鲜验证链接（远程端链接过期兜底）。"""
+                res = request_fresh_captcha_url(safe_id, _cookies_dict, existing_cookies_str, device_id)
+                if res.get("token_ok"):
+                    # 风控已解除、无需滑块：返回哨兵，让上层提前结束滑块流程
+                    return CAPTCHA_NOT_REQUIRED
+                return res.get("fresh_url")
+
+            url_provider = _remote_url_provider
+            logger.info(f"【过滑块接口】account_id={safe_id} 已携带 Cookie，启用链接过期自动重取")
+
         success, cookies, engine = await run_browser_task(
             run_slider_verification_with_fallback,
-            safe_id, url, True, False, timeout, "", None,
+            safe_id, url, True, False, timeout, existing_cookies_str, url_provider,
         )
     except Exception as e:
         logger.error(f"【过滑块接口】account_id={safe_id} 执行异常: {e}")

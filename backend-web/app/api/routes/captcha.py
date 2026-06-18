@@ -49,6 +49,9 @@ class SliderSolveRequest(BaseModel):
     account_id: str = ""                 # 外部账号标识（仅用于日志/浏览器实例隔离，本系统不查库）
     url: str                             # punish 验证链接（punish?x5secdata=...）
     browser_timeout: int = 40            # 单次浏览器超时（秒），范围 20~120
+    cookies: str = ""                    # 可选：账号 Cookie（调用方开启"传递Cookie"开关时传入），
+                                         # 用于链接过期时凭 Cookie 重取新链接继续处理
+    device_id: str = ""                  # 可选：设备 ID，配合 cookies 重新请求 token 接口使用
 
 
 class TestRemoteSolveRequest(BaseModel):
@@ -61,11 +64,13 @@ class RemoteConfigUpdate(BaseModel):
     """远程过滑块全局配置（仅管理员）"""
     url: str = ""
     secret_key: str = ""
+    pass_cookies: bool = False   # 是否在调用远程接口时传递账号 Cookie（默认关闭）
 
 
 # 远程过滑块全局配置存储 key（system_settings，全局唯一，仅管理员可读写）
 REMOTE_CONFIG_URL_KEY = "captcha.remote_service_url"
 REMOTE_CONFIG_SECRET_KEY = "captcha.remote_secret_key"
+REMOTE_CONFIG_PASS_COOKIES_KEY = "captcha.remote_pass_cookies"
 
 
 # ==================== 工具函数 ====================
@@ -447,6 +452,8 @@ async def slider_solve(
         browser_timeout=timeout,
         call_type="remote",
         call_user=user.username,
+        cookies=(request.cookies or "").strip(),
+        device_id=(request.device_id or "").strip(),
     )
 
     if isinstance(result_data, dict) and result_data.get("success"):
@@ -507,13 +514,18 @@ async def get_remote_config(
 
     rows = (await db.execute(
         select(SystemSetting).where(
-            SystemSetting.key.in_([REMOTE_CONFIG_URL_KEY, REMOTE_CONFIG_SECRET_KEY])
+            SystemSetting.key.in_([
+                REMOTE_CONFIG_URL_KEY,
+                REMOTE_CONFIG_SECRET_KEY,
+                REMOTE_CONFIG_PASS_COOKIES_KEY,
+            ])
         )
     )).scalars().all()
     m = {r.key: (r.value or "") for r in rows}
     return ApiResponse(success=True, data={
         "url": m.get(REMOTE_CONFIG_URL_KEY, ""),
         "secret_key": m.get(REMOTE_CONFIG_SECRET_KEY, ""),
+        "pass_cookies": (m.get(REMOTE_CONFIG_PASS_COOKIES_KEY, "") or "").strip().lower() == "true",
     })
 
 
@@ -529,4 +541,9 @@ async def update_remote_config(
     svc = SystemSettingService(db)
     await svc.set_setting(REMOTE_CONFIG_URL_KEY, (request.url or "").strip(), "远程过滑块服务URL")
     await svc.set_setting(REMOTE_CONFIG_SECRET_KEY, (request.secret_key or "").strip(), "远程过滑块秘钥")
+    await svc.set_setting(
+        REMOTE_CONFIG_PASS_COOKIES_KEY,
+        "true" if request.pass_cookies else "false",
+        "远程过滑块是否传递账号Cookie",
+    )
     return ApiResponse(success=True, message="保存成功")

@@ -123,13 +123,13 @@ export const testRemoteSliderSolve = async (
 }
 
 // 读取远程过滑块全局配置（仅管理员）
-export const getRemoteCaptchaConfig = async (): Promise<ApiResponse<{ url: string; secret_key: string }>> => {
+export const getRemoteCaptchaConfig = async (): Promise<ApiResponse<{ url: string; secret_key: string; pass_cookies: boolean }>> => {
   return get(`${API_PREFIX}/captcha/remote-config`)
 }
 
 // 保存远程过滑块全局配置（仅管理员）
-export const saveRemoteCaptchaConfig = async (url: string, secret_key: string): Promise<ApiResponse> => {
-  return put(`${API_PREFIX}/captcha/remote-config`, { url, secret_key })
+export const saveRemoteCaptchaConfig = async (url: string, secret_key: string, pass_cookies: boolean): Promise<ApiResponse> => {
+  return put(`${API_PREFIX}/captcha/remote-config`, { url, secret_key, pass_cookies })
 }
 
 // ========== 风控日志 ==========

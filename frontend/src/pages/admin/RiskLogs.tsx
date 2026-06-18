@@ -55,6 +55,7 @@ export function RiskLogs() {
   // 远程过滑块配置（与个人设置一致，按用户存储于 user-settings）
   const [remoteUrl, setRemoteUrl] = useState('')
   const [remoteSecret, setRemoteSecret] = useState('')
+  const [passCookies, setPassCookies] = useState(false)
   const [savingConfig, setSavingConfig] = useState(false)
   const [testing, setTesting] = useState(false)
 
@@ -112,6 +113,7 @@ export function RiskLogs() {
       if (res.success && res.data) {
         setRemoteUrl(res.data.url || '')
         setRemoteSecret(res.data.secret_key || '')
+        setPassCookies(!!res.data.pass_cookies)
       }
     } catch {
       // 回显失败不阻断页面
@@ -121,7 +123,7 @@ export function RiskLogs() {
   const handleSaveRemoteConfig = async () => {
     try {
       setSavingConfig(true)
-      const res = await saveRemoteCaptchaConfig(remoteUrl.trim(), remoteSecret.trim())
+      const res = await saveRemoteCaptchaConfig(remoteUrl.trim(), remoteSecret.trim(), passCookies)
       if (res.success) {
         addToast({ type: 'success', message: '远程过滑块配置已保存' })
       } else {
@@ -261,6 +263,32 @@ export function RiskLogs() {
               {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
               测试
             </button>
+          </div>
+
+          {/* 是否传递账号Cookie（默认关闭）：开启后调用远程接口时会把当前账号 Cookie 传给远程服务，
+              远程端在验证链接过期时可凭 Cookie 自动重取新链接，提高成功率 */}
+          <div className="flex items-start gap-3 mt-4">
+            <button
+              type="button"
+              onClick={() => setPassCookies((v) => !v)}
+              role="switch"
+              aria-checked={passCookies}
+              className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors shrink-0 mt-0.5 ${
+                passCookies ? 'bg-blue-500' : 'bg-gray-300 dark:bg-slate-600'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  passCookies ? 'translate-x-5' : 'translate-x-0.5'
+                }`}
+              />
+            </button>
+            <div className="text-sm">
+              <p className="font-medium text-slate-700 dark:text-slate-200">调用远程接口时传递账号 Cookie</p>
+              <p className="mt-0.5 text-xs text-amber-600 dark:text-amber-400">
+                默认关闭。传递 Cookie 可进一步提高过滑块成功率（链接过期时远程端可凭此自动重取新链接），远程系统不会保存该值；请仅在信任该远程服务时开启。
+              </p>
+            </div>
           </div>
         </div>
       </div>
