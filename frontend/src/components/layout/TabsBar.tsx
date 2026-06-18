@@ -86,6 +86,7 @@ const routeTitles: Record<string, string> = {
   '/product-monitor/listing': '商品监控',
   '/product-monitor/logs': '监控日志',
   '/product-monitor/items': '采集商品',
+  '/product-monitor/order-fallback-accounts': '下单账号',
   '/blacklist': '黑名单管理',
 }
 

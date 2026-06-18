@@ -123,6 +123,7 @@ export const mainNavItems: NavEntry[] = [
       { key: 'product-monitor-listing', icon: PackageSearch, label: '商品监控', path: '/product-monitor/listing' },
       { key: 'product-monitor-logs', icon: ScrollText, label: '监控日志', path: '/product-monitor/logs' },
       { key: 'product-monitor-items', icon: Package, label: '采集商品', path: '/product-monitor/items' },
+      { key: 'product-monitor-order-fallback', icon: ShoppingCart, label: '下单账号', path: '/product-monitor/order-fallback-accounts' },
     ],
   },
   { key: 'keywords', icon: MessageSquare, label: '自动回复', path: '/keywords' },

@@ -316,7 +316,7 @@ export function ListingMonitor() {
         </div>
 
         <div className="flex-1 overflow-auto">
-          <table className="table-ios min-w-[820px]">
+          <table className="table-ios min-w-[900px]">
             <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
               <tr>
                 <th className="w-10 whitespace-nowrap">
@@ -328,6 +328,7 @@ export function ListingMonitor() {
                     )}
                   </button>
                 </th>
+                <th>任务ID</th>
                 <th>监控类型</th>
                 <th>所属用户</th>
                 <th>商品关键字</th>
@@ -350,13 +351,13 @@ export function ListingMonitor() {
             <tbody>
               {tableLoading ? (
                 <tr>
-                  <td colSpan={18} className="text-center py-12">
+                  <td colSpan={19} className="text-center py-12">
                     <Loader2 className="w-6 h-6 animate-spin text-blue-500 mx-auto" />
                   </td>
                 </tr>
               ) : tasks.length === 0 ? (
                 <tr>
-                  <td colSpan={18} className="text-center py-12 text-slate-400">
+                  <td colSpan={19} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <PackageSearch className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>暂无监控任务，点击右上角新建</p>
@@ -375,6 +376,7 @@ export function ListingMonitor() {
                         )}
                       </button>
                     </td>
+                    <td className="whitespace-nowrap text-slate-500 dark:text-slate-400">#{item.id}</td>
                     <td className="whitespace-nowrap">
                       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
                         {MONITOR_TYPE_LABELS[item.monitor_type] || item.monitor_type}

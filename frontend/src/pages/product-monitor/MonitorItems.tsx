@@ -324,7 +324,12 @@ export function MonitorItems() {
                 items.map((item) => (
                   <tr key={item.id}>
                     <td className="whitespace-nowrap text-slate-500 dark:text-slate-400">{item.id}</td>
-                    <td className="whitespace-nowrap text-slate-500 dark:text-slate-400">{item.monitor_task_id}</td>
+                    <td className="max-w-[160px]">
+                      <span className="truncate block text-slate-700 dark:text-slate-200" title={item.monitor_task_keyword || `任务#${item.monitor_task_id}`}>
+                        {item.monitor_task_keyword || '-'}
+                      </span>
+                      <span className="text-xs text-slate-400">#{item.monitor_task_id}</span>
+                    </td>
                     <td className="whitespace-nowrap text-slate-600 dark:text-slate-300">{item.item_id}</td>
                     <td>
                       {item.pic_url ? (
@@ -385,6 +390,8 @@ export function MonitorItems() {
                     <td className="whitespace-nowrap">
                       {item.order_status === 'duplicate' ? (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400" title="同商品已在其他监控任务下单，跳过重复下单">重复跳过</span>
+                      ) : item.order_status === 'no_account' && !item.is_ordered ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400" title={item.order_fail_reason || '无可用下单账号'}>无可用账号</span>
                       ) : item.order_status === 'failed' && !item.is_ordered ? (
                         (item.order_attempts || 0) >= 3 ? (
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">下单失败(已放弃)</span>

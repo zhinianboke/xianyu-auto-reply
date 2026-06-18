@@ -238,6 +238,7 @@ export const getListingMonitorLogs = (
 export interface ListingMonitorItem {
   id: number
   monitor_task_id: number
+  monitor_task_keyword?: string | null
   item_id: string
   title?: string | null
   price?: string | null

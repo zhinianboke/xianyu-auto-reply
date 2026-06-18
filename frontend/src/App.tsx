@@ -67,6 +67,7 @@ const ListingMonitor = React.lazy(() => import('@/pages/product-monitor/ListingM
 const MonitorOverview = React.lazy(() => import('@/pages/product-monitor/MonitorOverview').then(m => ({ default: m.MonitorOverview })))
 const MonitorLogs = React.lazy(() => import('@/pages/product-monitor/MonitorLogs').then(m => ({ default: m.MonitorLogs })))
 const MonitorItems = React.lazy(() => import('@/pages/product-monitor/MonitorItems').then(m => ({ default: m.MonitorItems })))
+const OrderFallbackAccount = React.lazy(() => import('@/pages/product-monitor/OrderFallbackAccount').then(m => ({ default: m.OrderFallbackAccount })))
 
 // 管理员页面懒加载
 const Users = React.lazy(() => import('@/pages/admin/Users').then(m => ({ default: m.Users })))
@@ -367,6 +368,7 @@ function App() {
             <Route path="product-monitor/listing" element={<ListingMonitor />} />
             <Route path="product-monitor/logs" element={<MonitorLogs />} />
             <Route path="product-monitor/items" element={<MonitorItems />} />
+            <Route path="product-monitor/order-fallback-accounts" element={<OrderFallbackAccount />} />
             <Route path="personal-settings" element={<PersonalSettings />} />
             <Route path="blacklist" element={<Blacklist />} />
             <Route path="settings" element={<Settings />} />

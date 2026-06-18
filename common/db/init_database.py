@@ -1438,6 +1438,18 @@ class DatabaseInitializer:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品监控执行日志表';
         """,
 
+        # 45.4 用户级兜底下单账号配置表（任务无可用下单账号时回退使用）
+        "xy_order_fallback_accounts": """
+            CREATE TABLE IF NOT EXISTS xy_order_fallback_accounts (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                owner_id BIGINT NOT NULL COMMENT '归属用户ID（唯一，一个用户一条配置）',
+                account_ids JSON DEFAULT NULL COMMENT '兜底下单账号ID列表（JSON数组，多选轮换使用）',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                UNIQUE KEY uk_ofa_owner (owner_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户级兜底下单账号配置表';
+        """,
+
         # 46. 共享扫码登录会话表
         "xy_shared_scan_sessions": """
             CREATE TABLE IF NOT EXISTS xy_shared_scan_sessions (

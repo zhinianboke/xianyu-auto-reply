@@ -96,11 +96,15 @@ def _log_to_dict(log: ListingMonitorLog) -> Dict[str, Any]:
     }
 
 
-def _item_to_dict(item: ListingMonitorItem) -> Dict[str, Any]:
-    """将采集商品模型转换为前端可用的字典。"""
+def _item_to_dict(item: ListingMonitorItem, task_keyword: Optional[str] = None) -> Dict[str, Any]:
+    """将采集商品模型转换为前端可用的字典。
+
+    task_keyword: 所属监控任务的关键字（任务名称），由调用方批量查出后传入。
+    """
     return {
         "id": item.id,
         "monitor_task_id": item.monitor_task_id,
+        "monitor_task_keyword": task_keyword,
         "item_id": item.item_id,
         "title": item.title,
         "price": item.price,
@@ -876,8 +880,20 @@ class ListingMonitorService:
         )
         rows = (await self.session.execute(stmt)).scalars().all()
 
+        # 批量查询本页商品所属监控任务的关键字（任务名称），用于前端展示
+        task_keyword_map: Dict[int, str] = {}
+        task_ids = {row.monitor_task_id for row in rows if row.monitor_task_id is not None}
+        if task_ids:
+            kw_stmt = select(ListingMonitorTask.id, ListingMonitorTask.keyword).where(
+                ListingMonitorTask.id.in_(task_ids)
+            )
+            for tid, kw in (await self.session.execute(kw_stmt)).all():
+                task_keyword_map[tid] = kw
+
         return {
-            "list": [_item_to_dict(row) for row in rows],
+            "list": [
+                _item_to_dict(row, task_keyword_map.get(row.monitor_task_id)) for row in rows
+            ],
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -893,7 +909,17 @@ class ListingMonitorService:
         item = (await self.session.execute(stmt)).scalar_one_or_none()
         if not item:
             return None
-        data = _item_to_dict(item)
+        # 查询所属监控任务关键字（任务名称）
+        task_keyword = None
+        if item.monitor_task_id is not None:
+            task_keyword = (
+                await self.session.execute(
+                    select(ListingMonitorTask.keyword).where(
+                        ListingMonitorTask.id == item.monitor_task_id
+                    )
+                )
+            ).scalar_one_or_none()
+        data = _item_to_dict(item, task_keyword)
         # 附带数据库中存储的原始详情与搜索原始数据（解析为对象，便于前端展示）
         data["detail_json"] = _safe_json_loads(item.detail_json)
         data["raw_json"] = _safe_json_loads(item.raw_json)

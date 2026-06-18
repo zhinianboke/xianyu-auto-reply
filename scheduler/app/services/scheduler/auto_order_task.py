@@ -30,6 +30,7 @@ from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_task import ListingMonitorTask
 from common.models.xy_account import XYAccount
 from common.services.listing_monitor_dedup import has_owner_ordered_item
+from common.services.order_fallback_account_service import OrderFallbackAccountService
 from common.services.xianyu_order_client import XianyuOrderClient
 from common.utils.time_utils import get_beijing_now_naive
 
@@ -74,6 +75,16 @@ class AutoOrderTaskService:
             task_order_cache: Dict[int, List[str]] = {}
             # 监控任务ID -> 每次最多下单条数（缓存）
             task_batch_cache: Dict[int, int] = {}
+            # 监控任务ID -> 任务名称(监控关键字)（缓存）
+            task_name_cache: Dict[int, str] = {}
+            # 监控任务ID -> 不可用账号精确明细（缓存）
+            task_detail_cache: Dict[int, str] = {}
+            # 用户ID -> 兜底下单账号字典 {account_id: XYAccount}（缓存，仅含可用账号）
+            fallback_accounts_cache: Dict[Optional[int], Dict[str, XYAccount]] = {}
+            # 用户ID -> 兜底账号不可用明细（缓存）
+            fallback_detail_cache: Dict[Optional[int], str] = {}
+            # 用户ID -> 兜底账号轮换指针
+            fallback_rr: Dict[Optional[int], int] = {}
             # 监控任务ID -> 回退轮换指针
             task_rr: Dict[int, int] = {}
             # 监控任务ID -> 本次已实际下单处理条数（达到 order_batch_size 后该任务本次不再处理）
@@ -99,10 +110,12 @@ class AutoOrderTaskService:
                     continue
 
                 if task_id not in task_accounts_cache:
-                    accounts_map, order_list, batch_size = await self._load_task_accounts(task_id)
+                    accounts_map, order_list, batch_size, task_name, detail = await self._load_task_accounts(task_id)
                     task_accounts_cache[task_id] = accounts_map
                     task_order_cache[task_id] = order_list
                     task_batch_cache[task_id] = batch_size
+                    task_name_cache[task_id] = task_name
+                    task_detail_cache[task_id] = detail
                 accounts_map = task_accounts_cache[task_id]
                 order_list = task_order_cache[task_id]
                 batch_size = task_batch_cache.get(task_id, 5)
@@ -119,23 +132,37 @@ class AutoOrderTaskService:
                 task_rr[task_id] = task_rr.get(task_id, 0) + 1
 
                 usable = [a for a in candidates if a.account_id not in disabled_accounts]
+                used_fallback = False
+                if not usable:
+                    # 任务自身无可用下单账号，回退到用户级兜底下单账号
+                    if owner_id not in fallback_accounts_cache:
+                        fb_map, fb_detail = await self._load_fallback_accounts(owner_id)
+                        fallback_accounts_cache[owner_id] = fb_map
+                        fallback_detail_cache[owner_id] = fb_detail
+                    fb_accounts = fallback_accounts_cache[owner_id]
+                    fb_usable = [a for a in fb_accounts.values() if a.account_id not in disabled_accounts]
+                    if fb_usable:
+                        # 轮换兜底账号，避免总是从同一个账号开始
+                        start = fallback_rr.get(owner_id, 0)
+                        fallback_rr[owner_id] = start + 1
+                        n = len(fb_usable)
+                        usable = [fb_usable[(start + i) % n] for i in range(n)]
+                        used_fallback = True
+
                 if not usable:
                     skipped_no_account += 1
-                    # 仅对每个监控任务打印一次明细，定位"无可用账号"根因
+                    task_name = task_name_cache.get(task_id, f"id={task_id}")
+                    task_reason = task_detail_cache.get(task_id) or "配置账号本次运行均失效（Token过期/需登录/风控）"
+                    fb_detail = fallback_detail_cache.get(owner_id, "未配置兜底下单账号")
+                    reason = f"任务下单账号不可用（{task_reason}）；兜底下单账号也不可用（{fb_detail}）"
+                    # 落库：更新该商品下单失败原因（不累加尝试次数，账号恢复后下次自动重试）
+                    await self._mark_no_account(pk, f"无可用下单账号：{reason}")
+                    # 日志仅对每个监控任务打印一次，避免刷屏
                     if task_id not in warned_no_account_tasks:
                         warned_no_account_tasks.add(task_id)
-                        if not order_list:
-                            reason = "该监控任务未配置下单账号(order_account_ids 为空)，或任务已删除/未启用"
-                        elif not accounts_map:
-                            reason = (
-                                f"配置的下单账号 {order_list} 全部不可用"
-                                "（账号不存在 / Cookie为空 / 状态为停用-封禁-删除）"
-                            )
-                        else:
-                            blocked = [a.account_id for a in candidates if a.account_id in disabled_accounts]
-                            reason = f"候选账号 {blocked} 本次运行已被判定失效并停用（Session/Token过期、需登录或风控）"
                         logger.warning(
-                            f"【{self.task_name}】商品 {item_id}(任务{task_id}) 无可用账号跳过：{reason}"
+                            f"【{self.task_name}】监控任务「{task_name}」无可用账号跳过（含兜底），原因：{reason}"
+                            f"（该任务剩余商品同因跳过，不再重复打印）"
                         )
                     continue
 
@@ -144,8 +171,16 @@ class AutoOrderTaskService:
                     ordered += 1
                     ordered_item_ids.add(item_id)
                     task_done[task_id] = task_done.get(task_id, 0) + 1
+                    if used_fallback:
+                        logger.info(
+                            f"【{self.task_name}】商品 {item_id}(任务{task_id}) 使用兜底下单账号下单成功"
+                        )
                 elif result == "no_account":
+                    # 候选账号在实际下单调用中全部失效：记录原因，不累加尝试次数
                     skipped_no_account += 1
+                    await self._mark_no_account(
+                        pk, "无可用下单账号：候选账号在下单时全部失效（Session/Token过期、需重新登录或被风控）"
+                    )
                 else:
                     # failed：已实际尝试下单（render/create），计入该任务本次处理条数
                     failed += 1
@@ -212,35 +247,69 @@ class AutoOrderTaskService:
         except Exception as exc:  # noqa: BLE001
             logger.error(f"【{self.task_name}】标记重复商品失败 采集商品id={pk}：{exc}")
 
-    async def _load_task_accounts(self, task_id: int) -> Tuple[Dict[str, XYAccount], List[str], int]:
+    async def _mark_no_account(self, pk: int, reason: str) -> None:
+        """无可用账号时更新商品下单状态与失败原因。
+
+        说明：账号不可用属于"环境问题"而非"商品问题"，故不累加 order_attempts，
+        待账号恢复后下次任务可继续重试；仅更新 order_status/order_fail_reason 供前端查看。
+        """
+        try:
+            async with async_session_maker() as session:
+                item = (
+                    await session.execute(
+                        select(ListingMonitorItem).where(ListingMonitorItem.id == pk)
+                    )
+                ).scalar_one_or_none()
+                if not item:
+                    return
+                item.order_status = "no_account"
+                item.order_fail_reason = str(reason)[:500] if reason else None
+                await session.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"【{self.task_name}】更新无可用账号状态失败 采集商品id={pk}：{exc}")
+
+    async def _load_task_accounts(self, task_id: int) -> Tuple[Dict[str, XYAccount], List[str], int, str, str]:
         """加载监控任务配置的下单账号（任务须未删除且启用；过滤禁用/空Cookie）。
 
-        Returns: ({account_id: XYAccount 仅可用账号}, 配置顺序的account_id列表, order_batch_size)
+        Returns: (
+            {account_id: XYAccount 仅可用账号},
+            配置顺序的account_id列表,
+            order_batch_size,
+            任务名称(监控关键字),
+            不可用原因明细(无则空串),
+        )
         """
         async with async_session_maker() as session:
+            # 不带启用/删除条件查询，确保停用/未配账号的任务也能拿到关键字用于日志展示
             task = (
                 await session.execute(
                     select(
+                        ListingMonitorTask.keyword,
+                        ListingMonitorTask.is_deleted,
+                        ListingMonitorTask.is_enabled,
                         ListingMonitorTask.order_account_ids,
                         ListingMonitorTask.order_batch_size,
-                    ).where(
-                        ListingMonitorTask.id == task_id,
-                        ListingMonitorTask.is_deleted.is_(False),
-                        ListingMonitorTask.is_enabled.is_(True),
-                    )
+                    ).where(ListingMonitorTask.id == task_id)
                 )
             ).first()
-            if not task or not task[0]:
-                logger.warning(
-                    f"【{self.task_name}】加载任务{task_id}下单账号失败："
-                    f"任务不存在/已删除/未启用，或未配置下单账号(order_account_ids)"
-                )
-                return {}, [], 5
-            account_ids = list(task[0] or [])
-            batch_size = task[1] if task[1] and task[1] > 0 else 5
+            if not task:
+                logger.warning(f"【{self.task_name}】监控任务 id={task_id} 不存在（可能已被物理删除）")
+                return {}, [], 5, f"id={task_id}", "监控任务不存在"
+            keyword, is_deleted, is_enabled, order_account_ids_raw, order_batch_size = task
+            task_name = keyword or f"id={task_id}"
+            batch_size = order_batch_size if order_batch_size and order_batch_size > 0 else 5
+            if is_deleted:
+                logger.warning(f"【{self.task_name}】监控任务「{task_name}」已删除，跳过下单")
+                return {}, [], batch_size, task_name, "监控任务已删除"
+            if not is_enabled:
+                logger.warning(f"【{self.task_name}】监控任务「{task_name}」已停用，跳过下单")
+                return {}, [], batch_size, task_name, "监控任务已停用"
+            account_ids = list(order_account_ids_raw or [])
             if not account_ids:
-                logger.warning(f"【{self.task_name}】任务{task_id}未配置下单账号(order_account_ids 为空)")
-                return {}, [], batch_size
+                logger.warning(
+                    f"【{self.task_name}】监控任务「{task_name}」未配置下单账号(order_account_ids 为空)"
+                )
+                return {}, [], batch_size, task_name, "未配置下单账号(order_account_ids 为空)"
             rows = list(
                 (
                     await session.execute(
@@ -255,25 +324,75 @@ class AutoOrderTaskService:
         for row in rows:
             found_ids.add(row.account_id)
             if not row.cookie:
-                skip_reasons.append(f"{row.account_id}(Cookie为空)")
+                skip_reasons.append(f"账号{row.account_id} 未登录(Cookie为空)")
                 continue
             status = (row.status or "active").strip().lower()
             if status in _INACTIVE_STATUSES:
-                skip_reasons.append(f"{row.account_id}(状态={status})")
+                skip_reasons.append(f"账号{row.account_id} 已停用(状态={status})")
                 continue
             accounts_map[row.account_id] = row
         # 配置了但数据库查不到的账号
         for aid in account_ids:
             if aid not in found_ids:
-                skip_reasons.append(f"{aid}(账号不存在)")
+                skip_reasons.append(f"账号{aid} 不存在(已被删除)")
 
+        detail = "；".join(skip_reasons)
         logger.info(
-            f"【{self.task_name}】任务{task_id}下单账号加载完成："
+            f"【{self.task_name}】监控任务「{task_name}」下单账号加载完成："
             f"配置{len(account_ids)}个，可用{len(accounts_map)}个"
-            f"{('，过滤[' + '; '.join(skip_reasons) + ']') if skip_reasons else ''}"
+            f"{('，不可用：' + detail) if detail else ''}"
             f"，每次最多下单{batch_size}条"
         )
-        return accounts_map, account_ids, batch_size
+        # 配置了账号但全部不可用，明细即为不可用原因
+        return accounts_map, account_ids, batch_size, task_name, detail
+
+    async def _load_fallback_accounts(self, owner_id: Optional[int]) -> Tuple[Dict[str, XYAccount], str]:
+        """加载用户级兜底下单账号（过滤禁用/空Cookie）。
+
+        当监控任务自身无可用下单账号时，回退使用该用户配置的兜底下单账号。
+
+        Returns: ({account_id: XYAccount 仅可用账号}, 不可用/未配置原因明细)
+        """
+        if owner_id is None:
+            return {}, "商品无归属用户，无法匹配兜底下单账号"
+
+        async with async_session_maker() as session:
+            svc = OrderFallbackAccountService(session)
+            account_ids = await svc.get_fallback_account_ids(owner_id)
+            if not account_ids:
+                return {}, "未配置兜底下单账号"
+            rows = list(
+                (
+                    await session.execute(
+                        select(XYAccount).where(XYAccount.account_id.in_(account_ids))
+                    )
+                ).scalars().all()
+            )
+
+        accounts_map: Dict[str, XYAccount] = {}
+        found_ids: set[str] = set()
+        skip_reasons: List[str] = []
+        for row in rows:
+            found_ids.add(row.account_id)
+            if not row.cookie:
+                skip_reasons.append(f"账号{row.account_id} 未登录(Cookie为空)")
+                continue
+            status = (row.status or "active").strip().lower()
+            if status in _INACTIVE_STATUSES:
+                skip_reasons.append(f"账号{row.account_id} 已停用(状态={status})")
+                continue
+            accounts_map[row.account_id] = row
+        for aid in account_ids:
+            if aid not in found_ids:
+                skip_reasons.append(f"账号{aid} 不存在(已被删除)")
+
+        detail = "；".join(skip_reasons) if skip_reasons else ""
+        logger.info(
+            f"【{self.task_name}】用户{owner_id}兜底下单账号加载完成："
+            f"配置{len(account_ids)}个，可用{len(accounts_map)}个"
+            f"{('，不可用：' + detail) if detail else ''}"
+        )
+        return accounts_map, (detail or "兜底账号全部不可用")
 
     def _build_candidates(
         self,
