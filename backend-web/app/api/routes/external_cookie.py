@@ -3,8 +3,8 @@
 
 功能：
 1. 提供给外部系统回传账号最新 Cookie 的接口（无需登录，凭分销秘钥校验身份）
-2. 校验账号存在、分销秘钥有效且归属该账号所属用户后，更新账号 Cookie 并重启账号任务
-   （与账号管理中"更新 Cookie 并重启 WebSocket 任务"逻辑保持一致）
+2. 校验账号存在、分销秘钥有效且归属该账号所属用户后，仅更新账号 Cookie 到数据库
+   （不重启账号 WebSocket 任务，避免打断实时连接；定时任务从数据库读取 Cookie 会自动用上最新值）
 
 安全设计：
 - 本接口不走登录态，鉴权依赖 secret_key（分销秘钥，32 位密码学随机字符，约 190bit 熵，
@@ -26,7 +26,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.services.account_service import AccountService
-from app.services.websocket_client import websocket_client
 from common.models.user import User
 from common.models.xy_account import XYAccount
 from common.schemas.common import ApiResponse
@@ -72,7 +71,7 @@ async def sync_account_cookie(
     session: AsyncSession = Depends(deps.get_db_session),
     account_service: AccountService = Depends(deps.get_account_service),
 ) -> ApiResponse:
-    """外部系统回传账号 Cookie：校验账号、分销秘钥与 Cookie 归属后更新 Cookie 并重启账号任务。
+    """外部系统回传账号 Cookie：校验账号、分销秘钥与 Cookie 归属后，仅更新 Cookie 到数据库。
 
     业务错误统一以 HTTP 200 + success=false 返回，由调用方据标志字段处理。
     """
@@ -131,12 +130,11 @@ async def sync_account_cookie(
         )
         return ApiResponse(success=False, message="Cookie 与账号不匹配（unb 不一致）")
 
-    # 5. 更新 Cookie 并重启账号任务（与账号管理中更新 Cookie 的逻辑一致）
+    # 5. 仅更新 Cookie 到数据库（不重启账号 WebSocket 任务，避免打断实时连接）
     await account_service.update_cookie(account, cookies)
-    await websocket_client.restart_account(account_id)
 
     logger.info(
         f"[外部Cookie同步] 更新成功 ip={client_ip} account_id={account_id} owner={account.owner_id} "
         f"secret={_mask_secret(secret_key)} cookie_len={len(cookies)}"
     )
-    return ApiResponse(success=True, message="Cookie 已更新并重启账号")
+    return ApiResponse(success=True, message="Cookie 已更新")

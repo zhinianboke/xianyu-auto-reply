@@ -9,8 +9,9 @@
 4. 下单成功后记录订单ID并标记 is_ordered=1
 
 账号规则：
-- 账号不可用（Session/Token过期、需登录、风控等）：本次运行不再使用该账号，换下一个账号，不计下单尝试次数
-- 业务失败（商品不可买/缺地址等）：累计下单尝试次数(order_attempts)，本次不再换号（下次任务再试）
+- 账号不可用（Session/Token过期、需登录、风控等）：本次运行不再使用该账号（全局停用至本轮结束），换下一个账号，不计下单尝试次数
+- 业务失败（商品不可买/缺地址/权限受限等）：换下一个候选账号继续尝试（不全局停用，可能仅该商品不可买）；
+  所有候选账号都尝试过仍未成功，才累计下单尝试次数(order_attempts)并记录失败原因
 
 安全说明：
 - 仅做到"创建订单（拍下）"，不自动付款（mtop.order.dopay 会真实扣款）。
@@ -442,14 +443,25 @@ class AutoOrderTaskService:
     ) -> str:
         """对单个商品按候选账号顺序下单。
 
+        策略：只要接口未返回成功就换下一个候选账号继续尝试。
+        - account_invalid（Session/Token过期、需登录、风控）：全局停用该账号至本轮结束，换号；
+        - 业务失败（商品不可买/缺地址/权限受限等）：换下一个候选账号继续尝试，但不全局停用该账号
+          （可能仅该商品不可买，账号对其它商品仍可用）；
+        - 全部候选账号都试过仍未成功：有业务失败则记录失败原因并累计尝试次数，返回 "failed"。
+
         Returns: "ordered" / "failed" / "no_account"
         """
         tried = 0
+        had_business_failure = False
+        last_fail_reason: Optional[str] = None
         for acc in accounts:
             if acc.account_id in disabled_accounts:
                 continue
             tried += 1
             status, biz_order_id, fail_reason = await self._order_one(acc, item_id)
+            if status == "success":
+                await self._record_result(pk, True, biz_order_id, None)
+                return "ordered"
             if status == "account_invalid":
                 disabled_accounts.add(acc.account_id)
                 logger.warning(
@@ -457,14 +469,19 @@ class AutoOrderTaskService:
                     f"本次停用，尝试下一个账号"
                 )
                 continue
-            if status == "success":
-                await self._record_result(pk, True, biz_order_id, None)
-                return "ordered"
-            # 业务失败：累计尝试次数，本次不再换号
-            await self._record_result(pk, False, None, fail_reason)
-            return "failed"
+            # 业务失败：换下一个候选账号继续尝试（不全局停用，可能仅该商品不可买）
+            had_business_failure = True
+            last_fail_reason = fail_reason
+            logger.warning(
+                f"【{self.task_name}】账号 {acc.account_id} 下单失败（{fail_reason}），尝试下一个账号"
+            )
+            continue
 
-        # 所有候选账号都不可用
+        # 所有候选账号都尝试过仍未成功
+        if had_business_failure:
+            await self._record_result(pk, False, None, last_fail_reason)
+            return "failed"
+        # 全部账号均为不可用且无任何账号实际尝试
         return "no_account" if tried == 0 else "failed"
 
     async def _order_one(self, account: XYAccount, item_id: str) -> Tuple[str, Optional[str], Optional[str]]:

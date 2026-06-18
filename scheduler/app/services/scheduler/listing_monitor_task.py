@@ -254,7 +254,7 @@ class ListingMonitorTaskService:
                     reverse=True,
                 )
 
-        # 风控冷却过滤：去掉处于冷却期（被挤爆/触发验证后10分钟内）的账号；
+        # 风控冷却过滤：去掉处于冷却期（被挤爆/触发验证后冷却时长内）的账号；
         # 若全部都在冷却期，则本次不采集，并在监控日志记录失败原因。
         cooldown_blocked = False
         if accounts:
@@ -321,7 +321,7 @@ class ListingMonitorTaskService:
                         page_result = res
                         break
                     error_msg = res.get("error")
-                    # 被挤爆/触发验证等风控：将该账号加入10分钟冷却，本次运行后续页不再使用
+                    # 被挤爆/触发验证等风控：将该账号加入冷却，本次运行后续页不再使用
                     if account_cooldown_manager.is_risk_control_error(error_msg):
                         account_cooldown_manager.add(acc.account_id)
                         cooled_this_run.add(acc.account_id)

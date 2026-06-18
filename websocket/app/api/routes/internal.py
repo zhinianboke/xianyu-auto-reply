@@ -248,6 +248,11 @@ async def restart_account(account_id: str, request: StartAccountRequest = None):
         if request is None:
             request = StartAccountRequest()
 
+        # 实际用于启动任务的 Cookie 与所属用户：
+        # 优先用请求携带的值，未携带时回退数据库（避免重启时把空 Cookie 传给任务导致"未提供cookies"）
+        cookie_str = request.cookie_value
+        resolved_user_id = request.user_id
+
         # 重启前清除Token缓存，确保重新获取Token和完整Cookie
         # 注意：xy_token_cache.user_id 存的是闲鱼的 unb（myid），不是 cookie_id(account_id)
         # 因此必须先从 Cookie 中解析出 unb 再作为 user_id 参数删除
@@ -257,18 +262,19 @@ async def restart_account(account_id: str, request: StartAccountRequest = None):
             from common.utils.xianyu_utils import trans_cookies
             from sqlalchemy import text
 
-            # 1) 优先用请求携带的 cookie_value，其次回退数据库查询
-            cookie_str = request.cookie_value
+            # 1) 请求未携带 Cookie 时，回退数据库查询（同时取账号归属用户）
             if not cookie_str:
                 try:
                     account = await get_account_by_identity(
                         account_id,
                         owner_id=request.user_id,
                     )
-                    cookie_str = account.cookie if account else None
+                    if account:
+                        cookie_str = account.cookie
+                        if resolved_user_id is None:
+                            resolved_user_id = account.owner_id
                 except Exception as query_e:
-                    logger.warning(f"查询账号Cookie用于清除Token缓存失败: {query_e}")
-                    cookie_str = None
+                    logger.warning(f"查询账号Cookie失败: {query_e}")
 
             # 2) 解析 unb
             unb = ""
@@ -297,11 +303,11 @@ async def restart_account(account_id: str, request: StartAccountRequest = None):
         manager = get_manager()
         # 先停止
         manager.remove_cookie(account_id)
-        # 再启动
+        # 再启动（使用解析后的 Cookie 与归属用户，避免空 Cookie 启动失败）
         manager.add_cookie(
             cookie_id=account_id,
-            cookie_value=request.cookie_value,
-            user_id=request.user_id
+            cookie_value=cookie_str,
+            user_id=resolved_user_id
         )
         logger.info(f"账号任务重启成功: {account_id}")
         
