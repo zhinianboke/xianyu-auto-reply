@@ -679,8 +679,10 @@ class ListingMonitorService:
     ) -> List[Dict[str, Any]]:
         """根据监控日志ID集合，汇总去重后的账号信息（账号ID、Cookie、分销秘钥），用于复制。
 
-        - 账号来源：每条日志的主账号(account_id) + 使用过的账号列表(used_account_ids)；
-        - 多条日志重复账号按 account_id 去重（保留首次出现顺序）；
+        - 账号来源：每条日志关联的监控任务(monitor_task_id) 所配置的账号列表(account_ids)；
+          即"根据日志找到监控任务，再取任务里配置的采集账号"，而非日志实际执行时用到的账号
+          （失败的执行可能没有记录实际账号）。
+        - 多条日志可能关联同一任务，按 account_id 去重（保留首次出现顺序）；
         - 分销秘钥：取该账号所属用户(owner)的 secret_key（个人设置-分销模块），一个账号一条。
 
         Returns: [{"account_id": str, "cookies": str, "secret_key": str}, ...]
@@ -696,20 +698,42 @@ class ListingMonitorService:
         if not normalized_ids:
             raise ValueError("请选择要复制的监控日志")
 
-        conditions = [ListingMonitorLog.id.in_(normalized_ids)]
+        # 1) 由日志找到其关联的监控任务ID（按日志ID顺序保留任务首次出现顺序）
+        log_conditions = [ListingMonitorLog.id.in_(normalized_ids)]
         if owner_id is not None:
-            conditions.append(ListingMonitorLog.owner_id == owner_id)
+            log_conditions.append(ListingMonitorLog.owner_id == owner_id)
         log_rows = (
             await self.session.execute(
-                select(ListingMonitorLog.account_id, ListingMonitorLog.used_account_ids).where(*conditions)
+                select(ListingMonitorLog.id, ListingMonitorLog.monitor_task_id)
+                .where(*log_conditions)
+                .order_by(ListingMonitorLog.id.desc())
             )
         ).all()
 
-        # 收集去重后的账号ID（保留首次出现顺序）
+        ordered_task_ids: List[int] = []
+        seen_task: set[int] = set()
+        for _log_id, task_id in log_rows:
+            if task_id and task_id not in seen_task:
+                seen_task.add(task_id)
+                ordered_task_ids.append(task_id)
+        if not ordered_task_ids:
+            return []
+
+        # 2) 取这些监控任务配置的账号ID列表(account_ids)，去重保序
+        task_conditions = [ListingMonitorTask.id.in_(ordered_task_ids)]
+        if owner_id is not None:
+            task_conditions.append(ListingMonitorTask.owner_id == owner_id)
+        task_rows = (
+            await self.session.execute(
+                select(ListingMonitorTask.id, ListingMonitorTask.account_ids).where(*task_conditions)
+            )
+        ).all()
+        task_account_map = {tid: (acc_ids or []) for tid, acc_ids in task_rows}
+
         ordered_account_ids: List[str] = []
         seen: set[str] = set()
-        for account_id, used_ids in log_rows:
-            for aid in [account_id, *(list(used_ids or []))]:
+        for task_id in ordered_task_ids:
+            for aid in list(task_account_map.get(task_id) or []):
                 if not aid:
                     continue
                 aid = str(aid)

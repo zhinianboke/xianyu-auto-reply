@@ -71,6 +71,14 @@ class XianyuOrderClient:
         )
         # 令牌刷新后，回写实例 Cookie，供同一商品的后续调用（render->create）复用
         self.cookies_str = result.get("cookies_str", self.cookies_str)
+        # 打印下单接口原始返回，便于排查"账号可用却下单失败/账号失效"等问题
+        res_json = result.get("res")
+        ret = (res_json or {}).get("ret") if isinstance(res_json, dict) else None
+        logger.info(
+            f"【{self.cookie_id}】下单接口返回 api={api} 请求参数={json.dumps(data, ensure_ascii=False)} "
+            f"success={result.get('success')} account_invalid={result.get('account_invalid')} "
+            f"error={result.get('error')} ret={ret} res={json.dumps(res_json, ensure_ascii=False)}"
+        )
         return result
 
     # ------------------------------------------------------------------
