@@ -6,10 +6,11 @@
  * 2. 支持按监控任务筛选
  */
 import { useEffect, useState } from 'react'
-import { ChevronLeft, ChevronRight, Loader2, RefreshCw, ScrollText } from 'lucide-react'
+import { CheckSquare, ChevronLeft, ChevronRight, Copy, Loader2, RefreshCw, ScrollText, Square } from 'lucide-react'
 import {
   getListingMonitorLogs,
   getListingMonitorTaskOptions,
+  copyListingMonitorLogCookies,
   MONITOR_TYPE_LABELS,
   MONITOR_TYPE_OPTIONS,
   type ListingMonitorLog,
@@ -40,6 +41,8 @@ export function MonitorLogs() {
   const [pageSize, setPageSize] = useState(20)
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(0)
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [copying, setCopying] = useState(false)
 
   const loadTaskOptions = async () => {
     try {
@@ -70,6 +73,8 @@ export function MonitorLogs() {
       setLogs(result.data.list || [])
       setTotal(result.data.total || 0)
       setTotalPages(result.data.total_pages || 0)
+      const currentIdSet = new Set((result.data.list || []).map((item) => item.id))
+      setSelectedIds((prev) => new Set(Array.from(prev).filter((id) => currentIdSet.has(id))))
     } catch (error) {
       addToast({ type: 'error', message: getApiErrorMessage(error, '加载监控日志失败') })
     } finally {
@@ -90,6 +95,57 @@ export function MonitorLogs() {
 
   const startIndex = total === 0 ? 0 : (page - 1) * pageSize + 1
   const endIndex = Math.min(page * pageSize, total)
+  const isAllSelected = logs.length > 0 && logs.every((item) => selectedIds.has(item.id))
+
+  const handleSelectAll = () => {
+    const currentPageIds = logs.map((item) => item.id)
+    if (currentPageIds.length === 0) {
+      setSelectedIds(new Set())
+      return
+    }
+    const allSelected = currentPageIds.every((id) => selectedIds.has(id))
+    setSelectedIds(allSelected ? new Set() : new Set(currentPageIds))
+  }
+
+  const handleSelect = (logId: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(logId)) {
+        next.delete(logId)
+      } else {
+        next.add(logId)
+      }
+      return next
+    })
+  }
+
+  const handleCopyCookies = async () => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) {
+      addToast({ type: 'warning', message: '请先勾选要复制的监控日志' })
+      return
+    }
+    setCopying(true)
+    try {
+      const result = await copyListingMonitorLogCookies(ids)
+      if (!result.success || !result.data) {
+        addToast({ type: 'error', message: result.message || '复制账号Cookies失败' })
+        return
+      }
+      const list = result.data.list || []
+      if (list.length === 0) {
+        addToast({ type: 'warning', message: '选中的日志没有可复制的账号信息' })
+        return
+      }
+      const json = JSON.stringify(list, null, 2)
+      await navigator.clipboard.writeText(json)
+      addToast({ type: 'success', message: `已复制 ${list.length} 个账号的Cookies到剪贴板` })
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '复制账号Cookies失败') })
+    } finally {
+      setCopying(false)
+    }
+  }
 
   if (loading) {
     return <PageLoading />
@@ -102,10 +158,18 @@ export function MonitorLogs() {
           <h1 className="page-title">监控日志</h1>
           <p className="page-description">查看每次商品监控任务执行的获取、新增、更新数量与使用的账号。</p>
         </div>
-        <button className="btn-ios-secondary" onClick={() => loadLogs(page, pageSize)} disabled={tableLoading}>
-          {tableLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-          刷新
-        </button>
+        <div className="flex gap-3 flex-wrap">
+          {selectedIds.size > 0 && (
+            <button className="btn-ios-secondary" onClick={() => void handleCopyCookies()} disabled={copying || tableLoading}>
+              {copying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Copy className="w-4 h-4" />}
+              复制账号Cookies ({selectedIds.size})
+            </button>
+          )}
+          <button className="btn-ios-secondary" onClick={() => loadLogs(page, pageSize)} disabled={tableLoading}>
+            {tableLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            刷新
+          </button>
+        </div>
       </div>
 
       <div className="vben-card">
@@ -178,6 +242,15 @@ export function MonitorLogs() {
           <table className="table-ios min-w-[900px]">
             <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
               <tr>
+                <th className="w-10 whitespace-nowrap">
+                  <button onClick={handleSelectAll} className="p-1 hover:bg-gray-100 rounded" title={isAllSelected ? '取消全选' : '全选'}>
+                    {isAllSelected ? (
+                      <CheckSquare className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    ) : (
+                      <Square className="w-4 h-4 text-gray-400" />
+                    )}
+                  </button>
+                </th>
                 <th>执行时间</th>
                 <th>监控类型</th>
                 <th>触发方式</th>
@@ -194,13 +267,13 @@ export function MonitorLogs() {
             <tbody>
               {tableLoading ? (
                 <tr>
-                  <td colSpan={11} className="text-center py-12">
+                  <td colSpan={12} className="text-center py-12">
                     <Loader2 className="w-6 h-6 animate-spin text-blue-500 mx-auto" />
                   </td>
                 </tr>
               ) : logs.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="text-center py-12 text-slate-400">
+                  <td colSpan={12} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <ScrollText className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>暂无监控日志</p>
@@ -213,6 +286,15 @@ export function MonitorLogs() {
                   const accounts = item.used_account_ids && item.used_account_ids.length > 0 ? item.used_account_ids.join('，') : (item.account_id || '-')
                   return (
                     <tr key={item.id}>
+                      <td className="w-10 whitespace-nowrap">
+                        <button onClick={() => handleSelect(item.id)} className="p-1 hover:bg-gray-100 rounded" title={selectedIds.has(item.id) ? '取消勾选' : '勾选'}>
+                          {selectedIds.has(item.id) ? (
+                            <CheckSquare className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                          ) : (
+                            <Square className="w-4 h-4 text-gray-400" />
+                          )}
+                        </button>
+                      </td>
                       <td className="whitespace-nowrap text-slate-500 dark:text-slate-400">{item.created_at ? new Date(item.created_at).toLocaleString('zh-CN') : '-'}</td>
                       <td className="whitespace-nowrap">{item.monitor_type ? (MONITOR_TYPE_LABELS[item.monitor_type] || item.monitor_type) : '-'}</td>
                       <td className="whitespace-nowrap">

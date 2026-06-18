@@ -87,6 +87,12 @@ class ListingMonitorBatchAccountsRequest(BaseModel):
     account_ids: List[str] = Field(default_factory=list, description="选择的账号ID列表")
 
 
+class ListingMonitorCopyCookiesRequest(BaseModel):
+    """复制监控日志账号Cookies请求"""
+
+    ids: List[int] = Field(default_factory=list, description="监控日志ID列表")
+
+
 @router.get("", response_model=ApiResponse)
 async def list_listing_monitor_tasks(
     page: int = Query(1, ge=1, description="页码"),
@@ -275,6 +281,22 @@ async def list_listing_monitor_logs(
         monitor_type=monitor_type,
     )
     return ApiResponse(success=True, message="查询成功", data=data)
+
+
+@router.post("/logs/copy-cookies", response_model=ApiResponse)
+async def copy_listing_monitor_log_cookies(
+    req: ListingMonitorCopyCookiesRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """汇总选中监控日志涉及的账号（去重），返回账号ID/Cookie/分销秘钥，供前端复制为JSON"""
+    owner_id, _ = resolve_owner_scope(current_user)
+    svc = ListingMonitorService(session)
+    try:
+        data = await svc.collect_log_account_cookies(owner_id, req.ids)
+    except ValueError as exc:
+        return ApiResponse(success=False, message=str(exc))
+    return ApiResponse(success=True, message="查询成功", data={"list": data})
 
 
 @router.get("/items", response_model=ApiResponse)

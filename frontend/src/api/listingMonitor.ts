@@ -161,6 +161,20 @@ export const batchUpdateListingMonitorAccounts = (
   return post(`${PREFIX}/batch-update-accounts`, { ids: taskIds, field, account_ids: accountIds })
 }
 
+// 监控日志账号Cookie复制项
+export interface ListingMonitorLogCookieItem {
+  account_id: string
+  cookies: string
+  secret_key: string
+}
+
+// 复制选中监控日志涉及的账号Cookie（去重，返回账号ID/Cookie/分销秘钥）
+export const copyListingMonitorLogCookies = (
+  logIds: number[]
+): Promise<ApiResponse<{ list: ListingMonitorLogCookieItem[] }>> => {
+  return post(`${PREFIX}/logs/copy-cookies`, { ids: logIds })
+}
+
 // 手动执行单个监控任务采集（立即执行一次）
 export const runListingMonitorTask = (
   taskId: number

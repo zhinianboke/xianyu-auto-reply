@@ -53,6 +53,7 @@ from . import (
     product_publish,
     publish_addresses,
     listing_monitor,
+    external_cookie,
     proxy,
     qr_login,
     qrcode,
@@ -97,6 +98,7 @@ api_router.include_router(orders.router, prefix="/orders", tags=["订单管理"]
 api_router.include_router(product_publish.router, tags=["商品发布"])  # 已定义prefix="/product-publish"
 api_router.include_router(publish_addresses.router, tags=["商品发布随机地址池"])  # 已定义prefix="/product-publish/addresses"
 api_router.include_router(listing_monitor.router, tags=["商品上新监控"])  # 已定义prefix="/product-monitor/listing-tasks"
+api_router.include_router(external_cookie.router, tags=["外部Cookie同步"])  # 已定义prefix="/external/account-cookie"
 api_router.include_router(keywords.router, prefix="/keywords-with-item-id", tags=["关键词管理"])
 api_router.include_router(cards.router, prefix="/cards", tags=["卡券管理"])
 api_router.include_router(distribution.router, prefix="/distribution", tags=["分销管理"])

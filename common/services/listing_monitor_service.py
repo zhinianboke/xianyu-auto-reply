@@ -668,6 +668,87 @@ class ListingMonitorService:
         await self.session.commit()
         return len(tasks)
 
+    async def collect_log_account_cookies(
+        self,
+        owner_id: Optional[int],
+        log_ids: Sequence[int],
+    ) -> List[Dict[str, Any]]:
+        """根据监控日志ID集合，汇总去重后的账号信息（账号ID、Cookie、分销秘钥），用于复制。
+
+        - 账号来源：每条日志的主账号(account_id) + 使用过的账号列表(used_account_ids)；
+        - 多条日志重复账号按 account_id 去重（保留首次出现顺序）；
+        - 分销秘钥：取该账号所属用户(owner)的 secret_key（个人设置-分销模块），一个账号一条。
+
+        Returns: [{"account_id": str, "cookies": str, "secret_key": str}, ...]
+        """
+        normalized_ids: List[int] = []
+        for raw_id in log_ids:
+            try:
+                log_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if log_id > 0 and log_id not in normalized_ids:
+                normalized_ids.append(log_id)
+        if not normalized_ids:
+            raise ValueError("请选择要复制的监控日志")
+
+        conditions = [ListingMonitorLog.id.in_(normalized_ids)]
+        if owner_id is not None:
+            conditions.append(ListingMonitorLog.owner_id == owner_id)
+        log_rows = (
+            await self.session.execute(
+                select(ListingMonitorLog.account_id, ListingMonitorLog.used_account_ids).where(*conditions)
+            )
+        ).all()
+
+        # 收集去重后的账号ID（保留首次出现顺序）
+        ordered_account_ids: List[str] = []
+        seen: set[str] = set()
+        for account_id, used_ids in log_rows:
+            for aid in [account_id, *(list(used_ids or []))]:
+                if not aid:
+                    continue
+                aid = str(aid)
+                if aid not in seen:
+                    seen.add(aid)
+                    ordered_account_ids.append(aid)
+        if not ordered_account_ids:
+            return []
+
+        # 查询账号 Cookie（普通用户仅限本人账号，管理员不限）
+        acc_conditions = [XYAccount.account_id.in_(ordered_account_ids)]
+        if owner_id is not None:
+            acc_conditions.append(XYAccount.owner_id == owner_id)
+        acc_rows = list(
+            (await self.session.execute(select(XYAccount).where(*acc_conditions))).scalars().all()
+        )
+        acc_map = {acc.account_id: acc for acc in acc_rows}
+
+        # 查询各账号所属用户的分销秘钥
+        owner_ids = {acc.owner_id for acc in acc_rows if acc.owner_id is not None}
+        secret_map: Dict[int, Optional[str]] = {}
+        if owner_ids:
+            for uid, secret_key in (
+                await self.session.execute(
+                    select(User.id, User.secret_key).where(User.id.in_(owner_ids))
+                )
+            ).all():
+                secret_map[uid] = secret_key
+
+        result: List[Dict[str, Any]] = []
+        for aid in ordered_account_ids:
+            acc = acc_map.get(aid)
+            if not acc:
+                continue
+            result.append(
+                {
+                    "account_id": acc.account_id,
+                    "cookies": acc.cookie or "",
+                    "secret_key": secret_map.get(acc.owner_id) or "",
+                }
+            )
+        return result
+
     async def list_task_options(self, owner_id: Optional[int]) -> List[Dict[str, Any]]:
         """查询监控任务下拉选项（用于日志/采集商品页按任务筛选）。"""
         conditions = self._scope_conditions(owner_id)
