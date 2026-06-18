@@ -22,7 +22,7 @@ from common.models.xy_keyword_rule import XYKeywordRule
 
 
 class KeywordService:
-    """Business logic for keyword CRUD compatible with the legacy API."""
+    """关键词增删改查服务，保持旧接口和旧表结构兼容。"""
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -150,6 +150,11 @@ class KeywordService:
 
         await self.session.commit()
 
+    @staticmethod
+    def _split_keyword_lines(keyword_text: str) -> list[str]:
+        """按行拆分关键词文本，前端多关键词输入仍然落到旧的一条规则一行结构。"""
+        return [line.strip() for line in (keyword_text or "").splitlines() if line.strip()]
+
     async def update_text_keyword(
         self,
         source_account: XYAccount,
@@ -160,14 +165,23 @@ class KeywordService:
         target_reply: str | None,
         target_item_id: str | None,
     ) -> None:
+        """更新文本关键词，允许把一个旧规则替换成多条同回复规则。"""
         normalized_source_keyword = (source_keyword or "").strip()
         normalized_source_item_id = (source_item_id or "").strip() or None
-        normalized_target_keyword = (target_keyword or "").strip()
+        normalized_target_keywords = self._split_keyword_lines(target_keyword)
         normalized_target_reply = (target_reply or "").strip()
         normalized_target_item_id = (target_item_id or "").strip() or None
 
-        if not normalized_target_keyword:
+        if not normalized_target_keywords:
             raise ValueError("关键词不能为空")
+
+        seen_keywords: set[str] = set()
+        for keyword in normalized_target_keywords:
+            keyword_key = keyword.lower()
+            if keyword_key in seen_keywords:
+                item_desc = f"商品ID: {normalized_target_item_id}" if normalized_target_item_id else "通用关键词"
+                raise ValueError(f"关键词 '{keyword}'（{item_desc}） 在当前提交中重复")
+            seen_keywords.add(keyword_key)
 
         if source_account.owner_id != target_account.owner_id:
             raise ValueError("所属账号只能修改为同一用户下的账号")
@@ -188,9 +202,9 @@ class KeywordService:
         conflict_stmt = select(XYKeywordRule).where(
             XYKeywordRule.owner_id == target_account.owner_id,
             XYKeywordRule.account_pk == target_account.id,
-            XYKeywordRule.keyword == normalized_target_keyword,
             XYKeywordRule.item_id == normalized_target_item_id,
             XYKeywordRule.id != existing_rule.id,
+            func.lower(XYKeywordRule.keyword).in_([keyword.lower() for keyword in normalized_target_keywords]),
         )
         conflict_result = await self.session.execute(conflict_stmt)
         conflict_rule = conflict_result.scalars().first()
@@ -199,16 +213,33 @@ class KeywordService:
             item_desc = f"商品ID: {normalized_target_item_id}" if normalized_target_item_id else "通用关键词"
             conflict_type = (conflict_rule.reply_type or "text").lower()
             if conflict_type == "image":
-                raise ValueError(f"关键词 '{normalized_target_keyword}'（{item_desc}） 已存在（图片关键词），无法保存为文本关键词")
-            raise ValueError(f"关键词 '{normalized_target_keyword}'（{item_desc}） 已存在")
+                raise ValueError(f"关键词 '{conflict_rule.keyword}'（{item_desc}） 已存在（图片关键词），无法保存为文本关键词")
+            raise ValueError(f"关键词 '{conflict_rule.keyword}'（{item_desc}） 已存在")
 
+        timestamp = datetime.now(timezone.utc)
         existing_rule.owner_id = target_account.owner_id
         existing_rule.account_pk = target_account.id
-        existing_rule.keyword = normalized_target_keyword
+        existing_rule.keyword = normalized_target_keywords[0]
         existing_rule.reply_content = normalized_target_reply
         existing_rule.reply_type = "TEXT"
         existing_rule.item_id = normalized_target_item_id
-        existing_rule.updated_at = datetime.now(timezone.utc)
+        existing_rule.updated_at = timestamp
+
+        for keyword in normalized_target_keywords[1:]:
+            self.session.add(
+                XYKeywordRule(
+                    owner_id=target_account.owner_id,
+                    account_pk=target_account.id,
+                    keyword=keyword,
+                    reply_content=normalized_target_reply,
+                    reply_type="TEXT",
+                    item_id=normalized_target_item_id,
+                    priority=existing_rule.priority or 100,
+                    is_active=existing_rule.is_active if existing_rule.is_active is not None else True,
+                    created_at=timestamp,
+                    updated_at=timestamp,
+                )
+            )
 
         await self.session.commit()
 

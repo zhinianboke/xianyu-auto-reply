@@ -107,6 +107,9 @@ export function CardDetailModal({ card, onClose, zIndex = 60 }: CardDetailModalP
               {card.api_config.params && (
                 <DetailRow label="请求参数" value={card.api_config.params} multiline />
               )}
+              {card.api_config.response_field && (
+                <DetailRow label="响应取值字段" value={card.api_config.response_field} />
+              )}
             </div>
           )}
 

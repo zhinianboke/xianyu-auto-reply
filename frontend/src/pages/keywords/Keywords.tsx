@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import type { FormEvent, ChangeEvent } from 'react'
 import { motion } from 'framer-motion'
 import { MessageSquare, RefreshCw, Plus, Edit2, Trash2, Upload, Download, Info, Image, CheckSquare, Square, Search, ChevronLeft, ChevronRight } from 'lucide-react'
-import { getKeywords, deleteKeyword, addKeyword, updateKeyword, exportKeywords, importKeywords as importKeywordsApi, addImageKeyword } from '@/api/keywords'
+import { getKeywords, deleteKeyword, saveKeywords, updateKeyword, exportKeywords, importKeywords as importKeywordsApi, addImageKeyword } from '@/api/keywords'
 import { getAccountDetails } from '@/api/accounts'
 import { getItems } from '@/api/items'
 import { useUIStore } from '@/store/uiStore'
@@ -11,6 +11,26 @@ import { useAuthStore } from '@/store/authStore'
 import { Select } from '@/components/common/Select'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import type { Keyword, Account, Item } from '@/types'
+
+/** 解析关键词文本域，按行保存是为了兼容旧表结构的一条关键词一条规则。 */
+const parseKeywordLines = (value: string) => value.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+
+/** 查找同一次提交里的重复关键词，提前拦截可以避免整体保存后部分数据不可预期。 */
+const findDuplicateKeywordLine = (keywordLines: string[]) => {
+  const seen = new Set<string>()
+  for (const keyword of keywordLines) {
+    const key = keyword.toLowerCase()
+    if (seen.has(key)) {
+      return keyword
+    }
+    seen.add(key)
+  }
+  return ''
+}
+
+/** 生成关键词唯一键，前端校验要和后端同一商品下唯一的规则保持一致。 */
+const buildKeywordRuleKey = (keyword: string, itemId?: string) =>
+  `${keyword.trim().toLowerCase()}__${(itemId || '').trim().toLowerCase()}`
 
 export function Keywords() {
   const { addToast } = useUIStore()
@@ -193,14 +213,21 @@ export function Keywords() {
     e.preventDefault()
 
     const submitAccountId = editingKeyword ? formAccountId : selectedAccount
+    const keywordLines = parseKeywordLines(keywordText)
+    const duplicateKeyword = findDuplicateKeywordLine(keywordLines)
 
     if (!submitAccountId) {
       addToast({ type: 'warning', message: '请先选择账号' })
       return
     }
 
-    if (!keywordText.trim()) {
+    if (keywordLines.length === 0) {
       addToast({ type: 'warning', message: '请输入关键词' })
+      return
+    }
+
+    if (duplicateKeyword) {
+      addToast({ type: 'warning', message: `关键词"${duplicateKeyword}"重复，请检查后再保存` })
       return
     }
 
@@ -218,14 +245,14 @@ export function Keywords() {
           addToast({ type: 'error', message: '未找到原所属账号，无法保存' })
           return
         }
-        // 编辑模式：单个更新
+        // 编辑模式：后端会把多行关键词替换成多条同回复规则，避免前端多次请求造成部分成功。
         const result = await updateKeyword(
           sourceAccountId,
           editingKeyword.keyword,
           editingKeyword.item_id || '',
           {
             account_id: submitAccountId,
-            keyword: keywordText.trim(),
+            keyword: keywordLines.join('\n'),
             reply: replyText.trim(),
             item_id: itemIdText.trim(),
           }
@@ -236,36 +263,33 @@ export function Keywords() {
         }
         addToast({ type: 'success', message: '关键词已更新' })
       } else {
-        // 新增模式：支持多选商品
+        // 新增模式：先在前端展开关键词和商品的组合，再复用整体保存接口保持原有后端兼容。
         const itemIdsToAdd = selectedItemIds.length > 0 ? selectedItemIds : ['']
-        let successCount = 0
-        let failCount = 0
+        const existingKeywords = await getKeywords(submitAccountId)
+        const existingKeys = new Set(existingKeywords.map(k => buildKeywordRuleKey(k.keyword, k.item_id)))
+        const newKeywords = itemIdsToAdd.flatMap(itemId =>
+          keywordLines.map(keyword => ({
+            keyword,
+            reply: replyText.trim(),
+            item_id: itemId,
+            type: 'text' as const,
+          } as Keyword))
+        )
+        const conflictKeyword = newKeywords.find(k => existingKeys.has(buildKeywordRuleKey(k.keyword, k.item_id)))
 
-        for (const itemId of itemIdsToAdd) {
-          try {
-            const result = await addKeyword(submitAccountId, {
-              keyword: keywordText.trim(),
-              reply: replyText.trim(),
-              item_id: itemId,
-            })
-            if (result.success === false) {
-              failCount++
-            } else {
-              successCount++
-            }
-          } catch {
-            failCount++
-          }
-        }
-
-        if (failCount === 0) {
-          addToast({ type: 'success', message: `成功添加 ${successCount} 条关键词` })
-        } else if (successCount > 0) {
-          addToast({ type: 'warning', message: `添加 ${successCount} 条成功，${failCount} 条失败` })
-        } else {
-          addToast({ type: 'error', message: '添加失败' })
+        if (conflictKeyword) {
+          const itemDesc = conflictKeyword.item_id ? `商品ID：${conflictKeyword.item_id}` : '通用关键词'
+          addToast({ type: 'error', message: `关键词"${conflictKeyword.keyword}"（${itemDesc}）已存在` })
           return
         }
+
+        const result = await saveKeywords(submitAccountId, [...existingKeywords, ...newKeywords])
+        if (result.success === false) {
+          addToast({ type: 'error', message: result.message || '添加失败' })
+          return
+        }
+
+        addToast({ type: 'success', message: `成功添加 ${newKeywords.length} 条关键词` })
       }
 
       await loadKeywords()
@@ -862,13 +886,15 @@ export function Keywords() {
                 </div>
                 <div>
                   <label className="input-label">关键词</label>
-                  <input
-                    type="text"
+                  <textarea
                     value={keywordText}
                     onChange={(e) => setKeywordText(e.target.value)}
-                    className="input-ios"
-                    placeholder="请输入关键词"
+                    className="input-ios h-24 resize-none"
+                    placeholder="请输入关键词，一行一个"
                   />
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    一行一个关键词，多个关键词会对应同一条回复内容
+                  </p>
                 </div>
                 <div>
                   <label className="input-label">商品ID（可选）</label>

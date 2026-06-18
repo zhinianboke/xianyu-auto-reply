@@ -23,6 +23,7 @@ from app.services.xianyu.delivery_utils import (
 )
 from app.services.xianyu.yifan_api_handler import YifanApiHandler
 from common.utils.fish_nick_utils import get_buyer_fish_nick
+from common.utils.response_field import extract_card_api_response_content
 
 
 class AutoDeliveryHandler:
@@ -2496,6 +2497,7 @@ class AutoDeliveryHandler:
             timeout = api_config.get('timeout', 10)
             headers = api_config.get('headers', '{}')
             params = api_config.get('params', '{}')
+            response_field = api_config.get('response_field') or api_config.get('responseField')
 
             # 解析headers和params
             if isinstance(headers, str):
@@ -2536,17 +2538,7 @@ class AutoDeliveryHandler:
                     return None
 
             if status_code == 200:
-                # 尝试解析JSON响应，如果失败则使用原始文本
-                try:
-                    result = json.loads(response_text)
-                    # 如果返回的是对象，尝试提取常见的内容字段
-                    if isinstance(result, dict):
-                        content = result.get('data') or result.get('content') or result.get('card') or str(result)
-                    else:
-                        content = str(result)
-                except Exception:
-                    content = response_text
-
+                content = extract_card_api_response_content(response_text, response_field)
                 logger.info(f"API调用成功，返回内容长度: {len(content)}")
                 return content
             else:

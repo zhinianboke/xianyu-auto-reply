@@ -11,6 +11,7 @@ from loguru import logger
 
 from common.models.card import Card
 from common.services.card_matcher import CardMatcher
+from common.utils.response_field import extract_card_api_response_content
 
 
 from common.utils.time_utils import safe_isoformat
@@ -932,14 +933,13 @@ class CardService:
     async def _call_card_api(self, card: Card) -> Optional[str]:
         """调用卡券API获取内容
         
-        Args:
+        参数:
             card: 卡券对象
             
-        Returns:
+        返回:
             API返回的内容或None
         """
         try:
-            import json
             import httpx
             
             if not card.api_config:
@@ -963,17 +963,8 @@ class CardService:
                     response = await client.post(url, headers=headers, json=body)
                 
                 response.raise_for_status()
-                
-                # 尝试解析JSON响应
-                try:
-                    data = response.json()
-                    # 支持自定义响应字段
-                    field = config.get("response_field", "data")
-                    if field in data:
-                        return str(data[field])
-                    return json.dumps(data, ensure_ascii=False)
-                except Exception:
-                    return response.text
+                response_field = config.get("response_field") or config.get("responseField")
+                return extract_card_api_response_content(response.text, response_field)
                     
         except Exception as e:
             logger.error(f"调用卡券API失败: {e}")

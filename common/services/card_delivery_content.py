@@ -29,6 +29,7 @@ from common.services.delivery_utils import (
     recursive_replace_params,
     replace_order_context_variables,
 )
+from common.utils.response_field import extract_card_api_response_content
 
 # API 取卡最大重试次数
 _API_MAX_RETRIES = 4
@@ -104,6 +105,7 @@ async def get_api_card_content(
         timeout = api_config.get('timeout', _API_DEFAULT_TIMEOUT)
         headers = api_config.get('headers', '{}')
         params = api_config.get('params', '{}')
+        response_field = api_config.get('response_field') or api_config.get('responseField')
 
         if isinstance(headers, str):
             headers = json.loads(headers)
@@ -135,14 +137,7 @@ async def get_api_card_content(
                 return None
 
         if status_code == 200:
-            try:
-                result = json.loads(response_text)
-                if isinstance(result, dict):
-                    content = result.get('data') or result.get('content') or result.get('card') or str(result)
-                else:
-                    content = str(result)
-            except Exception:
-                content = response_text
+            content = extract_card_api_response_content(response_text, response_field)
             logger.info(f"API调用成功，返回内容长度: {len(content)}")
             return content
 
