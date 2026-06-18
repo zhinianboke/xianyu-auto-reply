@@ -80,6 +80,8 @@ class AutoOrderTaskService:
             task_done: Dict[int, int] = {}
             # 本次运行被判定不可用的账号（停用至本次结束）
             disabled_accounts: set[str] = set()
+            # 已针对"无可用账号"打印过明细的监控任务，避免逐条商品刷屏
+            warned_no_account_tasks: set[int] = set()
 
             ordered = 0
             skipped_no_account = 0
@@ -119,6 +121,22 @@ class AutoOrderTaskService:
                 usable = [a for a in candidates if a.account_id not in disabled_accounts]
                 if not usable:
                     skipped_no_account += 1
+                    # 仅对每个监控任务打印一次明细，定位"无可用账号"根因
+                    if task_id not in warned_no_account_tasks:
+                        warned_no_account_tasks.add(task_id)
+                        if not order_list:
+                            reason = "该监控任务未配置下单账号(order_account_ids 为空)，或任务已删除/未启用"
+                        elif not accounts_map:
+                            reason = (
+                                f"配置的下单账号 {order_list} 全部不可用"
+                                "（账号不存在 / Cookie为空 / 状态为停用-封禁-删除）"
+                            )
+                        else:
+                            blocked = [a.account_id for a in candidates if a.account_id in disabled_accounts]
+                            reason = f"候选账号 {blocked} 本次运行已被判定失效并停用（Session/Token过期、需登录或风控）"
+                        logger.warning(
+                            f"【{self.task_name}】商品 {item_id}(任务{task_id}) 无可用账号跳过：{reason}"
+                        )
                     continue
 
                 result = await self._order_for_item(pk, item_id, usable, disabled_accounts)
@@ -213,10 +231,15 @@ class AutoOrderTaskService:
                 )
             ).first()
             if not task or not task[0]:
+                logger.warning(
+                    f"【{self.task_name}】加载任务{task_id}下单账号失败："
+                    f"任务不存在/已删除/未启用，或未配置下单账号(order_account_ids)"
+                )
                 return {}, [], 5
             account_ids = list(task[0] or [])
             batch_size = task[1] if task[1] and task[1] > 0 else 5
             if not account_ids:
+                logger.warning(f"【{self.task_name}】任务{task_id}未配置下单账号(order_account_ids 为空)")
                 return {}, [], batch_size
             rows = list(
                 (
@@ -227,12 +250,29 @@ class AutoOrderTaskService:
             )
 
         accounts_map: Dict[str, XYAccount] = {}
+        found_ids: set[str] = set()
+        skip_reasons: List[str] = []
         for row in rows:
+            found_ids.add(row.account_id)
             if not row.cookie:
+                skip_reasons.append(f"{row.account_id}(Cookie为空)")
                 continue
-            if (row.status or "active").strip().lower() in _INACTIVE_STATUSES:
+            status = (row.status or "active").strip().lower()
+            if status in _INACTIVE_STATUSES:
+                skip_reasons.append(f"{row.account_id}(状态={status})")
                 continue
             accounts_map[row.account_id] = row
+        # 配置了但数据库查不到的账号
+        for aid in account_ids:
+            if aid not in found_ids:
+                skip_reasons.append(f"{aid}(账号不存在)")
+
+        logger.info(
+            f"【{self.task_name}】任务{task_id}下单账号加载完成："
+            f"配置{len(account_ids)}个，可用{len(accounts_map)}个"
+            f"{('，过滤[' + '; '.join(skip_reasons) + ']') if skip_reasons else ''}"
+            f"，每次最多下单{batch_size}条"
+        )
         return accounts_map, account_ids, batch_size
 
     def _build_candidates(
