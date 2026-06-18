@@ -273,8 +273,11 @@ class AutoOrderTaskService:
             logger.error(f"【{self.task_name}】更新无可用账号状态失败 采集商品id={pk}：{exc}")
 
     async def _load_task_accounts(self, task_id: int) -> Tuple[Dict[str, XYAccount], List[str], int, str, str]:
-        """加载监控任务配置的下单账号（任务须未删除且启用；过滤禁用/空Cookie）。
+        """加载监控任务配置的下单账号（过滤禁用/空Cookie/不存在的账号）。
 
+        说明：不带启用/删除条件查询任务，以便停用、未配账号的任务也能取到关键字用于日志；
+        任务删除/停用/未配账号时返回空账号字典与对应原因。
+        
         Returns: (
             {account_id: XYAccount 仅可用账号},
             配置顺序的account_id列表,
@@ -360,18 +363,23 @@ class AutoOrderTaskService:
         if owner_id is None:
             return {}, "商品无归属用户，无法匹配兜底下单账号"
 
-        async with async_session_maker() as session:
-            svc = OrderFallbackAccountService(session)
-            account_ids = await svc.get_fallback_account_ids(owner_id)
-            if not account_ids:
-                return {}, "未配置兜底下单账号"
-            rows = list(
-                (
-                    await session.execute(
-                        select(XYAccount).where(XYAccount.account_id.in_(account_ids))
-                    )
-                ).scalars().all()
-            )
+        try:
+            async with async_session_maker() as session:
+                svc = OrderFallbackAccountService(session)
+                account_ids = await svc.get_fallback_account_ids(owner_id)
+                if not account_ids:
+                    return {}, "未配置兜底下单账号"
+                rows = list(
+                    (
+                        await session.execute(
+                            select(XYAccount).where(XYAccount.account_id.in_(account_ids))
+                        )
+                    ).scalars().all()
+                )
+        except Exception as exc:  # noqa: BLE001
+            # 兜底配置表尚未就绪或数据库异常时降级为"无兜底"，避免中断整轮下单任务
+            logger.warning(f"【{self.task_name}】加载用户{owner_id}兜底下单账号失败，本次按无兜底处理：{exc}")
+            return {}, "兜底下单账号加载失败"
 
         accounts_map: Dict[str, XYAccount] = {}
         found_ids: set[str] = set()
