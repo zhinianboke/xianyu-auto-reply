@@ -132,24 +132,32 @@ class AutoOrderTaskService:
                 task_rr[task_id] = task_rr.get(task_id, 0) + 1
 
                 usable = [a for a in candidates if a.account_id not in disabled_accounts]
-                used_fallback = False
-                if not usable:
-                    # 任务自身无可用下单账号，回退到用户级兜底下单账号
-                    if owner_id not in fallback_accounts_cache:
-                        fb_map, fb_detail = await self._load_fallback_accounts(owner_id)
-                        fallback_accounts_cache[owner_id] = fb_map
-                        fallback_detail_cache[owner_id] = fb_detail
-                    fb_accounts = fallback_accounts_cache[owner_id]
-                    fb_usable = [a for a in fb_accounts.values() if a.account_id not in disabled_accounts]
-                    if fb_usable:
-                        # 轮换兜底账号，避免总是从同一个账号开始
-                        start = fallback_rr.get(owner_id, 0)
-                        fallback_rr[owner_id] = start + 1
-                        n = len(fb_usable)
-                        usable = [fb_usable[(start + i) % n] for i in range(n)]
-                        used_fallback = True
 
-                if not usable:
+                # 追加用户级兜底下单账号作为后备：任务自身账号优先，兜底其次
+                # （任务账号在加载时可用但下单时失效的场景，也能继续用兜底账号兜住）
+                if owner_id not in fallback_accounts_cache:
+                    fb_map, fb_detail = await self._load_fallback_accounts(owner_id)
+                    fallback_accounts_cache[owner_id] = fb_map
+                    fallback_detail_cache[owner_id] = fb_detail
+                fb_accounts = fallback_accounts_cache[owner_id]
+                fb_usable = [a for a in fb_accounts.values() if a.account_id not in disabled_accounts]
+                if fb_usable:
+                    # 轮换兜底账号起点，避免总是从同一个账号开始
+                    start = fallback_rr.get(owner_id, 0)
+                    fallback_rr[owner_id] = start + 1
+                    n = len(fb_usable)
+                    fb_usable = [fb_usable[(start + i) % n] for i in range(n)]
+
+                # 合并候选：任务账号在前、兜底在后，按 account_id 去重
+                seen_ids: set[str] = set()
+                order_candidates: List[XYAccount] = []
+                for acc in usable + fb_usable:
+                    if acc.account_id in seen_ids:
+                        continue
+                    seen_ids.add(acc.account_id)
+                    order_candidates.append(acc)
+
+                if not order_candidates:
                     skipped_no_account += 1
                     task_name = task_name_cache.get(task_id, f"id={task_id}")
                     task_reason = task_detail_cache.get(task_id) or "配置账号本次运行均失效（Token过期/需登录/风控）"
@@ -166,20 +174,16 @@ class AutoOrderTaskService:
                         )
                     continue
 
-                result = await self._order_for_item(pk, item_id, usable, disabled_accounts)
+                result = await self._order_for_item(pk, item_id, order_candidates, disabled_accounts)
                 if result == "ordered":
                     ordered += 1
                     ordered_item_ids.add(item_id)
                     task_done[task_id] = task_done.get(task_id, 0) + 1
-                    if used_fallback:
-                        logger.info(
-                            f"【{self.task_name}】商品 {item_id}(任务{task_id}) 使用兜底下单账号下单成功"
-                        )
                 elif result == "no_account":
-                    # 候选账号在实际下单调用中全部失效：记录原因，不累加尝试次数
+                    # 候选账号（含兜底）在实际下单调用中全部失效：记录原因，不累加尝试次数
                     skipped_no_account += 1
                     await self._mark_no_account(
-                        pk, "无可用下单账号：候选账号在下单时全部失效（Session/Token过期、需重新登录或被风控）"
+                        pk, "无可用下单账号：任务账号与兜底账号在下单时全部失效（Session/Token过期、需重新登录或被风控）"
                     )
                 else:
                     # failed：已实际尝试下单（render/create），计入该任务本次处理条数
