@@ -67,6 +67,8 @@ export interface ListingMonitorOverview {
   today_new: number
   today_dm: number
   today_ordered: number
+  today_order_failed: number
+  today_order_duplicate: number
   total_items: number
   total_dm: number
   total_ordered: number

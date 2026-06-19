@@ -452,13 +452,13 @@ class ListingMonitorService:
                 select(distinct_item).where(*_item_cond())
             )
         ).scalar() or 0
-        # 今日采集数（去重）：今日被采集到（last_seen_at 在今日）
+        # 今日采集数（去重）：今日被采集到（last_seen_at），包含重复采集的商品
         today_collected = (
             await self.session.execute(
                 select(distinct_item).where(*_item_cond([ListingMonitorItem.last_seen_at >= today_start]))
             )
         ).scalar() or 0
-        # 今日新增商品数（去重）：今日首次入库
+        # 今日新增商品数（去重）：今日首次入库（created_at），不包含重复采集
         today_new = (
             await self.session.execute(
                 select(distinct_item).where(*_item_cond([ListingMonitorItem.created_at >= today_start]))
@@ -474,6 +474,28 @@ class ListingMonitorService:
         today_ordered = (
             await self.session.execute(
                 select(distinct_item).where(*_item_cond([ListingMonitorItem.ordered_at >= today_start]))
+            )
+        ).scalar() or 0
+        # 今日下单失败数（去重）：今日入库（created_at 在今日）且下单结果为失败
+        today_order_failed = (
+            await self.session.execute(
+                select(distinct_item).where(
+                    *_item_cond([
+                        ListingMonitorItem.created_at >= today_start,
+                        ListingMonitorItem.order_status == "failed",
+                    ])
+                )
+            )
+        ).scalar() or 0
+        # 今日重复跳过数（去重）：今日入库（created_at 在今日）且下单结果为重复跳过
+        today_order_duplicate = (
+            await self.session.execute(
+                select(distinct_item).where(
+                    *_item_cond([
+                        ListingMonitorItem.created_at >= today_start,
+                        ListingMonitorItem.order_status == "duplicate",
+                    ])
+                )
             )
         ).scalar() or 0
         # 累计私信成功数（去重，按实际发起私信时间，排除直接下单跳过私信的商品）
@@ -501,6 +523,8 @@ class ListingMonitorService:
             "today_new": int(today_new),
             "today_dm": int(today_dm),
             "today_ordered": int(today_ordered),
+            "today_order_failed": int(today_order_failed),
+            "today_order_duplicate": int(today_order_duplicate),
             "total_items": int(total_items),
             "total_dm": int(total_dm),
             "total_ordered": int(total_ordered),

@@ -12,7 +12,9 @@ import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   Activity,
+  AlertCircle,
   CheckCircle2,
+  CopyX,
   ListChecks,
   MessageSquare,
   Package,
@@ -84,6 +86,7 @@ export function MonitorOverview() {
     { icon: PauseCircle, label: '停用任务数', value: data?.disabled_tasks ?? 0, color: 'warning' },
     { icon: Activity, label: '今日执行次数', value: data?.today_run_total ?? 0, color: 'info' },
     { icon: CheckCircle2, label: '今日任务成功数', value: data?.today_run_success ?? 0, color: 'success' },
+    { icon: AlertCircle, label: '今日任务部分成功数', value: data?.today_run_partial ?? 0, color: 'warning' },
     { icon: XCircle, label: '今日任务失败数', value: data?.today_run_failed ?? 0, color: 'danger' },
   ]
 
@@ -92,6 +95,8 @@ export function MonitorOverview() {
     { icon: PlusCircle, label: '今日新增商品数', value: data?.today_new ?? 0, color: 'info', hint: '按商品ID去重' },
     { icon: MessageSquare, label: '今日私信数', value: data?.today_dm ?? 0, color: 'success', hint: '按商品ID去重' },
     { icon: ShoppingCart, label: '今日下单数', value: data?.today_ordered ?? 0, color: 'purple', hint: '按商品ID去重' },
+    { icon: XCircle, label: '今日下单失败数', value: data?.today_order_failed ?? 0, color: 'danger', hint: '按创建时间统计，按商品ID去重' },
+    { icon: CopyX, label: '今日重复跳过数', value: data?.today_order_duplicate ?? 0, color: 'warning', hint: '按创建时间统计，按商品ID去重' },
   ]
 
   const totalCards: OverviewCard[] = [
