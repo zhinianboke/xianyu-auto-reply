@@ -80,6 +80,7 @@ _BROWSER_ARGS = [
     "--disable-popup-blocking",
     "--force-color-profile=srgb",
     "--lang=zh-CN",
+    "--start-maximized",       # 窗口默认最大化（配合 no_viewport 生效）
 ]
 
 
