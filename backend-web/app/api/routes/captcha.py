@@ -82,6 +82,48 @@ def generate_captcha_text(length: int = 4) -> str:
     return "".join(random.choices(chars, k=length))
 
 
+def _load_captcha_font(size: int = 28):
+    """
+    按候选路径加载验证码字体。
+
+    Why: Linux 容器（python:3.11-slim）默认没有 arial.ttf，原先直接
+    truetype("arial.ttf") 抛异常后 fallback 到 load_default() 的位图字体
+    极小（~10px），用户看到的验证码图片几乎是空白。
+    这里按优先级尝试各平台常见 TTF 路径，全部失败再退回默认字体。
+    """
+    from PIL import ImageFont
+    import os
+
+    # 全部使用绝对路径，避免 truetype 解析相对路径时抛异常拖慢生成
+    candidates = [
+        # Linux 容器（apt 安装 fonts-dejavu-core / fonts-liberation 后存在）
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        # Windows 本地开发
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+        # macOS
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/Library/Fonts/Arial.ttf",
+    ]
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+
+    # 全部 TTF 都不可用时的兜底：Pillow 10+ 支持 load_default(size)
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        # 老版本 Pillow 不支持 size 参数，只能回退到默认小字体
+        return ImageFont.load_default()
+
+
 def generate_captcha_image(text: str) -> str:
     """
     生成图形验证码图片
@@ -121,10 +163,7 @@ def generate_captcha_image(text: str) -> str:
             )
         
         # 绘制文字
-        try:
-            font = ImageFont.truetype("arial.ttf", 28)
-        except Exception:
-            font = ImageFont.load_default()
+        font = _load_captcha_font(28)
         
         # 计算文字位置
         for i, char in enumerate(text):
