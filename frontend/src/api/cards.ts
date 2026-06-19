@@ -27,6 +27,7 @@ export interface CardData {
     timeout?: number
     headers?: string
     params?: string
+    response_field?: string
   }
   text_content?: string
   data_content?: string

@@ -48,6 +48,7 @@ interface CardFormData {
   apiTimeout: number
   apiHeaders: string
   apiParams: string
+  apiResponseField: string
   textContent: string
   dataContent: string
   imageUrls: string[]
@@ -90,6 +91,7 @@ export function cardToFormData(card: CardData): CardFormData {
     apiTimeout: card.api_config?.timeout || 60,
     apiHeaders: card.api_config?.headers || '',
     apiParams: card.api_config?.params || '',
+    apiResponseField: card.api_config?.response_field || '',
     textContent: card.text_content || '',
     dataContent: card.data_content || '',
     imageUrls: imageUrlsList,
@@ -122,6 +124,7 @@ export const emptyCardFormData: CardFormData = {
   apiTimeout: 60,
   apiHeaders: '',
   apiParams: '',
+  apiResponseField: '',
   textContent: '',
   dataContent: '',
   imageUrls: [],
@@ -293,6 +296,7 @@ export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFor
           timeout: formData.apiTimeout,
           headers: formData.apiHeaders.trim() || undefined,
           params: formData.apiParams.trim() || undefined,
+          response_field: formData.apiResponseField.trim() || undefined,
         }
       } else if (formData.type === 'text') {
         cardData.text_content = formData.textContent.trim()
@@ -423,6 +427,19 @@ export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFor
                       </div>
                     </div>
                   )}
+                </div>
+                <div>
+                  <label className="input-label">响应取值字段</label>
+                  <input
+                    type="text"
+                    value={formData.apiResponseField}
+                    onChange={(e) => updateField('apiResponseField', e.target.value)}
+                    className="input-ios"
+                    placeholder="data.cards[0].key"
+                  />
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    留空时按旧逻辑取 data、content 或 card；填写后按路径从接口响应里取值
+                  </p>
                 </div>
               </div>
             )}
