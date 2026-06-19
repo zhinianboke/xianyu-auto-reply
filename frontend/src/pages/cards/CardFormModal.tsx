@@ -429,7 +429,7 @@ export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFor
                   )}
                 </div>
                 <div>
-                  <label className="input-label">响应取值字段</label>
+                  <label className="input-label">响应取值字段（选填）</label>
                   <input
                     type="text"
                     value={formData.apiResponseField}
@@ -437,9 +437,24 @@ export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFor
                     className="input-ios"
                     placeholder="data.cards[0].key"
                   />
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                    留空时按旧逻辑取 data、content 或 card；填写后按路径从接口响应里取值
-                  </p>
+                  <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 space-y-1 leading-relaxed">
+                    <p>当卡密藏在 JSON 的某一层里时，填写路径精确取出该值。</p>
+                    <p>
+                      写法：用点号进入对象、用中括号取数组下标，例如
+                      <code className="mx-1 px-1 rounded bg-slate-100 dark:bg-slate-700">data.cards[0].key</code>、
+                      <code className="mx-1 px-1 rounded bg-slate-100 dark:bg-slate-700">result.card</code>。
+                      数组下标只能用 <code className="px-1 rounded bg-slate-100 dark:bg-slate-700">[0]</code>，区分大小写。
+                    </p>
+                    <p>
+                      <span className="text-amber-600 dark:text-amber-400 font-medium">以下情况请留空：</span>
+                      接口直接返回纯文本卡密、或想要整个返回内容。留空时会自动按
+                      <code className="mx-1 px-1 rounded bg-slate-100 dark:bg-slate-700">data → content → card</code>
+                      取值，取不到则返回整个内容。
+                    </p>
+                    <p className="text-amber-600 dark:text-amber-400">
+                      注意：接口返回纯文本时若填写本字段，会因无法解析而取值失败，请务必留空。
+                    </p>
+                  </div>
                 </div>
               </div>
             )}

@@ -485,15 +485,21 @@ class ListingMonitorTaskService:
     ) -> None:
         """采集后直接下单：用下单账号轮换对该商品下单，结果写入 item（随后随采集一起入库）。
 
-        直接下单跳过私信环节（置 is_dm_sent=true）：
+        直接下单跳过私信环节（置 is_dm_sent=true）。策略：只要接口未返回成功就换下一个候选账号继续尝试：
         - 下单成功：is_ordered=true，记录 order_id；
-        - 业务失败：order_status=failed、order_attempts=1，后续由定时下单任务重试；
-        - 账号不可用：本次停用换号；全部不可用则不下单（is_ordered=false、order_attempts=0），
-          交由定时下单任务后续重试。
+        - 账号不可用（Session/Token过期、需登录、风控）：本次停用该账号并换号；
+        - 业务失败（商品不可买/缺地址/权限受限等）：换下一个候选账号继续尝试，但不全局停用该账号
+          （可能仅该商品不可买，账号对其它商品仍可用）；
+        - 全部候选账号都试过仍失败：order_status=failed、order_attempts=1，后续由定时下单任务重试；
+        - 全部账号均不可用：不下单（is_ordered=false、order_attempts=0），交由定时下单任务后续重试。
         """
         item.is_dm_sent = True  # 直接下单跳过私信
         n = len(accounts)
         start = rr[0]  # 固定本次起点，避免循环内修改导致索引跳跃
+        had_business_failure = False
+        last_fail_reason: Optional[str] = None
+        last_acc_id: Optional[str] = None
+        last_offset = 0
         for offset in range(n):
             acc = accounts[(start + offset) % n]
             if acc.account_id in disabled:
@@ -508,21 +514,40 @@ class ListingMonitorTaskService:
                     f"【{self.task_name}】直接下单账号 {acc.account_id} 不可用（{result.get('error')}），换下一个账号"
                 )
                 continue
-            # 确定使用该账号：推进轮换指针到下一个账号
-            rr[0] = start + offset + 1
-            item.dm_account_id = acc.account_id
-            item.order_attempts = 1
             if status == "success":
+                # 确定使用该账号：推进轮换指针到下一个账号
+                rr[0] = start + offset + 1
+                item.dm_account_id = acc.account_id
+                item.order_attempts = 1
                 item.is_ordered = True
                 item.order_status = "success"
                 item.ordered_at = get_beijing_now_naive()
                 order_id = result.get("order_id")
                 item.order_id = str(order_id)[:64] if order_id else None
                 logger.info(f"【{self.task_name}】商品 {item_id} 采集后直接下单成功（拍下）：账号={acc.account_id}，订单ID={item.order_id}")
-            else:
-                item.order_status = "failed"
-                item.order_fail_reason = str(result.get("error"))[:500] if result.get("error") else None
-                logger.warning(f"【{self.task_name}】商品 {item_id} 采集后直接下单失败（账号 {acc.account_id}）：{result.get('error')}")
+                return
+            # 业务失败：换下一个候选账号继续尝试（不全局停用，可能仅该商品不可买）
+            had_business_failure = True
+            last_fail_reason = result.get("error")
+            last_acc_id = acc.account_id
+            last_offset = offset
+            logger.warning(
+                f"【{self.task_name}】商品 {item_id} 采集后直接下单失败（账号 {acc.account_id}）：{result.get('error')}，尝试下一个账号"
+            )
+            continue
+
+        # 所有候选账号都尝试过仍未成功
+        if had_business_failure:
+            # 推进轮换指针，避免下个商品仍从同一账号开始
+            rr[0] = start + last_offset + 1
+            item.dm_account_id = last_acc_id
+            item.order_attempts = 1
+            item.order_status = "failed"
+            item.order_fail_reason = str(last_fail_reason)[:500] if last_fail_reason else None
+            logger.warning(
+                f"【{self.task_name}】商品 {item_id} 采集后直接下单：所有下单账号均失败，"
+                f"最后失败原因（账号 {last_acc_id}）：{last_fail_reason}，留待定时下单任务重试"
+            )
             return
         # 所有下单账号本次都不可用：推进一格避免下个商品仍从同一坏账号开始，交由定时下单任务后续重试
         rr[0] = start + 1

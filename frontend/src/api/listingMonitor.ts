@@ -292,6 +292,10 @@ export const getListingMonitorItems = (
     isOrdered?: boolean
     sellerFill?: string
     hasDetail?: boolean
+    dmState?: string
+    orderState?: string
+    createdStart?: string
+    createdEnd?: string
   }
 ): Promise<ApiResponse<ListingMonitorItemListData>> => {
   const searchParams = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
@@ -304,6 +308,10 @@ export const getListingMonitorItems = (
   if (params?.isOrdered !== undefined) searchParams.append('is_ordered', String(params.isOrdered))
   if (params?.sellerFill) searchParams.append('seller_fill', params.sellerFill)
   if (params?.hasDetail !== undefined) searchParams.append('has_detail', String(params.hasDetail))
+  if (params?.dmState) searchParams.append('dm_state', params.dmState)
+  if (params?.orderState) searchParams.append('order_state', params.orderState)
+  if (params?.createdStart) searchParams.append('created_start', params.createdStart)
+  if (params?.createdEnd) searchParams.append('created_end', params.createdEnd)
   return get(`${PREFIX}/items?${searchParams.toString()}`)
 }
 

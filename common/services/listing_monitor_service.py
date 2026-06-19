@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -37,6 +38,26 @@ def _to_decimal(value: Any) -> Optional[Decimal]:
         return Decimal(str(value)).quantize(Decimal("0.01"))
     except (InvalidOperation, ValueError, TypeError):
         raise ValueError("价格格式不正确")
+
+
+def _parse_naive_datetime(value: Optional[str]) -> Optional[datetime]:
+    """将前端传入的时间字符串解析为 naive 北京时间，用于采集时间区间过滤。
+
+    兼容 "2026-06-18T22:36"、"2026-06-18T22:36:00"、"2026-06-18 22:36:00" 等格式；
+    解析失败或空值返回 None（即不施加该边界条件）。
+    """
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    normalized = raw.replace("T", " ")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(normalized, fmt)
+        except ValueError:
+            continue
+    return None
 
 
 def _safe_json_loads(text: Optional[str]) -> Any:
@@ -845,6 +866,10 @@ class ListingMonitorService:
         is_ordered: Optional[bool] = None,
         seller_fill: Optional[str] = None,
         has_detail: Optional[bool] = None,
+        dm_state: Optional[str] = None,
+        order_state: Optional[str] = None,
+        created_start: Optional[str] = None,
+        created_end: Optional[str] = None,
     ) -> Dict[str, Any]:
         """分页查询采集商品信息。"""
         page = max(page, 1)
@@ -863,10 +888,61 @@ class ListingMonitorService:
             conditions.append(ListingMonitorItem.seller_nick.like(f"%{seller_nick.strip()}%"))
         if item_id:
             conditions.append(ListingMonitorItem.item_id == item_id.strip())
-        if is_dm_sent is not None:
+        # 私信状态（优先使用 dm_state 多状态筛选；未传时回退旧的 is_dm_sent 布尔筛选）
+        # 状态语义与列表展示保持一致：
+        #   not_sent-未私信 / pending-已发待确认 / success-私信成功 / failed-私信失败
+        if dm_state == "not_sent":
+            conditions.append(ListingMonitorItem.is_dm_sent.is_(False))
+            conditions.append(
+                or_(
+                    ListingMonitorItem.dm_status.is_(None),
+                    ListingMonitorItem.dm_status != "failed",
+                )
+            )
+        elif dm_state == "success":
+            conditions.append(ListingMonitorItem.dm_status == "success")
+        elif dm_state == "failed":
+            conditions.append(ListingMonitorItem.dm_status == "failed")
+        elif dm_state == "pending":
+            conditions.append(ListingMonitorItem.is_dm_sent.is_(True))
+            conditions.append(
+                or_(
+                    ListingMonitorItem.dm_status.is_(None),
+                    ListingMonitorItem.dm_status.notin_(["success", "failed"]),
+                )
+            )
+        elif is_dm_sent is not None:
             conditions.append(ListingMonitorItem.is_dm_sent.is_(is_dm_sent))
-        if is_ordered is not None:
+        # 下单状态（优先使用 order_state 多状态筛选；未传时回退旧的 is_ordered 布尔筛选）
+        # 状态语义与列表展示保持一致：
+        #   not_ordered-未下单 / ordered-已下单 / failed-下单失败 / no_account-无可用账号 / duplicate-重复跳过
+        if order_state == "ordered":
+            conditions.append(ListingMonitorItem.is_ordered.is_(True))
+        elif order_state == "duplicate":
+            conditions.append(ListingMonitorItem.order_status == "duplicate")
+        elif order_state == "no_account":
+            conditions.append(ListingMonitorItem.is_ordered.is_(False))
+            conditions.append(ListingMonitorItem.order_status == "no_account")
+        elif order_state == "failed":
+            conditions.append(ListingMonitorItem.is_ordered.is_(False))
+            conditions.append(ListingMonitorItem.order_status == "failed")
+        elif order_state == "not_ordered":
+            conditions.append(ListingMonitorItem.is_ordered.is_(False))
+            conditions.append(
+                or_(
+                    ListingMonitorItem.order_status.is_(None),
+                    ListingMonitorItem.order_status.notin_(["duplicate", "no_account", "failed"]),
+                )
+            )
+        elif is_ordered is not None:
             conditions.append(ListingMonitorItem.is_ordered.is_(is_ordered))
+        # 采集时间区间（created_at，北京时间）
+        created_start_dt = _parse_naive_datetime(created_start)
+        if created_start_dt is not None:
+            conditions.append(ListingMonitorItem.created_at >= created_start_dt)
+        created_end_dt = _parse_naive_datetime(created_end)
+        if created_end_dt is not None:
+            conditions.append(ListingMonitorItem.created_at <= created_end_dt)
         if has_detail is not None:
             if has_detail:
                 conditions.append(ListingMonitorItem.detail_json.isnot(None))

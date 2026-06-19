@@ -19,6 +19,18 @@ import { MonitorItemDetailModal } from './MonitorItemDetailModal'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/apiError'
 
+// 计算北京时间（UTC+8）的"今天"日期，避免依赖浏览器本地时区
+const getBeijingToday = (): string => {
+  const now = new Date()
+  // 本地时间转 UTC 再加 8 小时得到北京时间
+  const beijing = new Date(now.getTime() + now.getTimezoneOffset() * 60000 + 8 * 3600 * 1000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${beijing.getFullYear()}-${pad(beijing.getMonth() + 1)}-${pad(beijing.getDate())}`
+}
+// 采集时间默认区间：当天 00:00 ~ 23:59（datetime-local 格式 YYYY-MM-DDTHH:mm）
+const DEFAULT_CREATED_START = `${getBeijingToday()}T00:00`
+const DEFAULT_CREATED_END = `${getBeijingToday()}T23:59`
+
 export function MonitorItems() {
   const { addToast } = useUIStore()
 
@@ -31,10 +43,12 @@ export function MonitorItems() {
   const [area, setArea] = useState('')
   const [sellerNick, setSellerNick] = useState('')
   const [itemId, setItemId] = useState('')
-  const [dmSent, setDmSent] = useState('')
-  const [ordered, setOrdered] = useState('')
+  const [dmState, setDmState] = useState('')
+  const [orderState, setOrderState] = useState('')
   const [sellerFill, setSellerFill] = useState('')
   const [hasDetail, setHasDetail] = useState('')
+  const [createdStart, setCreatedStart] = useState(DEFAULT_CREATED_START)
+  const [createdEnd, setCreatedEnd] = useState(DEFAULT_CREATED_END)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [total, setTotal] = useState(0)
@@ -61,10 +75,12 @@ export function MonitorItems() {
         area: area.trim() || undefined,
         sellerNick: sellerNick.trim() || undefined,
         itemId: itemId.trim() || undefined,
-        isDmSent: dmSent === '' ? undefined : dmSent === 'true',
-        isOrdered: ordered === '' ? undefined : ordered === 'true',
+        dmState: dmState || undefined,
+        orderState: orderState || undefined,
         sellerFill: sellerFill || undefined,
         hasDetail: hasDetail === '' ? undefined : hasDetail === 'true',
+        createdStart: createdStart || undefined,
+        createdEnd: createdEnd || undefined,
       })
       if (!result.success || !result.data) {
         setItems([])
@@ -92,7 +108,7 @@ export function MonitorItems() {
   useEffect(() => {
     void loadItems(page, pageSize)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, pageSize, taskId, dmSent, ordered, sellerFill, hasDetail])
+  }, [page, pageSize, taskId, dmState, orderState, sellerFill, hasDetail])
 
   const handleSearch = () => {
     if (page === 1) {
@@ -192,33 +208,38 @@ export function MonitorItems() {
               />
             </div>
             <div className="input-group min-w-[130px]">
-              <label className="input-label">是否已私信</label>
+              <label className="input-label">私信状态</label>
               <select
                 className="input-ios"
-                value={dmSent}
+                value={dmState}
                 onChange={(e) => {
-                  setDmSent(e.target.value)
+                  setDmState(e.target.value)
                   setPage(1)
                 }}
               >
                 <option value="">全部</option>
-                <option value="true">已私信</option>
-                <option value="false">未私信</option>
+                <option value="not_sent">未私信</option>
+                <option value="pending">已发待确认</option>
+                <option value="success">私信成功</option>
+                <option value="failed">私信失败</option>
               </select>
             </div>
             <div className="input-group min-w-[130px]">
-              <label className="input-label">是否已下单</label>
+              <label className="input-label">下单状态</label>
               <select
                 className="input-ios"
-                value={ordered}
+                value={orderState}
                 onChange={(e) => {
-                  setOrdered(e.target.value)
+                  setOrderState(e.target.value)
                   setPage(1)
                 }}
               >
                 <option value="">全部</option>
-                <option value="true">已下单</option>
-                <option value="false">未下单</option>
+                <option value="not_ordered">未下单</option>
+                <option value="ordered">已下单</option>
+                <option value="failed">下单失败</option>
+                <option value="no_account">无可用账号</option>
+                <option value="duplicate">重复跳过</option>
               </select>
             </div>
             <div className="input-group min-w-[140px]">
@@ -252,7 +273,25 @@ export function MonitorItems() {
                 <option value="false">未获取</option>
               </select>
             </div>
-            <button className="btn-ios-primary" onClick={handleSearch}>
+            <div className="input-group min-w-[190px]">
+              <label className="input-label">采集时间（起）</label>
+              <input
+                type="datetime-local"
+                className="input-ios"
+                value={createdStart}
+                onChange={(e) => setCreatedStart(e.target.value)}
+              />
+            </div>
+            <div className="input-group min-w-[190px]">
+              <label className="input-label">采集时间（止）</label>
+              <input
+                type="datetime-local"
+                className="input-ios"
+                value={createdEnd}
+                onChange={(e) => setCreatedEnd(e.target.value)}
+              />
+            </div>
+            <button className="btn-ios-primary ml-auto" onClick={handleSearch}>
               <Search className="w-4 h-4" />查询
             </button>
           </div>
