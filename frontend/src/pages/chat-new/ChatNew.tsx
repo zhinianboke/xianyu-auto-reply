@@ -116,6 +116,10 @@ export function ChatNew() {
   // 手动管理 WebSocket 连接的账号列表（仅用户显式操作时加入，页面刷新不自动重连）
   const [wsAccountIds, setWsAccountIds] = useState<string[]>([])
 
+  // 手机端 Tab 切换（桌面端 md+ 仍为四栏并排，本 state 不影响桌面布局）
+  type MobileTab = 'accounts' | 'convs' | 'chat' | 'tools'
+  const [mobileTab, setMobileTab] = useState<MobileTab>('accounts')
+
   const requestConfirm = useCallback((options: {
     title?: string
     message: string
@@ -313,6 +317,8 @@ export function ChatNew() {
         await loadAccounts()
         setActiveAccountId(accountId)
         setWsAccountIds((prev) => prev.includes(accountId) ? prev : [...prev, accountId])
+        // 手机端：连接成功后自动切到"会话"Tab（桌面端不受影响）
+        setMobileTab('convs')
       } else {
         addToast({ message: res.message || '连接失败', type: 'error' })
       }
@@ -333,6 +339,8 @@ export function ChatNew() {
         setConversations([])
         setActiveCid('')
         setMessages([])
+        // 手机端：当前账号被断开后回到"账号"Tab
+        setMobileTab('accounts')
       }
       await loadAccounts()
     } catch (e: any) {
@@ -346,6 +354,8 @@ export function ChatNew() {
       setActiveAccountId(acc.account_id)
       // 选中已连接账号时也建立 WebSocket（页面刷新后首次选中时触发）
       setWsAccountIds((prev) => prev.includes(acc.account_id) ? prev : [...prev, acc.account_id])
+      // 手机端：选中已连接账号后切到"会话"Tab
+      setMobileTab('convs')
     } else {
       await handleConnect(acc.account_id)
     }
@@ -557,6 +567,8 @@ export function ChatNew() {
   // 选中会话时：优先从缓存恢复消息，无缓存才加载
   const handleSelectConversation = (cid: string) => {
     setActiveCid(cid)
+    // 手机端：选中会话后切到"聊天"Tab
+    setMobileTab('chat')
     // 清零该会话的未读数
     setConversations((prev) =>
       prev.map((c) => (c.cid === cid ? { ...c, unreadCount: 0 } : c)),
@@ -943,10 +955,47 @@ export function ChatNew() {
   }
 
   // ==================== 渲染 ====================
+  // 手机端各 Tab 对应未读 / 状态提示
+  const totalUnread = conversations.reduce((sum, c) => sum + (c.unreadCount || 0), 0)
+  const tabItems: Array<{ key: MobileTab; label: string; badge?: number; disabled?: boolean }> = [
+    { key: 'accounts', label: '账号' },
+    { key: 'convs', label: '会话', badge: totalUnread, disabled: !activeAccountId },
+    { key: 'chat', label: '聊天', disabled: !activeCid },
+    { key: 'tools', label: '工作区', disabled: !activeCid },
+  ]
+
   return (
-    <div className="flex h-[calc(100vh-120px)] gap-3">
+    <div className="flex flex-col h-[calc(100vh-120px)]">
+      {/* 手机端顶部 Tab 切换栏（桌面端隐藏） */}
+      <div className="md:hidden mb-2 flex bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+        {tabItems.map((item) => {
+          const active = mobileTab === item.key
+          return (
+            <button
+              key={item.key}
+              type="button"
+              disabled={item.disabled}
+              onClick={() => setMobileTab(item.key)}
+              className={`flex-1 py-2 text-xs font-medium transition-colors relative ${
+                active
+                  ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300'
+                  : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40'
+              } disabled:opacity-40 disabled:cursor-not-allowed`}
+            >
+              {item.label}
+              {item.badge && item.badge > 0 ? (
+                <span className="absolute top-1 right-1/2 translate-x-6 bg-red-500 text-white text-[10px] rounded-full px-1 min-w-[16px] text-center">
+                  {item.badge > 99 ? '99+' : item.badge}
+                </span>
+              ) : null}
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="flex flex-1 min-h-0 flex-col md:flex-row gap-3">
       {/* 左侧：账号列表 */}
-      <div className="w-56 flex-shrink-0 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 flex flex-col">
+      <div className={`${mobileTab === 'accounts' ? 'flex' : 'hidden'} md:flex w-full md:w-56 flex-shrink-0 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 flex-col min-h-0`}>
         <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
           <span className="font-medium text-sm text-gray-700 dark:text-gray-300">账号列表</span>
           <button
@@ -1055,7 +1104,7 @@ export function ChatNew() {
       </div>
 
       {/* 中间：会话列表 */}
-      <div className="w-72 flex-shrink-0 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 flex flex-col">
+      <div className={`${mobileTab === 'convs' ? 'flex' : 'hidden'} md:flex w-full md:w-72 flex-shrink-0 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 flex-col min-h-0`}>
         <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
           <span className="font-medium text-sm text-gray-700 dark:text-gray-300">会话列表</span>
           {activeAccountId && (
@@ -1156,7 +1205,7 @@ export function ChatNew() {
       </div>
 
       {/* 右侧：聊天记录 */}
-      <div className="flex-1 min-w-0 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 flex flex-col">
+      <div className={`${mobileTab === 'chat' ? 'flex' : 'hidden'} md:flex flex-1 min-w-0 min-h-0 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 flex-col`}>
         {/* 聊天头部 */}
         <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -1269,7 +1318,7 @@ export function ChatNew() {
         </div>
         {/* 底部输入框 */}
         {activeCid && (
-          <div className="p-3 border-t border-gray-200 dark:border-gray-700 flex items-center gap-2">
+          <div className="p-3 border-t border-gray-200 dark:border-gray-700 flex items-end gap-2">
             <input
               ref={imageInputRef}
               type="file"
@@ -1286,24 +1335,27 @@ export function ChatNew() {
             >
               <ImagePlus className="w-4 h-4" />
             </button>
-            <input
-              type="text"
+            <textarea
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                // Enter 发送；Shift+Enter / Ctrl+Enter 在输入框内换行
+                // 中文输入法选词阶段的回车（compositionend 前）不触发发送
+                const isComposing = e.nativeEvent.isComposing || (e as any).keyCode === 229
+                if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !isComposing) {
                   e.preventDefault()
                   handleSendMessage()
                 }
               }}
-              placeholder="输入消息..."
+              placeholder="输入消息...（Shift+Enter 换行，Enter 发送）"
               disabled={sending}
-              className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              rows={1}
+              className="flex-1 px-3 py-2 text-sm leading-5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 resize-none max-h-32 overflow-y-auto whitespace-pre-wrap"
             />
             <button
               onClick={handleSendMessage}
               disabled={sending || !inputText.trim()}
-              className="flex items-center gap-1 px-4 py-2 text-sm font-medium text-white bg-blue-500 rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="flex-shrink-0 flex items-center gap-1 px-4 h-9 text-sm font-medium text-white bg-blue-500 rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {sending ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -1317,7 +1369,7 @@ export function ChatNew() {
       </div>
       {/* 图片预览弹窗 */}
       {/* 右侧工作区：客户订单 + 快捷短语 */}
-      <div className="w-80 flex-shrink-0 flex flex-col gap-3">
+      <div className={`${mobileTab === 'tools' ? 'flex' : 'hidden'} md:flex w-full md:w-80 flex-shrink-0 min-h-0 flex-col gap-3 overflow-y-auto md:overflow-visible`}>
         <CustomerOrdersPanel
           activeCid={activeCid}
           orders={customerOrders}
@@ -1348,6 +1400,7 @@ export function ChatNew() {
           onContentChange={setPhraseContent}
           onSave={handleSavePhrase}
         />
+      </div>
       </div>
       <OrderDetailModal
         order={orderDetail}

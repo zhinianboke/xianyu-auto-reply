@@ -643,7 +643,8 @@ export function PersonalSettings() {
           <div>
             <label className="input-label">对接卡密秘钥</label>
             <p className="text-xs text-gray-500 mb-2">用于「分销卡券」页面对接上游卡券系统的鉴权秘钥，请妥善保管。修改后点击「保存」生效。</p>
-            <p className="text-xs text-blue-600 dark:text-blue-400 mb-2">如需获取对接卡密秘钥，请联系 QQ：531779707 微信：zhinian_znbk</p>
+            <p className="text-xs text-gray-500 mb-2">秘钥资金流水和余额充值，请进入 <a className="text-xs text-blue-600 dark:text-blue-400 mb-2" href="http://agent.zhinianboke.com" target='_BLANK'>agent.zhinianboke.com</a> 中进行操作。</p>
+            <p className="text-xs text-blue-600 dark:text-blue-400 mb-2">如需获取对接卡密秘钥，请联系 QQ：531779708 微信：zhinian_znbk</p>
             <div className="flex items-center gap-3 flex-wrap">
               <div className="relative flex-1 min-w-[260px]">
                 <input
