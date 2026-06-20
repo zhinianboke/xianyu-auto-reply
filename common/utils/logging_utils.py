@@ -115,6 +115,13 @@ def setup_logging(
     for name in ["passlib", "asyncio", "concurrent", "urllib3", "charset_normalizer"]:
         logging.getLogger(name).setLevel(logging.INFO)
 
+    # SQLAlchemy 引擎/连接池自带的原生日志（BEGIN/SELECT/ROLLBACK 等）。
+    # 引擎以 echo=False 创建时，其 logger 级别为 NOTSET，会继承 root 的 INFO，
+    # 导致即便项目未开启 SQL_ECHO 仍会输出 SQL。这里显式钉到 WARNING 关闭原生输出。
+    # 项目自有的 SQL 打印由 common.db.session 中的 sql_echo 钩子单独控制。
+    for name in ["sqlalchemy.engine", "sqlalchemy.engine.Engine", "sqlalchemy.pool", "asyncmy"]:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
 
 def update_log_retention(retention_days: int, log_applied: bool = True) -> bool:
     """动态更新日志文件保留天数

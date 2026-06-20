@@ -527,19 +527,45 @@ async def test_remote_slider_solve(
         "account_id": "connectivity-test",
         "url": "",  # 故意留空：只测连通+秘钥，不真正过滑块
     }
+    logger.info(f"[过滑块测试] 请求远程服务 url={url} payload={payload}")
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
             async with session.post(url, json=payload) as resp:
+                # 打印远程服务原始返回（状态码 + 文本）
+                raw_text = await resp.text()
+                logger.info(
+                    f"[过滑块测试] 远程响应 status={resp.status} body={raw_text}"
+                )
                 try:
                     body = await resp.json(content_type=None)
                 except Exception:
                     body = {}
-                msg = ((body or {}).get("message") or "").strip()
+
+                # 非 200 一律视为连接/路径异常（如 404 表示远程没有该接口、502 表示远程服务异常）
+                if resp.status != 200:
+                    detail = ""
+                    if isinstance(body, dict):
+                        detail = str(body.get("detail") or body.get("message") or "").strip()
+                    detail = detail or (raw_text or "").strip()
+                    result = ApiResponse(
+                        success=False,
+                        message=f"远程服务返回异常（HTTP {resp.status}）：{detail or '无响应内容'}，请检查远程服务URL是否正确",
+                    )
+                    logger.info(f"[过滑块测试] 接口返回 {result.model_dump()}")
+                    return result
+
+                msg = ((body or {}).get("message") if isinstance(body, dict) else "") or ""
+                msg = msg.strip()
                 if "秘钥" in msg and ("无效" in msg or "缺少" in msg):
-                    return ApiResponse(success=False, message=f"连接成功，但秘钥无效（远程：{msg}）")
-                return ApiResponse(success=True, message=f"连接成功（远程返回：{msg or '正常'}）")
+                    result = ApiResponse(success=False, message=f"连接成功，但秘钥无效（远程：{msg}）")
+                else:
+                    result = ApiResponse(success=True, message=f"连接成功（远程返回：{msg or '正常'}）")
+                logger.info(f"[过滑块测试] 接口返回 {result.model_dump()}")
+                return result
     except Exception as e:
-        return ApiResponse(success=False, message=f"无法连接到远程服务：{str(e)}")
+        result = ApiResponse(success=False, message=f"无法连接到远程服务：{str(e)}")
+        logger.info(f"[过滑块测试] 接口返回 {result.model_dump()}")
+        return result
 
 
 @router.get("/remote-config")
