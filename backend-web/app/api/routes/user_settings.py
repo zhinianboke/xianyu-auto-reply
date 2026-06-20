@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.services.card_dock_service import CARD_SECRET_KEY_SETTING, CardDockService
+from app.services.card_secret_key_service import CardSecretKeyService
 from common.models.user import User
 from common.models.user_setting import UserSetting
 from common.schemas.common import ApiResponse
@@ -137,6 +138,56 @@ async def delete_user_setting(
         CardDockService.invalidate_secret_key_cache(current_user.id)
 
     return ApiResponse(success=True, message="设置已删除")
+
+
+@router.post("/card-secret-key/create", response_model=ApiResponse)
+async def create_card_secret_key(
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """一键创建对接卡密秘钥：调用外部密钥服务创建后，自动保存到当前用户设置。
+
+    key_name 取「xy_ + 当前用户名」，创建成功后将返回的 key_value 写入用户设置
+    distribution.card_secret_key 并失效缓存。业务错误以 HTTP 200 携带 success=False 返回。
+
+    校验：若当前用户已存在对接卡密秘钥，则禁止重复创建，提示联系管理员重置。
+    """
+    # 1. 先校验是否已存在对接卡密秘钥，已存在则禁止创建
+    stmt = select(UserSetting).where(
+        UserSetting.user_id == current_user.id,
+        UserSetting.key == CARD_SECRET_KEY_SETTING,
+    )
+    db_result = await session.execute(stmt)
+    setting = db_result.scalar_one_or_none()
+    if setting and setting.value and setting.value.strip():
+        return ApiResponse(success=False, message="对接卡密秘钥已存在，如需重新创建请联系管理员重置")
+
+    # 2. 调用外部密钥服务创建
+    service = CardSecretKeyService()
+    result = await service.create_key(current_user.username)
+    if not result.get("success"):
+        return ApiResponse(success=False, message=result.get("message") or "创建密钥失败")
+
+    key_value = (result.get("data") or {}).get("key_value", "").strip()
+    if not key_value:
+        return ApiResponse(success=False, message="创建密钥成功但未返回密钥值")
+
+    # 3. 保存到当前用户的「对接卡密秘钥」设置（存在空值记录则更新，不存在则新增）
+    if setting:
+        setting.value = key_value
+    else:
+        session.add(UserSetting(
+            user_id=current_user.id,
+            key=CARD_SECRET_KEY_SETTING,
+            value=key_value,
+            description="对接卡密秘钥",
+        ))
+    await session.commit()
+
+    # 更新后立即失效缓存，避免最长 5 分钟内仍使用旧秘钥
+    CardDockService.invalidate_secret_key_cache(current_user.id)
+
+    return ApiResponse(success=True, message="对接卡密秘钥创建成功", data={"key_value": key_value})
 
 
 @router.post("/payment-qrcode/upload")

@@ -8,7 +8,7 @@
  */
 import { useState, useEffect, useRef } from 'react'
 import { User, RefreshCw, Wallet, Plus, Key, Link2, Copy, RotateCcw, Save, Package, X, ScrollText, ArrowUpFromLine, Upload, QrCode, Eye, EyeOff } from 'lucide-react'
-import { getUserSetting, updateUserSetting, changePassword, getDockCode, resetDockCode, getSecretKey, resetSecretKey, uploadPaymentQrcode, getSystemSettings } from '@/api/settings'
+import { getUserSetting, updateUserSetting, createCardSecretKey, changePassword, getDockCode, resetDockCode, getSecretKey, resetSecretKey, uploadPaymentQrcode, getSystemSettings } from '@/api/settings'
 import { createWithdraw, getSettlementRecords, type SettlementRecord } from '@/api/payment'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
@@ -67,6 +67,7 @@ export function PersonalSettings() {
   // 对接卡密秘钥状态（用于分销卡券对接上游系统）
   const [cardSecretKey, setCardSecretKey] = useState('')
   const [savingCardSecretKey, setSavingCardSecretKey] = useState(false)
+  const [creatingCardSecretKey, setCreatingCardSecretKey] = useState(false)
   const [showCardSecretKey, setShowCardSecretKey] = useState(false)
 
   // 联系方式状态
@@ -235,6 +236,27 @@ export function PersonalSettings() {
       addToast({ type: 'error', message: '保存对接卡密秘钥失败' })
     } finally {
       setSavingCardSecretKey(false)
+    }
+  }
+
+  // 一键创建对接卡密秘钥：调用外部密钥服务创建并自动保存到当前用户
+  const handleCreateCardSecretKey = async () => {
+    // 已存在则禁止创建，提示联系管理员重置
+    if (cardSecretKey.trim()) {
+      addToast({ type: 'warning', message: '对接卡密秘钥已存在，如需重新创建请联系管理员重置' })
+      return
+    }
+    try {
+      setCreatingCardSecretKey(true)
+      const result = await createCardSecretKey()
+      if (result.success && result.data?.key_value) {
+        setCardSecretKey(result.data.key_value)
+        addToast({ type: 'success', message: result.message || '对接卡密秘钥创建成功' })
+      } else {
+        addToast({ type: 'error', message: result.message || '创建失败' })
+      }
+    } finally {
+      setCreatingCardSecretKey(false)
     }
   }
 
@@ -644,7 +666,7 @@ export function PersonalSettings() {
             <label className="input-label">对接卡密秘钥</label>
             <p className="text-xs text-gray-500 mb-2">用于「分销卡券」页面对接上游卡券系统的鉴权秘钥，请妥善保管。修改后点击「保存」生效。</p>
             <p className="text-xs text-gray-500 mb-2">秘钥资金流水和余额充值，请进入 <a className="text-xs text-blue-600 dark:text-blue-400 mb-2" href="http://agent.zhinianboke.com" target='_BLANK'>agent.zhinianboke.com</a> 中进行操作。</p>
-            <p className="text-xs text-blue-600 dark:text-blue-400 mb-2">如需获取对接卡密秘钥，请联系 QQ：531779708 微信：zhinian_znbk</p>
+            <p className="text-xs text-blue-600 dark:text-blue-400 mb-2">如有其他疑问可联系 QQ：531779708 微信：zhinian_znbk</p>
             <div className="flex items-center gap-3 flex-wrap">
               <div className="relative flex-1 min-w-[260px]">
                 <input
@@ -664,6 +686,15 @@ export function PersonalSettings() {
                   {showCardSecretKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
+              <button
+                onClick={handleCreateCardSecretKey}
+                disabled={creatingCardSecretKey || !!cardSecretKey.trim()}
+                className="btn-ios-secondary text-sm"
+                title={cardSecretKey.trim() ? '秘钥已存在，如需重新创建请联系管理员重置' : '一键创建对接卡密秘钥'}
+              >
+                {creatingCardSecretKey ? <ButtonLoading /> : <Plus className="w-4 h-4" />}
+                创建
+              </button>
               <button
                 onClick={handleSaveCardSecretKey}
                 disabled={savingCardSecretKey}

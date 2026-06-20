@@ -417,6 +417,11 @@ export const updateUserSetting = async (key: string, value: string, description?
   return put(`/api/v1/user-settings/${key}`, { value, description })
 }
 
+// 一键创建对接卡密秘钥（后端调用外部密钥服务创建并自动保存到当前用户）
+export const createCardSecretKey = async (): Promise<ApiResponse<{ key_value: string }>> => {
+  return post('/api/v1/user-settings/card-secret-key/create')
+}
+
 // 上传收款码
 export const uploadPaymentQrcode = async (file: File, paymentType: 'alipay' | 'wechat'): Promise<{
   success: boolean

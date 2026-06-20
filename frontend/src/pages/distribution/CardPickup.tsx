@@ -246,7 +246,7 @@ export function CardPickup() {
     <div className="space-y-4">
       {/* 顶部红色加粗提醒 */}
       <div className="text-red-600 font-bold text-center">
-        以下商品均为对接商品，无售后，请谨慎对接或购买
+        以下商品均为对接商品，无售后，请谨慎对接或购买，个人设置中创建秘钥后即可查看
       </div>
 
       {/* 页头 */}

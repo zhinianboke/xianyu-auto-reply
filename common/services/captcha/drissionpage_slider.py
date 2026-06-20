@@ -238,6 +238,22 @@ class DrissionPageSliderService:
         except Exception:
             return False
 
+    @staticmethod
+    def _has_x5sec(cookies: Optional[Dict[str, str]]) -> bool:
+        """判断 cookie 字典中是否包含 x5sec（真正放行的标志，与上层放行判定一致）。
+
+        滑块通过的唯一可靠标志是阿里 baxia 下发的 x5sec cookie；仅凭页面标题
+        判断会误判（链接过期页 / punish 页 / 空白页 / 网络错误页标题都不等于
+        "验证码拦截"，却并未真正通过）。
+        """
+        if not cookies:
+            return False
+        for name in cookies:
+            name_lower = str(name).lower()
+            if name_lower.startswith("x5") or "x5sec" in name_lower:
+                return True
+        return False
+
     def _calculate_slide_distance(self) -> int:
         """动态计算滑动距离（委托 drissionpage_motion）。"""
         return calculate_slide_distance(self.page, self.pure_user_id)
@@ -334,14 +350,18 @@ class DrissionPageSliderService:
 
                     if not self._detect_blocked():
                         cookies = self.get_cookies_dict()
-                        if cookies:
+                        if self._has_x5sec(cookies):
                             duration = time.time() - start_time
                             logger.info(
                                 f"【{self.pure_user_id}】DrissionPage 兜底成功，耗时 {duration:.2f}s，"
                                 f"滑动 {self.slide_attempt} 次"
                             )
                             return True, cookies
-                        logger.warning(f"【{self.pure_user_id}】验证通过但未获取到 cookie")
+                        # 标题已非拦截页但仍未拿到 x5sec：尚未真正通过，继续重试
+                        logger.warning(
+                            f"【{self.pure_user_id}】第 {attempt + 1} 次滑动后未检测到 x5sec，"
+                            f"判定为未通过，继续重试"
+                        )
                     else:
                         logger.warning(
                             f"【{self.pure_user_id}】第 {attempt + 1} 次滑动未通过（标题: {self.page.title}）"
