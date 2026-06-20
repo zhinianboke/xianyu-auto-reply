@@ -126,7 +126,7 @@ export function CardItemRelationModal({ cardId, cardName, onClose, onSaved, read
           <div className="modal-body flex-1 overflow-hidden p-0">
             <div className="grid grid-cols-2 gap-0 h-full" style={{ height: '60vh' }}>
               {/* 左侧：商品列表 */}
-              <div className="flex flex-col border-r border-gray-200 dark:border-gray-700">
+              <div className="flex flex-col overflow-hidden border-r border-gray-200 dark:border-gray-700">
                 <div className="flex-shrink-0 px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="font-medium text-gray-900 dark:text-white text-sm">待选商品</h3>
@@ -214,7 +214,7 @@ export function CardItemRelationModal({ cardId, cardName, onClose, onSaved, read
               </div>
 
               {/* 右侧：已选商品 */}
-              <div className="flex flex-col">
+              <div className="flex overflow-hidden flex-col">
                 <div className="flex-shrink-0 px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-green-50 dark:bg-green-900/20">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="font-medium text-green-700 dark:text-green-400 text-sm">{readonly ? '已关联商品' : '已选商品'}</h3>
