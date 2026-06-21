@@ -32,6 +32,8 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from common.services.captcha.slider_stealth import URL_EXPIRED, CAPTCHA_NOT_REQUIRED
+
 from playwright.sync_api import sync_playwright
 
 # —— 惰性/可选依赖：仅在有桌面的 Windows 上可用，导入失败则标记为不可用 ——
@@ -270,16 +272,22 @@ class _RealMouseSolver:
                 content = self.page.content()
             except Exception:
                 content = ""
-            if "抱歉，页面访问出现了问题" in content and url_provider and attempt == 0:
-                try:
-                    fresh = url_provider()
+            if "抱歉，页面访问出现了问题" in content:
+                if url_provider and attempt == 0:
+                    try:
+                        fresh = url_provider()
+                    except Exception:
+                        fresh = None
+                    # 风控已解除、无需滑块：交由上层 _refetch_token_ok 流程处理
+                    if fresh == CAPTCHA_NOT_REQUIRED:
+                        logger.info(f"【{self.pure_id}】重取链接时检测到 token 已可用，无需滑块，提前结束")
+                        return True, None
                     if fresh and isinstance(fresh, str):
                         target = fresh
                         logger.info(f"【{self.pure_id}】真实鼠标引擎使用刷新后的验证链接重试")
                         continue
-                except Exception:
-                    pass
-                return False, None
+                # 链接已过期且无法自助重取：返回过期哨兵，供编排层/远程调用方刷新URL重试
+                return False, URL_EXPIRED
             break
 
         # 多次尝试：失败则点“重试”按钮重置滑块，再用物理鼠标滑（同页重试，最多 3 次）

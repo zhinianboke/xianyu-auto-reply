@@ -42,6 +42,11 @@ except ImportError:
 # 根本不需要滑块验证"。run()/编排层据此提前结束，避免无谓地导航到失效链接或启动兜底引擎。
 CAPTCHA_NOT_REQUIRED = "__CAPTCHA_NOT_REQUIRED__"
 
+# 返回值哨兵：表示"验证链接已过期（页面显示'抱歉，页面访问出现了问题'），且本端无法
+# 自助重取新链接"。作为 run()/solve() 返回元组中 cookies 位置的特殊值，由编排层识别后
+# 以 engine='url_expired' 上报，最终让远程调用方据此刷新 URL 后重试。
+URL_EXPIRED = "__URL_EXPIRED__"
+
 
 class PlaywrightSliderService:
     """Playwright滑块验证服务"""
@@ -686,7 +691,8 @@ class PlaywrightSliderService:
                         logger.error(f"【{self.pure_user_id}】重新获取验证链接失败，返回失败")
                     else:
                         logger.error(f"【{self.pure_user_id}】页面访问出现问题，直接返回失败")
-                    return False, None
+                    # 链接已过期且无法自助重取：返回过期哨兵，供编排层/远程调用方刷新URL重试
+                    return False, URL_EXPIRED
                 break
 
             if "崩溃" in page_content or "STATUS_BREAKPOINT" in page_content:

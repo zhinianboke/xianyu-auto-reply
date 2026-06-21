@@ -9,7 +9,8 @@ from sqlalchemy import select
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from app.api.deps import get_db_session as get_db
+from app.api.deps import get_db_session as get_db, get_current_active_user
+from common.models import User, UserRole
 from common.models.xy_account import XYAccount as Cookie
 from common.schemas.common import ApiResponse
 
@@ -31,7 +32,8 @@ class GoofishSearchRequest(BaseModel):
 @router.post("/search")
 async def search_goofish(
     request: GoofishSearchRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ) -> ApiResponse:
     """
     搜索 Goofish 商品
@@ -56,7 +58,15 @@ async def search_goofish(
                 message="账号不存在",
                 data=None
             )
-        
+
+        # 账号归属校验：非管理员只能使用自己名下的账号，防止越权借用他人账号登录态发起搜索
+        if current_user.role != UserRole.ADMIN and cookie.owner_id != current_user.id:
+            return ApiResponse(
+                success=False,
+                message="无权使用该账号",
+                data=None
+            )
+
         if not cookie.cookie:
             return ApiResponse(
                 success=False,

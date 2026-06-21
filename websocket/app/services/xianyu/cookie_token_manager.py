@@ -208,7 +208,7 @@ class CookieTokenManager:
         """将token和device_id缓存到数据库
         
         使用 INSERT ... ON DUPLICATE KEY UPDATE 实现插入或更新
-        过期时间为当前时间 + 8~10小时随机
+        过期时间为当前时间 + 7~12小时随机
         
         Args:
             token: IM Token
@@ -218,8 +218,8 @@ class CookieTokenManager:
             from datetime import timedelta
             from sqlalchemy import text
             
-            # 8-10小时随机过期时间
-            ttl_hours = random.uniform(8, 10)
+            # 7-12小时随机过期时间
+            ttl_hours = random.uniform(7, 12)
             expire_at = get_beijing_now_naive() + timedelta(hours=ttl_hours)
             
             async with async_session_maker() as session:

@@ -429,10 +429,19 @@ async def solve_captcha(request: SolveCaptchaRequest):
         _update_log("success", f"远程过滑块成功，耗时: {duration:.2f}秒", engine=engine)
         return {
             "success": True, "code": 200, "message": "过滑块成功",
-            "data": {"engine": engine, "cookies": cookies},
+            "data": {"engine": engine, "cookies": cookies, "url_expired": False},
+        }
+    # 验证链接已过期：明确告知调用方刷新URL后重试（区别于普通过滑块失败）
+    # 注意：url_expired 不是"通过引擎"，不写入 captcha_engine 字段（避免污染引擎枚举/前端展示），
+    # 过期信息体现在 processing_result 文案与返回体 data 中即可。
+    if engine == "url_expired":
+        _update_log("failed", f"远程过滑块失败(验证链接已过期)，耗时: {duration:.2f}秒")
+        return {
+            "success": False, "code": 200, "message": "验证链接已过期，请刷新URL后重试",
+            "data": {"engine": engine, "url_expired": True},
         }
     _update_log("failed", f"远程过滑块失败，耗时: {duration:.2f}秒", engine=engine)
-    return {"success": False, "code": 200, "message": "过滑块失败", "data": {"engine": engine}}
+    return {"success": False, "code": 200, "message": "过滑块失败", "data": {"engine": engine, "url_expired": False}}
 
 
 @router.get("/accounts/connection-stats")

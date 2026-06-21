@@ -14,7 +14,7 @@ from typing import Callable, Dict, Optional, Tuple
 
 from loguru import logger
 
-from common.services.captcha.slider_stealth import run_slider_verification, CAPTCHA_NOT_REQUIRED
+from common.services.captcha.slider_stealth import run_slider_verification, CAPTCHA_NOT_REQUIRED, URL_EXPIRED
 from common.services.captcha.drissionpage_slider import (
     run_drissionpage_verification,
     DRISSIONPAGE_AVAILABLE,
@@ -91,6 +91,7 @@ def _call_remote_solve(
     Returns:
         (status, cookies)
         status: 'ok'（远程通过，cookies 为 x5*）/ 'fail'（远程有返回但未通过）/
+                'url_expired'（远程反馈验证链接已过期，调用方应刷新URL后重试）/
                 'fallback'（超时或网络不可用，应回退本机逻辑）
     """
     import requests
@@ -128,6 +129,10 @@ def _call_remote_solve(
         cookies = (data.get("data") or {}).get("cookies") or {}
         if cookies:
             return "ok", cookies
+    # 远程明确反馈"验证链接已过期"：调用方需刷新URL后重试（老版本远程端无此字段，自然走 fail）
+    if isinstance(data, dict) and (data.get("data") or {}).get("url_expired"):
+        logger.info(f"【{user_id}】远程反馈验证链接已过期(url_expired)")
+        return "url_expired", None
     return "fail", None
 
 
@@ -181,7 +186,33 @@ def run_slider_verification_with_fallback(
             if status == "ok" and _has_x5sec(r_cookies_out):
                 logger.info(f"【{user_id}】远程过滑块成功，采用远程结果")
                 return True, r_cookies_out, "remote"
-            if status == "fail":
+            # 远程反馈验证链接已过期：本端用 url_provider 重取新鲜链接后再调远程（最多 2 次），
+            # 与本机处理链接过期保持一致；无 url_provider 或重试用尽则按失败处理（不回退）。
+            remote_url_refreshes = 0
+            max_remote_url_refreshes = 2 if url_provider is not None else 0
+            while status == "url_expired" and remote_url_refreshes < max_remote_url_refreshes:
+                remote_url_refreshes += 1
+                logger.warning(
+                    f"【{user_id}】远程反馈验证链接已过期，第{remote_url_refreshes}次重取新链接后重试远程"
+                )
+                try:
+                    fresh = url_provider()
+                except Exception as up_e:
+                    logger.warning(f"【{user_id}】重取验证链接异常: {up_e}")
+                    fresh = None
+                if fresh == CAPTCHA_NOT_REQUIRED:
+                    logger.info(f"【{user_id}】重取链接时检测到 token 已可用，无需滑块，结束远程流程")
+                    return True, None, "remote"
+                if not (fresh and isinstance(fresh, str)):
+                    logger.info(f"【{user_id}】重取验证链接失败，远程过滑块按失败处理（不回退）")
+                    return False, None, "remote"
+                status, r_cookies_out = _call_remote_solve(
+                    r_url, r_secret, user_id, fresh, browser_timeout, r_cookies, r_device_id
+                )
+                if status == "ok" and _has_x5sec(r_cookies_out):
+                    logger.info(f"【{user_id}】远程过滑块成功（刷新链接后），采用远程结果")
+                    return True, r_cookies_out, "remote"
+            if status in ("fail", "url_expired"):
                 logger.info(f"【{user_id}】远程过滑块未通过（非超时），按配置不回退本机，返回失败")
                 return False, None, "remote"
             # status == 'fallback' → 落到下面的本机逻辑
@@ -218,6 +249,10 @@ def run_slider_verification_with_fallback(
                 rm_ok, rm_cookies = False, None
             if rm_ok and _has_x5sec(rm_cookies):
                 return True, rm_cookies, "real_mouse"
+            # 验证链接已过期且无法自助重取：上报 url_expired，供远程调用方刷新URL后重试
+            if rm_cookies == URL_EXPIRED:
+                logger.info(f"【{user_id}】真实鼠标引擎检测到验证链接已过期，返回 url_expired")
+                return False, None, "url_expired"
             # 按配置：真实鼠标失败不回退原引擎，直接返回失败
             logger.info(f"【{user_id}】真实鼠标未通过，按配置不回退，返回失败（下次重试仍用真实鼠标）")
             return False, None, None
@@ -234,6 +269,12 @@ def run_slider_verification_with_fallback(
     )
     if ok and _has_x5sec(cookies):
         return True, cookies, "playwright"
+
+    # 验证链接已过期且无法自助重取：上报 url_expired，供远程调用方刷新URL后重试
+    # （过期页无需再走兜底引擎，兜底同样会命中过期页，直接返回让调用方刷新链接更高效）
+    if cookies == URL_EXPIRED:
+        logger.info(f"【{user_id}】主引擎检测到验证链接已过期，返回 url_expired")
+        return False, None, "url_expired"
 
     # 2. 判断是否需要兜底
     fallback_enabled, fb_headless, fb_timeout = _load_fallback_config()
