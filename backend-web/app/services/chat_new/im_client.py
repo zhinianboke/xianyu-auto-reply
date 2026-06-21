@@ -22,7 +22,13 @@ import aiohttp
 from loguru import logger
 from sqlalchemy import text
 
+from app.services.websocket_client import websocket_client
 from common.db.session import async_session_maker
+from common.utils.cookie_refresh import (
+    extract_cookies_from_response,
+    merge_cookies,
+    update_account_cookies_in_db,
+)
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.xianyu_utils import (
     generate_device_id,
@@ -41,6 +47,20 @@ TOKEN_API_URL = "https://h5api.m.goofish.com/h5/mtop.taobao.idlemessage.pc.login
 REQUEST_TIMEOUT = 20
 # 心跳间隔（秒）
 HEARTBEAT_INTERVAL = 15
+# 风控滑块验证关键词：Token响应中出现任一关键词即表示被风控拦截（如"哎哟喂,被挤爆啦"），需过滑块
+# 与 websocket 进程 cookie_token_manager.need_captcha_verification 保持一致
+CAPTCHA_KEYWORDS = (
+    "FAIL_SYS_USER_VALIDATE",  # 用户验证失败
+    "RGV587_ERROR",            # 风控错误
+    "哎哟喂,被挤爆啦",          # 被挤爆了（英文逗号）
+    "哎哟喂，被挤爆啦",         # 被挤爆了（中文逗号）
+    "挤爆了",                  # 被挤爆了
+    "请稍后重试",              # 请稍后重试
+    "punish?x5secdata",        # 惩罚页面
+    "captcha",                 # 验证码
+)
+# 过滑块重试上限（防止无限递归）
+CAPTCHA_MAX_RETRY = 1
 
 
 class GoofishImClient:
@@ -592,22 +612,22 @@ class GoofishImClient:
             await self._set_cached_token(token, self.device_id)
         return token
 
-    async def _fetch_im_token_from_api(self, _retry: int = 0) -> str:
+    async def _fetch_im_token_from_api(
+        self, _retry: int = 0, _captcha_retry: int = 0
+    ) -> str:
         """
         通过mtop API获取IM登录Token
 
         令牌过期时会从响应Set-Cookie中提取新Cookie，增量合并后更新到数据库和内存，
         然后使用新Cookie重试一次（最多重试1次，防止无限递归）。
 
-        Args:
-            _retry: 内部重试计数，外部不需要传
-        """
-        from common.utils.cookie_refresh import (
-            extract_cookies_from_response,
-            merge_cookies,
-            update_account_cookies_in_db,
-        )
+        触发风控滑块（如"哎哟喂,被挤爆啦" / FAIL_SYS_USER_VALIDATE）时，委托 WebSocket
+        进程过滑块获取最新Cookie，成功后清缓存并用新Cookie重试（最多重试 CAPTCHA_MAX_RETRY 次）。
 
+        Args:
+            _retry: 令牌过期内部重试计数，外部不需要传
+            _captcha_retry: 过滑块内部重试计数，外部不需要传
+        """
         try:
             timestamp = str(int(time.time() * 1000))
             data_val = json.dumps(
@@ -686,6 +706,24 @@ class GoofishImClient:
                     logger.error(f"【{self.account_id}】令牌过期重试已达上限，放弃获取Token")
                     return ""
 
+            # 检查是否触发风控滑块验证（如"哎哟喂,被挤爆啦"），委托过滑块后用新Cookie重试
+            if self._is_captcha_required(ret_str, result):
+                if _captcha_retry >= CAPTCHA_MAX_RETRY:
+                    logger.error(f"【{self.account_id}】过滑块重试已达上限，放弃获取Token")
+                    return ""
+                if not await self._solve_captcha_via_websocket(result):
+                    logger.error(f"【{self.account_id}】过滑块失败，放弃获取Token")
+                    return ""
+                logger.warning(
+                    f"【{self.account_id}】过滑块成功，准备用新Cookie重试获取Token"
+                    f"（第{_captcha_retry + 1}次）"
+                )
+                # 清除可能已失效的Token缓存，确保后续走最新Cookie
+                await self._delete_cached_token()
+                return await self._fetch_im_token_from_api(
+                    _retry=_retry, _captcha_retry=_captcha_retry + 1
+                )
+
             access_token = result.get("data", {}).get("accessToken", "")
             if not access_token:
                 logger.error(
@@ -697,6 +735,81 @@ class GoofishImClient:
         except Exception as e:
             logger.error(f"【{self.account_id}】获取IM Token异常: {e}")
             return ""
+
+    def _is_captcha_required(self, ret_str: str, result: Dict[str, Any]) -> bool:
+        """判断Token响应是否触发风控滑块验证（被挤爆 / 风控拦截）
+
+        Args:
+            ret_str: 响应 ret 字段的字符串形式
+            result: 完整响应字典
+
+        Returns:
+            是否需要过滑块
+        """
+        for keyword in CAPTCHA_KEYWORDS:
+            if keyword in ret_str:
+                logger.info(f"【{self.account_id}】检测到风控滑块关键词: {keyword}")
+                return True
+        data = result.get("data", {})
+        if isinstance(data, dict):
+            url = data.get("url", "") or ""
+            if any(flag in url for flag in ("punish", "captcha", "validate")):
+                logger.info(f"【{self.account_id}】检测到风控验证URL")
+                return True
+        return False
+
+    async def _solve_captcha_via_websocket(self, result: Dict[str, Any]) -> bool:
+        """委托 WebSocket 进程过滑块，成功后合并新Cookie并写回数据库与内存
+
+        backend-web 进程不具备本地浏览器过滑块能力（浏览器持久化目录与账号级互斥锁
+        统一收敛在 WebSocket 进程），因此通过 HTTP 委托 /internal/captcha/solve 完成。
+        过滑块成功返回的 x5sec 等风控Cookie会合并进当前实例并更新数据库，供本次重试使用。
+
+        Args:
+            result: Token接口返回的完整响应字典（含 data.url 验证链接）
+
+        Returns:
+            是否过滑块成功（成功时已更新 self.cookies / self.cookies_str / 数据库）
+        """
+        # 提取 punish 验证链接
+        verification_url = ""
+        data = result.get("data", {})
+        if isinstance(data, dict):
+            verification_url = data.get("url", "") or ""
+        if not verification_url:
+            logger.error(f"【{self.account_id}】未找到验证URL，无法过滑块")
+            return False
+
+        logger.info(
+            f"【{self.account_id}】检测到风控，委托WebSocket过滑块: {verification_url[:80]}..."
+        )
+        # 携带当前Cookie与设备ID：验证链接过期时 WebSocket 端可凭此重取新鲜链接
+        resp = await websocket_client.solve_captcha(
+            account_id=self.account_id,
+            url=verification_url,
+            call_type="local",
+            cookies=self.cookies_str,
+            device_id=self.device_id,
+        )
+
+        if not (isinstance(resp, dict) and resp.get("success")):
+            msg = resp.get("message", "") if isinstance(resp, dict) else ""
+            logger.error(f"【{self.account_id}】过滑块失败: {msg}")
+            return False
+
+        new_cookies = (resp.get("data") or {}).get("cookies") or {}
+        if not new_cookies:
+            logger.error(f"【{self.account_id}】过滑块返回成功但未获取到Cookie，判定为失败")
+            return False
+
+        # 合并过滑块返回的Cookie（主要为 x5sec 等风控字段）并写回内存与数据库
+        self.cookies.update(new_cookies)
+        self.cookies_str = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+        await update_account_cookies_in_db(self.account_id, self.cookies_str)
+        logger.info(
+            f"【{self.account_id}】过滑块成功，已合并 {len(new_cookies)} 个Cookie并更新数据库"
+        )
+        return True
 
     async def _register(self):
         """发送注册消息 (/reg) 并等待服务器确认，然后发送 ackDiff"""
