@@ -144,18 +144,27 @@ def build_cookie_string_from_browser_cookies(cookies: list[dict[str, Any]] | Non
 
 
 def is_token_expired_error(ret_list: list) -> bool:
-    """判断API返回是否为令牌过期错误
-    
+    """判断API返回是否为令牌过期/令牌为空错误
+
+    令牌过期（FAIL_SYS_TOKEN_EXOIRED）与令牌为空（FAIL_SYS_TOKEN_EMPTY）
+    在闲鱼接口中均会在响应头返回新的 Set-Cookie（含新的 _m_h5_tk），
+    处理方式一致：提取新 Cookie 后刷新并重试，不需要重新登录。
+
     Args:
         ret_list: API响应中的ret列表
-        
+
     Returns:
-        True表示令牌过期
+        True表示令牌过期或令牌为空
     """
     if not ret_list:
         return False
     ret_str = str(ret_list)
-    return 'FAIL_SYS_TOKEN_EXOIRED' in ret_str or '令牌过期' in ret_str
+    return (
+        'FAIL_SYS_TOKEN_EXOIRED' in ret_str
+        or 'FAIL_SYS_TOKEN_EMPTY' in ret_str
+        or '令牌过期' in ret_str
+        or '令牌为空' in ret_str
+    )
 
 
 def is_session_expired_error(ret_list: list) -> bool:
