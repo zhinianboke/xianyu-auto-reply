@@ -13,7 +13,8 @@ from datetime import timedelta
 from typing import Dict, Any
 from loguru import logger
 
-from app.api.deps import get_db_session as get_db
+from app.api.deps import get_db_session as get_db, get_current_active_user
+from common.models import User, UserRole
 from common.models.xy_account import XYAccount as Cookie
 from common.schemas.common import ApiResponse
 
@@ -21,10 +22,16 @@ from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 router = APIRouter(prefix="/cookie-refresh", tags=["Cookie刷新管理"])
 
 
+def _is_admin(user: User) -> bool:
+    """判断用户是否为管理员。"""
+    return user.role == UserRole.ADMIN
+
+
 @router.get("/cooldown/{account_id}")
 async def get_refresh_cooldown(
     account_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ) -> ApiResponse:
     """
     查询账号的刷新冷却状态
@@ -47,6 +54,14 @@ async def get_refresh_cooldown(
             return ApiResponse(
                 success=False,
                 message="账号不存在",
+                data=None
+            )
+
+        # 账号归属校验：非管理员只能查看自己名下账号
+        if not _is_admin(current_user) and cookie.owner_id != current_user.id:
+            return ApiResponse(
+                success=False,
+                message="无权查看该账号",
                 data=None
             )
         
@@ -95,7 +110,8 @@ async def get_refresh_cooldown(
 async def reset_refresh_cooldown(
     account_id: int,
     cooldown_type: str,  # "password_login" 或 "account_error"
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ) -> ApiResponse:
     """
     重置账号的刷新冷却时间
@@ -119,6 +135,14 @@ async def reset_refresh_cooldown(
             return ApiResponse(
                 success=False,
                 message="账号不存在",
+                data=None
+            )
+
+        # 账号归属校验：非管理员只能重置自己名下账号的冷却
+        if not _is_admin(current_user) and cookie.owner_id != current_user.id:
+            return ApiResponse(
+                success=False,
+                message="无权操作该账号",
                 data=None
             )
         
@@ -159,7 +183,8 @@ async def reset_refresh_cooldown(
 @router.post("/trigger/{account_id}")
 async def trigger_manual_refresh(
     account_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ) -> ApiResponse:
     """
     手动触发账号的 Cookie 刷新
@@ -184,6 +209,14 @@ async def trigger_manual_refresh(
             return ApiResponse(
                 success=False,
                 message="账号不存在",
+                data=None
+            )
+
+        # 账号归属校验：非管理员只能触发自己名下账号的刷新
+        if not _is_admin(current_user) and cookie.owner_id != current_user.id:
+            return ApiResponse(
+                success=False,
+                message="无权操作该账号",
                 data=None
             )
         

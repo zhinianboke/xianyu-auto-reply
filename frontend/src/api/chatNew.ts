@@ -298,8 +298,11 @@ function getChatNewWsBaseUrl(): string {
  * 创建在线聊天(新) WebSocket 连接
  *
  * 连接后会实时接收 IM 推送的新消息
+ * 通过查询参数携带登录令牌进行鉴权（浏览器 WebSocket 无法设置请求头）
  */
 export function createChatNewWebSocket(accountId: string): WebSocket {
   const wsBase = getChatNewWsBaseUrl()
-  return new WebSocket(`${wsBase}/api/v1/chat-new/ws/${accountId}`)
+  const token = localStorage.getItem('auth_token') || ''
+  const url = `${wsBase}/api/v1/chat-new/ws/${encodeURIComponent(accountId)}?token=${encodeURIComponent(token)}`
+  return new WebSocket(url)
 }

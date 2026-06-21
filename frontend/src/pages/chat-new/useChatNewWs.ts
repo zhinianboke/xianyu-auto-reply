@@ -90,7 +90,7 @@ export function useChatNewWs({ accountIds, onNewMessage, onDisconnect }: UseChat
 
     ws.onerror = () => {}
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (conn.heartbeat) {
         clearInterval(conn.heartbeat)
         conn.heartbeat = null
@@ -98,7 +98,14 @@ export function useChatNewWs({ accountIds, onNewMessage, onDisconnect }: UseChat
       if (!conn.closed && onDisconnectRef.current) {
         onDisconnectRef.current(aid)
       }
-      // 自动重连（除非主动关闭）
+      // 鉴权失败（4401 未认证 / 4403 无权限）为终止性关闭，不再重连，避免请求风暴
+      const isAuthFailure = event.code === 4401 || event.code === 4403
+      if (isAuthFailure) {
+        conn.closed = true
+        connectionsRef.current.delete(aid)
+        return
+      }
+      // 其他原因断开则自动重连（除非主动关闭）
       if (!conn.closed) {
         conn.reconnect = setTimeout(() => {
           if (!conn.closed) connectAccount(aid)

@@ -41,7 +41,6 @@ from . import (
     geetest,
     goofish_compass,
     goofish_crawler,
-    goofish_tasks,
     health,
     items,
     keywords,
@@ -159,7 +158,6 @@ api_router.include_router(data_analysis.router, tags=["数据分析"])  # 已定
 # Goofish相关
 api_router.include_router(goofish_compass.router, tags=["Goofish数据罗盘"])  # 已定义prefix="/compass/goofish"
 api_router.include_router(goofish_crawler.router, tags=["Goofish定时采集"])  # 已定义prefix="/goofish/crawler"
-api_router.include_router(goofish_tasks.router, tags=["Goofish采集任务"])  # 已定义prefix="/goofish/tasks"
 
 # 黑名单管理
 api_router.include_router(blacklist.router, tags=["黑名单管理"])  # 已定义prefix="/blacklist"

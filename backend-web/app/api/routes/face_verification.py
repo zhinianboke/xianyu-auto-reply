@@ -14,7 +14,8 @@ from typing import List, Optional
 from pathlib import Path
 import os
 
-from app.api.deps import get_db_session as get_db
+from app.api.deps import get_db_session as get_db, get_current_active_user
+from common.models import User, UserRole
 from common.models.message_notification import MessageNotification as Notification
 from common.models.xy_account import XYAccount as Cookie
 from common.schemas.common import ApiResponse
@@ -24,6 +25,11 @@ from common.utils.time_utils import safe_isoformat
 router = APIRouter(prefix="/face-verification", tags=["人脸验证管理"])
 
 
+def _is_admin(user: User) -> bool:
+    """判断用户是否为管理员。"""
+    return user.role == UserRole.ADMIN
+
+
 @router.get("/notifications")
 async def get_face_verification_notifications(
     page: int = Query(1, ge=1, description="页码"),
@@ -31,7 +37,8 @@ async def get_face_verification_notifications(
     account_id: Optional[int] = Query(None, description="账号ID筛选"),
     start_date: Optional[str] = Query(None, description="开始日期 YYYY-MM-DD"),
     end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ) -> ApiResponse:
     """
     查询人脸验证通知列表
@@ -52,7 +59,27 @@ async def get_face_verification_notifications(
         conditions = [
             Notification.type == "face_verification"
         ]
-        
+
+        # 非管理员仅能查看自己名下账号的人脸验证通知
+        if not _is_admin(current_user):
+            owned_result = await db.execute(
+                select(Cookie.id).where(Cookie.owner_id == current_user.id)
+            )
+            owned_account_ids = [row[0] for row in owned_result.all()]
+            if not owned_account_ids:
+                return ApiResponse(
+                    success=True,
+                    message="查询成功",
+                    data={
+                        "list": [],
+                        "total": 0,
+                        "page": page,
+                        "page_size": page_size,
+                        "total_pages": 0
+                    }
+                )
+            conditions.append(Notification.cookie_id.in_(owned_account_ids))
+
         if account_id:
             conditions.append(Notification.cookie_id == account_id)
         
@@ -145,7 +172,8 @@ async def get_face_verification_notifications(
 async def get_account_face_verification(
     account_id: int,
     limit: int = Query(10, ge=1, le=100, description="返回数量限制"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ) -> ApiResponse:
     """
     查询特定账号的人脸验证通知
@@ -169,6 +197,14 @@ async def get_account_face_verification(
             return ApiResponse(
                 success=False,
                 message="账号不存在",
+                data=None
+            )
+
+        # 账号归属校验：非管理员只能查看自己名下账号
+        if not _is_admin(current_user) and account.owner_id != current_user.id:
+            return ApiResponse(
+                success=False,
+                message="无权查看该账号",
                 data=None
             )
         
@@ -223,7 +259,8 @@ async def get_account_face_verification(
 @router.post("/notifications/{notification_id}/read")
 async def mark_notification_as_read(
     notification_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ) -> ApiResponse:
     """
     标记通知为已读
@@ -248,6 +285,19 @@ async def mark_notification_as_read(
                 message="通知不存在",
                 data=None
             )
+
+        # 归属校验：非管理员只能操作自己名下账号的通知
+        if not _is_admin(current_user):
+            account_result = await db.execute(
+                select(Cookie).where(Cookie.id == notification.cookie_id)
+            )
+            account = account_result.scalar_one_or_none()
+            if not account or account.owner_id != current_user.id:
+                return ApiResponse(
+                    success=False,
+                    message="无权操作该通知",
+                    data=None
+                )
         
         # 标记为已读
         notification.is_read = True
@@ -274,7 +324,8 @@ async def mark_notification_as_read(
 @router.get("/screenshot/{account_id}")
 async def get_face_verification_screenshot(
     account_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ) -> ApiResponse:
     """
     获取账号的人脸验证截图
@@ -297,6 +348,14 @@ async def get_face_verification_screenshot(
             return ApiResponse(
                 success=False,
                 message="账号不存在",
+                data=None
+            )
+
+        # 账号归属校验：非管理员只能读取自己名下账号的截图（含人脸隐私）
+        if not _is_admin(current_user) and account.owner_id != current_user.id:
+            return ApiResponse(
+                success=False,
+                message="无权查看该账号截图",
                 data=None
             )
         
@@ -356,7 +415,8 @@ async def get_face_verification_screenshot(
 @router.delete("/screenshot/{account_id}")
 async def delete_face_verification_screenshot(
     account_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ) -> ApiResponse:
     """
     删除账号的人脸验证截图
@@ -379,6 +439,14 @@ async def delete_face_verification_screenshot(
             return ApiResponse(
                 success=False,
                 message="账号不存在",
+                data=None
+            )
+
+        # 账号归属校验：非管理员只能删除自己名下账号的截图
+        if not _is_admin(current_user) and account.owner_id != current_user.id:
+            return ApiResponse(
+                success=False,
+                message="无权删除该账号截图",
                 data=None
             )
         

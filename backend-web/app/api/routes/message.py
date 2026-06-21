@@ -76,14 +76,6 @@ async def send_message(request: SendMessageRequest):
                 message="API秘钥不能为空"
             )
         
-        # 特殊测试秘钥
-        if cleaned_api_key == "zhinina_test_key":
-            logger.info("使用测试秘钥，直接返回成功")
-            return SendMessageResponse(
-                success=True,
-                message="接口验证成功"
-            )
-        
         # 验证秘钥
         if not verify_api_key(cleaned_api_key):
             logger.warning(f"API秘钥验证失败: {cleaned_api_key}")

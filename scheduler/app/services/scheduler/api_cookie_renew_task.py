@@ -15,9 +15,10 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass, field
+from datetime import timedelta
 
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import delete as sql_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -53,6 +54,9 @@ class ApiCookieRenewResult:
 class ApiCookieRenewTaskService:
     """接口续期Cookies定时任务服务。"""
 
+    # 接口续期日志保留天数，超过该天数的日志在每次任务执行时主动清理
+    LOG_RETENTION_DAYS = 10
+
     def __init__(self):
         self.task_name = "接口续期Cookies"
 
@@ -70,6 +74,9 @@ class ApiCookieRenewTaskService:
 
         try:
             async with async_session_maker() as session:
+                # 主动清理过期的接口续期日志（10天前）
+                await self._cleanup_expired_logs(session)
+
                 accounts = await self._get_eligible_accounts(session)
                 if not accounts:
                     logger.info(f"【{self.task_name}】未找到可处理的账号")
@@ -136,6 +143,31 @@ class ApiCookieRenewTaskService:
         except Exception as exc:
             logger.error(f"【{self.task_name}】执行失败: {exc}")
             raise
+
+    async def _cleanup_expired_logs(self, session: AsyncSession) -> None:
+        """
+        主动清理过期的接口续期日志
+
+        删除 created_at 早于 (当前北京时间 - LOG_RETENTION_DAYS 天) 的日志记录，
+        避免日志表无限增长。使用参数化的 ORM delete 语句，避免 SQL 注入。
+        """
+        try:
+            cutoff_time = get_beijing_now_naive() - timedelta(days=self.LOG_RETENTION_DAYS)
+            stmt = sql_delete(ScheduledApiCookieRenewLog).where(
+                ScheduledApiCookieRenewLog.created_at < cutoff_time
+            )
+            result = await session.execute(stmt)
+            await session.commit()
+
+            deleted_count = result.rowcount or 0
+            if deleted_count > 0:
+                logger.info(
+                    f"【{self.task_name}】已清理 {deleted_count} 条 {self.LOG_RETENTION_DAYS} 天前的接口续期日志"
+                    f"（清理时间界限: {cutoff_time}）"
+                )
+        except Exception as e:
+            logger.error(f"【{self.task_name}】清理过期日志失败: {e}")
+            await session.rollback()
 
     async def _get_eligible_accounts(self, session: AsyncSession) -> list[XYAccount]:
         """获取所有启用状态的账号（仅处理 active 账号）。"""
