@@ -694,6 +694,44 @@ async def update_item_multi_quantity_delivery(
     return ApiResponse(success=True, message=f"商品多数量发货状态已{status_text}")
 
 
+class ItemDeleteRequest(PydanticBaseModel):
+    """统一删除商品请求（账号可选）
+
+    - cookie_id 传入：按账号删除（校验归属）；
+    - cookie_id 不传：商品所属账号仍存在则要求指定账号，账号已删除（孤儿商品）则直接按商品ID删除。
+    """
+    item_id: str
+    cookie_id: str | None = None
+
+
+@items_router.delete("/delete", response_model=ApiResponse)
+async def delete_item_unified(
+    payload: ItemDeleteRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+    item_service: ItemService = Depends(deps.get_item_service),
+) -> ApiResponse:
+    """删除商品（统一入口，账号可选，兼容账号已删除的孤儿商品）
+
+    - 传入 cookie_id：校验账号归属后按账号删除；账号不存在直接报错。
+    - 未传 cookie_id：若商品所属账号仍存在则要求指定账号；账号已删除（孤儿商品）则按商品ID删除。
+    """
+    owner_id, _ = resolve_owner_scope(current_user)
+
+    account = None
+    if payload.cookie_id:
+        account = await account_service.get_account_for_user(owner_id, payload.cookie_id)
+        if not account:
+            return ApiResponse(success=False, message="账号不存在")
+
+    result = await item_service.delete_item_smart(owner_id, payload.item_id, account)
+    if result == "ok":
+        return ApiResponse(success=True, message="商品已删除")
+    if result == "account_required":
+        return ApiResponse(success=False, message="该商品所属账号仍存在，请指定账号后再删除")
+    return ApiResponse(success=False, message="商品不存在")
+
+
 @items_router.delete("/{cookie_id}/{item_id}", response_model=ApiResponse)
 async def delete_item(
     cookie_id: str,

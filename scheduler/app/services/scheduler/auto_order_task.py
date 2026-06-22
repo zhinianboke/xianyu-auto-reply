@@ -31,11 +31,13 @@ from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_task import ListingMonitorTask
 from common.models.xy_account import XYAccount
 from common.services.listing_monitor_dedup import has_owner_ordered_item
-from common.services.order_fallback_account_service import OrderFallbackAccountService
+from common.services.order_account_loader import (
+    load_fallback_accounts,
+    load_xy_accounts_by_ids,
+)
 from common.services.xianyu_order_client import XianyuOrderClient
 from common.utils.time_utils import get_beijing_now_naive
 
-_INACTIVE_STATUSES = {"inactive", "disabled", "suspended", "deleted"}
 # 单次任务最多扫描的待下单商品数（全局安全上限；每个监控任务实际处理条数由任务自身的 order_batch_size 控制）
 _MAX_ITEMS_SCAN_PER_RUN = 500
 # 下单失败最大重试次数（达到后不再重试）
@@ -318,33 +320,8 @@ class AutoOrderTaskService:
                     f"【{self.task_name}】监控任务「{task_name}」未配置下单账号(order_account_ids 为空)"
                 )
                 return {}, [], batch_size, task_name, "未配置下单账号(order_account_ids 为空)"
-            rows = list(
-                (
-                    await session.execute(
-                        select(XYAccount).where(XYAccount.account_id.in_(account_ids))
-                    )
-                ).scalars().all()
-            )
+            accounts_map, detail = await load_xy_accounts_by_ids(session, account_ids)
 
-        accounts_map: Dict[str, XYAccount] = {}
-        found_ids: set[str] = set()
-        skip_reasons: List[str] = []
-        for row in rows:
-            found_ids.add(row.account_id)
-            if not row.cookie:
-                skip_reasons.append(f"账号{row.account_id} 未登录(Cookie为空)")
-                continue
-            status = (row.status or "active").strip().lower()
-            if status in _INACTIVE_STATUSES:
-                skip_reasons.append(f"账号{row.account_id} 已停用(状态={status})")
-                continue
-            accounts_map[row.account_id] = row
-        # 配置了但数据库查不到的账号
-        for aid in account_ids:
-            if aid not in found_ids:
-                skip_reasons.append(f"账号{aid} 不存在(已被删除)")
-
-        detail = "；".join(skip_reasons)
         logger.info(
             f"【{self.task_name}】监控任务「{task_name}」下单账号加载完成："
             f"配置{len(account_ids)}个，可用{len(accounts_map)}个"
@@ -362,49 +339,15 @@ class AutoOrderTaskService:
 
         Returns: ({account_id: XYAccount 仅可用账号}, 不可用/未配置原因明细)
         """
-        try:
-            async with async_session_maker() as session:
-                svc = OrderFallbackAccountService(session)
-                # 优先用商品所属用户的兜底；未配置则回退到管理员配置的全局兜底
-                account_ids = await svc.get_effective_fallback_account_ids(owner_id)
-                if not account_ids:
-                    return {}, "未配置兜底下单账号"
-                rows = list(
-                    (
-                        await session.execute(
-                            select(XYAccount).where(XYAccount.account_id.in_(account_ids))
-                        )
-                    ).scalars().all()
-                )
-        except Exception as exc:  # noqa: BLE001
-            # 兜底配置表尚未就绪或数据库异常时降级为"无兜底"，避免中断整轮下单任务
-            logger.warning(f"【{self.task_name}】加载用户{owner_id}兜底下单账号失败，本次按无兜底处理：{exc}")
-            return {}, "兜底下单账号加载失败"
-
-        accounts_map: Dict[str, XYAccount] = {}
-        found_ids: set[str] = set()
-        skip_reasons: List[str] = []
-        for row in rows:
-            found_ids.add(row.account_id)
-            if not row.cookie:
-                skip_reasons.append(f"账号{row.account_id} 未登录(Cookie为空)")
-                continue
-            status = (row.status or "active").strip().lower()
-            if status in _INACTIVE_STATUSES:
-                skip_reasons.append(f"账号{row.account_id} 已停用(状态={status})")
-                continue
-            accounts_map[row.account_id] = row
-        for aid in account_ids:
-            if aid not in found_ids:
-                skip_reasons.append(f"账号{aid} 不存在(已被删除)")
-
-        detail = "；".join(skip_reasons) if skip_reasons else ""
+        accounts_map, detail = await load_fallback_accounts(owner_id, log_prefix=self.task_name)
         logger.info(
             f"【{self.task_name}】用户{owner_id}兜底下单账号加载完成："
-            f"配置{len(account_ids)}个，可用{len(accounts_map)}个"
-            f"{('，不可用：' + detail) if detail else ''}"
+            f"可用{len(accounts_map)}个"
+            f"{('，明细：' + detail) if detail else ''}"
         )
-        return accounts_map, (detail or "兜底账号全部不可用")
+        if not accounts_map and not detail:
+            detail = "兜底账号全部不可用"
+        return accounts_map, detail
 
     def _build_candidates(
         self,

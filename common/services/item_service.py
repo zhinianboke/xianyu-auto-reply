@@ -795,6 +795,62 @@ class ItemService:
         await self.session.commit()
         return True
 
+    async def delete_item_smart(
+        self, owner_id: int | None, item_id: str, account: XYAccount | None = None
+    ) -> str:
+        """统一删除商品，兼容账号已被删除的孤儿商品。
+
+        删除规则（与前端约定一致）：
+        - 传入 account（调用方已校验账号归属）：按 (owner_id, account.id, item_id) 精确删除；
+        - 未传 account：在 owner 范围内按 item_id 定位商品，
+            * 若其所属账号仍存在 → 返回 'account_required'，要求调用方指定账号后再删；
+            * 若所属账号已不存在（孤儿商品）→ 直接按 item_id 删除并清理卡券关联。
+
+        Args:
+            owner_id: 用户ID（管理员场景可为 None，表示不限制归属）
+            item_id: 商品ID
+            account: 已校验的账号对象（可选）
+
+        Returns:
+            'ok'：删除成功；'not_found'：商品不存在；'account_required'：商品所属账号仍存在，需指定账号
+        """
+        # CardMatcher 采用局部导入，避免与 card_matcher 模块产生循环依赖（与 delete_item 保持一致）
+        from common.services.card_matcher import CardMatcher
+
+        # 情况一：调用方已指定并校验账号 → 复用原有按账号删除逻辑
+        if account is not None:
+            ok = await self.delete_item(account, item_id)
+            return "ok" if ok else "not_found"
+
+        # 情况二：未指定账号 → 按 owner + item_id 定位商品记录
+        stmt = select(XYCatalogItem).where(XYCatalogItem.item_id == item_id)
+        if owner_id is not None:
+            stmt = stmt.where(XYCatalogItem.owner_id == owner_id)
+        items = (await self.session.execute(stmt)).scalars().all()
+        if not items:
+            return "not_found"
+
+        # 校验这些商品所属账号是否仍然存在
+        account_pks = {it.account_pk for it in items}
+        existing_rows = await self.session.execute(
+            select(XYAccount.id).where(XYAccount.id.in_(account_pks))
+        )
+        existing_pks = {row[0] for row in existing_rows.all()}
+        if existing_pks:
+            # 商品所属账号仍存在 → 不允许脱离账号删除，要求指定账号
+            return "account_required"
+
+        # 全部为孤儿商品（账号已删除）→ 按 item_id 删除，并清理卡券关联
+        matcher = CardMatcher(self.session)
+        rel_count = await matcher.delete_relations_by_item_id(item_id)
+        if rel_count > 0:
+            logger.info(f"删除孤儿商品 {item_id} 的 {rel_count} 条卡券关联记录")
+        for it in items:
+            await self.session.delete(it)
+        await self.session.commit()
+        logger.info(f"已删除孤儿商品 {item_id}（所属账号已不存在），共 {len(items)} 条记录")
+        return "ok"
+
     async def delete_many(self, account: XYAccount, item_ids: list[str]) -> int:
         deleted = 0
         for item_id in item_ids:
