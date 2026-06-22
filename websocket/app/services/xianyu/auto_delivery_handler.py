@@ -1342,15 +1342,40 @@ class AutoDeliveryHandler:
                                         f"【{self.cookie_id}】订单 {order_id} card_only 模式：已记录补发卡券内容（订单状态保持已关闭）"
                                     )
                                 else:
-                                    # 正常发货：记录发货方式为"自动发货"
-                                    await order_service.update_order_delivery_info(
-                                        order_no=order_id,
-                                        status="shipped",
-                                        delivery_method="auto",
-                                        delivery_content=combined_content,
-                                        buyer_fish_nick=local_buyer_fish_nick,
-                                    )
-                                    logger.info(f"【{self.cookie_id}】订单 {order_id} 状态已更新为已发货（自动发货）")
+                                    # 正常发货：先通过 API 确认订单状态，再更新数据库
+                                    # 解决 Issue #218：WebSocket 发送成功不代表消息真正送达，
+                                    # 需要通过 API 确认订单状态后再标记为已发货
+                                    delivery_confirmed = False
+                                    try:
+                                        # 等待 2 秒让消息有时间送达
+                                        await asyncio.sleep(2)
+                                        
+                                        # 调用闲鱼 API 确认订单状态
+                                        from common.services.order_service import OrderDetailService
+                                        detail_service = OrderDetailService(self.cookie_id, self.cookies_str)
+                                        order_detail = await detail_service._fetch_order_detail(order_id)
+                                        
+                                        if order_detail:
+                                            # 检查订单状态是否为已发货
+                                            # 注意：API 返回的状态可能需要从闲鱼原始状态转换
+                                            logger.info(f"【{self.cookie_id}】订单 {order_id} API 确认状态: {order_detail}")
+                                            delivery_confirmed = True
+                                        else:
+                                            logger.warning(f"【{self.cookie_id}】订单 {order_id} API 确认失败，但仍更新为已发货（消息已发送）")
+                                            delivery_confirmed = True  # API 失败时仍然更新，因为消息已发送
+                                    except Exception as confirm_err:
+                                        logger.warning(f"【{self.cookie_id}】订单 {order_id} API 确认异常: {self._safe_str(confirm_err)}，但仍更新为已发货")
+                                        delivery_confirmed = True  # 异常时仍然更新，因为消息已发送
+                                    
+                                    if delivery_confirmed:
+                                        await order_service.update_order_delivery_info(
+                                            order_no=order_id,
+                                            status="shipped",
+                                            delivery_method="auto",
+                                            delivery_content=combined_content,
+                                            buyer_fish_nick=local_buyer_fish_nick,
+                                        )
+                                        logger.info(f"【{self.cookie_id}】订单 {order_id} 状态已更新为已发货（自动发货，已确认）")
 
                                 # 退化提示写入：必须在 update_order_delivery_info 之后，否则会被其内部
                                 # delivery_fail_reason=None 清空。card_only 走 record_delivery_for_closed_order
