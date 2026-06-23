@@ -145,16 +145,27 @@ async def call_reply_api(
     message: str,
     api_url: str,
     timeout: Optional[int] = DEFAULT_API_TIMEOUT,
+    chat_id: Optional[str] = None,
+    item_id: Optional[str] = None,
+    send_user_id: Optional[str] = None,
+    send_user_name: Optional[str] = None,
+    msg_time: Optional[str] = None,
 ) -> Optional[str]:
     """调用外部 API 获取默认回复内容。
 
-    POST 请求体: ``{"account_id": "...", "message": "..."}``
+    默认 POST 请求体: ``{"account_id": "...", "message": "..."}``
+    如果传入上下文字段，则额外透传，便于外部系统按会话、商品和买家管理状态。
 
     Args:
         account_id: 闲鱼账号标识
         message: 买家发来的消息内容
         api_url: 外部 API 地址
         timeout: 请求超时时间（秒）
+        chat_id: 会话ID
+        item_id: 商品ID
+        send_user_id: 买家ID
+        send_user_name: 买家昵称
+        msg_time: 消息时间
 
     Returns:
         外部 API 返回的回复文本；失败/超时/无内容时返回 None
@@ -166,6 +177,14 @@ async def call_reply_api(
 
     timeout_seconds = normalize_api_timeout(timeout)
     payload = {"account_id": account_id, "message": message}
+    context_payload = {
+        "chat_id": chat_id,
+        "item_id": item_id,
+        "send_user_id": send_user_id,
+        "send_user_name": send_user_name,
+        "msg_time": msg_time,
+    }
+    payload.update({key: value for key, value in context_payload.items() if value is not None})
 
     try:
         client_timeout = aiohttp.ClientTimeout(total=timeout_seconds)
