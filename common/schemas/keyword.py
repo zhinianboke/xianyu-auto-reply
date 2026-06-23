@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class KeywordDetail(BaseModel):
+    id: str | None = None
     keyword: str
     reply: str
     item_id: str | None = Field(default=None)

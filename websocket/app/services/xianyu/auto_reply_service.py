@@ -1159,21 +1159,23 @@ class AutoReplyService:
             if item_id:
                 for kw in keywords:
                     keyword = kw.get("keyword", "")
+                    keyword_lines = [line.strip() for line in keyword.splitlines() if line.strip()]
                     reply = kw.get("reply", "")
                     kw_item_id = kw.get("item_id", "")
                     kw_type = kw.get("type", "text")
                     image_url = kw.get("image_url", "")
+                    matched_keyword = next((line for line in keyword_lines if line.lower() in msg_lower), "")
                     
-                    if kw_item_id == item_id and keyword.lower() in msg_lower:
-                        logger.info(f"商品ID关键词匹配成功: 商品{item_id} '{keyword}' (类型: {kw_type})")
+                    if kw_item_id == item_id and matched_keyword:
+                        logger.info(f"商品ID关键词匹配成功: 商品{item_id} '{matched_keyword}' (类型: {kw_type})")
                         if reply_trace is not None:
                             reply_trace["reply_strategy"] = "keyword"
-                            reply_trace["matched_keyword"] = keyword
+                            reply_trace["matched_keyword"] = matched_keyword
                             reply_trace["matched_rule_type"] = "keyword_item"
                             reply_trace.setdefault("context_snapshot", {})["matched_item_title"] = kw.get("item_title") or None
                         
                         if kw_type == "image" and image_url:
-                            image_reply = await self._handle_image_keyword(keyword, image_url)
+                            image_reply = await self._handle_image_keyword(matched_keyword, image_url)
                             if reply_trace is not None:
                                 if image_reply.startswith("__IMAGE_SEND__"):
                                     reply_trace["reply_mode"] = "image"
@@ -1186,7 +1188,7 @@ class AutoReplyService:
                             return image_reply
                         
                         if not reply or not reply.strip():
-                            logger.info(f"商品ID关键词 '{keyword}' 回复内容为空,不进行回复")
+                            logger.info(f"商品ID关键词 '{matched_keyword}' 回复内容为空,不进行回复")
                             return "EMPTY_REPLY"
                         
                         try:
@@ -1213,20 +1215,22 @@ class AutoReplyService:
             
             for kw in keywords:
                 keyword = kw.get("keyword", "")
+                keyword_lines = [line.strip() for line in keyword.splitlines() if line.strip()]
                 reply = kw.get("reply", "")
                 kw_item_id = kw.get("item_id", "")
                 kw_type = kw.get("type", "text")
                 image_url = kw.get("image_url", "")
+                matched_keyword = next((line for line in keyword_lines if line.lower() in msg_lower), "")
 
-                if not kw_item_id and keyword.lower() in msg_lower:
-                    logger.info(f"通用关键词匹配成功: '{keyword}' (类型: {kw_type})")
+                if not kw_item_id and matched_keyword:
+                    logger.info(f"通用关键词匹配成功: '{matched_keyword}' (类型: {kw_type})")
                     if reply_trace is not None:
                         reply_trace["reply_strategy"] = "keyword"
-                        reply_trace["matched_keyword"] = keyword
+                        reply_trace["matched_keyword"] = matched_keyword
                         reply_trace["matched_rule_type"] = "keyword_common"
 
                     if kw_type == "image" and image_url:
-                        image_reply = await self._handle_image_keyword(keyword, image_url)
+                        image_reply = await self._handle_image_keyword(matched_keyword, image_url)
                         if reply_trace is not None:
                             if image_reply.startswith("__IMAGE_SEND__"):
                                 reply_trace["reply_mode"] = "image"
@@ -1239,7 +1243,7 @@ class AutoReplyService:
                         return image_reply
 
                     if not reply or not reply.strip():
-                        logger.info(f"通用关键词 '{keyword}' 回复内容为空,不进行回复")
+                        logger.info(f"通用关键词 '{matched_keyword}' 回复内容为空,不进行回复")
                         return "EMPTY_REPLY"
 
                     try:
