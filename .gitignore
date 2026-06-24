@@ -106,6 +106,7 @@ dmypy.json
 .claude/
 CLAUDE.md
 .windsurf/
+.cursor/
 
 # ------------------------------------------
 # 操作系统

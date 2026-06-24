@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from app.services.scheduler.listing_monitor_task import listing_monitor_task_service
 from app.services.scheduler_service import get_scheduler_service
+from common.services.account_cooldown import account_cooldown_manager
 from common.utils.time_utils import get_beijing_now_naive
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -23,6 +24,11 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 class LogRetentionRequest(BaseModel):
     """日志保留天数刷新请求"""
     retention_days: int
+
+
+class AccountCooldownClearRequest(BaseModel):
+    """解除账号风控冷却请求"""
+    account_id: str
 
 
 @router.post("/logs/retention")
@@ -151,6 +157,38 @@ async def trigger_task(task_code: str):
             "success": False,
             "code": 500,
             "message": f"触发任务执行失败: {str(e)}",
+            "data": None,
+        }
+
+
+@router.post("/account-cooldown/clear")
+async def clear_account_cooldown(request: AccountCooldownClearRequest):
+    """解除指定账号的风控冷却（如外部回传新 Cookie 后立即恢复该账号可用）。
+
+    冷却态仅存在于 scheduler 进程内存中，故由 backend-web 通过本内部接口跨进程触发解除。
+    """
+    try:
+        account_id = (request.account_id or "").strip()
+        if not account_id:
+            return {
+                "success": False,
+                "code": 400,
+                "message": "account_id 不能为空",
+                "data": None,
+            }
+        cleared = account_cooldown_manager.clear(account_id)
+        return {
+            "success": True,
+            "code": 200,
+            "message": "账号风控冷却已解除" if cleared else "该账号当前不在冷却期，无需解除",
+            "data": {"account_id": account_id, "cleared": cleared},
+        }
+    except Exception as e:
+        logger.error(f"[内部API] 解除账号风控冷却失败: {e}")
+        return {
+            "success": False,
+            "code": 500,
+            "message": f"解除账号风控冷却失败: {str(e)}",
             "data": None,
         }
 

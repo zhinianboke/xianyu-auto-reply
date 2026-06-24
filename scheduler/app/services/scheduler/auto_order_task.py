@@ -82,12 +82,14 @@ class AutoOrderTaskService:
             task_name_cache: Dict[int, str] = {}
             # 监控任务ID -> 不可用账号精确明细（缓存）
             task_detail_cache: Dict[int, str] = {}
-            # 用户ID -> 兜底下单账号字典 {account_id: XYAccount}（缓存，仅含可用账号）
-            fallback_accounts_cache: Dict[Optional[int], Dict[str, XYAccount]] = {}
-            # 用户ID -> 兜底账号不可用明细（缓存）
-            fallback_detail_cache: Dict[Optional[int], str] = {}
-            # 用户ID -> 兜底账号轮换指针
-            fallback_rr: Dict[Optional[int], int] = {}
+            # 监控任务ID -> 所属分类ID（缓存，用于按分类取兜底）
+            task_category_cache: Dict[int, Optional[int]] = {}
+            # (用户ID,分类ID) -> 兜底下单账号字典 {account_id: XYAccount}（缓存，仅含可用账号）
+            fallback_accounts_cache: Dict[tuple, Dict[str, XYAccount]] = {}
+            # (用户ID,分类ID) -> 兜底账号不可用明细（缓存）
+            fallback_detail_cache: Dict[tuple, str] = {}
+            # (用户ID,分类ID) -> 兜底账号轮换指针
+            fallback_rr: Dict[tuple, int] = {}
             # 监控任务ID -> 回退轮换指针
             task_rr: Dict[int, int] = {}
             # 监控任务ID -> 本次已实际下单处理条数（达到 order_batch_size 后该任务本次不再处理）
@@ -113,15 +115,18 @@ class AutoOrderTaskService:
                     continue
 
                 if task_id not in task_accounts_cache:
-                    accounts_map, order_list, batch_size, task_name, detail = await self._load_task_accounts(task_id)
+                    accounts_map, order_list, batch_size, task_name, detail, category_id = await self._load_task_accounts(task_id)
                     task_accounts_cache[task_id] = accounts_map
                     task_order_cache[task_id] = order_list
                     task_batch_cache[task_id] = batch_size
                     task_name_cache[task_id] = task_name
                     task_detail_cache[task_id] = detail
+                    task_category_cache[task_id] = category_id
                 accounts_map = task_accounts_cache[task_id]
                 order_list = task_order_cache[task_id]
                 batch_size = task_batch_cache.get(task_id, 5)
+                category_id = task_category_cache.get(task_id)
+                fb_key = (owner_id, category_id)
 
                 # 该任务本次已达每次最多下单条数：跳过
                 if task_done.get(task_id, 0) >= batch_size:
@@ -138,16 +143,16 @@ class AutoOrderTaskService:
 
                 # 追加用户级兜底下单账号作为后备：任务自身账号优先，兜底其次
                 # （任务账号在加载时可用但下单时失效的场景，也能继续用兜底账号兜住）
-                if owner_id not in fallback_accounts_cache:
-                    fb_map, fb_detail = await self._load_fallback_accounts(owner_id)
-                    fallback_accounts_cache[owner_id] = fb_map
-                    fallback_detail_cache[owner_id] = fb_detail
-                fb_accounts = fallback_accounts_cache[owner_id]
+                if fb_key not in fallback_accounts_cache:
+                    fb_map, fb_detail = await self._load_fallback_accounts(owner_id, category_id)
+                    fallback_accounts_cache[fb_key] = fb_map
+                    fallback_detail_cache[fb_key] = fb_detail
+                fb_accounts = fallback_accounts_cache[fb_key]
                 fb_usable = [a for a in fb_accounts.values() if a.account_id not in disabled_accounts]
                 if fb_usable:
                     # 轮换兜底账号起点，避免总是从同一个账号开始
-                    start = fallback_rr.get(owner_id, 0)
-                    fallback_rr[owner_id] = start + 1
+                    start = fallback_rr.get(fb_key, 0)
+                    fallback_rr[fb_key] = start + 1
                     n = len(fb_usable)
                     fb_usable = [fb_usable[(start + i) % n] for i in range(n)]
 
@@ -164,7 +169,7 @@ class AutoOrderTaskService:
                     skipped_no_account += 1
                     task_name = task_name_cache.get(task_id, f"id={task_id}")
                     task_reason = task_detail_cache.get(task_id) or "配置账号本次运行均失效（Token过期/需登录/风控）"
-                    fb_detail = fallback_detail_cache.get(owner_id, "未配置兜底下单账号")
+                    fb_detail = fallback_detail_cache.get(fb_key, "未配置兜底下单账号")
                     reason = f"任务下单账号不可用（{task_reason}）；兜底下单账号也不可用（{fb_detail}）"
                     # 落库：更新该商品下单失败原因（不累加尝试次数，账号恢复后下次自动重试）
                     await self._mark_no_account(pk, f"无可用下单账号：{reason}")
@@ -275,7 +280,7 @@ class AutoOrderTaskService:
         except Exception as exc:  # noqa: BLE001
             logger.error(f"【{self.task_name}】更新无可用账号状态失败 采集商品id={pk}：{exc}")
 
-    async def _load_task_accounts(self, task_id: int) -> Tuple[Dict[str, XYAccount], List[str], int, str, str]:
+    async def _load_task_accounts(self, task_id: int) -> Tuple[Dict[str, XYAccount], List[str], int, str, str, Optional[int]]:
         """加载监控任务配置的下单账号（过滤禁用/空Cookie/不存在的账号）。
 
         说明：不带启用/删除条件查询任务，以便停用、未配账号的任务也能取到关键字用于日志；
@@ -287,6 +292,7 @@ class AutoOrderTaskService:
             order_batch_size,
             任务名称(监控关键字),
             不可用原因明细(无则空串),
+            任务所属分类ID(NULL=无分类),
         )
         """
         async with async_session_maker() as session:
@@ -299,27 +305,28 @@ class AutoOrderTaskService:
                         ListingMonitorTask.is_enabled,
                         ListingMonitorTask.order_account_ids,
                         ListingMonitorTask.order_batch_size,
+                        ListingMonitorTask.category_id,
                     ).where(ListingMonitorTask.id == task_id)
                 )
             ).first()
             if not task:
                 logger.warning(f"【{self.task_name}】监控任务 id={task_id} 不存在（可能已被物理删除）")
-                return {}, [], 5, f"id={task_id}", "监控任务不存在"
-            keyword, is_deleted, is_enabled, order_account_ids_raw, order_batch_size = task
+                return {}, [], 5, f"id={task_id}", "监控任务不存在", None
+            keyword, is_deleted, is_enabled, order_account_ids_raw, order_batch_size, category_id = task
             task_name = keyword or f"id={task_id}"
             batch_size = order_batch_size if order_batch_size and order_batch_size > 0 else 5
             if is_deleted:
                 logger.warning(f"【{self.task_name}】监控任务「{task_name}」已删除，跳过下单")
-                return {}, [], batch_size, task_name, "监控任务已删除"
+                return {}, [], batch_size, task_name, "监控任务已删除", category_id
             if not is_enabled:
                 logger.warning(f"【{self.task_name}】监控任务「{task_name}」已停用，跳过下单")
-                return {}, [], batch_size, task_name, "监控任务已停用"
+                return {}, [], batch_size, task_name, "监控任务已停用", category_id
             account_ids = list(order_account_ids_raw or [])
             if not account_ids:
                 logger.warning(
                     f"【{self.task_name}】监控任务「{task_name}」未配置下单账号(order_account_ids 为空)"
                 )
-                return {}, [], batch_size, task_name, "未配置下单账号(order_account_ids 为空)"
+                return {}, [], batch_size, task_name, "未配置下单账号(order_account_ids 为空)", category_id
             accounts_map, detail = await load_xy_accounts_by_ids(session, account_ids)
 
         logger.info(
@@ -329,19 +336,23 @@ class AutoOrderTaskService:
             f"，每次最多下单{batch_size}条"
         )
         # 配置了账号但全部不可用，明细即为不可用原因
-        return accounts_map, account_ids, batch_size, task_name, detail
+        return accounts_map, account_ids, batch_size, task_name, detail, category_id
 
-    async def _load_fallback_accounts(self, owner_id: Optional[int]) -> Tuple[Dict[str, XYAccount], str]:
+    async def _load_fallback_accounts(
+        self, owner_id: Optional[int], category_id: Optional[int] = None
+    ) -> Tuple[Dict[str, XYAccount], str]:
         """加载生效的兜底下单账号（过滤禁用/空Cookie）。
 
-        当监控任务自身无可用下单账号时回退使用：优先商品所属用户配置的兜底账号，
-        该用户未配置（或商品无归属用户）时回退到管理员配置的全局兜底账号。
+        当监控任务自身无可用下单账号时回退使用，按 5 层链取：
+        本用户·本分类 → 本用户·无分类 → 管理员·本分类 → 管理员·无分类。
 
         Returns: ({account_id: XYAccount 仅可用账号}, 不可用/未配置原因明细)
         """
-        accounts_map, detail = await load_fallback_accounts(owner_id, log_prefix=self.task_name)
+        accounts_map, detail = await load_fallback_accounts(
+            owner_id, category_id, log_prefix=self.task_name
+        )
         logger.info(
-            f"【{self.task_name}】用户{owner_id}兜底下单账号加载完成："
+            f"【{self.task_name}】用户{owner_id}(分类{category_id})兜底下单账号加载完成："
             f"可用{len(accounts_map)}个"
             f"{('，明细：' + detail) if detail else ''}"
         )

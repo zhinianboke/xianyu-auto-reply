@@ -55,6 +55,17 @@ class AccountCooldownManager:
         with self._lock:
             self._cooldowns[str(account_id)] = time.time() + max(seconds, 0)
 
+    def clear(self, account_id: str) -> bool:
+        """解除账号冷却（如外部回传新 Cookie 后立即恢复该账号可用，无需等满冷却期）。
+
+        Returns:
+            True 表示该账号原本处于冷却期且已被解除；False 表示原本就不在冷却期。
+        """
+        if not account_id:
+            return False
+        with self._lock:
+            return self._cooldowns.pop(str(account_id), None) is not None
+
     def is_cooling(self, account_id: str) -> bool:
         """账号当前是否处于冷却期。"""
         with self._lock:

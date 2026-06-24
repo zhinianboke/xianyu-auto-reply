@@ -2,12 +2,13 @@
 采集商品发送私信定时任务
 
 功能：
-1. 查询采集商品表中"卖家真实ID已补全(seller_user_id 不为空) 且 未私信(is_dm_sent=0)"的数据
-2. 取该商品所属监控任务配置的下单账号列表(order_account_ids，私信与下单共用)与私信内容(dm_content)
-3. 在该任务的下单账号列表中轮换取账号发起私信：参照既有发起聊天逻辑，调用 WebSocket 服务的
+1. 查询采集商品表中"最近2天下单成功(order_status=success 且 ordered_at>=今日00:00前推2天) 且
+   卖家真实ID已补全(seller_user_id 不为空) 且 未私信(is_dm_sent=0)"的数据
+2. 取私信内容(dm_content)与候选账号——参照自动下单定时任务：任务下单账号(order_account_ids)
+   + 用户级兜底账号 + 管理员兜底账号（合并去重，任务账号在前、兜底在后）
+3. 在候选账号中轮换取账号发起私信：参照既有发起聊天逻辑，调用 WebSocket 服务的
    create-chat 创建/获取与卖家的会话，再调用 send-message 发送私信内容
-4. 发送成功后将该采集商品标记为已私信(is_dm_sent=1)，并记录成功私信使用的账号(dm_account_id)，
-   供后续自动下单优先使用该账号
+4. 发送成功后将该采集商品标记为已私信(is_dm_sent=1)，并记录成功私信使用的账号(dm_account_id)
 
 账号规则：
 - 账号不可用（离线/会话创建失败/Token过期等）：本次运行不再使用该账号，换下一个账号，不计私信尝试次数
@@ -15,6 +16,10 @@
 - 发送成功/超时未确认：标记已私信(终态)，记录 dm_account_id
 
 说明：
+- 仅在"下单成功之后"才发送私信：私信对象是已成功拍下该商品的卖家，故只处理 order_status=success 的数据
+  （失败/重复/无账号等非成功状态不发私信）。
+- "最近2天"按下单成功时间(ordered_at)计：处理最近2天下单成功的商品，提供48小时容错窗口，
+  避免定时任务短期故障导致私信永久遗漏。
 - 发起私信需要卖家真实用户ID作为收件人，因此处理的是 seller_user_id 已补全的数据
   （seller_user_id 为空无法私信，由"采集商品卖家ID补全"任务先补全）。
 - 私信账号需已启动且 WebSocket 在线，否则换号或下次任务再试。
@@ -22,7 +27,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -34,9 +39,12 @@ from common.db.session import async_session_maker
 from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_task import ListingMonitorTask
 from common.models.xy_account import XYAccount
+from common.services.order_account_loader import (
+    load_fallback_accounts,
+    load_xy_accounts_by_ids,
+)
 from common.utils.time_utils import get_beijing_now_naive
 
-_INACTIVE_STATUSES = {"inactive", "disabled", "suspended", "deleted"}
 # 单次任务最多扫描的待私信商品数（全局安全上限，避免一次性载入过多；
 # 每个监控任务实际处理条数由任务自身的 dm_batch_size 控制）
 _MAX_ITEMS_SCAN_PER_RUN = 500
@@ -91,14 +99,14 @@ class DmSendTaskService:
             no_account = 0
             failed = 0
 
-            for pk, item_id, seller_user_id, task_id in items:
+            for pk, item_id, seller_user_id, task_id, item_owner_id in items:
                 # 私信内容、账号、批量上限（按任务缓存）
                 if task_id not in task_content_cache:
                     (
                         task_content_cache[task_id],
                         task_accounts_cache[task_id],
                         task_batch_cache[task_id],
-                    ) = await self._get_task_dm_config(task_id)
+                    ) = await self._get_task_dm_config(task_id, item_owner_id)
                 dm_content = task_content_cache.get(task_id)
                 accounts = task_accounts_cache.get(task_id) or []
                 batch_size = task_batch_cache.get(task_id, 5)
@@ -151,11 +159,14 @@ class DmSendTaskService:
         except Exception as exc:  # noqa: BLE001
             logger.error(f"【{self.task_name}】执行异常: {exc}")
 
-    async def _get_items_to_send(self) -> List[Tuple[int, str, str, int]]:
-        """查询卖家真实ID已补全且未私信的采集商品。
+    async def _get_items_to_send(self) -> List[Tuple[int, str, str, int, Optional[int]]]:
+        """查询"最近 2 天下单成功 且 卖家真实ID已补全 且 未私信"的采集商品。
 
-        Returns: (主键id, item_id, seller_user_id, monitor_task_id) 列表
+        Returns: (主键id, item_id, seller_user_id, monitor_task_id, owner_id) 列表
         """
+        # 处理"下单成功时间"为最近 2 天（北京时间今天 00:00 前推 2 天）的采集商品，
+        # 提供 48 小时容错窗口，避免定时任务短期故障导致私信永久遗漏
+        cutoff_time = get_beijing_now_naive().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=2)
         async with async_session_maker() as session:
             stmt = (
                 select(
@@ -163,11 +174,15 @@ class DmSendTaskService:
                     ListingMonitorItem.item_id,
                     ListingMonitorItem.seller_user_id,
                     ListingMonitorItem.monitor_task_id,
+                    ListingMonitorItem.owner_id,
                 )
                 .where(
                     and_(
                         ListingMonitorItem.is_dm_sent.is_(False),
-                        ListingMonitorItem.is_ordered.is_(False),
+                        # 下单成功之后才发送私信（仅 success，排除失败/重复/无账号等非成功状态）
+                        ListingMonitorItem.order_status == "success",
+                        # 处理"下单成功时间"为最近 2 天的数据（ordered_at 仅在下单成功时写入北京时间）
+                        ListingMonitorItem.ordered_at >= cutoff_time,
                         ListingMonitorItem.dm_attempts < _MAX_DM_ATTEMPTS,
                         ListingMonitorItem.seller_user_id.isnot(None),
                         ListingMonitorItem.seller_user_id != "",
@@ -177,12 +192,18 @@ class DmSendTaskService:
                 .limit(_MAX_ITEMS_SCAN_PER_RUN)
             )
             rows = (await session.execute(stmt)).all()
-            return [(r[0], r[1], r[2], r[3]) for r in rows]
+            return [(r[0], r[1], r[2], r[3], r[4]) for r in rows]
 
-    async def _get_task_dm_config(self, task_id: int) -> Tuple[Optional[str], List[XYAccount], int]:
+    async def _get_task_dm_config(
+        self, task_id: int, owner_id: Optional[int]
+    ) -> Tuple[Optional[str], List[XYAccount], int]:
         """获取监控任务的私信内容、可用账号列表与每次最多处理条数（任务须未删除且启用）。
 
-        私信与下单共用 order_account_ids，按配置顺序返回、过滤禁用/空Cookie账号。
+        候选账号来源（与自动下单定时任务对齐）：
+        - 任务下单账号(order_account_ids)
+        - + 兜底下单账号（本用户·本分类→本用户·无分类→管理员·本分类→管理员·无分类）
+        按配置顺序合并去重、过滤未登录/已停用/不存在的账号。
+
         Returns: (dm_content, accounts, dm_batch_size)
         """
         async with async_session_maker() as session:
@@ -192,6 +213,7 @@ class DmSendTaskService:
                         ListingMonitorTask.dm_content,
                         ListingMonitorTask.order_account_ids,
                         ListingMonitorTask.dm_batch_size,
+                        ListingMonitorTask.category_id,
                     ).where(
                         ListingMonitorTask.id == task_id,
                         ListingMonitorTask.is_deleted.is_(False),
@@ -202,27 +224,34 @@ class DmSendTaskService:
             if not task:
                 return None, [], 5
             dm_content = task[0]
-            account_ids = list(task[1] or [])
+            task_account_ids = list(task[1] or [])
             batch_size = task[2] if task[2] and task[2] > 0 else 5
-            if not dm_content or not account_ids:
+            category_id = task[3]
+            if not dm_content:
                 return dm_content, [], batch_size
-            rows = list(
-                (
-                    await session.execute(
-                        select(XYAccount).where(XYAccount.account_id.in_(account_ids))
-                    )
-                ).scalars().all()
-            )
 
-        by_id = {row.account_id: row for row in rows}
+            # 加载任务账号（按配置顺序、过滤失效）
+            task_accounts_map: Dict[str, XYAccount] = {}
+            if task_account_ids:
+                task_accounts_map, _ = await load_xy_accounts_by_ids(session, task_account_ids)
+
+        # 加载兜底账号（按分类 5 层链）；独立 session 内完成
+        fallback_accounts_map, _ = await load_fallback_accounts(
+            owner_id, category_id, log_prefix=self.task_name
+        )
+
+        # 合并：任务账号在前、兜底在后；按 account_id 去重
         ordered: List[XYAccount] = []
-        for account_id in account_ids:
-            acc = by_id.get(account_id)
-            if not acc or not acc.cookie:
-                continue
-            if (acc.status or "active").strip().lower() in _INACTIVE_STATUSES:
-                continue
-            ordered.append(acc)
+        seen: set[str] = set()
+        for aid in task_account_ids:
+            acc = task_accounts_map.get(aid)
+            if acc and acc.account_id not in seen:
+                seen.add(acc.account_id)
+                ordered.append(acc)
+        for aid, acc in fallback_accounts_map.items():
+            if aid not in seen:
+                seen.add(aid)
+                ordered.append(acc)
         return dm_content, ordered, batch_size
 
     async def _send_for_item(

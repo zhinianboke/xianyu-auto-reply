@@ -1,10 +1,10 @@
 """
-用户级兜底下单账号配置服务（按分类）
+用户级兜底采集账号配置服务（按分类）
 
 功能：
-1. 按分类查询/新建/修改/删除当前用户的兜底下单账号配置
+1. 按分类查询/新建/修改/删除当前用户的兜底采集账号配置
    （每个用户每个分类一条；category_id=NULL 表示"无分类"全局兜底）
-2. 供定时下单/私信任务在监控任务无可用下单账号时，按 5 层链回退取兜底账号：
+2. 供采集/卖家补全任务在监控任务无可用采集账号时，按 5 层链回退取兜底账号：
    任务账号 → 本用户·本分类 → 本用户·无分类 → 管理员·本分类 → 管理员·无分类
 3. 统一封装数据库操作，避免 SQL 散落各处
 
@@ -20,15 +20,15 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from common.models.collect_fallback_account import CollectFallbackAccount
 from common.models.listing_monitor_category import ListingMonitorCategory
-from common.models.order_fallback_account import OrderFallbackAccount
 from common.models.user import User, UserRole
 from common.models.xy_account import XYAccount
 from common.utils.time_utils import safe_isoformat
 
 
-class OrderFallbackAccountService:
-    """兜底下单账号配置服务（按分类配置）。"""
+class CollectFallbackAccountService:
+    """兜底采集账号配置服务（按分类配置）。"""
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -36,16 +36,16 @@ class OrderFallbackAccountService:
     # ==================== 前端配置页：查询 ====================
 
     async def list_configs(self, owner_id: int, is_admin: bool = False) -> List[Dict[str, Any]]:
-        """列出当前用户已配置的兜底下单账号（按分类，含无分类那条），附带账号有效性。"""
+        """列出当前用户已配置的兜底采集账号（按分类，含无分类那条），附带账号有效性。"""
         stmt = (
-            select(OrderFallbackAccount)
+            select(CollectFallbackAccount)
             .where(
-                OrderFallbackAccount.owner_id == owner_id,
-                OrderFallbackAccount.is_deleted.is_(False),
+                CollectFallbackAccount.owner_id == owner_id,
+                CollectFallbackAccount.is_deleted.is_(False),
             )
             .order_by(
-                OrderFallbackAccount.category_id.is_(None).desc(),
-                OrderFallbackAccount.id.desc(),
+                CollectFallbackAccount.category_id.is_(None).desc(),
+                CollectFallbackAccount.id.desc(),
             )
         )
         records = (await self.session.execute(stmt)).scalars().all()
@@ -60,7 +60,7 @@ class OrderFallbackAccountService:
     async def get_config(
         self, owner_id: int, category_id: Optional[int], is_admin: bool = False
     ) -> Dict[str, Any]:
-        """查询某个分类的兜底下单账号配置（含账号有效性）。"""
+        """查询某个分类的兜底采集账号配置（含账号有效性）。"""
         record = await self._get_record(owner_id, category_id)
         name_map = await self._category_name_map([category_id])
         data = self._to_dict(record, name_map, category_id=category_id)
@@ -76,7 +76,7 @@ class OrderFallbackAccountService:
         account_ids: List[str],
         is_admin: bool = False,
     ) -> Dict[str, Any]:
-        """新建或修改某个分类的兜底下单账号配置。
+        """新建或修改某个分类的兜底采集账号配置。
 
         - 同一用户同一分类仅一条；无分类（category_id=NULL）仅一条；
         - 复用软删除记录（重复新建即恢复并覆盖）。
@@ -101,7 +101,7 @@ class OrderFallbackAccountService:
             record.account_ids = cleaned
             record.is_deleted = False
         else:
-            record = OrderFallbackAccount(
+            record = CollectFallbackAccount(
                 owner_id=owner_id, category_id=category_id, account_ids=cleaned
             )
             self.session.add(record)
@@ -112,7 +112,7 @@ class OrderFallbackAccountService:
     async def delete_config(
         self, owner_id: int, category_id: Optional[int], is_admin: bool = False
     ) -> None:
-        """软删除某个分类的兜底下单账号配置。"""
+        """软删除某个分类的兜底采集账号配置。"""
         record = await self._get_record(owner_id, category_id)
         if not record:
             raise ValueError("配置不存在")
@@ -124,7 +124,7 @@ class OrderFallbackAccountService:
     async def get_effective_fallback_account_ids(
         self, owner_id: Optional[int], category_id: Optional[int] = None
     ) -> List[str]:
-        """返回生效的兜底下单账号ID列表（已按优先级合并去重）。
+        """返回生效的兜底采集账号ID列表（已按优先级合并去重）。
 
         顺序：本用户·本分类 → 本用户·无分类 → 管理员·本分类 → 管理员·无分类。
         （任务自身账号由调用方在更前面合并）
@@ -152,22 +152,22 @@ class OrderFallbackAccountService:
 
     async def _get_record(
         self, owner_id: int, category_id: Optional[int], include_deleted: bool = False
-    ) -> Optional[OrderFallbackAccount]:
-        conditions = [OrderFallbackAccount.owner_id == owner_id]
+    ) -> Optional[CollectFallbackAccount]:
+        conditions = [CollectFallbackAccount.owner_id == owner_id]
         if category_id is None:
-            conditions.append(OrderFallbackAccount.category_id.is_(None))
+            conditions.append(CollectFallbackAccount.category_id.is_(None))
         else:
-            conditions.append(OrderFallbackAccount.category_id == category_id)
+            conditions.append(CollectFallbackAccount.category_id == category_id)
         if not include_deleted:
-            conditions.append(OrderFallbackAccount.is_deleted.is_(False))
+            conditions.append(CollectFallbackAccount.is_deleted.is_(False))
         # MySQL 唯一键对 category_id=NULL 不去重，并发新建"无分类"可能产生多条记录；
         # 这里按（未删除优先、id 升序）取最早一条复用，避免 scalar_one_or_none 抛 MultipleResultsFound
         stmt = (
-            select(OrderFallbackAccount)
+            select(CollectFallbackAccount)
             .where(*conditions)
             .order_by(
-                OrderFallbackAccount.is_deleted.asc(),
-                OrderFallbackAccount.id.asc(),
+                CollectFallbackAccount.is_deleted.asc(),
+                CollectFallbackAccount.id.asc(),
             )
         )
         return (await self.session.execute(stmt)).scalars().first()
@@ -177,17 +177,17 @@ class OrderFallbackAccountService:
         return list(record.account_ids or []) if record else []
 
     async def _admin_account_ids(self, category_id: Optional[int]) -> List[str]:
-        """返回所有管理员在指定分类（或无分类）下配置的兜底下单账号ID（去重合并）。"""
+        """返回所有管理员在指定分类（或无分类）下配置的兜底采集账号ID（去重合并）。"""
         admin_ids_subq = select(User.id).where(User.role == UserRole.ADMIN)
         conditions = [
-            OrderFallbackAccount.owner_id.in_(admin_ids_subq),
-            OrderFallbackAccount.is_deleted.is_(False),
+            CollectFallbackAccount.owner_id.in_(admin_ids_subq),
+            CollectFallbackAccount.is_deleted.is_(False),
         ]
         if category_id is None:
-            conditions.append(OrderFallbackAccount.category_id.is_(None))
+            conditions.append(CollectFallbackAccount.category_id.is_(None))
         else:
-            conditions.append(OrderFallbackAccount.category_id == category_id)
-        stmt = select(OrderFallbackAccount.account_ids).where(*conditions)
+            conditions.append(CollectFallbackAccount.category_id == category_id)
+        stmt = select(CollectFallbackAccount.account_ids).where(*conditions)
         result: List[str] = []
         seen: set[str] = set()
         for row in (await self.session.execute(stmt)).all():
@@ -208,7 +208,7 @@ class OrderFallbackAccountService:
 
     def _to_dict(
         self,
-        record: Optional[OrderFallbackAccount],
+        record: Optional[CollectFallbackAccount],
         name_map: Dict[int, str],
         category_id: Optional[int] = None,
     ) -> Dict[str, Any]:

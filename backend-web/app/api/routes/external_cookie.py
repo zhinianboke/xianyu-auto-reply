@@ -18,7 +18,7 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -56,6 +56,26 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "-"
 
 
+async def _notify_scheduler_clear_cooldown(account_id: str) -> None:
+    """通知 scheduler 解除该账号的风控冷却（回传新 Cookie 后让账号立即恢复可用）。
+
+    冷却态仅存在于 scheduler 进程内存中，需跨进程经内部接口触发解除；
+    本调用失败不影响 Cookie 更新主流程，仅记录告警日志。
+    """
+    try:
+        from app.core.config import get_settings
+        from app.core.http_client import get_http_client
+
+        settings = get_settings()
+        url = f"{settings.scheduler_service_url}/internal/account-cooldown/clear"
+        await get_http_client().post(url, json={"account_id": account_id})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            f"[外部Cookie同步] 通知 scheduler 解除账号冷却失败（不影响 Cookie 更新）"
+            f" account_id={account_id}: {exc}"
+        )
+
+
 class ExternalCookieSyncRequest(BaseModel):
     """外部回传账号 Cookie 请求"""
 
@@ -68,6 +88,7 @@ class ExternalCookieSyncRequest(BaseModel):
 async def sync_account_cookie(
     payload: ExternalCookieSyncRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(deps.get_db_session),
     account_service: AccountService = Depends(deps.get_account_service),
 ) -> ApiResponse:
@@ -132,6 +153,11 @@ async def sync_account_cookie(
 
     # 5. 仅更新 Cookie 到数据库（不重启账号 WebSocket 任务，避免打断实时连接）
     await account_service.update_cookie(account, cookies)
+
+    # 6. 回传新 Cookie 意味着账号已恢复，通知 scheduler 解除其风控冷却，
+    #    让采集/补全等定时任务无需等满冷却期即可立即重新使用该账号。
+    #    放入后台任务执行：不占用本次响应时延，scheduler 不可达时也不拖慢外部回传。
+    background_tasks.add_task(_notify_scheduler_clear_cooldown, account_id)
 
     logger.info(
         f"[外部Cookie同步] 更新成功 ip={client_ip} account_id={account_id} owner={account.owner_id} "

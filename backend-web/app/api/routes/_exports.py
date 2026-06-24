@@ -51,7 +51,9 @@ from . import (
     password_login,
     product_publish,
     publish_addresses,
+    listing_monitor_category,
     listing_monitor,
+    collect_fallback_account,
     order_fallback_account,
     external_cookie,
     proxy,
@@ -97,7 +99,9 @@ api_router.include_router(items.items_router, tags=["商品管理"])  # items.py
 api_router.include_router(orders.router, prefix="/orders", tags=["订单管理"])
 api_router.include_router(product_publish.router, tags=["商品发布"])  # 已定义prefix="/product-publish"
 api_router.include_router(publish_addresses.router, tags=["商品发布随机地址池"])  # 已定义prefix="/product-publish/addresses"
+api_router.include_router(listing_monitor_category.router, tags=["商品监控分类"])  # 已定义prefix="/product-monitor/categories"
 api_router.include_router(listing_monitor.router, tags=["商品上新监控"])  # 已定义prefix="/product-monitor/listing-tasks"
+api_router.include_router(collect_fallback_account.router, tags=["兜底采集账号"])  # 已定义prefix="/product-monitor/collect-fallback-accounts"
 api_router.include_router(order_fallback_account.router, tags=["兜底下单账号"])  # 已定义prefix="/product-monitor/order-fallback-accounts"
 api_router.include_router(external_cookie.router, tags=["外部Cookie同步"])  # 已定义prefix="/external/account-cookie"
 api_router.include_router(keywords.router, prefix="/keywords-with-item-id", tags=["关键词管理"])

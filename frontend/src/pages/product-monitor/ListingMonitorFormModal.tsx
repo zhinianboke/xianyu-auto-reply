@@ -16,6 +16,7 @@ import {
   type MonitorType,
 } from '@/api/listingMonitor'
 import { getAccountDetails } from '@/api/accounts'
+import { getListingMonitorCategories } from '@/api/listingMonitorCategory'
 import { Loading } from '@/components/common/Loading'
 import { Select } from '@/components/common/Select'
 import { useUIStore } from '@/store/uiStore'
@@ -35,6 +36,7 @@ interface ListingMonitorFormModalProps {
 
 interface ListingMonitorFormState {
   monitorType: MonitorType
+  categoryId: string
   keyword: string
   priceMin: string
   priceMax: string
@@ -52,6 +54,7 @@ interface ListingMonitorFormState {
 
 const buildInitialState = (initial?: ListingMonitorTask | null): ListingMonitorFormState => ({
   monitorType: initial?.monitor_type ?? 'listing',
+  categoryId: initial?.category_id != null ? String(initial.category_id) : '',
   keyword: initial?.keyword ?? '',
   priceMin: initial?.price_min != null ? String(initial.price_min) : '',
   priceMax: initial?.price_max != null ? String(initial.price_max) : '',
@@ -77,6 +80,22 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
   const [accountLoading, setAccountLoading] = useState(false)
   const [accountDropdownOpen, setAccountDropdownOpen] = useState(false)
   const [orderAccountDropdownOpen, setOrderAccountDropdownOpen] = useState(false)
+  const [categoryOptions, setCategoryOptions] = useState<{ value: string; label: string }[]>([])
+
+  // 加载分类下拉选项（全局共享分类）
+  useEffect(() => {
+    const loadCategories = async () => {
+      try {
+        const result = await getListingMonitorCategories()
+        if (result.success && result.data) {
+          setCategoryOptions(result.data.map((c) => ({ value: String(c.id), label: c.name })))
+        }
+      } catch (error) {
+        addToast({ type: 'error', message: getApiErrorMessage(error, '加载分类列表失败') })
+      }
+    }
+    void loadCategories()
+  }, [addToast])
 
   // 加载账号下拉选项
   useEffect(() => {
@@ -165,6 +184,11 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
       return
     }
 
+    if (!form.categoryId) {
+      addToast({ type: 'warning', message: '请选择分类' })
+      return
+    }
+
     const priceMin = form.priceMin.trim() === '' ? null : Number(form.priceMin)
     const priceMax = form.priceMax.trim() === '' ? null : Number(form.priceMax)
     if (priceMin !== null && (Number.isNaN(priceMin) || priceMin < 0)) {
@@ -189,11 +213,6 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
     const collectPages = Number(form.collectPages)
     if (!Number.isInteger(collectPages) || collectPages < 1) {
       addToast({ type: 'warning', message: '采集页数必须为大于等于1的整数' })
-      return
-    }
-
-    if (form.accountIds.length === 0) {
-      addToast({ type: 'warning', message: '请至少选择一个关联账号' })
       return
     }
 
@@ -223,6 +242,7 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
     try {
       const payload = {
         monitor_type: form.monitorType,
+        category_id: Number(form.categoryId),
         keyword,
         price_min: priceMin,
         price_max: priceMax,
@@ -273,14 +293,26 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
 
         <div className="modal-body">
           <div className="space-y-4">
-            <div className="input-group">
-              <label className="input-label">监控类型 <span className="text-red-500">*</span></label>
-              <Select
-                value={form.monitorType}
-                onChange={(value) => setForm((prev) => ({ ...prev, monitorType: value as MonitorType }))}
-                options={MONITOR_TYPE_OPTIONS}
-                placeholder="请选择监控类型"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="input-group">
+                <label className="input-label">监控类型 <span className="text-red-500">*</span></label>
+                <Select
+                  value={form.monitorType}
+                  onChange={(value) => setForm((prev) => ({ ...prev, monitorType: value as MonitorType }))}
+                  options={MONITOR_TYPE_OPTIONS}
+                  placeholder="请选择监控类型"
+                />
+              </div>
+
+              <div className="input-group">
+                <label className="input-label">所属分类 <span className="text-red-500">*</span></label>
+                <Select
+                  value={form.categoryId}
+                  onChange={(value) => setForm((prev) => ({ ...prev, categoryId: value }))}
+                  options={categoryOptions}
+                  placeholder={categoryOptions.length === 0 ? '暂无分类，请先到「监控分类」新建' : '请选择分类'}
+                />
+              </div>
             </div>
 
             <div className="input-group">
@@ -383,7 +415,10 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
 
             <div className="input-group">
               <div className="flex items-center justify-between">
-                <label className="input-label mb-0">关联账号（可多选） <span className="text-red-500">*</span></label>
+                <label className="input-label mb-0">
+                  采集账号（可多选）
+                  <span className="text-xs text-slate-400 ml-1">（非必填，未配置或失效时回退用户级兜底采集账号）</span>
+                </label>
                 {form.accountIds.length > 0 && (
                   <button
                     type="button"
@@ -400,7 +435,7 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
                 className="mt-1 w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md text-sm text-left bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 hover:border-blue-400 dark:hover:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <span className={selectedAccountLabels ? 'truncate text-slate-900 dark:text-slate-100' : 'truncate text-slate-400'}>
-                  {selectedAccountLabels || (accountLoading ? '正在加载账号...' : '请选择关联账号')}
+                  {selectedAccountLabels || (accountLoading ? '正在加载账号...' : '不使用（请选择采集账号）')}
                 </span>
                 <ChevronDown className={`w-4 h-4 text-slate-400 flex-shrink-0 transition-transform duration-200 ${accountDropdownOpen ? 'rotate-180' : ''}`} />
               </button>

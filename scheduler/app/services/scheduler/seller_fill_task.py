@@ -2,17 +2,24 @@
 采集商品卖家ID补全定时任务
 
 功能：
-1. 查询采集商品表中卖家真实ID（seller_user_id）为空的数据
+1. 查询采集商品表中卖家真实ID（seller_user_id）为空、且最近2天采集入库（created_at >= 今日00:00前推2天）的数据
 2. 调用商品详情接口补全卖家真实ID与商品详情
-3. Cookie 使用该商品对应监控任务里配置的账号，轮换使用这些账号
-4. 若某账号接口返回不可用（Session/Token过期、需登录、风控等），本次运行不再使用该账号，
+3. Cookie 账号来源与采集任务一致：监控任务配置的采集账号 + 用户级兜底采集账号，
+   用户未配置时回退管理员全局兜底；任务账号在前、兜底在后、去重保序，轮换使用
+4. 与采集任务一致的账号负载与风控规避：按最近使用度（跨任务监控日志）排序，优先选用
+   最近未使用的账号；过滤处于风控冷却期的账号；账号触发风控时加入冷却并停用本轮
+5. 若某账号接口返回不可用（Session/Token过期、需登录、风控等），本次运行不再使用该账号，
    等下次任务启动时再重新使用
+
+说明：
+- 最近2天窗口：提供48小时容错窗口，避免定时任务短期故障导致商品永久卡在未补全状态；
+  超过2天的遗留数据不再处理，防止历史脏数据持续占用补全配额。
 """
 from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -20,10 +27,14 @@ from sqlalchemy import and_, or_, select
 
 from common.db.session import async_session_maker
 from common.models.listing_monitor_item import ListingMonitorItem
+from common.models.listing_monitor_log import ListingMonitorLog
 from common.models.listing_monitor_task import ListingMonitorTask
 from common.models.xy_account import XYAccount
+from common.services.account_cooldown import DEFAULT_COOLDOWN_SECONDS, account_cooldown_manager
+from common.services.collect_account_loader import merge_task_and_fallback_account_ids
 from common.services.xianyu_detail_client import XianyuItemDetailClient
 from common.services.xianyu_mtop import fetch_proxy_from_api
+from common.utils.time_utils import get_beijing_now_naive
 
 _INACTIVE_STATUSES = {"inactive", "disabled", "suspended", "deleted"}
 # 单次任务最多处理的待补全商品数，避免单次运行过久
@@ -67,7 +78,27 @@ class SellerFillTaskService:
             for pk, item_id, task_id in items:
                 accounts = task_accounts_cache.get(task_id)
                 if accounts is None:
-                    accounts, proxy_api = await self._load_task_accounts(task_id)
+                    accounts, proxy_api, owner_id = await self._load_task_accounts(task_id)
+                    # 跨任务 usage-rank 负载均衡：优先选用最近未使用的账号（与采集任务一致）
+                    if accounts:
+                        usage_rank = await self._get_account_usage_rank(owner_id, limit=40)
+                        if usage_rank:
+                            _stalest = 10 ** 9  # 未出现在最近日志中的账号视为最久未使用，优先级最高
+                            accounts = sorted(
+                                accounts,
+                                key=lambda a: usage_rank.get(a.account_id, _stalest),
+                                reverse=True,
+                            )
+                    # 风控冷却过滤：去掉处于冷却期（被挤爆/触发验证后冷却时长内）的账号（与采集任务一致）
+                    if accounts:
+                        available_ids = set(
+                            account_cooldown_manager.filter_available([a.account_id for a in accounts])
+                        )
+                        accounts = [a for a in accounts if a.account_id in available_ids]
+                        if not accounts:
+                            logger.warning(
+                                f"【{self.task_name}】任务 {task_id} 所有可用账号均在风控冷却期，本次跳过补全"
+                            )
                     task_accounts_cache[task_id] = accounts
                     # 任务配置了代理API地址时，取一个HTTP代理供本任务本轮使用（失败则直连）
                     task_proxy_cache[task_id] = (
@@ -108,7 +139,14 @@ class SellerFillTaskService:
             logger.error(f"【{self.task_name}】执行异常: {exc}")
 
     async def _get_items_to_fill(self) -> List[Tuple[int, str, int]]:
-        """查询卖家真实ID为空的采集商品，返回 (主键id, item_id, monitor_task_id) 列表。"""
+        """查询卖家真实ID为空的采集商品（最近 2 天入库的），返回 (主键id, item_id, monitor_task_id) 列表。
+
+        说明：只补全最近 2 天内采集入库（created_at 在北京时间今天 00:00 前推 2 天）的商品，
+        提供 48 小时容错窗口，避免定时任务短期故障导致商品永久卡在未补全状态；
+        超过 2 天的遗留数据不再处理，防止历史脏数据持续占用补全配额。
+        """
+        # 北京时间今天 00:00 前推 2 天作为下限（48 小时容错窗口）
+        cutoff_time = get_beijing_now_naive().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=2)
         async with async_session_maker() as session:
             stmt = (
                 select(
@@ -118,6 +156,8 @@ class SellerFillTaskService:
                 )
                 .where(
                     and_(
+                        # 仅处理最近 2 天入库的商品
+                        ListingMonitorItem.created_at >= cutoff_time,
                         or_(
                             ListingMonitorItem.seller_user_id.is_(None),
                             ListingMonitorItem.seller_user_id == "",
@@ -135,10 +175,13 @@ class SellerFillTaskService:
             rows = (await session.execute(stmt)).all()
             return [(r[0], r[1], r[2]) for r in rows]
 
-    async def _load_task_accounts(self, task_id: int) -> Tuple[List[XYAccount], Optional[str]]:
-        """加载监控任务配置的可用账号与代理API地址（任务须未删除且启用；保持配置顺序、过滤禁用/空Cookie）。
+    async def _load_task_accounts(self, task_id: int) -> Tuple[List[XYAccount], Optional[str], Optional[int]]:
+        """加载补全可用账号、代理API地址与归属用户ID（任务须未删除且启用；保持顺序、过滤禁用/空Cookie）。
 
-        Returns: (可用账号列表, 代理API地址或None)
+        账号来源与采集任务一致：监控任务自身配置的采集账号(account_ids) + 用户级兜底采集账号，
+        用户未配置时回退管理员全局兜底；任务账号在前、兜底在后、去重保序。
+
+        Returns: (可用账号列表, 代理API地址或None, 归属用户ID或None)
         """
         async with async_session_maker() as session:
             task = (
@@ -151,11 +194,16 @@ class SellerFillTaskService:
                 )
             ).scalar_one_or_none()
             if not task:
-                return [], None
+                return [], None, None
             proxy_api = task.proxy_url
-            account_ids = list(task.account_ids or [])
+            owner_id = task.owner_id
+            # 合并任务采集账号 + 生效兜底采集账号
+            # （本用户·本分类→本用户·无分类→管理员·本分类→管理员·无分类）
+            account_ids = await merge_task_and_fallback_account_ids(
+                session, list(task.account_ids or []), owner_id, task.category_id
+            )
             if not account_ids:
-                return [], proxy_api
+                return [], proxy_api, owner_id
             rows = list(
                 (
                     await session.execute(
@@ -173,7 +221,38 @@ class SellerFillTaskService:
             if (acc.status or "active").strip().lower() in _INACTIVE_STATUSES:
                 continue
             ordered.append(acc)
-        return ordered, proxy_api
+        return ordered, proxy_api, owner_id
+
+    async def _get_account_usage_rank(self, owner_id: Optional[int], limit: int = 40) -> Dict[str, int]:
+        """统计该用户最近 limit 条监控日志（跨任务）中各账号的"使用新近度"。
+
+        与采集任务共用监控日志(ListingMonitorLog)的账号使用记录，使补全任务优先选用
+        最近未被采集使用的账号，跨任务均衡账号负载、规避风控。仅按归属用户隔离，不限具体任务。
+
+        Returns:
+            account_id -> 最近一次被使用的日志序号（0=最新一条；数值越小表示越近期使用）。
+            未出现在最近日志中的账号不在返回字典中（视为最久未使用，优先使用）。
+        """
+        rank: Dict[str, int] = {}
+        async with async_session_maker() as session:
+            stmt = (
+                select(ListingMonitorLog.account_id, ListingMonitorLog.used_account_ids)
+                .order_by(ListingMonitorLog.id.desc())
+                .limit(limit)
+            )
+            if owner_id is not None:
+                stmt = stmt.where(ListingMonitorLog.owner_id == owner_id)
+            for idx, (account_id, used_ids) in enumerate((await session.execute(stmt)).all()):
+                candidates = list(used_ids or [])
+                if account_id:
+                    candidates.append(account_id)
+                for aid in candidates:
+                    if aid:
+                        aid = str(aid)
+                        # 只记录最近一次（最小 idx），后续更旧的日志不覆盖
+                        if aid not in rank:
+                            rank[aid] = idx
+        return rank
 
     async def _fill_one_item(
         self,
@@ -210,10 +289,18 @@ class SellerFillTaskService:
 
             if result.get("account_invalid"):
                 disabled_accounts.add(acc.account_id)
-                logger.warning(
-                    f"【{self.task_name}】账号 {acc.account_id} 不可用（{result.get('error')}），"
-                    f"本次停用，尝试下一个账号"
-                )
+                # 风控类错误（被挤爆/触发验证）额外加入冷却，避免后续任务短时再用该账号触发风控
+                if account_cooldown_manager.is_risk_control_error(result.get("error")):
+                    account_cooldown_manager.add(acc.account_id)
+                    logger.warning(
+                        f"【{self.task_name}】账号 {acc.account_id} 触发风控（{result.get('error')}），"
+                        f"加入冷却 {DEFAULT_COOLDOWN_SECONDS // 60} 分钟并停用本轮，尝试下一个账号"
+                    )
+                else:
+                    logger.warning(
+                        f"【{self.task_name}】账号 {acc.account_id} 不可用（{result.get('error')}），"
+                        f"本次停用，尝试下一个账号"
+                    )
                 continue
 
             if result.get("item_invalid"):

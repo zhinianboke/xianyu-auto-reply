@@ -2,14 +2,16 @@
  * 批量修改监控任务账号弹窗
  *
  * 功能：
- * 1. 对勾选的多个监控任务，批量设置"监控账号"或"下单账号"
+ * 1. 对勾选的多个监控任务，批量设置"采集账号"或"下单账号"
  * 2. 账号多选，确认后调用后端批量修改接口
+ * 3. 允许清空（采集账号→回退兜底；下单账号→不下单），清空时二次确认
  * 说明：弹窗只能通过按钮关闭（不点击遮罩关闭）。
  */
 import { useEffect, useMemo, useState } from 'react'
 import { Check, ChevronDown, Loader2, X } from 'lucide-react'
 import { batchUpdateListingMonitorAccounts } from '@/api/listingMonitor'
 import { getAccountDetails } from '@/api/accounts'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/apiError'
 
@@ -29,7 +31,7 @@ interface BatchAccountsModalProps {
 }
 
 const FIELD_LABELS: Record<BatchAccountField, string> = {
-  account_ids: '监控账号',
+  account_ids: '采集账号',
   order_account_ids: '下单账号',
 }
 
@@ -42,6 +44,7 @@ export function BatchAccountsModal({ field, taskIds, onClose, onSaved }: BatchAc
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
 
   useEffect(() => {
     const loadAccounts = async () => {
@@ -91,10 +94,15 @@ export function BatchAccountsModal({ field, taskIds, onClose, onSaved }: BatchAc
   }
 
   const handleSave = async () => {
+    // 未选任何账号：弹确认对话框，确认后清空该字段配置
     if (selectedIds.length === 0) {
-      addToast({ type: 'warning', message: `请至少选择一个${label}` })
+      setShowClearConfirm(true)
       return
     }
+    await doSave()
+  }
+
+  const doSave = async () => {
     setSaving(true)
     try {
       const result = await batchUpdateListingMonitorAccounts(taskIds, field, selectedIds)
@@ -113,6 +121,21 @@ export function BatchAccountsModal({ field, taskIds, onClose, onSaved }: BatchAc
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <ConfirmModal
+        isOpen={showClearConfirm}
+        title="确认清空"
+        message={
+          field === 'account_ids'
+            ? `确定将 ${taskIds.length} 条监控任务的采集账号清空吗？清空后将按分类兜底链回退使用兜底采集账号（本分类→无分类→管理员）。`
+            : `确定将 ${taskIds.length} 条监控任务的下单账号清空吗？清空后这些任务将不再自动下单。`
+        }
+        onCancel={() => setShowClearConfirm(false)}
+        onConfirm={() => {
+          setShowClearConfirm(false)
+          void doSave()
+        }}
+      />
+
       <div className="w-full max-w-lg bg-white dark:bg-slate-800 rounded-2xl shadow-xl">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-700">
           <h3 className="text-base font-semibold text-slate-800 dark:text-slate-100">

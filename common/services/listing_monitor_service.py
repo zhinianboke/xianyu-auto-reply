@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from common.models.listing_monitor_task import ListingMonitorTask
 from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_log import ListingMonitorLog
+from common.models.listing_monitor_category import ListingMonitorCategory
 from common.models.xy_account import XYAccount
 from common.models.user import User
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
@@ -75,6 +76,7 @@ def _task_to_dict(task: ListingMonitorTask) -> Dict[str, Any]:
     return {
         "id": task.id,
         "owner_id": task.owner_id,
+        "category_id": task.category_id,
         "monitor_type": task.monitor_type,
         "keyword": task.keyword,
         "price_min": float(task.price_min) if task.price_min is not None else None,
@@ -178,6 +180,20 @@ class ListingMonitorService:
                 raise ValueError("监控类型不正确")
             payload["monitor_type"] = monitor_type
 
+        # 所属分类（必填）
+        if "category_id" in data or not partial:
+            raw_category = data.get("category_id")
+            if raw_category is None or raw_category == "":
+                raise ValueError("请选择分类")
+            try:
+                category_id = int(raw_category)
+            except (TypeError, ValueError):
+                raise ValueError("分类参数不正确")
+            category = await self.session.get(ListingMonitorCategory, category_id)
+            if not category or category.is_deleted:
+                raise ValueError("所选分类不存在")
+            payload["category_id"] = category_id
+
         # 关键字（必填）
         if "keyword" in data or not partial:
             keyword = (data.get("keyword") or "").strip()
@@ -253,11 +269,9 @@ class ListingMonitorService:
                     raise ValueError("代理API地址格式不正确，需以 http:// 或 https:// 开头")
             payload["proxy_url"] = proxy_url or None
 
-        # 账号列表（多选，必填：至少关联一个账号）
+        # 采集账号列表（多选，非必填；不可用时回退用户级/管理员兜底采集账号）
         if "account_ids" in data or not partial:
             account_ids = await self._normalize_account_ids(owner_id, data.get("account_ids"))
-            if not account_ids:
-                raise ValueError("请至少选择一个关联账号")
             payload["account_ids"] = account_ids
 
         # 下单账号列表（多选，非必填；私信与下单共用，轮换使用）
@@ -678,11 +692,13 @@ class ListingMonitorService:
         field: str,
         account_ids: Any,
     ) -> int:
-        """批量修改监控任务的账号字段（监控账号 account_ids 或下单账号 order_account_ids）。
+        """批量修改监控任务的账号字段（采集账号 account_ids 或下单账号 order_account_ids）。
 
         Args:
-            field: 仅允许 "account_ids"（监控/采集账号）或 "order_account_ids"（下单账号）
-            account_ids: 选择的账号ID列表（会校验归属，普通用户只能选自己的账号）
+            field: 仅允许 "account_ids"（采集账号）或 "order_account_ids"（下单账号）
+            account_ids: 选择的账号ID列表（会校验归属，普通用户只能选自己的账号）；
+                传空数组表示清空该字段配置（采集账号清空→回退用户/管理员兜底；
+                下单账号清空→该任务不再下单）。
 
         Returns: 实际更新的任务数
         """
@@ -700,10 +716,8 @@ class ListingMonitorService:
         if not normalized_ids:
             raise ValueError("请选择要修改的监控任务")
 
+        # 允许传空数组清空该字段；非空时按归属校验
         valid_account_ids = await self._normalize_account_ids(owner_id, account_ids)
-        if not valid_account_ids:
-            label = "监控账号" if field == "account_ids" else "下单账号"
-            raise ValueError(f"请至少选择一个{label}")
 
         conditions = self._scope_conditions(owner_id)
         conditions.append(ListingMonitorTask.id.in_(normalized_ids))
@@ -712,6 +726,49 @@ class ListingMonitorService:
         now = get_beijing_now_naive()
         for task in tasks:
             setattr(task, field, valid_account_ids)
+            task.updated_at = now
+
+        await self.session.commit()
+        return len(tasks)
+
+    async def batch_update_category(
+        self,
+        owner_id: Optional[int],
+        task_ids: Sequence[int],
+        category_id: Any,
+    ) -> int:
+        """批量修改监控任务的所属分类（分类必填、须存在）。
+
+        Returns: 实际更新的任务数
+        """
+        if category_id is None or category_id == "":
+            raise ValueError("请选择分类")
+        try:
+            category_id = int(category_id)
+        except (TypeError, ValueError):
+            raise ValueError("分类参数不正确")
+        category = await self.session.get(ListingMonitorCategory, category_id)
+        if not category or category.is_deleted:
+            raise ValueError("所选分类不存在")
+
+        normalized_ids: List[int] = []
+        for raw_id in task_ids:
+            try:
+                tid = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if tid > 0 and tid not in normalized_ids:
+                normalized_ids.append(tid)
+        if not normalized_ids:
+            raise ValueError("请选择要修改的监控任务")
+
+        conditions = self._scope_conditions(owner_id)
+        conditions.append(ListingMonitorTask.id.in_(normalized_ids))
+        stmt = select(ListingMonitorTask).where(*conditions)
+        tasks = (await self.session.execute(stmt)).scalars().all()
+        now = get_beijing_now_naive()
+        for task in tasks:
+            task.category_id = category_id
             task.updated_at = now
 
         await self.session.commit()

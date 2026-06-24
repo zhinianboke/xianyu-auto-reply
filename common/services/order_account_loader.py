@@ -74,15 +74,17 @@ async def load_xy_accounts_by_ids(
 
 async def load_fallback_accounts(
     owner_id: Optional[int],
+    category_id: Optional[int] = None,
     log_prefix: str = "兜底账号加载",
 ) -> Tuple[Dict[str, XYAccount], str]:
     """加载生效的兜底下单账号（含失效过滤、异常降级）。
 
-    覆盖策略：优先商品所属用户配置的兜底账号；未配置（或商品无归属用户）时回退到
-    管理员配置的全局兜底账号。具体由 OrderFallbackAccountService.get_effective_fallback_account_ids 决定。
+    覆盖策略（5 层链，由 OrderFallbackAccountService.get_effective_fallback_account_ids 决定）：
+    本用户·本分类 → 本用户·无分类 → 管理员·本分类 → 管理员·无分类。
 
     Args:
         owner_id: 商品所属用户ID（可为 None 表示无归属用户）
+        category_id: 任务所属分类ID（NULL=无分类；用于按分类取本分类兜底）
         log_prefix: 日志前缀，便于在调度任务日志中识别来源
 
     Returns:
@@ -94,7 +96,7 @@ async def load_fallback_accounts(
     try:
         async with async_session_maker() as session:
             svc = OrderFallbackAccountService(session)
-            account_ids = await svc.get_effective_fallback_account_ids(owner_id)
+            account_ids = await svc.get_effective_fallback_account_ids(owner_id, category_id)
             if not account_ids:
                 return {}, "未配置兜底下单账号"
             accounts_map, detail = await load_xy_accounts_by_ids(session, account_ids)

@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Search,
   Square,
+  Tags,
   Trash2,
   Users,
   ShoppingCart,
@@ -30,12 +31,14 @@ import {
   MONITOR_TYPE_LABELS,
   type ListingMonitorTask,
 } from '@/api/listingMonitor'
+import { getListingMonitorCategories } from '@/api/listingMonitorCategory'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { PageLoading } from '@/components/common/Loading'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ListingMonitorFormModal } from './ListingMonitorFormModal'
 import { BatchAccountsModal, type BatchAccountField } from './BatchAccountsModal'
+import { BatchCategoryModal } from './BatchCategoryModal'
 
 const formatPriceRange = (task: ListingMonitorTask): string => {
   const min = task.price_min
@@ -63,8 +66,29 @@ export function ListingMonitor() {
   const [editingTask, setEditingTask] = useState<ListingMonitorTask | null>(null)
   const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false)
   const [batchAccountsField, setBatchAccountsField] = useState<BatchAccountField | null>(null)
+  const [showBatchCategory, setShowBatchCategory] = useState(false)
+  const [categoryMap, setCategoryMap] = useState<Record<number, string>>({})
   const [statusUpdatingId, setStatusUpdatingId] = useState<number | null>(null)
   const [runningId, setRunningId] = useState<number | null>(null)
+
+  // 加载分类映射（用于列表展示分类名；全局共享分类）
+  useEffect(() => {
+    const loadCategories = async () => {
+      try {
+        const result = await getListingMonitorCategories()
+        if (result.success && result.data) {
+          const map: Record<number, string> = {}
+          result.data.forEach((c) => {
+            map[c.id] = c.name
+          })
+          setCategoryMap(map)
+        }
+      } catch {
+        // 分类加载失败不阻塞任务列表展示
+      }
+    }
+    void loadCategories()
+  }, [])
 
   const loadTasks = async (nextPage = page, nextPageSize = pageSize) => {
     try {
@@ -254,11 +278,15 @@ export function ListingMonitor() {
             <>
               <button className="btn-ios-secondary" onClick={() => setBatchAccountsField('account_ids')} disabled={tableLoading || deleting}>
                 <Users className="w-4 h-4" />
-                批量改监控账号 ({selectedIds.size})
+                批量改采集账号 ({selectedIds.size})
               </button>
               <button className="btn-ios-secondary" onClick={() => setBatchAccountsField('order_account_ids')} disabled={tableLoading || deleting}>
                 <ShoppingCart className="w-4 h-4" />
                 批量改下单账号 ({selectedIds.size})
+              </button>
+              <button className="btn-ios-secondary" onClick={() => setShowBatchCategory(true)} disabled={tableLoading || deleting}>
+                <Tags className="w-4 h-4" />
+                批量改分类 ({selectedIds.size})
               </button>
               <button className="btn-ios-danger" onClick={() => setBatchDeleteConfirmOpen(true)} disabled={tableLoading || deleting}>
                 <Trash2 className="w-4 h-4" />
@@ -330,6 +358,7 @@ export function ListingMonitor() {
                 </th>
                 <th>任务ID</th>
                 <th>监控类型</th>
+                <th>所属分类</th>
                 <th>所属用户</th>
                 <th>商品关键字</th>
                 <th>价格区间</th>
@@ -351,13 +380,13 @@ export function ListingMonitor() {
             <tbody>
               {tableLoading ? (
                 <tr>
-                  <td colSpan={19} className="text-center py-12">
+                  <td colSpan={20} className="text-center py-12">
                     <Loader2 className="w-6 h-6 animate-spin text-blue-500 mx-auto" />
                   </td>
                 </tr>
               ) : tasks.length === 0 ? (
                 <tr>
-                  <td colSpan={19} className="text-center py-12 text-slate-400">
+                  <td colSpan={20} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <PackageSearch className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>暂无监控任务，点击右上角新建</p>
@@ -381,6 +410,9 @@ export function ListingMonitor() {
                       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
                         {MONITOR_TYPE_LABELS[item.monitor_type] || item.monitor_type}
                       </span>
+                    </td>
+                    <td className="whitespace-nowrap text-slate-600 dark:text-slate-300">
+                      {item.category_id != null ? (categoryMap[item.category_id] || `#${item.category_id}`) : '-'}
                     </td>
                     <td className="whitespace-nowrap text-slate-600 dark:text-slate-300">{item.owner_username || '-'}</td>
                     <td className="max-w-[220px] font-medium text-slate-800 dark:text-slate-100">
@@ -506,6 +538,17 @@ export function ListingMonitor() {
           onClose={() => setBatchAccountsField(null)}
           onSaved={async () => {
             setBatchAccountsField(null)
+            await loadTasks(page, pageSize)
+          }}
+        />
+      )}
+
+      {showBatchCategory && (
+        <BatchCategoryModal
+          taskIds={Array.from(selectedIds)}
+          onClose={() => setShowBatchCategory(false)}
+          onSaved={async () => {
+            setShowBatchCategory(false)
             await loadTasks(page, pageSize)
           }}
         />

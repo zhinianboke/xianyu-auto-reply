@@ -25,6 +25,7 @@ class ListingMonitorItem(TimestampMixin, Base):
         Index("idx_lmi_task", "monitor_task_id"),
         Index("idx_lmi_owner", "owner_id"),
         Index("idx_lmi_publish_time", "publish_time"),
+        Index("idx_lmi_created", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)

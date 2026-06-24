@@ -26,6 +26,7 @@ from common.models.listing_monitor_task import ListingMonitorTask
 from common.models.xy_account import XYAccount
 from common.services.account_cooldown import DEFAULT_COOLDOWN_SECONDS, account_cooldown_manager
 from common.services.listing_monitor_dedup import has_owner_ordered_item
+from common.services.collect_account_loader import merge_task_and_fallback_account_ids
 from common.services.order_account_loader import load_fallback_accounts
 from common.services.xianyu_mtop import fetch_proxy_from_api
 from common.services.xianyu_order_client import XianyuOrderClient
@@ -206,6 +207,29 @@ class ListingMonitorTaskService:
             ordered.append(acc)
         return ordered
 
+    async def _resolve_and_load_accounts(self, task: ListingMonitorTask) -> List[XYAccount]:
+        """合并任务采集账号与兜底账号，加载可用账号（单次 session，减少连接获取）。"""
+        async with async_session_maker() as session:
+            # 合并任务账号 + 兜底（本用户·本分类→本用户·无分类→管理员·本分类→管理员·无分类）
+            merged_ids = await merge_task_and_fallback_account_ids(
+                session, list(task.account_ids or []), task.owner_id, task.category_id
+            )
+            if not merged_ids:
+                return []
+            # 同一 session 内加载账号（过滤失效）
+            stmt = select(XYAccount).where(XYAccount.account_id.in_(merged_ids))
+            rows = list((await session.execute(stmt)).scalars().all())
+        by_id = {row.account_id: row for row in rows}
+        ordered: List[XYAccount] = []
+        for account_id in merged_ids:
+            acc = by_id.get(account_id)
+            if not acc or not acc.cookie:
+                continue
+            if (acc.status or "active").strip().lower() in _INACTIVE_STATUSES:
+                continue
+            ordered.append(acc)
+        return ordered
+
     async def _get_account_usage_rank(self, owner_id: Optional[int], limit: int = 40) -> Dict[str, int]:
         """统计该用户最近 limit 条监控日志（跨任务）中各账号的"使用新近度"。
 
@@ -240,7 +264,7 @@ class ListingMonitorTaskService:
     async def _process_task(self, task: ListingMonitorTask, trigger_type: str = "auto"):
         """处理单个监控任务：采集 + 入库 + 写日志 + 更新执行时间。"""
         sort_field, sort_value = _MONITOR_SORT_MAP.get(task.monitor_type, _MONITOR_SORT_MAP["listing"])
-        accounts = await self._load_accounts(list(task.account_ids or []))
+        accounts = await self._resolve_and_load_accounts(task)
 
         # 负载均衡：跨任务（同用户）查最新40条监控日志，统计用过的账号；
         # 优先使用未在最近日志中出现的账号（跳过最近用过的），
@@ -282,7 +306,7 @@ class ListingMonitorTaskService:
             if cooldown_blocked:
                 message = "所有关联账号都在风控冷却期，本次跳过采集"
             else:
-                message = "无可用账号（账号不存在/禁用/Cookie为空）"
+                message = "无可用采集账号（任务账号与兜底账号均不可用：不存在/禁用/Cookie为空）"
             logger.warning(f"【{self.task_name}】监控任务 {task.id}({task.keyword}) {message}")
         else:
             price_min = float(task.price_min) if task.price_min is not None else None
@@ -470,7 +494,7 @@ class ListingMonitorTaskService:
                             # 兜底账号懒加载：监控任务的所有商品共用，仅一次 IO
                             if not fallback_loaded:
                                 fallback_accounts_map, fallback_detail = await load_fallback_accounts(
-                                    task.owner_id, log_prefix=self.task_name
+                                    task.owner_id, task.category_id, log_prefix=self.task_name
                                 )
                                 fallback_accounts = list(fallback_accounts_map.values())
                                 fallback_loaded = True
@@ -487,8 +511,9 @@ class ListingMonitorTaskService:
                                 )
                             except Exception as exc:  # noqa: BLE001
                                 # 下单过程异常也要把商品入库并保存失败原因，避免漏采集
+                                # （不再置 is_dm_sent=True：失败不发私信由查询的 order_status=success 网关保证，
+                                #   且后续被定时下单任务补单成功后仍可正常发起私信）
                                 logger.error(f"【{self.task_name}】商品 {item_id} 采集后直接下单异常: {exc}")
-                                new_item.is_dm_sent = True
                                 new_item.order_status = "failed"
                                 new_item.order_fail_reason = str(exc)[:500]
                                 new_item.order_attempts = 1
@@ -511,7 +536,8 @@ class ListingMonitorTaskService:
     ) -> None:
         """采集后直接下单：任务账号 + 兜底账号合并候选轮换下单，结果写入 item（随后随采集一起入库）。
 
-        直接下单跳过私信环节（置 is_dm_sent=true）。落库语义与定时下单任务（auto_order_task）对齐：
+        下单成功后由"采集商品发送私信"任务在下单成功之后再发起私信（不再预先置 is_dm_sent 跳过私信）。
+        落库语义与定时下单任务（auto_order_task）对齐：
         - 候选为空（任务账号与兜底账号本次全部失效，或两者均未配置）：
             order_status="no_account"，order_attempts 不累加，is_ordered=false；
             交由定时下单任务后续重试。
@@ -521,7 +547,6 @@ class ListingMonitorTaskService:
         - 全部候选都试过：有业务失败则 order_status="failed"、order_attempts=1；
             否则视为全部账号在下单时被判失效，order_status="no_account"、order_attempts 不累加。
         """
-        item.is_dm_sent = True  # 直接下单跳过私信
 
         # 1) 合并候选：任务账号在前、兜底在后，按 account_id 去重；
         #    任务账号按 rr 起点旋转，兜底独立 fallback_rr 轮换，避免总从同一个账号开始

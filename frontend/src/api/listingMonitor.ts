@@ -28,6 +28,7 @@ export const MONITOR_TYPE_LABELS: Record<string, string> = MONITOR_TYPE_OPTIONS.
 
 export interface ListingMonitorTask {
   id: number
+  category_id?: number | null
   monitor_type: MonitorType
   keyword: string
   price_min?: number | null
@@ -84,6 +85,7 @@ export interface ListingMonitorTaskListData {
 
 export interface ListingMonitorTaskSaveParams {
   monitor_type: MonitorType
+  category_id: number
   keyword: string
   price_min?: number | null
   price_max?: number | null
@@ -154,13 +156,21 @@ export const batchDeleteListingMonitorTasks = (
   return post(`${PREFIX}/batch-delete`, { ids: taskIds })
 }
 
-// 批量修改监控任务的账号（监控账号 account_ids 或下单账号 order_account_ids）
+// 批量修改监控任务的账号（采集账号 account_ids 或下单账号 order_account_ids）
 export const batchUpdateListingMonitorAccounts = (
   taskIds: number[],
   field: 'account_ids' | 'order_account_ids',
   accountIds: string[]
 ): Promise<ApiResponse<ListingMonitorBatchDeleteResult>> => {
   return post(`${PREFIX}/batch-update-accounts`, { ids: taskIds, field, account_ids: accountIds })
+}
+
+// 批量修改监控任务的所属分类
+export const batchUpdateListingMonitorCategory = (
+  taskIds: number[],
+  categoryId: number
+): Promise<ApiResponse<ListingMonitorBatchDeleteResult>> => {
+  return post(`${PREFIX}/batch-update-category`, { ids: taskIds, category_id: categoryId })
 }
 
 // 监控日志账号Cookie复制项

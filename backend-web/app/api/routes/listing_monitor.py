@@ -29,6 +29,7 @@ class ListingMonitorCreateRequest(BaseModel):
     """创建上新监控任务请求"""
 
     monitor_type: str = Field(..., description="监控类型：listing-上新监控，price_drop-降价监控")
+    category_id: int = Field(..., description="所属分类ID（必填）")
     keyword: str = Field(..., min_length=1, max_length=200, description="商品监控关键字")
     price_min: Optional[float] = Field(None, ge=0, description="商品价格区间最低值")
     price_max: Optional[float] = Field(None, ge=0, description="商品价格区间最高值")
@@ -36,7 +37,7 @@ class ListingMonitorCreateRequest(BaseModel):
     interval_minutes: int = Field(..., ge=1, description="任务执行间隔（分钟）")
     collect_pages: int = Field(1, ge=1, description="每次采集页数")
     proxy_url: Optional[str] = Field(None, max_length=255, description="代理API地址（GET返回IP:PORT列表，空=不使用代理）")
-    account_ids: List[str] = Field(..., min_length=1, description="关联的闲鱼账号ID列表（至少一个）")
+    account_ids: List[str] = Field(default_factory=list, description="采集账号ID列表（多选，非必填；不可用时回退兜底）")
     order_account_ids: Optional[List[str]] = Field(None, description="下单账号ID列表（多选，私信与下单共用，非必填）")
     dm_content: Optional[str] = Field(None, max_length=1000, description="私信内容（配置下单账号后必填）")
     dm_batch_size: int = Field(5, ge=1, le=100, description="每次定时私信任务最多处理条数")
@@ -50,6 +51,7 @@ class ListingMonitorUpdateRequest(BaseModel):
     """更新上新监控任务请求"""
 
     monitor_type: Optional[str] = Field(None, description="监控类型：listing-上新监控，price_drop-降价监控")
+    category_id: Optional[int] = Field(None, description="所属分类ID")
     keyword: Optional[str] = Field(None, min_length=1, max_length=200)
     price_min: Optional[float] = Field(None, ge=0)
     price_max: Optional[float] = Field(None, ge=0)
@@ -83,8 +85,15 @@ class ListingMonitorBatchAccountsRequest(BaseModel):
     """批量修改上新监控任务账号请求"""
 
     ids: List[int] = Field(default_factory=list, description="监控任务ID列表")
-    field: str = Field(..., description="要修改的账号字段：account_ids-监控账号，order_account_ids-下单账号")
+    field: str = Field(..., description="要修改的账号字段：account_ids-采集账号，order_account_ids-下单账号")
     account_ids: List[str] = Field(default_factory=list, description="选择的账号ID列表")
+
+
+class ListingMonitorBatchCategoryRequest(BaseModel):
+    """批量修改上新监控任务分类请求"""
+
+    ids: List[int] = Field(default_factory=list, description="监控任务ID列表")
+    category_id: int = Field(..., description="目标分类ID（必填）")
 
 
 class ListingMonitorCopyCookiesRequest(BaseModel):
@@ -239,10 +248,30 @@ async def batch_update_listing_monitor_accounts(
         success_count = await svc.batch_update_accounts(owner_id, req.ids, req.field, req.account_ids)
     except ValueError as exc:
         return ApiResponse(success=False, message=str(exc))
-    field_label = "监控账号" if req.field == "account_ids" else "下单账号"
+    field_label = "采集账号" if req.field == "account_ids" else "下单账号"
     return ApiResponse(
         success=True,
         message=f"成功为 {success_count} 条监控任务修改{field_label}",
+        data={"success_count": success_count, "total_count": len(req.ids)},
+    )
+
+
+@router.post("/batch-update-category", response_model=ApiResponse)
+async def batch_update_listing_monitor_category(
+    req: ListingMonitorBatchCategoryRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """批量修改监控任务的所属分类"""
+    owner_id, _ = resolve_owner_scope(current_user)
+    svc = ListingMonitorService(session)
+    try:
+        success_count = await svc.batch_update_category(owner_id, req.ids, req.category_id)
+    except ValueError as exc:
+        return ApiResponse(success=False, message=str(exc))
+    return ApiResponse(
+        success=True,
+        message=f"成功为 {success_count} 条监控任务修改分类",
         data={"success_count": success_count, "total_count": len(req.ids)},
     )
 
