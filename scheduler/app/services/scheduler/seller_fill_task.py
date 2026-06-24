@@ -2,18 +2,20 @@
 采集商品卖家ID补全定时任务
 
 功能：
-1. 查询采集商品表中卖家真实ID（seller_user_id）为空、且最近2天采集入库（created_at >= 今日00:00前推2天）的数据
+1. 查询采集商品表中卖家真实ID（seller_user_id）为空、且当天或昨天采集入库（created_at >= 昨天00:00）、
+   且下单状态为「未下单/已下单/下单失败/无可用账号」（排除重复 duplicate）的数据
 2. 调用商品详情接口补全卖家真实ID与商品详情
 3. Cookie 账号来源与采集任务一致：监控任务配置的采集账号 + 用户级兜底采集账号，
-   用户未配置时回退管理员全局兜底；任务账号在前、兜底在后、去重保序，轮换使用
+   用户未配置时回退管理员全局兜底；任务账号在前、兜底在后、去重保序，轮换使用。
+   与下单任务一致：监控任务被删除/停用也不影响补全——任务账号取不到时按商品归属用户的兜底采集账号补全
 4. 与采集任务一致的账号负载与风控规避：按最近使用度（跨任务监控日志）排序，优先选用
    最近未使用的账号；过滤处于风控冷却期的账号；账号触发风控时加入冷却并停用本轮
 5. 若某账号接口返回不可用（Session/Token过期、需登录、风控等），本次运行不再使用该账号，
    等下次任务启动时再重新使用
 
 说明：
-- 最近2天窗口：提供48小时容错窗口，避免定时任务短期故障导致商品永久卡在未补全状态；
-  超过2天的遗留数据不再处理，防止历史脏数据持续占用补全配额。
+- 当天+昨天窗口：提供约24小时容错窗口，避免定时任务短期故障导致商品永久卡在未补全状态；
+  早于昨天的遗留数据不再处理，防止历史脏数据持续占用补全配额。
 """
 from __future__ import annotations
 
@@ -75,10 +77,10 @@ class SellerFillTaskService:
             item_failed = 0
             no_account = 0
 
-            for pk, item_id, task_id in items:
+            for pk, item_id, task_id, item_owner_id in items:
                 accounts = task_accounts_cache.get(task_id)
                 if accounts is None:
-                    accounts, proxy_api, owner_id = await self._load_task_accounts(task_id)
+                    accounts, proxy_api, owner_id = await self._load_task_accounts(task_id, item_owner_id)
                     # 跨任务 usage-rank 负载均衡：优先选用最近未使用的账号（与采集任务一致）
                     if accounts:
                         usage_rank = await self._get_account_usage_rank(owner_id, limit=40)
@@ -138,25 +140,30 @@ class SellerFillTaskService:
         except Exception as exc:  # noqa: BLE001
             logger.error(f"【{self.task_name}】执行异常: {exc}")
 
-    async def _get_items_to_fill(self) -> List[Tuple[int, str, int]]:
-        """查询卖家真实ID为空的采集商品（最近 2 天入库的），返回 (主键id, item_id, monitor_task_id) 列表。
+    async def _get_items_to_fill(self) -> List[Tuple[int, str, int, Optional[int]]]:
+        """查询卖家真实ID为空的采集商品（当天和昨天入库的），返回 (主键id, item_id, monitor_task_id, owner_id) 列表。
 
-        说明：只补全最近 2 天内采集入库（created_at 在北京时间今天 00:00 前推 2 天）的商品，
-        提供 48 小时容错窗口，避免定时任务短期故障导致商品永久卡在未补全状态；
-        超过 2 天的遗留数据不再处理，防止历史脏数据持续占用补全配额。
+        说明：只补全当天和昨天采集入库（created_at >= 北京时间昨天 00:00）的商品，
+        提供约 24 小时容错窗口，避免定时任务短期故障导致商品永久卡在未补全状态；
+        早于昨天的遗留数据不再处理，防止历史脏数据持续占用补全配额。
+
+        下单状态过滤：仅补全下单状态为「未下单(NULL)/已下单(success)/下单失败(failed)/
+        无可用账号(no_account)」的商品；排除「重复(duplicate)」——重复商品已被同用户其他
+        监控任务下单，无需再补全卖家详情。
         """
-        # 北京时间今天 00:00 前推 2 天作为下限（48 小时容错窗口）
-        cutoff_time = get_beijing_now_naive().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=2)
+        # 北京时间今天 00:00 前推 1 天作为下限（即昨天 00:00，覆盖当天和昨天）
+        cutoff_time = get_beijing_now_naive().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
         async with async_session_maker() as session:
             stmt = (
                 select(
                     ListingMonitorItem.id,
                     ListingMonitorItem.item_id,
                     ListingMonitorItem.monitor_task_id,
+                    ListingMonitorItem.owner_id,
                 )
                 .where(
                     and_(
-                        # 仅处理最近 2 天入库的商品
+                        # 仅处理当天和昨天入库的商品
                         ListingMonitorItem.created_at >= cutoff_time,
                         or_(
                             ListingMonitorItem.seller_user_id.is_(None),
@@ -167,42 +174,58 @@ class SellerFillTaskService:
                             ListingMonitorItem.seller_fill_status.is_(None),
                             ListingMonitorItem.seller_fill_status != "failed",
                         ),
+                        # 仅补全下单状态为 未下单(NULL)/已下单/下单失败/无可用账号 的商品，排除重复(duplicate)
+                        or_(
+                            ListingMonitorItem.order_status.is_(None),
+                            ListingMonitorItem.order_status.in_(["success", "failed", "no_account"]),
+                        ),
                     )
                 )
                 .order_by(ListingMonitorItem.id.asc())
                 .limit(_MAX_ITEMS_PER_RUN)
             )
             rows = (await session.execute(stmt)).all()
-            return [(r[0], r[1], r[2]) for r in rows]
+            return [(r[0], r[1], r[2], r[3]) for r in rows]
 
-    async def _load_task_accounts(self, task_id: int) -> Tuple[List[XYAccount], Optional[str], Optional[int]]:
-        """加载补全可用账号、代理API地址与归属用户ID（任务须未删除且启用；保持顺序、过滤禁用/空Cookie）。
+    async def _load_task_accounts(
+        self, task_id: int, item_owner_id: Optional[int]
+    ) -> Tuple[List[XYAccount], Optional[str], Optional[int]]:
+        """加载补全可用账号、代理API地址与归属用户ID（保持顺序、过滤禁用/空Cookie）。
 
-        账号来源与采集任务一致：监控任务自身配置的采集账号(account_ids) + 用户级兜底采集账号，
-        用户未配置时回退管理员全局兜底；任务账号在前、兜底在后、去重保序。
+        与下单任务对齐：不因监控任务被删除/停用而放弃补全。
+        - 任务存在（含已删除/已停用）：取其采集账号(account_ids) + 兜底采集账号，归属用户取任务 owner_id；
+        - 任务查不到：归属用户回退为商品自身 owner_id，仅按兜底采集账号补全。
+        兜底覆盖链：本用户·本分类→本用户·无分类→管理员·本分类→管理员·无分类；任务账号在前、兜底在后、去重保序。
 
         Returns: (可用账号列表, 代理API地址或None, 归属用户ID或None)
         """
         async with async_session_maker() as session:
+            # 不过滤 is_deleted/is_enabled：监控任务被软删除/停用后，仍按兜底采集账号继续补全（与下单任务一致）
             task = (
                 await session.execute(
-                    select(ListingMonitorTask).where(
-                        ListingMonitorTask.id == task_id,
-                        ListingMonitorTask.is_deleted.is_(False),
-                        ListingMonitorTask.is_enabled.is_(True),
-                    )
+                    select(ListingMonitorTask).where(ListingMonitorTask.id == task_id)
                 )
             ).scalar_one_or_none()
-            if not task:
-                return [], None, None
-            proxy_api = task.proxy_url
-            owner_id = task.owner_id
-            # 合并任务采集账号 + 生效兜底采集账号
-            # （本用户·本分类→本用户·无分类→管理员·本分类→管理员·无分类）
+            if task:
+                proxy_api = task.proxy_url
+                owner_id = task.owner_id if task.owner_id is not None else item_owner_id
+                category_id = task.category_id
+                task_account_ids = list(task.account_ids or [])
+            else:
+                # 任务查不到（极端情况）：完全回退兜底，归属用户取商品自身 owner_id
+                proxy_api = None
+                owner_id = item_owner_id
+                category_id = None
+                task_account_ids = []
+            # 合并任务采集账号 + 生效兜底采集账号（任务账号为空时即纯兜底）
             account_ids = await merge_task_and_fallback_account_ids(
-                session, list(task.account_ids or []), owner_id, task.category_id
+                session, task_account_ids, owner_id, category_id
             )
             if not account_ids:
+                logger.warning(
+                    f"【{self.task_name}】任务 {task_id}（用户 {owner_id}）未配置任何采集账号"
+                    f"（任务账号与兜底采集账号均为空），该任务名下商品本轮跳过补全"
+                )
                 return [], proxy_api, owner_id
             rows = list(
                 (
@@ -221,6 +244,11 @@ class SellerFillTaskService:
             if (acc.status or "active").strip().lower() in _INACTIVE_STATUSES:
                 continue
             ordered.append(acc)
+        if not ordered:
+            logger.warning(
+                f"【{self.task_name}】任务 {task_id}（用户 {owner_id}）合并采集账号共 {len(account_ids)} 个，"
+                f"但均不可用（Cookie为空/账号已停用），该任务名下商品本轮跳过补全"
+            )
         return ordered, proxy_api, owner_id
 
     async def _get_account_usage_rank(self, owner_id: Optional[int], limit: int = 40) -> Dict[str, int]:

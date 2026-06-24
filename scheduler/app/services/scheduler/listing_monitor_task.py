@@ -485,7 +485,8 @@ class ListingMonitorTaskService:
                     if direct_order:
                         # 去重：同一用户该商品已被其他监控任务下单成功，则跳过重复下单
                         if await has_owner_ordered_item(session, task.owner_id, item_id):
-                            new_item.is_dm_sent = True
+                            # 重复商品并未实际发送私信，不再置 is_dm_sent=True（避免误显示「已发待确认」）；
+                            # 其 order_status="duplicate" 已被发私信任务的 order_status=="success" 网关排除，不会被发私信
                             new_item.is_ordered = True
                             new_item.order_status = "duplicate"
                             new_item.order_fail_reason = "同商品已在其他监控任务下单，跳过重复下单"
