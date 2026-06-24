@@ -68,6 +68,7 @@ dmypy.json
 # Node.js / 前端相关
 # ------------------------------------------
 **/node_modules/
+**/node_modules.zip
 /frontend/dist/
 /frontend/build/
 /promotion/frontend/dist/
