@@ -96,6 +96,13 @@ class ListingMonitorBatchCategoryRequest(BaseModel):
     category_id: int = Field(..., description="目标分类ID（必填）")
 
 
+class ListingMonitorBatchDmContentRequest(BaseModel):
+    """批量修改上新监控任务私信内容请求"""
+
+    ids: List[int] = Field(default_factory=list, description="监控任务ID列表")
+    dm_content: str = Field(..., min_length=1, max_length=1000, description="私信内容（必填）")
+
+
 class ListingMonitorCopyCookiesRequest(BaseModel):
     """复制监控日志账号Cookies请求"""
 
@@ -272,6 +279,26 @@ async def batch_update_listing_monitor_category(
     return ApiResponse(
         success=True,
         message=f"成功为 {success_count} 条监控任务修改分类",
+        data={"success_count": success_count, "total_count": len(req.ids)},
+    )
+
+
+@router.post("/batch-update-dm-content", response_model=ApiResponse)
+async def batch_update_listing_monitor_dm_content(
+    req: ListingMonitorBatchDmContentRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """批量修改监控任务的私信内容"""
+    owner_id, _ = resolve_owner_scope(current_user)
+    svc = ListingMonitorService(session)
+    try:
+        success_count = await svc.batch_update_dm_content(owner_id, req.ids, req.dm_content)
+    except ValueError as exc:
+        return ApiResponse(success=False, message=str(exc))
+    return ApiResponse(
+        success=True,
+        message=f"成功为 {success_count} 条监控任务修改私信内容",
         data={"success_count": success_count, "total_count": len(req.ids)},
     )
 

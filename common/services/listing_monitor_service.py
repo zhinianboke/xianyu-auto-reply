@@ -774,6 +774,48 @@ class ListingMonitorService:
         await self.session.commit()
         return len(tasks)
 
+    async def batch_update_dm_content(
+        self,
+        owner_id: Optional[int],
+        task_ids: Sequence[int],
+        dm_content: Any,
+    ) -> int:
+        """批量修改监控任务的私信内容（非空、≤1000字）。
+
+        说明：批量场景仅支持设置统一的私信内容，不支持批量清空（清空请逐条编辑），
+        避免误操作把多条任务的私信内容一次性清掉。
+
+        Returns: 实际更新的任务数
+        """
+        content = (str(dm_content).strip() if dm_content is not None else "")
+        if not content:
+            raise ValueError("请输入私信内容")
+        if len(content) > 1000:
+            raise ValueError("私信内容长度不能超过1000个字符")
+
+        normalized_ids: List[int] = []
+        for raw_id in task_ids:
+            try:
+                tid = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if tid > 0 and tid not in normalized_ids:
+                normalized_ids.append(tid)
+        if not normalized_ids:
+            raise ValueError("请选择要修改的监控任务")
+
+        conditions = self._scope_conditions(owner_id)
+        conditions.append(ListingMonitorTask.id.in_(normalized_ids))
+        stmt = select(ListingMonitorTask).where(*conditions)
+        tasks = (await self.session.execute(stmt)).scalars().all()
+        now = get_beijing_now_naive()
+        for task in tasks:
+            task.dm_content = content
+            task.updated_at = now
+
+        await self.session.commit()
+        return len(tasks)
+
     async def collect_log_account_cookies(
         self,
         owner_id: Optional[int],

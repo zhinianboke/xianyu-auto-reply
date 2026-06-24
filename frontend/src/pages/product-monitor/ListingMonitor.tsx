@@ -11,6 +11,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Loader2,
+  MessageSquare,
   PackageSearch,
   Pencil,
   Play,
@@ -39,6 +40,7 @@ import { getApiErrorMessage } from '@/utils/apiError'
 import { ListingMonitorFormModal } from './ListingMonitorFormModal'
 import { BatchAccountsModal, type BatchAccountField } from './BatchAccountsModal'
 import { BatchCategoryModal } from './BatchCategoryModal'
+import { BatchDmContentModal } from './BatchDmContentModal'
 
 const formatPriceRange = (task: ListingMonitorTask): string => {
   const min = task.price_min
@@ -67,6 +69,7 @@ export function ListingMonitor() {
   const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false)
   const [batchAccountsField, setBatchAccountsField] = useState<BatchAccountField | null>(null)
   const [showBatchCategory, setShowBatchCategory] = useState(false)
+  const [showBatchDmContent, setShowBatchDmContent] = useState(false)
   const [categoryMap, setCategoryMap] = useState<Record<number, string>>({})
   const [statusUpdatingId, setStatusUpdatingId] = useState<number | null>(null)
   const [runningId, setRunningId] = useState<number | null>(null)
@@ -287,6 +290,10 @@ export function ListingMonitor() {
               <button className="btn-ios-secondary" onClick={() => setShowBatchCategory(true)} disabled={tableLoading || deleting}>
                 <Tags className="w-4 h-4" />
                 批量改分类 ({selectedIds.size})
+              </button>
+              <button className="btn-ios-secondary" onClick={() => setShowBatchDmContent(true)} disabled={tableLoading || deleting}>
+                <MessageSquare className="w-4 h-4" />
+                批量改私信 ({selectedIds.size})
               </button>
               <button className="btn-ios-danger" onClick={() => setBatchDeleteConfirmOpen(true)} disabled={tableLoading || deleting}>
                 <Trash2 className="w-4 h-4" />
@@ -549,6 +556,17 @@ export function ListingMonitor() {
           onClose={() => setShowBatchCategory(false)}
           onSaved={async () => {
             setShowBatchCategory(false)
+            await loadTasks(page, pageSize)
+          }}
+        />
+      )}
+
+      {showBatchDmContent && (
+        <BatchDmContentModal
+          taskIds={Array.from(selectedIds)}
+          onClose={() => setShowBatchDmContent(false)}
+          onSaved={async () => {
+            setShowBatchDmContent(false)
             await loadTasks(page, pageSize)
           }}
         />

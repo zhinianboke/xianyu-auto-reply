@@ -173,6 +173,14 @@ export const batchUpdateListingMonitorCategory = (
   return post(`${PREFIX}/batch-update-category`, { ids: taskIds, category_id: categoryId })
 }
 
+// 批量修改监控任务的私信内容
+export const batchUpdateListingMonitorDmContent = (
+  taskIds: number[],
+  dmContent: string
+): Promise<ApiResponse<ListingMonitorBatchDeleteResult>> => {
+  return post(`${PREFIX}/batch-update-dm-content`, { ids: taskIds, dm_content: dmContent })
+}
+
 // 监控日志账号Cookie复制项
 export interface ListingMonitorLogCookieItem {
   account_id: string
