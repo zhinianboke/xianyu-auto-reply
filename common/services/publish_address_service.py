@@ -16,7 +16,9 @@ from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.publish_address import PublishAddress
+from common.models.user_publish_address import UserPublishAddress
 from common.models.xy_account import XYAccount
+from common.services.user_publish_address_service import UserPublishAddressService
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 
 
@@ -50,11 +52,14 @@ class ResolvedPublishAddress:
 
 @dataclass
 class PublishAddressQueueState:
-    """批量发布时的地址随机队列状态。"""
+    """批量发布时的地址随机队列状态。
 
-    addresses: List[PublishAddress]
+    addresses/queue 中的元素可能是全局地址 PublishAddress 或个人地址 UserPublishAddress。
+    """
+
+    addresses: List[Any]
     address_source: str
-    queue: List[PublishAddress] = field(default_factory=list)
+    queue: List[Any] = field(default_factory=list)
     last_selected_id: int | None = None
 
 
@@ -194,8 +199,26 @@ class PublishAddressService:
         )
         return (await self.session.execute(stmt)).scalars().all()
 
+    async def _get_account_owner_id(self, account_id: str) -> int | None:
+        """根据账号ID查询其归属用户ID。"""
+        stmt = select(XYAccount.owner_id).where(XYAccount.account_id == account_id).limit(1)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def build_queue_state(self, account_id: str) -> PublishAddressQueueState:
-        """为指定账号构建随机地址队列状态。"""
+        """为指定账号构建随机地址队列状态。
+
+        优先使用该账号归属用户的个人地址库；个人库为空时回退到全局随机地址库。
+        """
+        owner_id = await self._get_account_owner_id(account_id)
+        if owner_id is not None:
+            personal_svc = UserPublishAddressService(self.session)
+            personal_addresses = await personal_svc.get_enabled_addresses_for_owner(owner_id)
+            if personal_addresses:
+                return PublishAddressQueueState(
+                    addresses=personal_addresses,
+                    address_source="personal_pool",
+                )
+
         global_addresses = await self._list_enabled_addresses(account_id=None)
         return PublishAddressQueueState(
             addresses=global_addresses,
@@ -224,10 +247,17 @@ class PublishAddressService:
         self.mark_address_used(selected_address)
         return ResolvedPublishAddress(
             resolved_address_id=selected_address.id,
-            resolved_address_text=selected_address.search_keyword,
+            resolved_address_text=self._address_text(selected_address),
             address_source=current_queue_state.address_source,
             address_expected_text=None,
         )
+
+    @staticmethod
+    def _address_text(address: Any) -> str:
+        """读取地址对象的搜索文本，兼容全局地址与个人地址两种模型。"""
+        if isinstance(address, UserPublishAddress):
+            return address.address
+        return address.search_keyword
 
     def mark_address_used(self, address: PublishAddress) -> None:
         """记录地址被分配使用。"""

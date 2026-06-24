@@ -36,4 +36,4 @@ class PublishLog(TimestampMixin, Base):
     error_message: Mapped[str | None] = mapped_column(String(1000), comment="失败原因")
     resolved_address_id: Mapped[int | None] = mapped_column(BigInteger, comment="本次发布命中的地址池ID")
     resolved_address_text: Mapped[str | None] = mapped_column(String(200), comment="本次发布实际使用的地址搜索词")
-    address_source: Mapped[str | None] = mapped_column(String(20), comment="地址来源：material/account_pool/global_pool")
+    address_source: Mapped[str | None] = mapped_column(String(20), comment="地址来源：material/account_pool/global_pool/personal_pool")
