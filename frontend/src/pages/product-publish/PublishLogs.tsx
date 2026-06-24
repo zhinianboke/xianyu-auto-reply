@@ -27,6 +27,7 @@ const ADDRESS_SOURCE_CONFIG: Record<string, { label: string; cls: string }> = {
   material: { label: '素材地址', cls: 'badge-primary' },
   account_pool: { label: '账号随机', cls: 'badge-warning' },
   global_pool: { label: '全局随机', cls: 'badge-gray' },
+  personal_pool: { label: '个人随机', cls: 'badge-primary' },
 }
 
 export function PublishLogs() {

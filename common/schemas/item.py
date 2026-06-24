@@ -12,6 +12,13 @@ class ItemBatchDeleteRequest(BaseModel):
     items: list[ItemTarget]
 
 
+class ItemBatchOfflineRequest(BaseModel):
+    """批量下架请求：使用指定账号的Cookie下架其名下的商品。"""
+
+    cookie_id: str
+    item_ids: list[str]
+
+
 class ItemReplyUpdate(BaseModel):
     reply: str
 

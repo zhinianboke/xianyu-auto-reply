@@ -76,7 +76,7 @@ export interface PublishLog {
   error_message?: string | null
   resolved_address_id?: number | null
   resolved_address_text?: string | null
-  address_source?: 'material' | 'account_pool' | 'global_pool' | null
+  address_source?: 'material' | 'account_pool' | 'global_pool' | 'personal_pool' | null
   created_at: string
   updated_at: string
 }

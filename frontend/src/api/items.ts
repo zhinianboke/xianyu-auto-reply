@@ -90,6 +90,11 @@ export const batchDeleteItems = (ids: { cookie_id: string; item_id: string }[]):
   return del(`${ITEM_PREFIX}/batch`, { data: { items: ids } })
 }
 
+// 批量下架商品（调用闲鱼接口，使用所选账号的Cookie）
+export const batchOfflineItems = (cookieId: string, itemIds: string[]): Promise<ApiResponse> => {
+  return post(`${ITEM_PREFIX}/batch-offline`, { cookie_id: cookieId, item_ids: itemIds })
+}
+
 // 从账号获取商品（分页）
 export const fetchItemsFromAccount = (cookieId: string, page?: number): Promise<ApiResponse> => {
   return post(`${ITEM_PREFIX}/get-by-page`, { cookie_id: cookieId, page: page || 1 })

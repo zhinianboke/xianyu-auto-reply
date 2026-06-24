@@ -111,7 +111,7 @@ export const mainNavItems: NavEntry[] = [
       { key: 'product-publish-materials', icon: Image, label: '素材库', path: '/product-publish/materials' },
       { key: 'product-publish-single', icon: Send, label: '单品发布', path: '/product-publish/single' },
       { key: 'product-publish-batch', icon: Layers, label: '批量发布', path: '/product-publish/batch' },
-      { key: 'product-publish-addresses', icon: MapPin, label: '随机地址库', path: '/product-publish/addresses' },
+      { key: 'product-publish-addresses', icon: MapPin, label: '地址库', path: '/product-publish/addresses' },
       { key: 'product-publish-logs', icon: ScrollText, label: '发布日志', path: '/product-publish/logs' },
     ],
   },

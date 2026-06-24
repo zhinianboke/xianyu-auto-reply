@@ -1306,6 +1306,21 @@ class DatabaseInitializer:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品发布随机地址池表';
         """,
 
+        "xy_user_publish_addresses": """
+            CREATE TABLE IF NOT EXISTS xy_user_publish_addresses (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                owner_id BIGINT NOT NULL COMMENT '归属用户ID',
+                address VARCHAR(200) NOT NULL COMMENT '地址文本（去重键）',
+                is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）',
+                use_count INT NOT NULL DEFAULT 0 COMMENT '使用次数',
+                last_used_at DATETIME DEFAULT NULL COMMENT '最后使用时间',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX idx_upa_owner_deleted (owner_id, is_deleted),
+                INDEX idx_upa_owner_addr (owner_id, address)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='个人发布地址库表';
+        """,
+
         # 38. 商品发布日志表
         "xy_publish_logs": """
             CREATE TABLE IF NOT EXISTS xy_publish_logs (

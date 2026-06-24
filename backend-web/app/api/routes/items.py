@@ -13,9 +13,11 @@ from common.utils.auth_scope import resolve_owner_scope
 from common.utils.default_reply_api import validate_api_url, normalize_api_timeout
 from common.schemas.item import (
     ItemBatchDeleteRequest,
+    ItemBatchOfflineRequest,
     ItemFullFetchRequest,
     ItemPageFetchRequest,
 )
+from common.services.item_offline_service import batch_offline_items_from_xianyu
 from app.services.account_service import AccountService
 from app.services.item_service import ItemService
 
@@ -781,6 +783,52 @@ async def batch_delete_items(
     if removed == 0 and len(payload.items) > 0:
         return ApiResponse(success=False, message=f"未能删除任何商品（共 {len(payload.items)} 个），请检查商品是否存在")
     return ApiResponse(success=True, message=f"已删除 {removed} 个商品")
+
+
+@items_router.post("/batch-offline", response_model=ApiResponse)
+async def batch_offline_items(
+    payload: ItemBatchOfflineRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+) -> ApiResponse:
+    """批量下架商品（调用闲鱼接口，使用所选账号的Cookie）
+
+    下架 ≠ 删除：商品在卖家后台下架后仍可重新上架，本接口不改动本地商品库记录。
+    所选账号必须是这些商品的归属账号，否则闲鱼会对不属于该账号的商品返回失败。
+    """
+    # 管理员可操作所有账号，普通用户只能操作自己的账号
+    owner_id, _ = resolve_owner_scope(current_user)
+
+    if not payload.item_ids:
+        return ApiResponse(success=False, message="请选择要下架的商品")
+
+    account = await account_service.get_account_for_user(owner_id, payload.cookie_id)
+    if not account:
+        return ApiResponse(success=False, message="账号不存在")
+    if not account.cookie:
+        return ApiResponse(success=False, message="该账号未登录（Cookie为空），无法下架")
+
+    result = await batch_offline_items_from_xianyu(
+        account.account_id, account.cookie, payload.item_ids
+    )
+    suc_count = result.get("suc_count", 0)
+    fail_count = result.get("fail_count", 0)
+    logger.info(
+        f"批量下架商品: 账号={account.account_id}, 请求={len(payload.item_ids)}, "
+        f"成功={suc_count}, 失败={fail_count}"
+    )
+
+    data = {"results": result.get("results", []), "suc_count": suc_count, "fail_count": fail_count}
+    # 全部失败：透传闲鱼返回的失败原因，便于前端展示
+    if suc_count == 0:
+        return ApiResponse(
+            success=False,
+            message=result.get("message") or "下架失败",
+            data=data,
+        )
+    # 部分/全部成功
+    message = f"已下架 {suc_count} 个商品" + (f"，{fail_count} 个失败" if fail_count else "")
+    return ApiResponse(success=True, message=message, data=data)
 
 
 @items_router.post("/get-by-page")
