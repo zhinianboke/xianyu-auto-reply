@@ -1013,7 +1013,8 @@ class AutoReplyService:
                         send_email_notification,
                         send_webhook_notification,
                         send_wechat_notification,
-                        send_telegram_notification
+                        send_telegram_notification,
+                        send_pushplus_notification
                     )
                     
                     config_data = parse_notification_config(channel_config)
@@ -1032,6 +1033,8 @@ class AutoReplyService:
                         await send_wechat_notification(config_data, notification_content)
                     elif channel_type == 'telegram':
                         await send_telegram_notification(config_data, notification_content)
+                    elif channel_type == 'pushplus':
+                        await send_pushplus_notification(config_data, notification_content)
                     else:
                         logger.warning(f"【{self.cookie_id}】不支持的通知渠道类型: {channel_type}")
                         

@@ -475,6 +475,61 @@ async def send_wechat_notification(config_data: Dict[str, Any], message: str) ->
         return False
 
 
+async def send_pushplus_notification(config_data: Dict[str, Any], message: str) -> bool:
+    """发送PushPlus通知
+
+    Args:
+        config_data: 配置数据，包含token，可选topic、template、title
+        message: 通知消息
+
+    Returns:
+        是否发送成功
+    """
+    try:
+        token = (config_data.get('token') or '').strip()
+        if not token:
+            logger.warning("📱 PushPlus通知 - token配置为空")
+            return False
+
+        title = config_data.get('title') or '闲鱼自动回复通知'
+        template = config_data.get('template') or 'txt'
+        topic = (config_data.get('topic') or '').strip()
+        server_url = (config_data.get('server_url') or 'https://www.pushplus.plus').rstrip('/')
+
+        api_url = f"{server_url}/send"
+        data = {
+            "token": token,
+            "title": title,
+            "content": message,
+            "template": template,
+        }
+        if topic:
+            data["topic"] = topic
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(api_url, json=data, timeout=10) as response:
+                if response.status == 200:
+                    response_text = await response.text()
+                    try:
+                        response_json = json.loads(response_text)
+                        if response_json.get('code') == 200:
+                            logger.info("📱 PushPlus通知发送成功")
+                            return True
+                        else:
+                            logger.warning(f"📱 PushPlus通知发送失败: {response_json.get('msg')}")
+                            return False
+                    except json.JSONDecodeError:
+                        logger.info("📱 PushPlus通知发送成功")
+                        return True
+                else:
+                    logger.warning(f"📱 PushPlus通知发送失败: HTTP {response.status}")
+                    return False
+
+    except Exception as e:
+        logger.error(f"📱 发送PushPlus通知异常: {e}")
+        return False
+
+
 async def send_telegram_notification(config_data: Dict[str, Any], message: str) -> bool:
     """发送Telegram通知"""
     try:

@@ -79,15 +79,27 @@ const channelTypes = [
       webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=你的key"
     }
   },
-  { 
-    type: 'telegram', 
-    label: 'Telegram', 
-    desc: 'Telegram机器人', 
-    icon: Send, 
+  {
+    type: 'telegram',
+    label: 'Telegram',
+    desc: 'Telegram机器人',
+    icon: Send,
     placeholder: '{"bot_token": "...", "chat_id": "..."}',
     defaultConfig: {
       bot_token: "你的Bot_Token",
       chat_id: "你的Chat_ID"
+    }
+  },
+  {
+    type: 'pushplus',
+    label: 'PushPlus',
+    desc: '微信公众号推送',
+    icon: MessageCircle,
+    placeholder: '{"token": "...", "topic": "", "template": "txt"}',
+    defaultConfig: {
+      token: "你的token",
+      topic: "",
+      template: "txt"
     }
   },
 ] as const
@@ -289,6 +301,7 @@ export function NotificationChannels() {
       case 'email': return '需要填写SMTP服务器、端口、发送邮箱、密码和接收邮箱'
       case 'wechat': return '请设置企业微信机器人Webhook URL'
       case 'telegram': return '需要填写Bot Token和Chat ID'
+      case 'pushplus': return '需要填写PushPlus的token，topic为群组编码（可选）'
       case 'webhook': return '填写自定义Webhook URL'
       default: return ''
     }
