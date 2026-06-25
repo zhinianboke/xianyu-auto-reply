@@ -166,6 +166,7 @@ export function Users() {
                 <th>手机号</th>
                 <th>角色</th>
                 <th>可添加账号数</th>
+                <th>余额</th>
                 <th>状态</th>
                 <th>操作</th>
               </tr>
@@ -173,7 +174,7 @@ export function Users() {
             <tbody>
               {users.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-8 text-slate-500 dark:text-slate-400">
+                  <td colSpan={9} className="text-center py-8 text-slate-500 dark:text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <UsersIcon className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>暂无用户数据</p>
@@ -193,6 +194,7 @@ export function Users() {
                       </span>
                     </td>
                     <td className="text-slate-500 dark:text-slate-400">{user.account_limit ?? '-'}</td>
+                    <td className="font-medium text-slate-700 dark:text-slate-300 tabular-nums">¥{user.balance ?? '0.00'}</td>
                     <td>
                       <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${statusClassMap[user.status || 'ACTIVE'] || statusClassMap.ACTIVE}`}>
                         {statusLabelMap[user.status || 'ACTIVE'] || '正常'}

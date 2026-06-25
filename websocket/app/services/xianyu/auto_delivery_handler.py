@@ -11,6 +11,7 @@
 
 import asyncio
 import json
+import os
 import time
 import hashlib
 import aiohttp
@@ -24,6 +25,12 @@ from app.services.xianyu.delivery_utils import (
 from app.services.xianyu.yifan_api_handler import YifanApiHandler
 from common.utils.fish_nick_utils import get_buyer_fish_nick
 from common.utils.response_field import extract_card_api_response_content
+
+
+# “卡券发送成功再确认发货”开关开启时，确认发货前同步等待服务端回执的最长超时（秒）。
+# 闲鱼对违规内容会快速返回带 reason 的拦截响应；正常消息服务端通常不回带相同 mid 的响应，
+# 故超时按“未拦截、视为已送达”处理，可通过环境变量 SEND_BEFORE_CONFIRM_WAIT_TIMEOUT 调整。
+SEND_BEFORE_CONFIRM_WAIT_TIMEOUT = float(os.getenv('SEND_BEFORE_CONFIRM_WAIT_TIMEOUT', '8'))
 
 
 class AutoDeliveryHandler:
@@ -359,7 +366,8 @@ class AutoDeliveryHandler:
     async def _record_delivery_log(self, chat_id: str, item_id: str, sender_user_id: str,
                                     sender_user_name: str, msg_time: str, order_id: str,
                                     delivery_contents: list, send_results: list,
-                                    any_send_failed: bool) -> None:
+                                    any_send_failed: bool,
+                                    defer_send_status_writeback: bool = False) -> dict | None:
         """将自动发货的发送结果写入消息日志表
         
         Args:
@@ -372,6 +380,14 @@ class AutoDeliveryHandler:
             delivery_contents: 发货内容列表
             send_results: 每条消息的实际发送结果
             any_send_failed: 是否有发送失败
+            defer_send_status_writeback: 是否延后发送状态回写。
+                开启“卡券发送成功再确认发货”开关时置 True：不在此起后台回写任务，
+                而是返回上下文（log_service/log_id/待确认的 future），交由确认发货前的
+                同步等待统一判定并回写，避免后台任务与同步等待争用同一个 send_future。
+
+        Returns:
+            defer_send_status_writeback=True 且存在待确认 future 时返回回写上下文 dict；
+            其余情况返回 None。
         """
         try:
             from app.services.xianyu.auto_reply_log_service import AutoReplyLogService
@@ -438,11 +454,21 @@ class AutoDeliveryHandler:
             log_id = await log_service.record_message(log_payload)
             logger.info(f"【{self.cookie_id}】自动发货消息日志已记录: 成功{success_count}/失败{fail_count}")
 
-            # 发出成功且日志写入成功时，起后台任务异步等待发送结果并回写发送状态
+            # 发出成功且日志写入成功时，处理服务端响应并回写发送状态
             if log_id and not any_send_failed and pending_send_waiters:
+                if defer_send_status_writeback:
+                    # 开关“卡券发送成功再确认发货”开启：改由确认发货前的同步等待统一判定并回写，
+                    # 此处不再起后台回写任务，避免两处争用同一个 send_future
+                    return {
+                        "log_service": log_service,
+                        "log_id": log_id,
+                        "pending_send_waiters": pending_send_waiters,
+                    }
+                # 默认：起后台任务异步等待发送结果并回写发送状态（不阻塞发货主流程）
                 self._spawn_delivery_send_status_writeback(log_service, log_id, pending_send_waiters)
         except Exception as e:
             logger.error(f"【{self.cookie_id}】写入自动发货消息日志失败: {self._safe_str(e)}")
+        return None
 
     def _spawn_delivery_send_status_writeback(
         self, log_service, log_id: int, waiters: list
@@ -495,7 +521,73 @@ class AutoDeliveryHandler:
                 await log_service.safe_update_send_status(log_id, "success", None)
         except Exception as e:
             logger.warning(f"【{self.cookie_id}】回写发货发送状态异常 log_id={log_id}: {self._safe_str(e)}")
-    
+
+    async def _wait_card_delivery_confirmed(self, send_results: list,
+                                            delivery_log_ctx: dict | None,
+                                            msg_time: str, order_id: str) -> str | None:
+        """开关“卡券发送成功再确认发货”开启时，确认发货前同步等待服务端回执。
+
+        以本次发出消息的 send_future 为准等待服务端响应（不依赖日志是否写入成功），
+        并在有日志上下文时同步回写发送状态（替代被跳过的后台回写任务）：
+        - 任一被平台拦截（返回 reason，如 CSI_FORBID 安全拦截）→ 回写 failed，返回拦截原因
+        - 全部未拦截（含正常发送、服务端未回执超时）→ 回写 success，返回 None
+
+        注意：仅文本消息会注册 send_future，图片消息无回执 future，不参与拦截判定
+        （与既有后台回写一致）。
+
+        Args:
+            send_results: 本次每条消息的发送结果（含 send_future / mid）
+            delivery_log_ctx: _record_delivery_log 延后回写时返回的上下文
+                （含 log_service / log_id），日志写入失败时可能为 None
+            msg_time: 消息时间（日志用）
+            order_id: 订单号（日志用）
+
+        Returns:
+            拦截原因明文（被拦截时），未拦截 / 无可等待项返回 None
+        """
+        waiters = [
+            (r.get("send_future"), r.get("mid"))
+            for r in (send_results or [])
+            if isinstance(r, dict) and r.get("send_future") is not None
+        ]
+        ctx = delivery_log_ctx or {}
+        log_service = ctx.get("log_service")
+        log_id = ctx.get("log_id")
+
+        wait_fn = getattr(self.parent, "wait_send_reject_reason", None)
+        if not callable(wait_fn) or not waiters:
+            return None
+
+        logger.info(
+            f'[{msg_time}] 【{self.cookie_id}】卡券发送成功再确认发货：确认发货前等待服务端回执，'
+            f'order_id={order_id}，待确认 {len(waiters)} 条，最长等待 {SEND_BEFORE_CONFIRM_WAIT_TIMEOUT} 秒'
+        )
+        # 并发等待各条消息的服务端回执，使总等待时长收敛到约一个超时（避免多数量订单逐条累加）
+        reasons = []
+        wait_results = await asyncio.gather(
+            *(wait_fn(send_future, mid, timeout=SEND_BEFORE_CONFIRM_WAIT_TIMEOUT)
+              for send_future, mid in waiters),
+            return_exceptions=True,
+        )
+        for r in wait_results:
+            if isinstance(r, Exception):
+                logger.warning(f"【{self.cookie_id}】等待卡券服务端回执异常: {self._safe_str(r)}")
+                continue
+            if r:
+                reasons.append(r)
+
+        # 同步回写日志发送状态（替代被跳过的后台回写任务）
+        try:
+            if log_service and log_id:
+                if reasons:
+                    await log_service.safe_update_send_status(log_id, "failed", "；".join(reasons))
+                else:
+                    await log_service.safe_update_send_status(log_id, "success", None)
+        except Exception as e:
+            logger.warning(f"【{self.cookie_id}】回写发货发送状态异常 log_id={log_id}: {self._safe_str(e)}")
+
+        return "；".join(reasons) if reasons else None
+
     def is_lock_held(self, lock_key: str) -> bool:
         return self.parent.is_lock_held(lock_key)
     
@@ -1247,8 +1339,17 @@ class AutoDeliveryHandler:
                                 any_send_failed = True
                                 logger.error(f"发送第 {i+1} 条消息失败: {self._safe_str(e)}")
 
+                        # “卡券发送成功再确认发货”开关：开启时需在确认发货前同步等待服务端回执
+                        send_before_confirm_active = (
+                            not skip_confirm_for_card_only
+                            and self.is_send_before_confirm_enabled()
+                            and bool(order_id)
+                        )
+
                         # 写入消息日志，记录真实发送结果
-                        await self._record_delivery_log(
+                        # 开关开启且发送层无失败时延后发送状态回写：改由下方同步等待统一判定，
+                        # 避免后台回写任务与同步等待争用同一个 send_future
+                        delivery_log_ctx = await self._record_delivery_log(
                             chat_id=chat_id,
                             item_id=item_id,
                             sender_user_id=send_user_id,
@@ -1258,11 +1359,20 @@ class AutoDeliveryHandler:
                             delivery_contents=delivery_contents,
                             send_results=send_results,
                             any_send_failed=any_send_failed,
+                            defer_send_status_writeback=(send_before_confirm_active and not any_send_failed),
                         )
 
                         # "卡券发送成功再确认发货"模式：卡券已发送，现在执行确认发货
                         send_before_confirm_fail_msg = None  # 记录确认发货失败原因，延后到 update_order_delivery_info 之后写入
-                        if not skip_confirm_for_card_only and self.is_send_before_confirm_enabled() and order_id and not any_send_failed:
+                        # 开关开启时：确认发货前等待服务端回执，确认卡券真实送达（未被平台拦截）再确认发货
+                        # 以 send_results 中的 future 为准，不因日志写入失败而跳过等待
+                        card_intercept_reason = None
+                        if send_before_confirm_active and not any_send_failed:
+                            card_intercept_reason = await self._wait_card_delivery_confirmed(
+                                send_results, delivery_log_ctx, msg_time, order_id
+                            )
+
+                        if send_before_confirm_active and not any_send_failed and not card_intercept_reason:
                             logger.info(f'[{msg_time}] 【{self.cookie_id}】卡券发送成功，开始执行确认发货: order_id={order_id}')
                             if self.is_auto_confirm_enabled():
                                 confirm_result = await self.auto_confirm(order_id, item_id)
@@ -1280,7 +1390,15 @@ class AutoDeliveryHandler:
                             else:
                                 send_before_confirm_fail_msg = "⚠️ 卡券已发送成功，但自动确认发货已关闭，请手动确认发货"
                                 logger.info(f'[{msg_time}] 【{self.cookie_id}】自动确认发货已关闭，卡券已发送但跳过确认发货: order_id={order_id}')
-                        elif not skip_confirm_for_card_only and self.is_send_before_confirm_enabled() and order_id and any_send_failed:
+                        elif send_before_confirm_active and card_intercept_reason:
+                            send_before_confirm_fail_msg = f"⚠️ 卡券疑似被平台拦截未送达（{card_intercept_reason}），已跳过确认发货，请人工核实买家是否收到后再手动确认发货"
+                            logger.warning(f'[{msg_time}] 【{self.cookie_id}】卡券被平台拦截未送达，跳过确认发货: order_id={order_id}，原因: {card_intercept_reason}')
+                            await self.send_delivery_failure_notification(
+                                send_user_name, send_user_id, item_id,
+                                send_before_confirm_fail_msg,
+                                chat_id,
+                            )
+                        elif send_before_confirm_active and any_send_failed:
                             send_before_confirm_fail_msg = "⚠️ 卡券发送存在失败，已跳过确认发货，请检查买家是否收到完整内容后手动确认发货"
                             logger.warning(f'[{msg_time}] 【{self.cookie_id}】卡券发送存在失败，跳过确认发货: order_id={order_id}')
                             await self.send_delivery_failure_notification(

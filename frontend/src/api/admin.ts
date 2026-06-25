@@ -18,6 +18,7 @@ export interface AdminUserApiItem {
   account_limit?: number | null
   cookie_count?: number
   card_count?: number
+  balance?: string | null
 }
 
 export interface CreateAdminUserPayload {
@@ -49,6 +50,7 @@ const mapAdminUser = (user: AdminUserApiItem): User => ({
   status: user.status,
   is_admin: user.is_admin,
   account_limit: user.account_limit,
+  balance: user.balance,
 })
 
 // 获取用户列表

@@ -12,6 +12,7 @@ export interface User {
   role?: UserRole
   status?: UserStatus
   account_limit?: number | null
+  balance?: string | null
 }
 
 export interface LoginRequest {
