@@ -161,9 +161,9 @@ export function NotificationChannels() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [_hasHydrated, isAuthenticated, token])
 
-  // 根据类型查找已配置的渠道
-  const getChannelByType = (type: string) => {
-    return channels.find(c => c.type === type)
+  // 统计某类型已配置的渠道数量
+  const getChannelCountByType = (type: string) => {
+    return channels.filter(c => c.type === type).length
   }
 
   const handleToggleEnabled = async (channel: NotificationChannel) => {
@@ -212,7 +212,10 @@ export function NotificationChannels() {
     const typeConfig = channelTypes.find(c => c.type === type)
     setSelectedType(type)
     setEditingChannel(null)
-    setFormName(typeConfig?.label || '')
+    // 同类型已存在时，默认名称追加序号以便区分
+    const count = getChannelCountByType(type)
+    const baseName = typeConfig?.label || ''
+    setFormName(count > 0 ? `${baseName} ${count + 1}` : baseName)
     // 新建时默认填充样例配置
     if (typeConfig?.defaultConfig) {
       setFormConfig(JSON.stringify(typeConfig.defaultConfig, null, 2))
@@ -334,10 +337,10 @@ export function NotificationChannels() {
           </h2>
         </div>
         <div className="vben-card-body">
-          <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">点击下方按钮选择您要配置的通知渠道类型</p>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">点击下方按钮选择通知渠道类型新建，同一类型可创建多个</p>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
             {channelTypes.map((ct, index) => {
-              const existingChannel = getChannelByType(ct.type)
+              const configuredCount = getChannelCountByType(ct.type)
               const Icon = ct.icon
               return (
                 <motion.div
@@ -346,50 +349,32 @@ export function NotificationChannels() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.03 }}
                   className={`relative p-4 rounded-xl border-2 transition-all ${
-                    existingChannel
-                      ? existingChannel.enabled
-                        ? 'border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-900/20'
-                        : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50'
+                    configuredCount > 0
+                      ? 'border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-900/20'
                       : 'border-slate-200 dark:border-slate-700 hover:border-blue-300 dark:hover:border-blue-600'
                   }`}
                 >
+                  {configuredCount > 0 && (
+                    <span className="absolute top-2 right-2 min-w-[1.25rem] h-5 px-1.5 inline-flex items-center justify-center text-xs font-medium rounded-full bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400">
+                      {configuredCount}
+                    </span>
+                  )}
                   <div className="text-center">
                     <div className={`w-10 h-10 mx-auto mb-2 rounded-lg flex items-center justify-center ${
-                      existingChannel?.enabled ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400' : 'bg-slate-100 dark:bg-slate-700 text-slate-500'
+                      configuredCount > 0 ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400' : 'bg-slate-100 dark:bg-slate-700 text-slate-500'
                     }`}>
                       <Icon className="w-5 h-5" />
                     </div>
                     <h3 className="font-medium text-slate-900 dark:text-slate-100 text-sm">{ct.label}</h3>
                     <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{ct.desc}</p>
-                    
-                    {existingChannel ? (
-                      <div className="mt-3 flex items-center justify-center gap-1">
-                        <button
-                          onClick={() => openEditModal(existingChannel)}
-                          className="text-xs px-2 py-1 rounded bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-800"
-                        >
-                          编辑
-                        </button>
-                        <button
-                          onClick={() => handleToggleEnabled(existingChannel)}
-                          className={`text-xs px-2 py-1 rounded ${
-                            existingChannel.enabled
-                              ? 'bg-green-100 dark:bg-green-900/50 text-green-600 dark:text-green-400'
-                              : 'bg-slate-100 dark:bg-slate-700 text-slate-500'
-                          }`}
-                        >
-                          {existingChannel.enabled ? '已启用' : '已禁用'}
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => openConfigModal(ct.type)}
-                        className="mt-3 text-xs px-3 py-1 rounded border border-blue-300 dark:border-blue-600 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30"
-                      >
-                        <Plus className="w-3 h-3 inline mr-1" />
-                        配置
-                      </button>
-                    )}
+
+                    <button
+                      onClick={() => openConfigModal(ct.type)}
+                      className="mt-3 text-xs px-3 py-1 rounded border border-blue-300 dark:border-blue-600 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30"
+                    >
+                      <Plus className="w-3 h-3 inline mr-1" />
+                      {configuredCount > 0 ? '新建' : '配置'}
+                    </button>
                   </div>
                 </motion.div>
               )
@@ -423,11 +408,17 @@ export function NotificationChannels() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className={`text-xs px-2 py-0.5 rounded ${
-                      channel.enabled ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400' : 'bg-slate-100 text-slate-500 dark:bg-slate-700'
-                    }`}>
+                    <button
+                      onClick={() => handleToggleEnabled(channel)}
+                      title={channel.enabled ? '点击禁用' : '点击启用'}
+                      className={`text-xs px-2 py-0.5 rounded transition-colors ${
+                        channel.enabled
+                          ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-800'
+                          : 'bg-slate-100 text-slate-500 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600'
+                      }`}
+                    >
                       {channel.enabled ? '启用' : '禁用'}
-                    </span>
+                    </button>
                     <button
                       onClick={() => handleTest(channel.id)}
                       className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500"
