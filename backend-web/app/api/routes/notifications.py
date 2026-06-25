@@ -80,7 +80,8 @@ async def test_notification_channel(
         send_email_notification,
         send_webhook_notification,
         send_wechat_notification,
-        send_telegram_notification
+        send_telegram_notification,
+        send_pushplus_notification
     )
     
     # 获取渠道信息
@@ -116,6 +117,8 @@ async def test_notification_channel(
             await send_wechat_notification(config_data, test_message)
         elif channel_type == 'telegram':
             await send_telegram_notification(config_data, test_message)
+        elif channel_type == 'pushplus':
+            await send_pushplus_notification(config_data, test_message)
         else:
             return ApiResponse(success=False, message=f"不支持的通知渠道类型: {channel_type}")
         

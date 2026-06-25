@@ -21,7 +21,8 @@ from common.utils.notification_utils import (
     send_email_notification,
     send_webhook_notification,
     send_wechat_notification,
-    send_telegram_notification
+    send_telegram_notification,
+    send_pushplus_notification
 )
 from common.utils.text_utils import safe_str
 
@@ -379,6 +380,9 @@ class NotificationManager:
                     notification_sent = True
                 elif channel_type == 'telegram':
                     await send_telegram_notification(config_data, message)
+                    notification_sent = True
+                elif channel_type == 'pushplus':
+                    await send_pushplus_notification(config_data, message)
                     notification_sent = True
                 else:
                     logger.warning(f"不支持的通知渠道类型: {channel_type}")
