@@ -334,8 +334,10 @@ export function MonitorItems() {
                 <th>私信次数</th>
                 <th>已下单</th>
                 <th>订单ID</th>
+                <th>下单账号</th>
                 <th>下单失败原因</th>
                 <th>下单次数</th>
+                <th>下单时间</th>
                 <th>详情</th>
                 <th>最近采集</th>
                 <th>采集时间</th>
@@ -346,13 +348,13 @@ export function MonitorItems() {
             <tbody>
               {tableLoading ? (
                 <tr>
-                  <td colSpan={30} className="text-center py-12">
+                  <td colSpan={32} className="text-center py-12">
                     <Loader2 className="w-6 h-6 animate-spin text-blue-500 mx-auto" />
                   </td>
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={30} className="text-center py-12 text-slate-400">
+                  <td colSpan={32} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <PackageSearch className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>暂无采集商品</p>
@@ -444,8 +446,10 @@ export function MonitorItems() {
                       )}
                     </td>
                     <td className="whitespace-nowrap text-slate-600 dark:text-slate-300">{item.order_id || '-'}</td>
+                    <td className="whitespace-nowrap text-slate-600 dark:text-slate-300">{item.order_account_id || '-'}</td>
                     <td className="max-w-[200px]"><span className="truncate block" title={item.order_fail_reason || ''}>{item.order_fail_reason || '-'}</span></td>
                     <td className="text-center">{item.order_attempts || 0}</td>
+                    <td className="whitespace-nowrap text-slate-500 dark:text-slate-400">{item.ordered_at ? new Date(item.ordered_at).toLocaleString('zh-CN') : '-'}</td>
                     <td className="whitespace-nowrap">
                       {item.has_detail ? (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">已获取</span>

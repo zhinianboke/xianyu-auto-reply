@@ -283,9 +283,11 @@ export interface ListingMonitorItem {
   dm_attempts?: number
   is_ordered: boolean
   order_id?: string | null
+  order_account_id?: string | null
   order_status?: string | null
   order_fail_reason?: string | null
   order_attempts?: number
+  ordered_at?: string | null
   last_seen_at?: string | null
   created_at?: string | null
   updated_at?: string | null

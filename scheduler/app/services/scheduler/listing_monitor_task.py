@@ -610,8 +610,8 @@ class ListingMonitorTaskService:
                 # 仅当使用的是任务账号时推进任务 rr 指针；兜底账号有独立 fallback_rr
                 if acc.account_id in used_task_ids:
                     rr[0] = rr[0] + 1
-                item.dm_account_id = acc.account_id
-                # 记录下单账号，发送私信时严格使用该账号发起会话
+                # 仅记录下单账号到 order_account_id；dm_account_id 留待"私信成功后"再写入，
+                # 避免下单完成但尚未私信时前端「私信账号」列提前显示值、与「已私信=否」不一致
                 item.order_account_id = acc.account_id[:80]
                 item.order_attempts = 1
                 item.is_ordered = True
@@ -638,7 +638,8 @@ class ListingMonitorTaskService:
             # 推进任务账号轮换指针（仅当最后失败的是任务账号），避免下个商品仍从同一账号开始
             if last_acc_id in used_task_ids:
                 rr[0] = rr[0] + 1
-            item.dm_account_id = last_acc_id
+            # 不写 dm_account_id：下单失败既无成功私信，也无成功下单账号；
+            # dm_account_id 仅代表"私信成功账号"，避免前端「私信账号」列显示已失败账号、与「已私信=否」不一致
             item.order_attempts = 1
             item.order_status = "failed"
             item.order_fail_reason = str(last_fail_reason)[:500] if last_fail_reason else None

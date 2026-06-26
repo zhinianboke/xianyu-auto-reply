@@ -89,6 +89,8 @@ export function MonitorItemDetailModal({ itemPk, onClose }: MonitorItemDetailMod
         { label: '私信失败原因', value: item.dm_fail_reason || '-' },
         { label: '下单状态', value: orderStatusText(item) },
         { label: '订单ID', value: item.order_id || '-' },
+        { label: '下单账号', value: item.order_account_id || '-' },
+        { label: '下单时间', value: formatTime(item.ordered_at) },
         { label: '下单失败原因', value: item.order_fail_reason || '-' },
         { label: '采集时间', value: formatTime(item.created_at) },
         { label: '最近采集', value: formatTime(item.last_seen_at) },
