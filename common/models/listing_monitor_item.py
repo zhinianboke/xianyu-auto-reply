@@ -56,6 +56,7 @@ class ListingMonitorItem(TimestampMixin, Base):
     dm_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", comment="私信发送尝试次数（失败重试用，达上限后不再重试）")
     is_ordered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0", comment="是否已下单成功")
     order_id: Mapped[str | None] = mapped_column(String(64), comment="下单成功的订单ID（拍下）")
+    order_account_id: Mapped[str | None] = mapped_column(String(80), comment="下单成功使用的账号ID（发起私信时严格使用该账号）")
     order_status: Mapped[str | None] = mapped_column(String(20), comment="下单结果：success-成功，failed-失败")
     order_fail_reason: Mapped[str | None] = mapped_column(String(500), comment="下单失败原因")
     order_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", comment="下单尝试次数（失败重试用，达上限后不再重试）")

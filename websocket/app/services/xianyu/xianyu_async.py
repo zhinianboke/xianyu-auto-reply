@@ -1914,19 +1914,34 @@ class XianyuAsync:
         self._pending_mid_futures[mid] = future
 
         try:
+            # 打印完整请求体，便于与服务端响应对照排查
             logger.info(
                 f"【{self.cookie_id}】发起创建会话请求: to_user_id={to_user_id}, "
-                f"item_id={item_id}, mid={mid}"
+                f"item_id={item_id}, mid={mid}, "
+                f"请求体={json.dumps(msg, ensure_ascii=False)}"
             )
             await ws.send(json.dumps(msg))
 
             # 等待服务端响应
             response = await asyncio.wait_for(future, timeout=timeout)
 
+            # 打印完整响应体，便于排查 cid 解析失败、服务端报错等问题
+            logger.info(
+                f"【{self.cookie_id}】创建会话收到响应: to_user_id={to_user_id}, "
+                f"item_id={item_id}, mid={mid}, "
+                f"响应体={json.dumps(response, ensure_ascii=False, default=str)}"
+            )
+
             # 解析响应提取 cid
             chat_id = self._extract_cid_from_create_chat_response(response)
             if not chat_id:
-                logger.error(f"【{self.cookie_id}】创建会话响应中未找到 cid: {response}")
+                # cid 解析失败时，同时打印请求体与响应体，定位是请求参数问题还是响应结构变化
+                logger.error(
+                    f"【{self.cookie_id}】创建会话响应中未找到 cid: "
+                    f"to_user_id={to_user_id}, item_id={item_id}, mid={mid}, "
+                    f"请求体={json.dumps(msg, ensure_ascii=False)}, "
+                    f"响应体={json.dumps(response, ensure_ascii=False, default=str)}"
+                )
                 raise ValueError("响应中未找到 cid")
 
             logger.info(

@@ -414,7 +414,8 @@ class AutoOrderTaskService:
             tried += 1
             status, biz_order_id, fail_reason = await self._order_one(acc, item_id)
             if status == "success":
-                await self._record_result(pk, True, biz_order_id, None)
+                # 记录实际下单成功的账号，供后续"采集商品发送私信"严格使用同一账号
+                await self._record_result(pk, True, biz_order_id, None, account_id=acc.account_id)
                 return "ordered"
             if status == "account_invalid":
                 disabled_accounts.add(acc.account_id)
@@ -466,12 +467,20 @@ class AutoOrderTaskService:
         return "success", biz_order_id, None
 
     async def _record_result(
-        self, pk: int, ok: bool, biz_order_id: Optional[str], fail_reason: Optional[str]
+        self,
+        pk: int,
+        ok: bool,
+        biz_order_id: Optional[str],
+        fail_reason: Optional[str],
+        account_id: Optional[str] = None,
     ) -> None:
         """记录下单结果并累计尝试次数。
 
-        - 成功：is_ordered=true（终态），记录 order_id；
+        - 成功：is_ordered=true（终态），记录 order_id 与下单账号 order_account_id；
         - 失败：is_ordered 保持 false，仅累计 order_attempts，达上限后由查询条件自动排除（停止重试）。
+
+        Args:
+            account_id: 本次下单成功使用的账号ID（供发送私信时严格使用同一账号）
 
         注意：成功后回写失败会导致订单已拍下但未标记，下次可能重复下单，故失败时 CRITICAL 告警。
         """
@@ -492,6 +501,9 @@ class AutoOrderTaskService:
                     item.ordered_at = get_beijing_now_naive()
                     if biz_order_id:
                         item.order_id = biz_order_id[:64]
+                    # 记录下单账号，发送私信时严格使用该账号发起会话
+                    if account_id:
+                        item.order_account_id = account_id[:80]
                 else:
                     item.order_status = "failed"
                     item.order_fail_reason = str(fail_reason)[:500] if fail_reason else None

@@ -611,6 +611,8 @@ class ListingMonitorTaskService:
                 if acc.account_id in used_task_ids:
                     rr[0] = rr[0] + 1
                 item.dm_account_id = acc.account_id
+                # 记录下单账号，发送私信时严格使用该账号发起会话
+                item.order_account_id = acc.account_id[:80]
                 item.order_attempts = 1
                 item.is_ordered = True
                 item.order_status = "success"
