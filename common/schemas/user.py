@@ -26,6 +26,8 @@ class AdminUserCreate(UserBase):
     role: UserRole = UserRole.MEMBER
     status: UserStatus = UserStatus.ACTIVE
     account_limit: Optional[int] = Field(default=None, ge=1)
+    # 到期日（精确到秒，北京时间 naive）。不传 / null 表示永不过期。
+    expire_at: Optional[datetime] = None
 
 
 class UserUpdate(BaseModel):
@@ -43,6 +45,9 @@ class AdminUserUpdate(BaseModel):
     status: Optional[UserStatus] = None
     role: Optional[UserRole] = None
     account_limit: Optional[int] = Field(default=None, ge=1)
+    # 到期日（精确到秒，北京时间 naive）。显式传 null 表示清空到期日（永不过期）。
+    # 不传该字段则不修改原值（依赖 model_dump(exclude_unset=True)）。
+    expire_at: Optional[datetime] = None
 
 
 class UserPublic(TimestampSchema, UserBase):
@@ -52,5 +57,6 @@ class UserPublic(TimestampSchema, UserBase):
     account_limit: Optional[int] = None
     external_id: Optional[str] = None
     last_login_at: Optional[datetime] = None
+    expire_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)

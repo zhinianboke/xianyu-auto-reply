@@ -1724,6 +1724,7 @@ class DatabaseInitializer:
             ("login_locked_until", "DATETIME COMMENT '登录锁定截止时间'", "login_fail_count"),
             ("dock_code", "VARCHAR(32) DEFAULT NULL UNIQUE COMMENT '对接码，用于分销商识别'", "login_locked_until"),
             ("secret_key", "VARCHAR(64) DEFAULT NULL UNIQUE COMMENT '分销秘钥，32位随机字符，全局唯一'", "dock_code"),
+            ("expire_at", "DATETIME DEFAULT NULL COMMENT '账号到期日（精确到秒，NULL=永不过期）'", "secret_key"),
         ],
         "xy_default_replies": [
             ("item_id", "VARCHAR(64) DEFAULT NULL COMMENT '商品ID'", "account_id"),

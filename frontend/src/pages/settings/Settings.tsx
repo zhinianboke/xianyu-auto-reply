@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Navigate } from 'react-router-dom'
-import { Settings as SettingsIcon, Save, Mail, RefreshCw, Eye, EyeOff, Copy, Upload, MessageCircle, Users, Percent, CreditCard, Megaphone, Heart, Globe } from 'lucide-react'
+import { Settings as SettingsIcon, Save, Mail, RefreshCw, Eye, EyeOff, Copy, Upload, MessageCircle, Users, Percent, CreditCard, Megaphone, Heart, Globe, CalendarClock } from 'lucide-react'
 import {
   buildHiddenMenuSettingsPayload,
   getHiddenMenuKeysFromSettings,
@@ -62,6 +62,8 @@ export function Settings() {
   const [proxySaving, setProxySaving] = useState(false)
   // 分销设置独立保存状态：与页面右上角"保存设置"按钮的 saving 分离，互不影响
   const [distributionSaving, setDistributionSaving] = useState(false)
+  // 用户到期/续期设置独立保存状态
+  const [userExpirySaving, setUserExpirySaving] = useState(false)
   const [settings, setSettings] = useState<SystemSettings | null>(null)
 
   // SMTP密码显示状态
@@ -359,6 +361,44 @@ export function Settings() {
       addToast({ type: 'error', message: getApiErrorMessage(error, '分销设置保存失败') })
     } finally {
       setDistributionSaving(false)
+    }
+  }
+
+  // 用户到期/续期设置独立保存：只 PUT user.renew_month_price / user.register_default_days
+  // 不使用页面右上角"保存设置"按钮，避免影响其他未改动的设置
+  const handleUserExpirySave = async () => {
+    if (!settings) {
+      return
+    }
+
+    const renewPrice = String(settings['user.renew_month_price'] ?? '').trim()
+    const registerDays = String(settings['user.register_default_days'] ?? '').trim()
+
+    // 允许为空（空=未配置）；非空时必须为合法数字
+    if (renewPrice !== '' && (!/^\d+(\.\d{1,2})?$/.test(renewPrice) || Number(renewPrice) <= 0)) {
+      addToast({ type: 'error', message: '续期单价必须为大于0的数字（最多两位小数）' })
+      return
+    }
+    if (registerDays !== '' && (!/^\d+$/.test(registerDays) || Number(registerDays) <= 0)) {
+      addToast({ type: 'error', message: '注册默认天数必须为正整数' })
+      return
+    }
+
+    try {
+      setUserExpirySaving(true)
+      const result = await updateSystemSettings({
+        'user.renew_month_price': renewPrice,
+        'user.register_default_days': registerDays,
+      })
+      if (result.success) {
+        addToast({ type: 'success', message: '用户到期设置保存成功' })
+      } else {
+        addToast({ type: 'error', message: result.message || '用户到期设置保存失败' })
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '用户到期设置保存失败') })
+    } finally {
+      setUserExpirySaving(false)
     }
   }
 
@@ -1086,6 +1126,65 @@ export function Settings() {
                   className="input-ios"
                 />
                 <p className="text-xs text-slate-400 mt-1">用户每次提现金额不得低于此値，不填则不限制。</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 用户到期/续期设置（仅管理员可见）—— 暂时隐藏，后端接口与保存逻辑保留 */}
+      {false && user?.is_admin && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="vben-card">
+            <div className="vben-card-header">
+              <h2 className="vben-card-title">
+                <CalendarClock className="w-4 h-4" />
+                用户到期设置
+              </h2>
+            </div>
+            <div className="vben-card-body space-y-4">
+              <p className="text-sm text-slate-500 dark:text-slate-400">配置用户续期单价与注册默认有效天数。注册默认天数留空时，新注册用户不设置到期日（永不过期）。</p>
+              <div className="input-group">
+                <label className="input-label">续期一个月的价格（元）</label>
+                <input
+                  type="text"
+                  value={(settings?.['user.renew_month_price'] as string) || ''}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    if (val === '' || /^\d*\.?\d{0,2}$/.test(val)) {
+                      setSettings(s => s ? { ...s, 'user.renew_month_price': val } : null)
+                    }
+                  }}
+                  placeholder="请输入续期一个月的价格，例如：30.00"
+                  className="input-ios"
+                />
+                <p className="text-xs text-slate-400 mt-1">用户在个人设置中续期时，按「单价 × 续期月数」计算总价并扣减余额。留空则续期功能不可用。</p>
+              </div>
+              <div className="input-group">
+                <label className="input-label">注册用户默认天数（天）</label>
+                <input
+                  type="text"
+                  value={(settings?.['user.register_default_days'] as string) || ''}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    if (val === '' || /^\d*$/.test(val)) {
+                      setSettings(s => s ? { ...s, 'user.register_default_days': val } : null)
+                    }
+                  }}
+                  placeholder="留空表示注册不设置到期日"
+                  className="input-ios"
+                />
+                <p className="text-xs text-slate-400 mt-1">新用户注册时，到期日 = 注册时间 + 默认天数。留空则新用户永不过期。</p>
+              </div>
+              <div className="flex justify-end pt-2">
+                <button
+                  onClick={handleUserExpirySave}
+                  disabled={userExpirySaving}
+                  className="btn-ios-primary"
+                >
+                  {userExpirySaving ? <ButtonLoading /> : <Save className="w-4 h-4" />}
+                  保存到期设置
+                </button>
               </div>
             </div>
           </div>

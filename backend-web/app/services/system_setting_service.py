@@ -57,6 +57,11 @@ DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
     # api_url 默认空字符串表示未配置；enabled 默认 false 表示不启用
     "proxy.api_url": ("", "代理 API 的 URL（可能较长，用于配置外部代理服务）"),
     "proxy.enabled": ("false", "是否启用代理（true/false）"),
+    # 用户到期/续期设置
+    # renew_month_price：续期一个月的价格（元），空表示未配置（续期功能不可用）
+    # register_default_days：注册用户默认有效天数，空表示注册不设置到期日（永不过期）
+    "user.renew_month_price": ("", "用户续期一个月的价格（元），空=未配置"),
+    "user.register_default_days": ("", "注册用户默认有效天数（空=不设置到期日）"),
 }
 
 # 不需要XSS转义的键（布尔值、数字等）
@@ -93,6 +98,9 @@ NO_ESCAPE_KEYS = {
     "withdraw.min_amount",
     "log.retention_days",
     "account.face_verify_timeout_disable",
+    # 用户到期/续期设置：均为数字字符串，无需 XSS 转义
+    "user.renew_month_price",
+    "user.register_default_days",
     # 代理设置：URL 含 :、/、?、&、= 等字符不能被 XSS 转义；布尔字符串"true"/"false"也无需转义
     "proxy.api_url",
     "proxy.enabled",

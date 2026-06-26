@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +35,7 @@ from common.schemas.user import AdminUserCreate, AdminUserUpdate
 from app.services.dashboard_stats_service import DashboardStatsService
 from app.services.scheduled_batch_log_service import ScheduledBatchLogService
 from app.services.user_service import UserService
+from app.services.recharge_service import RechargeService
 from common.services.settlement_service import BALANCE_KEY
 
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
@@ -115,6 +117,7 @@ def _build_user_payload(
         "cookie_count": counts.get(user.id, 0),
         "card_count": 0,
         "balance": _format_balance(balance_map.get(user.id)),
+        "expire_at": safe_isoformat(user.expire_at),
     }
 
 
@@ -212,6 +215,41 @@ async def update_user(
 
     balances = await _fetch_user_balances(session, [updated_user.id])
     return ApiResponse(success=True, message="用户更新成功", data={"user": _build_user_payload(updated_user, balances=balances)})
+
+
+class AdminRechargeRequest(BaseModel):
+    """管理员手动调整用户余额请求"""
+    amount: str = Field(..., description="调整金额，正数为充值，负数为扣减，例如：10.00 或 -5.00")
+    remark: str = Field(default="", description="备注（可选）")
+
+
+@router.post("/users/{user_id}/recharge", response_model=ApiResponse)
+async def recharge_user(
+    user_id: int,
+    payload: AdminRechargeRequest,
+    current_admin: User = Depends(deps.get_current_admin_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+    user_service: UserService = Depends(deps.get_user_service),
+) -> ApiResponse:
+    """管理员手动调整指定用户余额（正数充值 / 负数扣减）
+
+    余额调整与流水写入在 RechargeService.manual_recharge 内加行锁防并发，
+    并在 service 内部 commit，路由层不重复 commit。
+    """
+    user = await user_service.get(user_id)
+    if not user:
+        return ApiResponse(success=False, message="用户不存在")
+
+    service = RechargeService(session)
+    result = await service.manual_recharge(
+        admin_user_id=current_admin.id,
+        target_user_id=user_id,
+        amount=payload.amount,
+        remark=payload.remark,
+    )
+    if not result.get("success"):
+        return ApiResponse(success=False, message=result.get("message", "余额调整失败"))
+    return ApiResponse(success=True, message=result.get("message", "余额调整成功"), data=result.get("data"))
 
 
 @router.delete("/users/{user_id}", response_model=ApiResponse)

@@ -20,6 +20,8 @@ from __future__ import annotations
 
 
 
+from datetime import datetime, timedelta
+
 from typing import Optional
 
 
@@ -32,11 +34,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import security
 
+from common.models.system_setting import SystemSetting
+
 from common.models.user import User, UserRole, UserStatus
 
 from common.models.xy_account import XYAccount
 
 from common.schemas.user import AdminUserCreate, AdminUserUpdate, UserCreate, UserUpdate
+
+from common.utils.time_utils import get_beijing_now_naive
 
 
 
@@ -132,6 +138,8 @@ class UserService:
 
             account_limit=payload.account_limit,
 
+            expire_at=payload.expire_at,
+
         )
 
         self.session.add(user)
@@ -146,7 +154,53 @@ class UserService:
 
 
 
+    async def _calc_register_expire_at(self) -> Optional[datetime]:
+
+        """根据系统设置「注册用户默认天数」计算注册用户的到期日。
+
+        读取 xy_system_settings.user.register_default_days：
+
+        - 为空 / 非正整数：返回 None（不设置到期日，永不过期）
+
+        - 正整数 N：返回 当前北京时间 + N 天（精确到秒）
+
+        Returns:
+
+            到期日（naive datetime，北京时间）或 None
+
+        """
+
+        stmt = select(SystemSetting.value).where(
+
+            SystemSetting.key == "user.register_default_days"
+
+        )
+
+        result = await self.session.execute(stmt)
+
+        raw = result.scalar_one_or_none()
+
+        value = str(raw or "").strip()
+
+        if not value.isdigit():
+
+            return None
+
+        days = int(value)
+
+        if days <= 0:
+
+            return None
+
+        return get_beijing_now_naive() + timedelta(days=days)
+
+
+
     async def create(self, payload: UserCreate, *, role: UserRole | None = None) -> User:
+
+        # 注册时按系统设置的默认天数计算到期日（未配置则为 None，表示永不过期）
+
+        expire_at = await self._calc_register_expire_at()
 
         user = User(
 
@@ -161,6 +215,8 @@ class UserService:
             role=role or UserRole.MEMBER,
 
             status=UserStatus.ACTIVE,
+
+            expire_at=expire_at,
 
         )
 

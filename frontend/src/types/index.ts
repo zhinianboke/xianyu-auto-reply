@@ -13,6 +13,7 @@ export interface User {
   status?: UserStatus
   account_limit?: number | null
   balance?: string | null
+  expire_at?: string | null
 }
 
 export interface LoginRequest {
@@ -278,6 +279,9 @@ export interface SystemSettings {
   // 代理设置
   'proxy.api_url'?: string
   'proxy.enabled'?: boolean
+  // 用户到期/续期设置
+  'user.renew_month_price'?: string
+  'user.register_default_days'?: string
   [key: string]: unknown
 }
 
