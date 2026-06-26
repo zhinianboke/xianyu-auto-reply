@@ -4,7 +4,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ItemTarget(BaseModel):
-    cookie_id: str
+    # cookie_id 允许为空/None：账号已删除的孤儿商品在列表中 cookie_id 为 null，
+    # 批量删除时原样回传，需接受 None 以便路由按商品ID删除（见 batch_delete_items）。
+    cookie_id: str | None = None
     item_id: str
 
 
