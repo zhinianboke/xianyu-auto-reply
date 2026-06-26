@@ -8,7 +8,7 @@
  */
 import { useState, useEffect, useRef } from 'react'
 import { User, RefreshCw, Wallet, Plus, Key, Link2, Copy, RotateCcw, Save, Package, X, ScrollText, ArrowUpFromLine, Upload, QrCode, Eye, EyeOff } from 'lucide-react'
-import { getUserSetting, updateUserSetting, createCardSecretKey, changePassword, getDockCode, resetDockCode, getSecretKey, resetSecretKey, uploadPaymentQrcode, getSystemSettings } from '@/api/settings'
+import { getUserSetting, updateUserSetting, createCardSecretKey, changePassword, getDockCode, resetDockCode, getSecretKey, resetSecretKey, uploadPaymentQrcode, getSystemSettings, getCurrentUserProfile } from '@/api/settings'
 import { createWithdraw, getSettlementRecords, type SettlementRecord } from '@/api/payment'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
@@ -16,9 +16,26 @@ import { PageLoading, ButtonLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { RechargeModal } from './RechargeModal'
 import { FundFlowModal } from './FundFlowModal'
+import { RenewModal } from './RenewModal'
 
 // 余额设置的 key
 const BALANCE_KEY = 'balance'
+// 续期单价的系统设置 key（普通用户可读，用于计算续期总价）
+const RENEW_MONTH_PRICE_KEY = 'user.renew_month_price'
+
+// 格式化到期日展示（后端为北京时间 naive 字符串，无需做时区转换）
+// 形如 '2026-06-25T14:30:00' -> '2026-06-25 14:30:00'；空值显示「永不过期」
+const formatExpireAt = (value?: string | null): string => {
+  if (!value) return '永不过期'
+  return value.replace('T', ' ').slice(0, 19)
+}
+
+// 判断到期日是否已过期（到期日存在且早于当前时间）
+const isExpiredTime = (value?: string | null): boolean => {
+  if (!value) return false
+  const time = new Date(value).getTime()
+  return Number.isFinite(time) && time < Date.now()
+}
 const CONTACT_WECHAT_KEY = 'contact_wechat'
 const CONTACT_QQ_KEY = 'contact_qq'
 const REDELIVERY_TRIGGER_KEYWORD_KEY = 'redelivery_trigger_keyword'
@@ -33,6 +50,9 @@ export function PersonalSettings() {
   const [loading, setLoading] = useState(true)
   const [balance, setBalance] = useState('')
   const [showRecharge, setShowRecharge] = useState(false)
+  const [expireAt, setExpireAt] = useState<string | null>(null)
+  const [renewPrice, setRenewPrice] = useState('')
+  const [showRenew, setShowRenew] = useState(false)
   const [showFundFlowModal, setShowFundFlowModal] = useState(false)
   const [showSettlementModal, setShowSettlementModal] = useState(false)
   const [settlementRecords, setSettlementRecords] = useState<SettlementRecord[]>([])
@@ -122,6 +142,22 @@ export function PersonalSettings() {
       const cardKeyResult = await getUserSetting(CARD_SECRET_KEY)
       if (cardKeyResult.success && cardKeyResult.value !== undefined) {
         setCardSecretKey(cardKeyResult.value)
+      }
+      // 加载当前用户到期日
+      try {
+        const profile = await getCurrentUserProfile()
+        setExpireAt(profile.expire_at ?? null)
+      } catch {
+        // 到期日加载失败不阻断其他设置展示
+      }
+      // 加载续期单价（普通用户可读）
+      try {
+        const sysResult = await getSystemSettings()
+        if (sysResult.success && sysResult.data) {
+          setRenewPrice(String(sysResult.data[RENEW_MONTH_PRICE_KEY] ?? ''))
+        }
+      } catch {
+        // 续期单价加载失败不阻断其他设置展示
       }
     } catch {
       setBalance('0.00')
@@ -494,6 +530,21 @@ export function PersonalSettings() {
                 disabled
                 className="input-ios bg-gray-50 dark:bg-gray-800 cursor-not-allowed"
               />
+            </div>
+            <div className="md:col-span-2">
+              <label className="input-label">账户到期日</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={formatExpireAt(expireAt)}
+                  disabled
+                  className={`input-ios flex-1 bg-gray-50 dark:bg-gray-800 cursor-not-allowed ${isExpiredTime(expireAt) ? 'text-red-500 dark:text-red-400' : ''}`}
+                />
+                {/* 续期按钮暂时隐藏（后端续期接口保留，前端不开放入口） */}
+              </div>
+              {isExpiredTime(expireAt) && (
+                <p className="mt-1 text-xs text-red-500">账户已到期，请尽快续期以恢复服务。</p>
+              )}
             </div>
           </div>
         </div>
@@ -1148,6 +1199,20 @@ export function PersonalSettings() {
         visible={showRecharge}
         onClose={() => setShowRecharge(false)}
         onSuccess={loadSettings}
+      />
+
+      {/* 续期弹窗 */}
+      <RenewModal
+        visible={showRenew}
+        unitPrice={renewPrice}
+        balance={balance || '0'}
+        onClose={() => setShowRenew(false)}
+        onSuccess={(newExpireAt) => {
+          setExpireAt(newExpireAt)
+          setShowRenew(false)
+          // 续期会扣减余额，刷新余额与到期日
+          loadSettings()
+        }}
       />
     </div>
   )

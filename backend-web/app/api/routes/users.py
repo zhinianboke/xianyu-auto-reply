@@ -2,7 +2,7 @@ import secrets
 import string
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +12,7 @@ from common.models.user import User
 from common.schemas.common import ApiResponse
 from common.schemas.user import UserPublic, UserUpdate
 from common.utils.security import generate_secret_key as _generate_secret_key
+from app.services.recharge_service import RechargeService
 from app.services.user_service import UserService
 
 
@@ -32,6 +33,30 @@ class ChangePasswordRequest(BaseModel):
 @router.get("/me", response_model=UserPublic)
 async def read_current_user(current_user: User = Depends(deps.get_current_active_user)) -> UserPublic:
     return UserPublic.model_validate(current_user)
+
+
+class RenewMembershipRequest(BaseModel):
+    """账户续期请求"""
+    months: int = Field(..., ge=1, le=120, description="续期月数（1~120）")
+
+
+@router.post("/renew", response_model=ApiResponse)
+async def renew_membership(
+    payload: RenewMembershipRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """当前用户账户续期
+
+    按系统设置的续期单价计算总价，扣减余额并写入资金流水，
+    随后延长到期日。余额扣减与到期日更新在 RechargeService.renew_membership
+    内加行锁防并发，并在 service 内部 commit，路由层不重复 commit。
+    """
+    service = RechargeService(session)
+    result = await service.renew_membership(current_user.id, payload.months)
+    if not result.get("success"):
+        return ApiResponse(success=False, message=result.get("message", "续期失败"))
+    return ApiResponse(success=True, message=result.get("message", "续期成功"), data=result.get("data"))
 
 
 # 说明：用户列表查询与用户信息（角色/状态等）修改，统一收口到带管理员鉴权的

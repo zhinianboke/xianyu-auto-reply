@@ -138,6 +138,65 @@ class CookieManager:
         except Exception as e:
             logger.error(f"从数据库加载数据失败: {safe_str(e)}")
 
+    async def _check_user_expired_and_disable(
+        self, cookie_id: str, user_id: Optional[int]
+    ) -> bool:
+        """检查账号所属用户是否已到期，已到期则禁用账号
+
+        在为账号建立 WebSocket 连接前调用：
+        - 查询 User.expire_at，若存在且早于当前北京时间则视为已到期；
+        - 已到期时将该 XYAccount.status 置为 disabled、写入 disable_reason，
+          同步内存 cookie_status，使后续不再建立连接。
+
+        Args:
+            cookie_id: 账号ID（XYAccount.account_id）
+            user_id: 账号所属用户ID，为 None 时不做到期判断
+
+        Returns:
+            True 表示用户已到期（连接应被跳过）；False 表示未到期或无需判断
+        """
+        # 无所属用户（历史数据）则不做到期限制，按原逻辑连接
+        if user_id is None:
+            return False
+
+        from common.db.session import async_session_maker
+        from common.models import User, XYAccount
+        from common.utils.time_utils import get_beijing_now_naive
+        from sqlalchemy import select, update
+
+        try:
+            async with async_session_maker() as session:
+                expire_at = (
+                    await session.execute(
+                        select(User.expire_at).where(User.id == user_id)
+                    )
+                ).scalar_one_or_none()
+
+                # 到期日为空表示永不过期；未到期则放行
+                now = get_beijing_now_naive()
+                if not expire_at or expire_at > now:
+                    return False
+
+                # 已到期：禁用账号并写入禁用原因
+                reason = f"账号所属用户已于 {expire_at:%Y-%m-%d %H:%M:%S} 到期，已自动禁用，请续期后重新启用"
+                await session.execute(
+                    update(XYAccount)
+                    .where(XYAccount.account_id == cookie_id)
+                    .values(status="disabled", disable_reason=reason)
+                )
+                await session.commit()
+
+            # 同步内存状态，避免后续调度再次尝试连接
+            self.cookie_status[cookie_id] = False
+            logger.warning(
+                f"【{cookie_id}】所属用户(ID:{user_id})已于 {expire_at} 到期，跳过 WebSocket 连接并自动禁用账号"
+            )
+            return True
+        except Exception as e:
+            # 到期检查失败不应阻断正常账号连接，记录后按未到期处理
+            logger.error(f"【{cookie_id}】用户到期检查失败: {safe_str(e)}")
+            return False
+
     async def _run_xianyu(
         self,
         cookie_id: str,
@@ -145,15 +204,20 @@ class CookieManager:
         user_id: Optional[int] = None,
     ):
         """在事件循环中启动 XianyuAsync.main
-        
+
         Args:
             cookie_id: 账号ID
             cookie_value: Cookie值
             user_id: 用户ID
         """
         logger.info(f"【{cookie_id}】_run_xianyu方法开始执行...")
-        
+
         try:
+            # 建立连接前先判断账号所属用户是否已到期：
+            # 已到期则不连接 WebSocket，并自动禁用账号（写入禁用原因）
+            if await self._check_user_expired_and_disable(cookie_id, user_id):
+                return
+
             logger.info(f"【{cookie_id}】正在导入XianyuAsync...")
             from .xianyu_async import XianyuAsync
             

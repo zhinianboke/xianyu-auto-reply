@@ -20,6 +20,14 @@ interface UserFormState {
   role: UserRole
   status: UserStatus
   account_limit: string
+  expire_at: string
+}
+
+// 后端到期日为北京时间 naive 字符串（如 '2026-06-25T14:30:00'），
+// datetime-local 输入框需要 'YYYY-MM-DDTHH:MM:SS' 格式，直接截取前 19 位即可。
+const toDatetimeLocalValue = (value?: string | null): string => {
+  if (!value) return ''
+  return value.slice(0, 19)
 }
 
 const createInitialState = (initial: User | null): UserFormState => ({
@@ -31,6 +39,7 @@ const createInitialState = (initial: User | null): UserFormState => ({
   role: initial?.role ?? (initial?.is_admin ? 'ADMIN' : 'MEMBER'),
   status: initial?.status ?? 'ACTIVE',
   account_limit: initial?.account_limit != null ? String(initial.account_limit) : '',
+  expire_at: toDatetimeLocalValue(initial?.expire_at),
 })
 
 const roleOptions: Array<{ value: UserRole; label: string }> = [
@@ -48,6 +57,7 @@ const toUser = (item: AdminUserApiItem): User => ({
   status: item.status,
   is_admin: item.is_admin,
   account_limit: item.account_limit,
+  expire_at: item.expire_at,
 })
 
 export function UserFormModal({ initial, onClose, onSaved }: Props) {
@@ -118,6 +128,9 @@ export function UserFormModal({ initial, onClose, onSaved }: Props) {
 
     setSaving(true)
     try {
+      // 到期日：留空表示永不过期（显式传 null 清空），非空则传 'YYYY-MM-DDTHH:MM:SS'
+      const expireAtValue = form.expire_at.trim() ? form.expire_at.trim() : null
+
       const basePayload = {
         username,
         email,
@@ -125,6 +138,7 @@ export function UserFormModal({ initial, onClose, onSaved }: Props) {
         role: form.role,
         status: form.status,
         account_limit: accountLimit,
+        expire_at: expireAtValue,
       }
 
       let result
@@ -232,6 +246,17 @@ export function UserFormModal({ initial, onClose, onSaved }: Props) {
                 onChange={(event) => updateField('account_limit', event.target.value)}
                 placeholder="留空表示不限制"
               />
+            </div>
+            <div className="input-group">
+              <label className="input-label">到期日</label>
+              <input
+                className="input-ios"
+                type="datetime-local"
+                step={1}
+                value={form.expire_at}
+                onChange={(event) => updateField('expire_at', event.target.value)}
+              />
+              <p className="text-xs text-slate-400 mt-1">留空表示永不过期；精确到秒</p>
             </div>
             <div className="input-group">
               <label className="input-label">{isEditMode ? '新密码' : '登录密码'} {!isEditMode && <span className="text-red-500">*</span>}</label>

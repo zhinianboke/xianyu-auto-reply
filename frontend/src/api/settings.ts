@@ -369,6 +369,37 @@ export const changePassword = async (data: { current_password: string; new_passw
   return post(`${USERS_PREFIX}/change-password`, data)
 }
 
+// 获取当前登录用户信息（含到期日）
+export interface CurrentUserProfile {
+  id: number
+  username: string
+  email?: string
+  phone?: string
+  role?: string
+  status?: string
+  account_limit?: number | null
+  last_login_at?: string | null
+  expire_at?: string | null
+}
+
+export const getCurrentUserProfile = async (): Promise<CurrentUserProfile> => {
+  return get(`${USERS_PREFIX}/me`)
+}
+
+// 账户续期：按系统设置的续期单价扣减余额并延长到期日
+export interface RenewMembershipResult {
+  months: number
+  unit_price: string
+  total: string
+  balance_before: string
+  balance_after: string
+  expire_at: string | null
+}
+
+export const renewMembership = async (months: number): Promise<ApiResponse<RenewMembershipResult>> => {
+  return post(`${USERS_PREFIX}/renew`, { months })
+}
+
 // 获取备份文件列表（管理员）
 export const getBackupList = async (): Promise<{ backups: Array<{ filename: string; size: number; size_mb: number; modified_time: string }>; total: number }> => {
   return get(`${ADMIN_PREFIX}/backup/list`)
