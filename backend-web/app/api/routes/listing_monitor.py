@@ -368,7 +368,7 @@ async def list_listing_monitor_items(
     is_ordered: Optional[bool] = Query(None, description="是否已下单"),
     seller_fill: Optional[str] = Query(None, description="卖家补全状态：filled/pending/failed"),
     has_detail: Optional[bool] = Query(None, description="是否已获取详情"),
-    dm_state: Optional[str] = Query(None, description="私信状态：not_sent/pending/success/failed"),
+    dm_state: Optional[str] = Query(None, description="私信状态：not_sent/waiting/pending/success/failed"),
     order_state: Optional[str] = Query(None, description="下单状态：not_ordered/ordered/failed/no_account/duplicate"),
     created_start: Optional[str] = Query(None, description="采集时间区间开始（北京时间，如 2026-06-18T00:00）"),
     created_end: Optional[str] = Query(None, description="采集时间区间结束（北京时间，如 2026-06-18T23:59）"),

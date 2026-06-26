@@ -219,6 +219,7 @@ export function MonitorItems() {
               >
                 <option value="">全部</option>
                 <option value="not_sent">未私信</option>
+                <option value="waiting">等待重试</option>
                 <option value="pending">已发待确认</option>
                 <option value="success">私信成功</option>
                 <option value="failed">私信失败</option>
@@ -330,7 +331,7 @@ export function MonitorItems() {
                 <th>已私信</th>
                 <th>私信账号</th>
                 <th>私信会话ID</th>
-                <th>私信失败原因</th>
+                <th>私信原因</th>
                 <th>私信次数</th>
                 <th>已下单</th>
                 <th>订单ID</th>
@@ -420,6 +421,8 @@ export function MonitorItems() {
                         ) : (
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">已发待确认</span>
                         )
+                      ) : item.dm_status === 'waiting' ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" title={item.dm_fail_reason || '下单账号当前不可用，等待下次重试'}>等待重试</span>
                       ) : (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">未私信</span>
                       )}

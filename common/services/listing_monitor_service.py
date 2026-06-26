@@ -1015,15 +1015,19 @@ class ListingMonitorService:
             conditions.append(ListingMonitorItem.item_id == item_id.strip())
         # 私信状态（优先使用 dm_state 多状态筛选；未传时回退旧的 is_dm_sent 布尔筛选）
         # 状态语义与列表展示保持一致：
-        #   not_sent-未私信 / pending-已发待确认 / success-私信成功 / failed-私信失败
+        #   not_sent-未私信 / waiting-等待重试 / pending-已发待确认 / success-私信成功 / failed-私信失败
         if dm_state == "not_sent":
             conditions.append(ListingMonitorItem.is_dm_sent.is_(False))
             conditions.append(
                 or_(
                     ListingMonitorItem.dm_status.is_(None),
-                    ListingMonitorItem.dm_status != "failed",
+                    ListingMonitorItem.dm_status.notin_(["failed", "waiting"]),
                 )
             )
+        elif dm_state == "waiting":
+            # 等待重试：下单账号暂时不可用，已记录原因、未私信、下轮继续重试
+            conditions.append(ListingMonitorItem.is_dm_sent.is_(False))
+            conditions.append(ListingMonitorItem.dm_status == "waiting")
         elif dm_state == "success":
             conditions.append(ListingMonitorItem.dm_status == "success")
         elif dm_state == "failed":

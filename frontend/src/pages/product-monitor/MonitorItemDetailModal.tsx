@@ -86,7 +86,7 @@ export function MonitorItemDetailModal({ itemPk, onClose }: MonitorItemDetailMod
         { label: '私信状态', value: dmStatusText(item) },
         { label: '私信账号', value: item.dm_account_id || '-' },
         { label: '私信会话ID', value: item.dm_chat_id || '-' },
-        { label: '私信失败原因', value: item.dm_fail_reason || '-' },
+        { label: '私信原因', value: item.dm_fail_reason || '-' },
         { label: '下单状态', value: orderStatusText(item) },
         { label: '订单ID', value: item.order_id || '-' },
         { label: '下单账号', value: item.order_account_id || '-' },
