@@ -1443,7 +1443,11 @@ class DatabaseInitializer:
                 INDEX idx_lmi_task (monitor_task_id),
                 INDEX idx_lmi_owner (owner_id),
                 INDEX idx_lmi_publish_time (publish_time),
-                INDEX idx_lmi_created (created_at)
+                INDEX idx_lmi_created (created_at),
+                INDEX idx_lmi_dm_send (order_status, is_dm_sent, ordered_at),
+                INDEX idx_lmi_order_pending (is_ordered, order_attempts),
+                INDEX idx_lmi_item_ordered (item_id, is_ordered),
+                INDEX idx_lmi_owner_publish (owner_id, publish_time)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品监控采集商品信息表';
         """,
 
@@ -2924,6 +2928,35 @@ class DatabaseInitializer:
                     logger.info("✓ xy_listing_monitor_items: 创建 idx_lmi_created 索引")
             except Exception as e:
                 logger.warning(f"✗ xy_listing_monitor_items idx_lmi_created 创建失败: {e}")
+
+            # 为 xy_listing_monitor_items 补建查询索引 —— 原仅有 task/owner/publish_time/created_at 索引，
+            # 未覆盖调度任务/去重/列表的高频过滤字段，表数据增大后会全表扫描导致查询很慢
+            lmi_query_indexes = [
+                # 「采集商品发送私信」定时任务：order_status='success' + is_dm_sent=0 + ordered_at>=cutoff
+                ("idx_lmi_dm_send", "(order_status, is_dm_sent, ordered_at)"),
+                # 「采集商品自动下单」定时任务：is_ordered=0 + order_attempts<上限
+                ("idx_lmi_order_pending", "(is_ordered, order_attempts)"),
+                # 下单去重 has_owner_ordered_item：item_id + is_ordered（item_id 原仅为联合唯一键非最左列）
+                ("idx_lmi_item_ordered", "(item_id, is_ordered)"),
+                # 前端列表分页：owner_id 过滤 + 按 publish_time 排序
+                ("idx_lmi_owner_publish", "(owner_id, publish_time)"),
+            ]
+            for idx_name, idx_cols in lmi_query_indexes:
+                try:
+                    check = text("""
+                        SELECT COUNT(*) FROM information_schema.STATISTICS
+                        WHERE TABLE_SCHEMA = DATABASE()
+                        AND TABLE_NAME = 'xy_listing_monitor_items'
+                        AND INDEX_NAME = :idx_name
+                    """)
+                    result = await conn.execute(check, {"idx_name": idx_name})
+                    if result.scalar() == 0:
+                        await conn.execute(text(
+                            f"ALTER TABLE xy_listing_monitor_items ADD INDEX {idx_name} {idx_cols}"
+                        ))
+                        logger.info(f"✓ xy_listing_monitor_items: 创建 {idx_name} 索引")
+                except Exception as e:
+                    logger.warning(f"✗ xy_listing_monitor_items {idx_name} 创建失败: {e}")
 
             # 为 xy_listing_monitor_tasks 补建 category_id 索引 —— 加速按分类筛选任务
             try:

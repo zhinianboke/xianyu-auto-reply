@@ -173,13 +173,13 @@ class DmSendTaskService:
             logger.error(f"【{self.task_name}】执行异常: {exc}")
 
     async def _get_items_to_send(self) -> List[Tuple[int, str, str, int, Optional[int], Optional[str]]]:
-        """查询"最近 2 天下单成功 且 卖家真实ID已补全 且 未私信"的采集商品。
+        """查询"今天和昨天下单成功 且 卖家真实ID已补全 且 未私信"的采集商品。
 
         Returns: (主键id, item_id, seller_user_id, monitor_task_id, owner_id, order_account_id) 列表
         """
-        # 处理"下单成功时间"为最近 2 天（北京时间今天 00:00 前推 2 天）的采集商品，
-        # 提供 48 小时容错窗口，避免定时任务短期故障导致私信永久遗漏
-        cutoff_time = get_beijing_now_naive().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=2)
+        # 只处理"下单成功时间"为今天和昨天（北京时间今天 00:00 前推 1 天 = 昨天 00:00 起）的采集商品，
+        # 提供 24 小时容错窗口，避免定时任务短期故障导致私信永久遗漏
+        cutoff_time = get_beijing_now_naive().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
         async with async_session_maker() as session:
             stmt = (
                 select(
@@ -195,7 +195,7 @@ class DmSendTaskService:
                         ListingMonitorItem.is_dm_sent.is_(False),
                         # 下单成功之后才发送私信（仅 success，排除失败/重复/无账号等非成功状态）
                         ListingMonitorItem.order_status == "success",
-                        # 处理"下单成功时间"为最近 2 天的数据（ordered_at 仅在下单成功时写入北京时间）
+                        # 处理"下单成功时间"为今天和昨天的数据（ordered_at 仅在下单成功时写入北京时间）
                         ListingMonitorItem.ordered_at >= cutoff_time,
                         ListingMonitorItem.dm_attempts < _MAX_DM_ATTEMPTS,
                         ListingMonitorItem.seller_user_id.isnot(None),
