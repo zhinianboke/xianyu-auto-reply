@@ -682,6 +682,7 @@ class AutoReplyService:
                     send_message=send_message,
                     chat_id=chat_id,
                     item_id=item_id,
+                    msg_time=msg_time,
                 )
                 
                 if reply:
@@ -1053,6 +1054,7 @@ class AutoReplyService:
         send_message: str,
         chat_id: str,
         item_id: Optional[str] = None,
+        msg_time: str = "",
     ) -> Optional[str]:
         """获取自动回复(主入口)
         
@@ -1064,6 +1066,7 @@ class AutoReplyService:
             send_message: 发送的消息内容
             chat_id: 会话ID
             item_id: 商品ID(可选)
+            msg_time: 消息时间
             
         Returns:
             回复内容,None表示不回复
@@ -1098,7 +1101,7 @@ class AutoReplyService:
                     return ai_reply
                 
                 default_reply = await self.get_default_reply(
-                    session, send_user_name, send_user_id, send_message, chat_id, item_id
+                    session, send_user_name, send_user_id, send_message, chat_id, item_id, msg_time
                 )
                 if default_reply:
                     if default_reply == "EMPTY_REPLY":
@@ -1370,6 +1373,10 @@ class AutoReplyService:
         settings: dict,
         settings_item_id: Optional[str],
         chat_id: str,
+        send_user_id: str,
+        send_user_name: str,
+        item_id: Optional[str],
+        msg_time: str,
         reply_trace: Optional[dict],
     ) -> Optional[str]:
         """调用外部 API 获取默认回复内容并处理结果。
@@ -1383,6 +1390,11 @@ class AutoReplyService:
             message=send_message,
             api_url=api_url,
             timeout=api_timeout,
+            chat_id=chat_id,
+            item_id=item_id or "",
+            send_user_id=send_user_id,
+            send_user_name=send_user_name,
+            msg_time=msg_time,
         )
 
         # 失败/无有效内容：不回复（不记录 reply_once，便于下次重试）
@@ -1415,6 +1427,7 @@ class AutoReplyService:
         send_message: str,
         chat_id: str,
         item_id: Optional[str] = None,
+        msg_time: str = "",
     ) -> Optional[str]:
         """获取默认回复
         
@@ -1430,6 +1443,7 @@ class AutoReplyService:
             send_message: 发送的消息内容
             chat_id: 会话ID
             item_id: 商品ID(可选)
+            msg_time: 消息时间
             
         Returns:
             回复内容,None表示不回复,"EMPTY_REPLY"表示回复为空
@@ -1482,6 +1496,10 @@ class AutoReplyService:
                         settings=settings,
                         settings_item_id=settings_item_id,
                         chat_id=chat_id,
+                        send_user_id=send_user_id,
+                        send_user_name=send_user_name,
+                        item_id=item_id,
+                        msg_time=msg_time,
                         reply_trace=reply_trace,
                     )
 
@@ -1518,6 +1536,10 @@ class AutoReplyService:
                                 settings=settings,
                                 settings_item_id=settings_item_id,
                                 chat_id=chat_id,
+                                send_user_id=send_user_id,
+                                send_user_name=send_user_name,
+                                item_id=item_id,
+                                msg_time=msg_time,
                                 reply_trace=reply_trace,
                             )
                         # 持锁后重新核对 reply_once：前一条同会话消息可能刚已回复并记录
@@ -1541,6 +1563,10 @@ class AutoReplyService:
                             settings=settings,
                             settings_item_id=settings_item_id,
                             chat_id=chat_id,
+                            send_user_id=send_user_id,
+                            send_user_name=send_user_name,
+                            item_id=item_id,
+                            msg_time=msg_time,
                             reply_trace=reply_trace,
                         )
                 except Exception as lock_exc:
@@ -1556,6 +1582,10 @@ class AutoReplyService:
                         settings=settings,
                         settings_item_id=settings_item_id,
                         chat_id=chat_id,
+                        send_user_id=send_user_id,
+                        send_user_name=send_user_name,
+                        item_id=item_id,
+                        msg_time=msg_time,
                         reply_trace=reply_trace,
                     )
 
