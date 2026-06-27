@@ -311,6 +311,7 @@ async def delete_single_keyword(
     account_id: str,
     keyword: str,
     item_id: str = "",
+    rule_id: int | None = None,
     current_user: User = Depends(deps.get_current_active_user),
     account_service: AccountService = Depends(deps.get_account_service),
     keyword_service: KeywordService = Depends(deps.get_keyword_service),
@@ -323,7 +324,7 @@ async def delete_single_keyword(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账号不存在")
     
     try:
-        deleted = await keyword_service.delete_keyword(account, keyword, item_id or None)
+        deleted = await keyword_service.delete_keyword(account, keyword, item_id or None, rule_id=rule_id)
         if not deleted:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="关键词不存在")
         return ApiResponse(success=True, message="关键词删除成功")

@@ -15,6 +15,9 @@ import type { Keyword, Account, Item } from '@/types'
 /** 解析关键词文本域，按行保存是为了兼容旧表结构的一条关键词一条规则。 */
 const parseKeywordLines = (value: string) => value.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
 
+/** 归一化关键词文本，保存为一条规则时仍按行保留用户维护习惯。 */
+const normalizeKeywordText = (value: string) => parseKeywordLines(value).join('\n')
+
 /** 查找同一次提交里的重复关键词，提前拦截可以避免整体保存后部分数据不可预期。 */
 const findDuplicateKeywordLine = (keywordLines: string[]) => {
   const seen = new Set<string>()
@@ -31,6 +34,10 @@ const findDuplicateKeywordLine = (keywordLines: string[]) => {
 /** 生成关键词唯一键，前端校验要和后端同一商品下唯一的规则保持一致。 */
 const buildKeywordRuleKey = (keyword: string, itemId?: string) =>
   `${keyword.trim().toLowerCase()}__${(itemId || '').trim().toLowerCase()}`
+
+/** 展开规则里的多行关键词，用于列表展示和跨规则重复校验。 */
+const getKeywordLineKeys = (keyword: Keyword) =>
+  parseKeywordLines(keyword.keyword).map(line => buildKeywordRuleKey(line, keyword.item_id))
 
 export function Keywords() {
   const { addToast } = useUIStore()
@@ -238,6 +245,7 @@ export function Keywords() {
 
     try {
       setSaving(true)
+      const normalizedKeywordText = normalizeKeywordText(keywordText)
 
       if (editingKeyword) {
         const sourceAccountId = getKeywordAccountId(editingKeyword)
@@ -245,14 +253,14 @@ export function Keywords() {
           addToast({ type: 'error', message: '未找到原所属账号，无法保存' })
           return
         }
-        // 编辑模式：后端会把多行关键词替换成多条同回复规则，避免前端多次请求造成部分成功。
+        // 编辑模式：多行关键词仍保存为同一条规则，方便后续在一个入口维护同回复内容。
         const result = await updateKeyword(
           sourceAccountId,
           editingKeyword.keyword,
           editingKeyword.item_id || '',
           {
             account_id: submitAccountId,
-            keyword: keywordLines.join('\n'),
+            keyword: normalizedKeywordText,
             reply: replyText.trim(),
             item_id: itemIdText.trim(),
           }
@@ -263,19 +271,13 @@ export function Keywords() {
         }
         addToast({ type: 'success', message: '关键词已更新' })
       } else {
-        // 新增模式：先在前端展开关键词和商品的组合，再复用整体保存接口保持原有后端兼容。
+        // 新增模式：每个商品只新增一条规则，避免多账号场景下同回复关键词被拆散后难以查找。
         const itemIdsToAdd = selectedItemIds.length > 0 ? selectedItemIds : ['']
         const existingKeywords = await getKeywords(submitAccountId)
-        const existingKeys = new Set(existingKeywords.map(k => buildKeywordRuleKey(k.keyword, k.item_id)))
-        const newKeywords = itemIdsToAdd.flatMap(itemId =>
-          keywordLines.map(keyword => ({
-            keyword,
-            reply: replyText.trim(),
-            item_id: itemId,
-            type: 'text' as const,
-          } as Keyword))
-        )
-        const conflictKeyword = newKeywords.find(k => existingKeys.has(buildKeywordRuleKey(k.keyword, k.item_id)))
+        const existingKeys = new Set(existingKeywords.flatMap(getKeywordLineKeys))
+        const conflictKeyword = itemIdsToAdd
+          .flatMap(itemId => keywordLines.map(keyword => ({ keyword, item_id: itemId })))
+          .find(k => existingKeys.has(buildKeywordRuleKey(k.keyword, k.item_id)))
 
         if (conflictKeyword) {
           const itemDesc = conflictKeyword.item_id ? `商品ID：${conflictKeyword.item_id}` : '通用关键词'
@@ -283,13 +285,19 @@ export function Keywords() {
           return
         }
 
+        const newKeywords = itemIdsToAdd.map(itemId => ({
+          keyword: normalizedKeywordText,
+          reply: replyText.trim(),
+          item_id: itemId,
+          type: 'text' as const,
+        } as Keyword))
         const result = await saveKeywords(submitAccountId, [...existingKeywords, ...newKeywords])
         if (result.success === false) {
           addToast({ type: 'error', message: result.message || '添加失败' })
           return
         }
 
-        addToast({ type: 'success', message: `成功添加 ${newKeywords.length} 条关键词` })
+        addToast({ type: 'success', message: `成功添加 ${newKeywords.length} 条关键词规则` })
       }
 
       await loadKeywords()
@@ -368,7 +376,7 @@ export function Keywords() {
         addToast({ type: 'error', message: '未找到所属账号，无法删除' })
         return
       }
-      const result = await deleteKeyword(accountId, keyword.keyword, keyword.item_id || '')
+      const result = await deleteKeyword(accountId, keyword.keyword, keyword.item_id || '', keyword.id)
       if (result.success === false) {
         addToast({ type: 'error', message: result.message || '删除失败' })
         return
@@ -384,7 +392,7 @@ export function Keywords() {
   }
 
   // 批量选择相关
-  const getKeywordUniqueId = (keyword: Keyword) => `${getKeywordAccountId(keyword)}_${keyword.keyword}_${keyword.item_id || ''}`
+  const getKeywordUniqueId = (keyword: Keyword) => keyword.id || `${getKeywordAccountId(keyword)}_${keyword.keyword}_${keyword.item_id || ''}`
 
   const toggleKeywordSelect = (keyword: Keyword) => {
     const id = getKeywordUniqueId(keyword)
@@ -429,7 +437,7 @@ export function Keywords() {
             }
             continue
           }
-          const result = await deleteKeyword(accountId, keyword.keyword, keyword.item_id || '')
+          const result = await deleteKeyword(accountId, keyword.keyword, keyword.item_id || '', keyword.id)
           if (result.success === false) {
             failCount++
             if (!firstErrorMessage) {
@@ -738,9 +746,16 @@ export function Keywords() {
                       </span>
                     </td>
                     <td className="font-medium">
-                      <code className="bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 px-2 py-1 rounded">
-                        {keyword.keyword}
-                      </code>
+                      <div className="flex max-w-[360px] flex-wrap gap-1.5">
+                        {parseKeywordLines(keyword.keyword).map((keywordLine) => (
+                          <code
+                            key={keywordLine}
+                            className="bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 px-2 py-1 rounded"
+                          >
+                            {keywordLine}
+                          </code>
+                        ))}
+                      </div>
                     </td>
                     <td>
                       {keyword.item_id ? (

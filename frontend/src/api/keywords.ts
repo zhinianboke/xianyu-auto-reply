@@ -71,12 +71,16 @@ export const updateKeyword = async (
 export const deleteKeyword = async (
   cookieId: string, 
   keyword: string, 
-  itemId: string
+  itemId: string,
+  ruleId?: string
 ): Promise<ApiResponse> => {
   // 使用新的删除API，支持删除文本和图片类型的关键词
   const params = new URLSearchParams()
   if (itemId) {
     params.append('item_id', itemId)
+  }
+  if (ruleId) {
+    params.append('rule_id', ruleId)
   }
   const url = `${KEYWORD_PREFIX}/${cookieId}/${encodeURIComponent(keyword)}${params.toString() ? '?' + params.toString() : ''}`
   

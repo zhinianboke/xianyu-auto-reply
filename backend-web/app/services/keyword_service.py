@@ -27,6 +27,17 @@ class KeywordService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    @staticmethod
+    def _split_keyword_lines(keyword_text: str) -> list[str]:
+        """拆分多行关键词，因为一条规则可以承载多个同回复关键词。"""
+        return [line.strip() for line in (keyword_text or "").splitlines() if line.strip()]
+
+    @staticmethod
+    def _keyword_line_keys(keyword_text: str, item_id: str | None) -> set[tuple[str, str]]:
+        """生成多行关键词的唯一键，避免不同规则里隐藏重复关键词。"""
+        item_key = (item_id or "").lower()
+        return {(line.lower(), item_key) for line in KeywordService._split_keyword_lines(keyword_text)}
+
     async def list_keywords_for_owner(self, owner_id: int | None = None) -> list[dict]:
         stmt = (
             select(XYKeywordRule, XYCatalogItem.title, XYAccount.account_id)
@@ -47,6 +58,7 @@ class KeywordService:
             rule_type = (rule.reply_type or "text").lower()
             keywords.append(
                 {
+                    "id": str(rule.id),
                     "keyword": rule.keyword,
                     "reply": rule.reply_content or "",
                     "item_id": rule.item_id or "",
@@ -78,6 +90,7 @@ class KeywordService:
             rule_type = (rule.reply_type or "text").lower()
             keywords.append(
                 {
+                    "id": str(rule.id),
                     "keyword": rule.keyword,
                     "reply": rule.reply_content or "",
                     "item_id": rule.item_id or "",
@@ -96,15 +109,17 @@ class KeywordService:
             keyword = (entry.get("keyword") or "").strip()
             reply = (entry.get("reply") or "").strip()
             item_id = (entry.get("item_id") or "").strip() or None
-            if not keyword:
+            keyword_lines = self._split_keyword_lines(keyword)
+            if not keyword_lines:
                 raise ValueError("关键词不能为空")
 
-            key = (keyword.lower(), (item_id or "").lower())
-            if key in seen:
-                if item_id:
-                    raise ValueError(f"关键词 '{keyword}'（商品ID: {item_id}） 在当前提交中重复")
-                raise ValueError(f"关键词 '{keyword}'（通用关键词） 在当前提交中重复")
-            seen.add(key)
+            for keyword_line in keyword_lines:
+                key = (keyword_line.lower(), (item_id or "").lower())
+                if key in seen:
+                    if item_id:
+                        raise ValueError(f"关键词 '{keyword_line}'（商品ID: {item_id}） 在当前提交中重复")
+                    raise ValueError(f"关键词 '{keyword_line}'（通用关键词） 在当前提交中重复")
+                seen.add(key)
             normalized_entries.append((keyword, reply, item_id))
 
         # Check for conflicts with image keywords
@@ -115,12 +130,16 @@ class KeywordService:
                 func.lower(XYKeywordRule.reply_type) == "image",
             )
         )
-        image_conflicts = {(row[0], (row[1] or "")) for row in image_rows.all()}
+        image_conflicts: set[tuple[str, str]] = set()
+        for image_keyword, image_item_id in image_rows.all():
+            image_conflicts.update(self._keyword_line_keys(image_keyword, image_item_id))
+
         for keyword, _, item_id in normalized_entries:
-            comparison_key = (keyword, item_id or "")
-            if comparison_key in image_conflicts:
-                item_desc = f"商品ID: {item_id}" if item_id else "通用关键词"
-                raise ValueError(f"关键词 '{keyword}'（{item_desc}） 已存在（图片关键词），无法保存为文本关键词")
+            for keyword_line in self._split_keyword_lines(keyword):
+                comparison_key = (keyword_line.lower(), (item_id or "").lower())
+                if comparison_key in image_conflicts:
+                    item_desc = f"商品ID: {item_id}" if item_id else "通用关键词"
+                    raise ValueError(f"关键词 '{keyword_line}'（{item_desc}） 已存在（图片关键词），无法保存为文本关键词")
 
         # Remove legacy text keywords and insert new ones
         await self.session.execute(
@@ -150,11 +169,6 @@ class KeywordService:
 
         await self.session.commit()
 
-    @staticmethod
-    def _split_keyword_lines(keyword_text: str) -> list[str]:
-        """按行拆分关键词文本，前端多关键词输入仍然落到旧的一条规则一行结构。"""
-        return [line.strip() for line in (keyword_text or "").splitlines() if line.strip()]
-
     async def update_text_keyword(
         self,
         source_account: XYAccount,
@@ -165,10 +179,11 @@ class KeywordService:
         target_reply: str | None,
         target_item_id: str | None,
     ) -> None:
-        """更新文本关键词，允许把一个旧规则替换成多条同回复规则。"""
+        """更新文本关键词，多行关键词仍保存在同一条规则里便于维护。"""
         normalized_source_keyword = (source_keyword or "").strip()
         normalized_source_item_id = (source_item_id or "").strip() or None
         normalized_target_keywords = self._split_keyword_lines(target_keyword)
+        normalized_target_keyword = "\n".join(normalized_target_keywords)
         normalized_target_reply = (target_reply or "").strip()
         normalized_target_item_id = (target_item_id or "").strip() or None
 
@@ -204,42 +219,35 @@ class KeywordService:
             XYKeywordRule.account_pk == target_account.id,
             XYKeywordRule.item_id == normalized_target_item_id,
             XYKeywordRule.id != existing_rule.id,
-            func.lower(XYKeywordRule.keyword).in_([keyword.lower() for keyword in normalized_target_keywords]),
         )
         conflict_result = await self.session.execute(conflict_stmt)
-        conflict_rule = conflict_result.scalars().first()
+        target_keys = {keyword.lower() for keyword in normalized_target_keywords}
+        conflict_rule = None
+        conflict_keyword = ""
+        for rule in conflict_result.scalars().all():
+            for keyword_line in self._split_keyword_lines(rule.keyword):
+                if keyword_line.lower() in target_keys:
+                    conflict_rule = rule
+                    conflict_keyword = keyword_line
+                    break
+            if conflict_rule:
+                break
 
         if conflict_rule:
             item_desc = f"商品ID: {normalized_target_item_id}" if normalized_target_item_id else "通用关键词"
             conflict_type = (conflict_rule.reply_type or "text").lower()
             if conflict_type == "image":
-                raise ValueError(f"关键词 '{conflict_rule.keyword}'（{item_desc}） 已存在（图片关键词），无法保存为文本关键词")
-            raise ValueError(f"关键词 '{conflict_rule.keyword}'（{item_desc}） 已存在")
+                raise ValueError(f"关键词 '{conflict_keyword}'（{item_desc}） 已存在（图片关键词），无法保存为文本关键词")
+            raise ValueError(f"关键词 '{conflict_keyword}'（{item_desc}） 已存在")
 
         timestamp = datetime.now(timezone.utc)
         existing_rule.owner_id = target_account.owner_id
         existing_rule.account_pk = target_account.id
-        existing_rule.keyword = normalized_target_keywords[0]
+        existing_rule.keyword = normalized_target_keyword
         existing_rule.reply_content = normalized_target_reply
         existing_rule.reply_type = "TEXT"
         existing_rule.item_id = normalized_target_item_id
         existing_rule.updated_at = timestamp
-
-        for keyword in normalized_target_keywords[1:]:
-            self.session.add(
-                XYKeywordRule(
-                    owner_id=target_account.owner_id,
-                    account_pk=target_account.id,
-                    keyword=keyword,
-                    reply_content=normalized_target_reply,
-                    reply_type="TEXT",
-                    item_id=normalized_target_item_id,
-                    priority=existing_rule.priority or 100,
-                    is_active=existing_rule.is_active if existing_rule.is_active is not None else True,
-                    created_at=timestamp,
-                    updated_at=timestamp,
-                )
-            )
 
         await self.session.commit()
 
@@ -248,6 +256,7 @@ class KeywordService:
         account: XYAccount,
         keyword: str,
         item_id: str | None = None,
+        rule_id: int | None = None,
     ) -> bool:
         """删除单个关键词（支持文本和图片类型）
         
@@ -255,6 +264,7 @@ class KeywordService:
             account: 账号对象
             keyword: 关键词
             item_id: 商品ID（可选）
+            rule_id: 关键词规则ID（可选，多行关键词优先用它精确删除）
             
         Returns:
             是否删除成功
@@ -262,9 +272,14 @@ class KeywordService:
         stmt = delete(XYKeywordRule).where(
             XYKeywordRule.owner_id == account.owner_id,
             XYKeywordRule.account_pk == account.id,
-            XYKeywordRule.keyword == keyword,
-            XYKeywordRule.item_id == (item_id if item_id else None),
         )
+        if rule_id is not None:
+            stmt = stmt.where(XYKeywordRule.id == rule_id)
+        else:
+            stmt = stmt.where(
+                XYKeywordRule.keyword == keyword,
+                XYKeywordRule.item_id == (item_id if item_id else None),
+            )
         result = await self.session.execute(stmt)
         await self.session.commit()
         return result.rowcount > 0
