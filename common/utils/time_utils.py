@@ -8,10 +8,17 @@
 """
 from __future__ import annotations
 
+import random
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Tuple
+
+from common.core.config import get_settings
 
 BEIJING_TZ = timezone(timedelta(hours=8))
+
+# IM Token 缓存 TTL 的兜底默认区间（小时），当环境变量未配置或配置非法时使用
+DEFAULT_TOKEN_CACHE_TTL_MIN_HOURS = 4.0
+DEFAULT_TOKEN_CACHE_TTL_MAX_HOURS = 7.0
 
 
 def get_beijing_now() -> datetime:
@@ -40,3 +47,27 @@ def safe_isoformat(value: Optional[datetime]) -> Optional[str]:
         ``value.isoformat()`` 字符串；当 ``value`` 为 ``None`` 或其他假值时返回 ``None``。
     """
     return value.isoformat() if value else None
+
+
+def random_token_cache_expiry() -> Tuple[datetime, float]:
+    """生成 IM Token 缓存（``xy_token_cache`` 表）的随机过期时间。
+
+    TTL 小时数在环境变量配置的区间内随机取值：
+    ``TOKEN_CACHE_TTL_MIN_HOURS`` ~ ``TOKEN_CACHE_TTL_MAX_HOURS``，
+    未配置时默认 4~7 小时；配置非法（任一值 <=0 或 min>max）时回退默认区间。
+    区间随机可避免大量账号 Token 同一时刻集中过期、触发并发刷新。
+
+    Returns:
+        ``(expire_at, ttl_hours)``：北京时间的过期时刻（naive datetime）
+        与本次随机出的 TTL 小时数。
+    """
+    settings = get_settings()
+    low = settings.token_cache_ttl_min_hours
+    high = settings.token_cache_ttl_max_hours
+    # 配置非法时回退默认，避免出现负数或区间反转
+    if low <= 0 or high <= 0 or low > high:
+        low = DEFAULT_TOKEN_CACHE_TTL_MIN_HOURS
+        high = DEFAULT_TOKEN_CACHE_TTL_MAX_HOURS
+    ttl_hours = random.uniform(low, high)
+    expire_at = get_beijing_now_naive() + timedelta(hours=ttl_hours)
+    return expire_at, ttl_hours

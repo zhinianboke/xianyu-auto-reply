@@ -13,9 +13,7 @@
 import asyncio
 import base64
 import json
-import random
 import time
-from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
 import aiohttp
@@ -29,7 +27,7 @@ from common.utils.cookie_refresh import (
     merge_cookies,
     update_account_cookies_in_db,
 )
-from common.utils.time_utils import get_beijing_now_naive
+from common.utils.time_utils import get_beijing_now_naive, random_token_cache_expiry
 from common.utils.xianyu_utils import (
     generate_device_id,
     generate_mid,
@@ -534,15 +532,16 @@ class GoofishImClient:
         """将token和device_id缓存到数据库
 
         使用 INSERT ... ON DUPLICATE KEY UPDATE 实现插入或更新
-        过期时间为当前时间 + 8~10小时随机
+        过期时间由环境变量 TOKEN_CACHE_TTL_MIN_HOURS / TOKEN_CACHE_TTL_MAX_HOURS 控制，
+        未配置时默认 4~7 小时随机
 
         Args:
             token_val: IM Token
             device_id_val: 设备ID
         """
         try:
-            ttl_hours = random.uniform(8, 10)
-            expire_at = get_beijing_now_naive() + timedelta(hours=ttl_hours)
+            # 过期时间在配置区间内随机取值（默认 4~7 小时）
+            expire_at, ttl_hours = random_token_cache_expiry()
 
             async with async_session_maker() as session:
                 await session.execute(

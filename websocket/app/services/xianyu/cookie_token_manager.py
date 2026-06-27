@@ -12,7 +12,6 @@ Cookie/Token管理模块
 
 import asyncio
 import json
-import random
 import time
 import aiohttp
 import requests
@@ -24,7 +23,7 @@ from common.services.captcha.concurrency import run_browser_task
 from common.services.captcha.token_refetch import request_fresh_captcha_url
 from common.utils.cookie_refresh import get_account_by_identity, update_account_cookies_in_db
 from common.utils.xianyu_utils import trans_cookies, generate_sign
-from common.utils.time_utils import get_beijing_now_naive
+from common.utils.time_utils import get_beijing_now_naive, random_token_cache_expiry
 
 
 class CookieTokenManager:
@@ -208,19 +207,18 @@ class CookieTokenManager:
         """将token和device_id缓存到数据库
         
         使用 INSERT ... ON DUPLICATE KEY UPDATE 实现插入或更新
-        过期时间为当前时间 + 7~12小时随机
-        
+        过期时间由环境变量 TOKEN_CACHE_TTL_MIN_HOURS / TOKEN_CACHE_TTL_MAX_HOURS 控制，
+        未配置时默认 4~7 小时随机
+
         Args:
             token: IM Token
             device_id: 设备ID
         """
         try:
-            from datetime import timedelta
             from sqlalchemy import text
-            
-            # 7-12小时随机过期时间
-            ttl_hours = random.uniform(7, 12)
-            expire_at = get_beijing_now_naive() + timedelta(hours=ttl_hours)
+
+            # 过期时间在配置区间内随机取值（默认 4~7 小时）
+            expire_at, ttl_hours = random_token_cache_expiry()
             
             async with async_session_maker() as session:
                 await session.execute(
