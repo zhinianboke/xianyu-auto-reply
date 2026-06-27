@@ -169,6 +169,32 @@ class ListingMonitorService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    async def _resolve_category(
+        self, owner_id: Optional[int], category_id: int
+    ) -> ListingMonitorCategory:
+        """校验分类存在且当前用户有权使用。
+
+        普通用户只能使用自己创建的分类；管理员（owner_id=None）可使用任意分类。
+        与分类列表的隔离规则保持一致，防止普通用户通过构造请求挂用他人分类。
+
+        Args:
+            owner_id: 数据隔离范围。None=管理员（不限制归属）；非 None 仅限本人创建的分类
+            category_id: 分类ID
+
+        Returns:
+            校验通过的分类对象
+
+        Raises:
+            ValueError: 分类不存在、已删除或无权限使用
+        """
+        category = await self.session.get(ListingMonitorCategory, category_id)
+        if not category or category.is_deleted:
+            raise ValueError("所选分类不存在")
+        # 普通用户只能使用自己创建的分类；管理员不受限
+        if owner_id is not None and category.owner_id != owner_id:
+            raise ValueError("所选分类不存在或无权限使用")
+        return category
+
     async def _normalize_payload(self, owner_id: Optional[int], data: dict, partial: bool) -> Dict[str, Any]:
         """校验并规整请求数据。partial=True 时仅处理传入的字段（用于更新）。"""
         payload: Dict[str, Any] = {}
@@ -191,9 +217,8 @@ class ListingMonitorService:
                 category_id = int(raw_category)
             except (TypeError, ValueError):
                 raise ValueError("分类参数不正确")
-            category = await self.session.get(ListingMonitorCategory, category_id)
-            if not category or category.is_deleted:
-                raise ValueError("所选分类不存在")
+            # 校验分类存在且当前用户有权使用（普通用户仅限本人分类）
+            await self._resolve_category(owner_id, category_id)
             payload["category_id"] = category_id
 
         # 关键字（必填）
@@ -553,6 +578,7 @@ class ListingMonitorService:
         page_size: int = 20,
         keyword: Optional[str] = None,
         is_enabled: Optional[bool] = None,
+        category_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """分页查询上新监控任务列表。"""
         page = max(page, 1)
@@ -563,6 +589,9 @@ class ListingMonitorService:
             conditions.append(ListingMonitorTask.keyword.like(f"%{keyword.strip()}%"))
         if is_enabled is not None:
             conditions.append(ListingMonitorTask.is_enabled.is_(is_enabled))
+        # 按分类筛选（category_id 为 None 时不限制）
+        if category_id is not None:
+            conditions.append(ListingMonitorTask.category_id == category_id)
 
         count_stmt = select(func.count()).select_from(ListingMonitorTask).where(*conditions)
         total = (await self.session.execute(count_stmt)).scalar() or 0
@@ -739,7 +768,7 @@ class ListingMonitorService:
         task_ids: Sequence[int],
         category_id: Any,
     ) -> int:
-        """批量修改监控任务的所属分类（分类必填、须存在）。
+        """批量修改监控任务的所属分类（分类必填、须存在且当前用户有权使用）。
 
         Returns: 实际更新的任务数
         """
@@ -749,9 +778,8 @@ class ListingMonitorService:
             category_id = int(category_id)
         except (TypeError, ValueError):
             raise ValueError("分类参数不正确")
-        category = await self.session.get(ListingMonitorCategory, category_id)
-        if not category or category.is_deleted:
-            raise ValueError("所选分类不存在")
+        # 校验分类存在且当前用户有权使用（普通用户仅限本人分类）
+        await self._resolve_category(owner_id, category_id)
 
         normalized_ids: List[int] = []
         for raw_id in task_ids:
@@ -1047,6 +1075,14 @@ class ListingMonitorService:
         #   not_ordered-未下单 / ordered-已下单 / failed-下单失败 / no_account-无可用账号 / duplicate-重复跳过
         if order_state == "ordered":
             conditions.append(ListingMonitorItem.is_ordered.is_(True))
+            # 排除"重复跳过"：其同样标记 is_ordered=True，但展示为"重复跳过"而非"已下单"，
+            # 故"已下单"筛选需排除 duplicate，与列表徽标语义保持一致
+            conditions.append(
+                or_(
+                    ListingMonitorItem.order_status.is_(None),
+                    ListingMonitorItem.order_status != "duplicate",
+                )
+            )
         elif order_state == "duplicate":
             conditions.append(ListingMonitorItem.order_status == "duplicate")
         elif order_state == "no_account":

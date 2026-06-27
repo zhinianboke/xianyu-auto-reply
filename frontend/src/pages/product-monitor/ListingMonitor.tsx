@@ -59,6 +59,7 @@ export function ListingMonitor() {
   const [deleting, setDeleting] = useState(false)
   const [tasks, setTasks] = useState<ListingMonitorTask[]>([])
   const [keyword, setKeyword] = useState('')
+  const [categoryId, setCategoryId] = useState<number | undefined>(undefined)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [total, setTotal] = useState(0)
@@ -74,7 +75,7 @@ export function ListingMonitor() {
   const [statusUpdatingId, setStatusUpdatingId] = useState<number | null>(null)
   const [runningId, setRunningId] = useState<number | null>(null)
 
-  // 加载分类映射（用于列表展示分类名；全局共享分类）
+  // 加载分类映射（用于列表展示分类名与筛选下拉；普通用户仅见自己的分类，管理员见全部）
   useEffect(() => {
     const loadCategories = async () => {
       try {
@@ -98,6 +99,7 @@ export function ListingMonitor() {
       setTableLoading(true)
       const result = await getListingMonitorTasks(nextPage, nextPageSize, {
         keyword: keyword.trim() || undefined,
+        categoryId,
       })
       if (!result.success || !result.data) {
         setTasks([])
@@ -135,6 +137,7 @@ export function ListingMonitor() {
 
   const handleReset = async () => {
     setKeyword('')
+    setCategoryId(undefined)
     if (page === 1) {
       try {
         setTableLoading(true)
@@ -314,7 +317,7 @@ export function ListingMonitor() {
 
       <div className="vben-card">
         <div className="vben-card-body">
-          <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-[1fr_220px_auto] gap-3">
             <div className="input-group">
               <label className="input-label">商品关键字</label>
               <input
@@ -328,6 +331,21 @@ export function ListingMonitor() {
                   }
                 }}
               />
+            </div>
+            <div className="input-group">
+              <label className="input-label">分类</label>
+              <select
+                className="input-ios"
+                value={categoryId === undefined ? '' : String(categoryId)}
+                onChange={(e) => setCategoryId(e.target.value === '' ? undefined : Number(e.target.value))}
+              >
+                <option value="">全部分类</option>
+                {Object.entries(categoryMap).map(([id, name]) => (
+                  <option key={id} value={id}>
+                    {name}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="flex items-end gap-2">
               <button className="btn-ios-primary flex-1" onClick={() => void handleSearch()}>

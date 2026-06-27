@@ -114,6 +114,7 @@ export const getListingMonitorTasks = (
   params?: {
     keyword?: string
     isEnabled?: boolean
+    categoryId?: number
   }
 ): Promise<ApiResponse<ListingMonitorTaskListData>> => {
   const searchParams = new URLSearchParams({
@@ -122,6 +123,7 @@ export const getListingMonitorTasks = (
   })
   if (params?.keyword) searchParams.append('keyword', params.keyword)
   if (params?.isEnabled !== undefined) searchParams.append('is_enabled', String(params.isEnabled))
+  if (params?.categoryId !== undefined) searchParams.append('category_id', String(params.categoryId))
   return get(`${PREFIX}?${searchParams.toString()}`)
 }
 

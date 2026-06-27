@@ -18,6 +18,7 @@ from app.api.deps import get_current_active_user, get_db_session
 from common.models.user import User
 from common.schemas.common import ApiResponse
 from common.services.listing_monitor_category_service import ListingMonitorCategoryService
+from common.utils.auth_scope import resolve_owner_scope
 
 router = APIRouter(prefix="/product-monitor/categories", tags=["商品监控分类"])
 
@@ -38,10 +39,11 @@ async def list_categories(
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> ApiResponse:
-    """查询当前用户的分类列表（按创建时间倒序）"""
+    """查询分类列表（普通用户仅见自己的分类，管理员可见全部，按创建时间倒序）"""
+    owner_id, _ = resolve_owner_scope(current_user)
     service = ListingMonitorCategoryService(db)
     categories = await service.list_categories(
-        owner_id=current_user.id, include_deleted=include_deleted
+        owner_id=owner_id, include_deleted=include_deleted
     )
     return ApiResponse(success=True, data=categories)
 
@@ -52,9 +54,10 @@ async def get_category(
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> ApiResponse:
-    """查询单个分类详情"""
+    """查询单个分类详情（普通用户仅可查看自己的分类，管理员可查看全部）"""
+    owner_id, _ = resolve_owner_scope(current_user)
     service = ListingMonitorCategoryService(db)
-    category = await service.get_category(category_id, owner_id=current_user.id)
+    category = await service.get_category(category_id, owner_id=owner_id)
     if not category:
         return ApiResponse(success=False, message="分类不存在或无权限访问")
     return ApiResponse(success=True, data=category)

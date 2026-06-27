@@ -82,7 +82,7 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
   const [orderAccountDropdownOpen, setOrderAccountDropdownOpen] = useState(false)
   const [categoryOptions, setCategoryOptions] = useState<{ value: string; label: string }[]>([])
 
-  // 加载分类下拉选项（全局共享分类）
+  // 加载分类下拉选项（普通用户仅见自己的分类，管理员可见全部）
   useEffect(() => {
     const loadCategories = async () => {
       try {

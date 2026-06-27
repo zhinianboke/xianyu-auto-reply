@@ -3,9 +3,9 @@
 
 功能：
 1. 分类的增删改查
-2. 名称唯一性校验（同一用户下分类名称不重复）
+2. 名称唯一性校验（分类名称全局唯一，跨用户不可重名）
 3. 删除前检查关联数据（监控任务、兜底账号配置）
-4. 支持多用户数据隔离与管理员权限
+4. 支持多用户数据隔离与管理员权限：普通用户仅可见/操作自己的分类，管理员可见/操作全部
 """
 from __future__ import annotations
 
@@ -34,15 +34,16 @@ class ListingMonitorCategoryService:
         return user is not None and user.role == UserRole.ADMIN
 
     async def list_categories(
-        self, owner_id: int, include_deleted: bool = False
+        self, owner_id: Optional[int], include_deleted: bool = False
     ) -> List[Dict]:
-        """查询分类列表（全局可见）
+        """查询分类列表（按用户隔离）
 
-        分类为全局共享维度（名称全局唯一），所有用户共用同一套、互相可见可选，
-        因此不按 owner_id 过滤；owner_id 仅作为创建人记录。
+        普通用户只能看到自己创建的分类，管理员可看到全部分类。
+        分类名称仍保持全局唯一（见 _check_name_duplicate），便于按名称跨用户匹配兜底配置。
 
         Args:
-            owner_id: 当前用户ID（保留参数，便于扩展，不参与过滤）
+            owner_id: 数据隔离范围。None 表示管理员（查看全部）；
+                非 None 时按 owner_id 过滤（仅查看该用户的分类）
             include_deleted: 是否包含已删除的分类
 
         Returns:
@@ -51,6 +52,9 @@ class ListingMonitorCategoryService:
         conditions = []
         if not include_deleted:
             conditions.append(ListingMonitorCategory.is_deleted.is_(False))
+        # owner_id=None 为管理员哨兵，不加 owner 过滤；非 None 时仅看本人分类
+        if owner_id is not None:
+            conditions.append(ListingMonitorCategory.owner_id == owner_id)
 
         stmt = (
             select(ListingMonitorCategory)
@@ -72,19 +76,26 @@ class ListingMonitorCategoryService:
             for cat in categories
         ]
 
-    async def get_category(self, category_id: int, owner_id: int) -> Optional[Dict]:
-        """查询单个分类详情（全局可见）
+    async def get_category(
+        self, category_id: int, owner_id: Optional[int]
+    ) -> Optional[Dict]:
+        """查询单个分类详情（按用户隔离）
+
+        普通用户只能查看自己创建的分类，管理员可查看全部。
 
         Args:
             category_id: 分类ID
-            owner_id: 当前用户ID（保留参数，不参与过滤）
+            owner_id: 数据隔离范围。None 表示管理员（不限制 owner）；
+                非 None 时仅可查看该用户的分类
 
         Returns:
-            分类详情，不存在时返回 None
+            分类详情，不存在或无权限时返回 None
         """
-        stmt = select(ListingMonitorCategory).where(
-            ListingMonitorCategory.id == category_id
-        )
+        conditions = [ListingMonitorCategory.id == category_id]
+        # owner_id=None 为管理员哨兵，不加 owner 过滤
+        if owner_id is not None:
+            conditions.append(ListingMonitorCategory.owner_id == owner_id)
+        stmt = select(ListingMonitorCategory).where(*conditions)
         result = await self.session.execute(stmt)
         category = result.scalar_one_or_none()
 
