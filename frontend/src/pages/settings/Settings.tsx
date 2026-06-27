@@ -1132,8 +1132,8 @@ export function Settings() {
         </div>
       )}
 
-      {/* 用户到期/续期设置（仅管理员可见）—— 暂时隐藏，后端接口与保存逻辑保留 */}
-      {false && user?.is_admin && (
+      {/* 用户到期/续期设置（仅管理员可见） */}
+      {user?.is_admin && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="vben-card">
             <div className="vben-card-header">

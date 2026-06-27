@@ -7,7 +7,7 @@
  * 3. 后续可扩展更多个人设置项
  */
 import { useState, useEffect, useRef } from 'react'
-import { User, RefreshCw, Wallet, Plus, Key, Link2, Copy, RotateCcw, Save, Package, X, ScrollText, ArrowUpFromLine, Upload, QrCode, Eye, EyeOff } from 'lucide-react'
+import { User, RefreshCw, Wallet, Plus, Key, Link2, Copy, RotateCcw, Save, Package, X, ScrollText, ArrowUpFromLine, Upload, QrCode, Eye, EyeOff, CalendarClock } from 'lucide-react'
 import { getUserSetting, updateUserSetting, createCardSecretKey, changePassword, getDockCode, resetDockCode, getSecretKey, resetSecretKey, uploadPaymentQrcode, getSystemSettings, getCurrentUserProfile } from '@/api/settings'
 import { createWithdraw, getSettlementRecords, type SettlementRecord } from '@/api/payment'
 import { useUIStore } from '@/store/uiStore'
@@ -540,7 +540,13 @@ export function PersonalSettings() {
                   disabled
                   className={`input-ios flex-1 bg-gray-50 dark:bg-gray-800 cursor-not-allowed ${isExpiredTime(expireAt) ? 'text-red-500 dark:text-red-400' : ''}`}
                 />
-                {/* 续期按钮暂时隐藏（后端续期接口保留，前端不开放入口） */}
+                <button
+                  onClick={() => setShowRenew(true)}
+                  className="btn-ios-primary whitespace-nowrap"
+                >
+                  <CalendarClock className="w-4 h-4" />
+                  续期
+                </button>
               </div>
               {isExpiredTime(expireAt) && (
                 <p className="mt-1 text-xs text-red-500">账户已到期，请尽快续期以恢复服务。</p>

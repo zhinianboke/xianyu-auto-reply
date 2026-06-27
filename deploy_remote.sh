@@ -1,8 +1,9 @@
 #!/bin/bash
 # ==========================================
-# 闲鱼自动回复系统 - 一键部署脚本
-# 自动生成远程镜像版 docker-compose.deploy.yml 并拉取镜像启动
-# 用法: bash deploy.sh
+# 闲鱼自动回复系统 - 远程 MySQL/Redis 一键部署脚本
+# 使用外部（远程）MySQL 和 Redis，仅启动应用服务（不内置 mysql/redis 容器）
+# 自动生成 docker-compose.remote.yml 与 .env.remote 并拉取镜像启动
+# 用法: bash deploy_remote.sh
 # ==========================================
 
 set -e
@@ -14,11 +15,11 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 WORK_DIR="$(cd "$(dirname "$0")" && pwd)"
-COMPOSE_FILE="$WORK_DIR/docker-compose.deploy.yml"
-ENV_FILE="$WORK_DIR/.env"
+COMPOSE_FILE="$WORK_DIR/docker-compose.remote.yml"
+ENV_FILE="$WORK_DIR/.env.remote"
 
 echo "=========================================="
-echo "  闲鱼自动回复系统 - 一键部署"
+echo "  闲鱼自动回复系统 - 远程 MySQL/Redis 部署"
 echo "=========================================="
 echo ""
 
@@ -46,21 +47,27 @@ echo -e "${CYAN}[信息] Compose: $DC${NC}"
 echo -e "${CYAN}[信息] 项目目录: $WORK_DIR${NC}"
 echo ""
 
-# ========== 生成 .env 配置文件 ==========
+# ========== 生成 .env.remote 配置文件 ==========
 if [ ! -f "$ENV_FILE" ]; then
-    echo -e "${YELLOW}[提示] 首次部署，生成默认配置文件 .env${NC}"
+    echo -e "${YELLOW}[提示] 首次部署，生成默认配置文件 .env.remote${NC}"
     cat > "$ENV_FILE" << 'ENVEOF'
 # ==========================================
-# 闲鱼自动回复系统 - 环境变量配置
+# 闲鱼自动回复系统 - 远程 MySQL / Redis 环境变量配置
 # ==========================================
 
-# MySQL数据库配置（Docker内置，自动创建）
-MYSQL_ROOT_PASSWORD=xianyu@2026
+# ========== 远程 MySQL 配置（必填，请改成你的远程数据库地址） ==========
+# 注意：不要填 localhost / 127.0.0.1（容器内会指向容器自身）
+# 远程库需提前创建好 MYSQL_DATABASE，并授权 MYSQL_USER 可从部署机 IP 远程访问
+MYSQL_HOST=your-remote-mysql-host
+MYSQL_PORT=3306
 MYSQL_DATABASE=xianyu_data
 MYSQL_USER=xianyu
 MYSQL_PASSWORD=xianyu@2026
 
-# Redis缓存配置（Docker内置）
+# ========== 远程 Redis 配置（必填，请改成你的远程 Redis 地址） ==========
+# 同样不要填 localhost / 127.0.0.1
+REDIS_HOST=your-remote-redis-host
+REDIS_PORT=6379
 REDIS_PASSWORD=xianyu@2026
 REDIS_DB=0
 
@@ -75,10 +82,6 @@ SCHEDULER_PORT=8091
 # 镜像配置
 IMAGE_REGISTRY=registry.cn-shanghai.aliyuncs.com/zhinian-software
 IMAGE_TAG=latest
-
-# 基础镜像（MySQL / Redis，从阿里云仓库拉取，由 sync_base_images.sh 同步上传）
-MYSQL_IMAGE=registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-mysql:8.0
-REDIS_IMAGE=registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-redis:7-alpine
 
 # 日志级别
 LOG_LEVEL=INFO
@@ -120,74 +123,21 @@ ENABLE_REMOTE_ADS=true
 # 是否启用远程官方公告合并展示（官方服务器自身部署建议设为 false）
 ENABLE_REMOTE_ANNOUNCEMENTS=true
 ENVEOF
-    echo -e "${GREEN}✓ 已生成 .env 文件${NC}"
-    echo -e "${YELLOW}[提示] 如需修改配置（如端口等），请编辑 $ENV_FILE 后重新运行${NC}"
-    echo ""
+    echo -e "${GREEN}✓ 已生成 .env.remote 文件${NC}"
+    echo -e "${RED}[重要] 请先编辑 $ENV_FILE 填写远程 MYSQL_HOST / REDIS_HOST 等连接信息，${NC}"
+    echo -e "${RED}       填写完成后重新运行 bash deploy_remote.sh${NC}"
+    exit 0
 fi
 
-# ========== 生成 docker-compose.deploy.yml（远程镜像版） ==========
-echo "[信息] 生成 docker-compose.deploy.yml（远程镜像版）..."
+# ========== 生成 docker-compose.remote.yml（远程镜像 + 远程 MySQL/Redis） ==========
+echo "[信息] 生成 docker-compose.remote.yml..."
 cat > "$COMPOSE_FILE" << 'COMPOSEEOF'
-# Docker Compose 配置文件 - 远程镜像部署版
-# 闲鱼自动回复系统 - 从镜像仓库拉取预构建镜像
-# 由 deploy.sh 自动生成，请勿手动修改
+# Docker Compose 配置文件 - 远程 MySQL / Redis 版
+# 闲鱼自动回复系统 - 使用外部（远程）MySQL 和 Redis，仅启动应用服务
+# 由 deploy_remote.sh 自动生成，请勿手动修改
 
 services:
-  # ====== 基础设施 ======
-
-  # MySQL数据库（默认从阿里云仓库拉取，可通过 MYSQL_IMAGE 覆盖）
-  mysql:
-    image: ${MYSQL_IMAGE:-registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-mysql:8.0}
-    container_name: xianyu-mysql
-    restart: unless-stopped
-    environment:
-      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-xianyu@2026}
-      - MYSQL_DATABASE=${MYSQL_DATABASE:-xianyu_data}
-      - MYSQL_USER=${MYSQL_USER:-xianyu}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-xianyu@2026}
-      - TZ=Asia/Shanghai
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --max-connections=300
-      - --max-allowed-packet=256M
-      - --default-time-zone=+08:00
-    volumes:
-      - ./xianyu_auto_reply/mysql/data:/var/lib/mysql
-    networks:
-      - xianyu-network
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-xianyu@2026}"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
-  # Redis缓存（默认从阿里云仓库拉取，可通过 REDIS_IMAGE 覆盖）
-  redis:
-    image: ${REDIS_IMAGE:-registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-redis:7-alpine}
-    container_name: xianyu-redis
-    restart: unless-stopped
-    command: >
-      redis-server
-      --requirepass ${REDIS_PASSWORD:-xianyu@2026}
-      --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
-      --appendonly yes
-    environment:
-      - TZ=Asia/Shanghai
-    volumes:
-      - ./xianyu_auto_reply/redis/data:/data
-    networks:
-      - xianyu-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-xianyu@2026}", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-  # ====== 应用服务（远程镜像） ======
+  # ====== 应用服务（远程镜像 + 远程 MySQL/Redis） ======
 
   # Backend-Web 服务
   backend-web:
@@ -196,13 +146,13 @@ services:
     restart: unless-stopped
     environment:
       - ENVIRONMENT=production
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
+      - MYSQL_HOST=${MYSQL_HOST}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
       - MYSQL_USER=${MYSQL_USER:-xianyu}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-xianyu@2026}
       - MYSQL_DATABASE=${MYSQL_DATABASE:-xianyu_data}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-xianyu@2026}
       - REDIS_DB=${REDIS_DB:-0}
       - BACKEND_WEB_PORT=8089
@@ -235,11 +185,6 @@ services:
       - "${BACKEND_WEB_PORT:-8089}:8089"
     networks:
       - xianyu-network
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8089/health"]
       interval: 30s
@@ -254,13 +199,13 @@ services:
     restart: unless-stopped
     environment:
       - ENVIRONMENT=production
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
+      - MYSQL_HOST=${MYSQL_HOST}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
       - MYSQL_USER=${MYSQL_USER:-xianyu}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-xianyu@2026}
       - MYSQL_DATABASE=${MYSQL_DATABASE:-xianyu_data}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-xianyu@2026}
       - REDIS_DB=${REDIS_DB:-0}
       - WEBSOCKET_PORT=8090
@@ -285,10 +230,6 @@ services:
     networks:
       - xianyu-network
     depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
       backend-web:
         condition: service_healthy
     healthcheck:
@@ -305,13 +246,13 @@ services:
     restart: unless-stopped
     environment:
       - ENVIRONMENT=production
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
+      - MYSQL_HOST=${MYSQL_HOST}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
       - MYSQL_USER=${MYSQL_USER:-xianyu}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-xianyu@2026}
       - MYSQL_DATABASE=${MYSQL_DATABASE:-xianyu_data}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-xianyu@2026}
       - REDIS_DB=${REDIS_DB:-0}
       - SCHEDULER_PORT=8091
@@ -334,10 +275,6 @@ services:
     networks:
       - xianyu-network
     depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
       websocket:
         condition: service_healthy
       backend-web:
@@ -368,55 +305,41 @@ networks:
   xianyu-network:
     driver: bridge
 COMPOSEEOF
-echo -e "${GREEN}✓ docker-compose.deploy.yml 已生成${NC}"
+echo -e "${GREEN}✓ docker-compose.remote.yml 已生成${NC}"
 echo ""
 
-# ========== 检测并清理加密版残留 ==========
-ENC_CONTAINERS=(
-    "xianyu-enc-frontend"
-    "xianyu-enc-backend-web"
-    "xianyu-enc-websocket"
-    "xianyu-enc-scheduler"
-    "xianyu-enc-mysql"
-    "xianyu-enc-redis"
-)
+# ========== 校验远程连接配置 ==========
+mysql_host=$(grep -E "^MYSQL_HOST=" "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '\r' | xargs)
+redis_host=$(grep -E "^REDIS_HOST=" "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '\r' | xargs)
 
-enc_found=0
-for container in "${ENC_CONTAINERS[@]}"; do
-    if docker ps -a --format '{{.Names}}' | grep -q "^${container}$"; then
-        enc_found=1
-        break
-    fi
-done
-
-if [ $enc_found -eq 1 ]; then
-    echo -e "${YELLOW}[信息] 检测到加密版容器，清理中（保留数据卷）...${NC}"
-    for container in "${ENC_CONTAINERS[@]}"; do
-        if docker ps -a --format '{{.Names}}' | grep -q "^${container}$"; then
-            echo -e "${CYAN}  停止并删除容器: ${container}${NC}"
-            docker stop "$container" 2>/dev/null || true
-            docker rm "$container" 2>/dev/null || true
-        fi
-    done
-    # 清理加密版应用镜像
-    for name in "xianyu-enc-frontend" "xianyu-enc-backend-web" "xianyu-enc-websocket" "xianyu-enc-scheduler"; do
-        image_ids=$(docker images --filter "reference=*/${name}*" --format '{{.ID}}' 2>/dev/null | sort -u)
-        for id in $image_ids; do
-            docker rmi "$id" --force 2>/dev/null || true
-        done
-    done
-    # 清理加密版网络
-    for enc_network in $(docker network ls --format '{{.Name}}' | grep -i "enc" | grep -i "xianyu"); do
-        docker network rm "$enc_network" 2>/dev/null || true
-    done
-    echo -e "${GREEN}✓ 加密版已清理（数据卷已保留）${NC}"
-    echo ""
+if [ -z "$mysql_host" ] || [ "$mysql_host" = "your-remote-mysql-host" ]; then
+    echo -e "${RED}错误: 请先在 $ENV_FILE 中填写真实的 MYSQL_HOST（远程数据库地址）${NC}"
+    exit 1
 fi
+if [ -z "$redis_host" ] || [ "$redis_host" = "your-remote-redis-host" ]; then
+    echo -e "${RED}错误: 请先在 $ENV_FILE 中填写真实的 REDIS_HOST（远程 Redis 地址）${NC}"
+    exit 1
+fi
+
+case "$mysql_host" in
+    localhost|127.0.0.1)
+        echo -e "${YELLOW}[警告] MYSQL_HOST=$mysql_host，容器内的 localhost 指向容器自身，${NC}"
+        echo -e "${YELLOW}       若数据库在宿主机上，请改用 host.docker.internal 或宿主机内网 IP${NC}"
+        ;;
+esac
+case "$redis_host" in
+    localhost|127.0.0.1)
+        echo -e "${YELLOW}[警告] REDIS_HOST=$redis_host，容器内的 localhost 指向容器自身，${NC}"
+        echo -e "${YELLOW}       若 Redis 在宿主机上，请改用 host.docker.internal 或宿主机内网 IP${NC}"
+        ;;
+esac
+
+echo -e "${CYAN}[信息] 远程 MySQL: $mysql_host${NC}"
+echo -e "${CYAN}[信息] 远程 Redis: $redis_host${NC}"
+echo ""
 
 # ========== 创建挂载目录 ==========
 mkdir -p \
-    "$WORK_DIR/xianyu_auto_reply/mysql/data" \
-    "$WORK_DIR/xianyu_auto_reply/redis/data" \
     "$WORK_DIR/xianyu_auto_reply/logs/backend_web" \
     "$WORK_DIR/xianyu_auto_reply/logs/websocket" \
     "$WORK_DIR/xianyu_auto_reply/logs/scheduler" \
@@ -470,5 +393,4 @@ echo "常用命令："
 echo "  查看日志: $DC_CMD logs -f"
 echo "  停止服务: $DC_CMD down"
 echo "  重启服务: $DC_CMD restart"
-echo "  更新版本: bash update.sh"
 echo ""
