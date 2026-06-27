@@ -200,19 +200,21 @@ bash update.sh
 
 当 MySQL 和 Redis 由外部（如云数据库 RDS、独立服务器或已有实例）提供时，可使用 `deploy_remote.sh`。
 该脚本**不内置 mysql/redis 容器**，仅拉取并启动 4 个应用服务（frontend / backend-web / websocket / scheduler），
-数据库连接信息通过 `.env.remote` 配置。
+数据库连接信息通过 `.env.remote` 配置。与方式一相同，直接远程拉取脚本执行即可：
 
 ```bash
 # 1) 首次运行：自动生成 .env.remote 后退出，提示填写远程连接信息
-bash deploy_remote.sh
+curl -fsSL https://xy-update.zhinianboke.com/deploy_remote.sh | sed 's/\r$//' | bash
 
 # 2) 编辑 .env.remote，填写真实的远程地址（勿填 localhost）
 #    MYSQL_HOST / REDIS_HOST 等
 vim .env.remote
 
 # 3) 再次运行：校验配置 → 自动生成 docker-compose.remote.yml → 拉取镜像 → 启动
-bash deploy_remote.sh
+curl -fsSL https://xy-update.zhinianboke.com/deploy_remote.sh | sed 's/\r$//' | bash
 ```
+
+> 已克隆仓库的也可改用本地脚本：`bash deploy_remote.sh`（首次生成配置后退出，填好 `.env.remote` 再次执行）。
 
 - 首次运行自动生成 `.env.remote`，每次运行自动生成 `docker-compose.remote.yml`，均不影响根目录原有的 `.env` / `docker-compose.yml` / `docker-compose.deploy.yml`
 - 容器名与主套保持一致（`xianyu-backend-web` / `xianyu-websocket` / `xianyu-scheduler` / `xianyu-frontend`），与方式二/方式四属于同一套部署，二者只需选其一，不要同时启动
