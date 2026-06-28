@@ -125,16 +125,25 @@ def _build_user_payload(
 async def list_users(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    username: str | None = Query(default=None, description="用户名筛选（模糊匹配，忽略大小写）"),
     _: User = Depends(deps.get_current_admin_user),
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> dict:
+    # 构建用户名筛选条件，同时作用于总数统计与分页查询，保证翻页数据一致
+    username_keyword = username.strip() if username else None
+
     # 获取总数
     total_stmt = select(func.count()).select_from(User)
+    if username_keyword:
+        total_stmt = total_stmt.where(User.username.ilike(f"%{username_keyword}%"))
     total_result = await session.execute(total_stmt)
     total = total_result.scalar() or 0
-    
+
     # 分页查询用户
-    users_stmt = select(User).order_by(User.created_at.desc()).limit(limit).offset(offset)
+    users_stmt = select(User).order_by(User.created_at.desc())
+    if username_keyword:
+        users_stmt = users_stmt.where(User.username.ilike(f"%{username_keyword}%"))
+    users_stmt = users_stmt.limit(limit).offset(offset)
     users_result = await session.execute(users_stmt)
     users = users_result.scalars().all()
 

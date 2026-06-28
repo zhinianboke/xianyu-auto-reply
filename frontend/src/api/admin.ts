@@ -60,13 +60,18 @@ const mapAdminUser = (user: AdminUserApiItem): User => ({
 })
 
 // 获取用户列表
-export const getUsers = async (params?: { page?: number; pageSize?: number }): Promise<{ success: boolean; data?: User[]; total?: number; message?: string }> => {
+export const getUsers = async (params?: { page?: number; pageSize?: number; username?: string }): Promise<{ success: boolean; data?: User[]; total?: number; message?: string }> => {
   const query = new URLSearchParams()
   const page = params?.page || 1
   const pageSize = params?.pageSize || 20
   const offset = (page - 1) * pageSize
   query.set('limit', String(pageSize))
   query.set('offset', String(offset))
+  // 用户名筛选条件，仅在有值时附加
+  const username = params?.username?.trim()
+  if (username) {
+    query.set('username', username)
+  }
 
   const result = await get<{ success: boolean; message?: string; users?: AdminUserApiItem[]; total?: number }>(`${ADMIN_PREFIX}/users?${query.toString()}`)
   if (!result.success) {

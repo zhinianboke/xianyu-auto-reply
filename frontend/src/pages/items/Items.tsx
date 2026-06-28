@@ -107,7 +107,7 @@ export function Items() {
   const [batchDeleteAiPromptConfirm, setBatchDeleteAiPromptConfirm] = useState(false)
   const [batchClearCardRelationsConfirm, setBatchClearCardRelationsConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const hasSearchEffectInitializedRef = useRef(false)
+  // const hasSearchEffectInitializedRef = useRef(false)  // 已改为手动查询，不再需要
   const skipNextSearchEffectRef = useRef(false)
 
   const loadItems = async (
@@ -259,25 +259,26 @@ export function Items() {
     loadItems(1, pagination.pageSize, filters)
   }, [_hasHydrated, isAuthenticated, token, selectedAccount])
 
-  useEffect(() => {
-    if (!hasSearchEffectInitializedRef.current) {
-      hasSearchEffectInitializedRef.current = true
-      return
-    }
-    if (!_hasHydrated || !isAuthenticated || !token) return
-    if (skipNextSearchEffectRef.current) {
-      skipNextSearchEffectRef.current = false
-      return
-    }
+  // 搜索关键词变更时自动触发查询（已改为手动点击查询按钮）
+  // useEffect(() => {
+  //   if (!hasSearchEffectInitializedRef.current) {
+  //     hasSearchEffectInitializedRef.current = true
+  //     return
+  //   }
+  //   if (!_hasHydrated || !isAuthenticated || !token) return
+  //   if (skipNextSearchEffectRef.current) {
+  //     skipNextSearchEffectRef.current = false
+  //     return
+  //   }
 
-    const timer = window.setTimeout(() => {
-      loadItems(1, pagination.pageSize, filters, searchKeyword)
-    }, 300)
+  //   const timer = window.setTimeout(() => {
+  //     loadItems(1, pagination.pageSize, filters, searchKeyword)
+  //   }, 300)
 
-    return () => {
-      window.clearTimeout(timer)
-    }
-  }, [searchKeyword])
+  //   return () => {
+  //     window.clearTimeout(timer)
+  //   }
+  // }, [searchKeyword])
 
   const handleDelete = async (item: Item) => {
     setDeleting(true)
@@ -1126,15 +1127,30 @@ export function Items() {
             </div>
             <div className="input-group">
               <label className="input-label">搜索商品</label>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input
-                  type="text"
-                  value={searchKeyword}
-                  onChange={(e) => setSearchKeyword(e.target.value)}
-                  placeholder="搜索商品ID、标题或详情..."
-                  className="input-ios pl-9"
-                />
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    value={searchKeyword}
+                    onChange={(e) => setSearchKeyword(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        loadItems(1, pagination.pageSize, filters, searchKeyword)
+                      }
+                    }}
+                    placeholder="搜索商品ID、标题或详情..."
+                    className="input-ios pl-9"
+                  />
+                </div>
+                <button
+                  onClick={() => loadItems(1, pagination.pageSize, filters, searchKeyword)}
+                  className="btn-ios-primary whitespace-nowrap"
+                  disabled={itemsLoading}
+                >
+                  <Search className="w-4 h-4" />
+                  查询
+                </button>
               </div>
             </div>
             <div className="input-group">

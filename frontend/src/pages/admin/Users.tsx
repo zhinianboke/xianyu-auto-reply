@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Users as UsersIcon, RefreshCw, Plus, ChevronLeft, ChevronRight, Loader2, Pencil, Power, PowerOff, Wallet } from 'lucide-react'
+import { Users as UsersIcon, RefreshCw, Plus, ChevronLeft, ChevronRight, Loader2, Pencil, Power, PowerOff, Wallet, Search, X } from 'lucide-react'
 import { getUsers, deleteUser, updateUser } from '@/api/admin'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
@@ -54,6 +54,10 @@ export function Users() {
   const [pageSize, setPageSize] = useState(20)
   const [total, setTotal] = useState(0)
 
+  // 用户名搜索：输入框值与已应用的查询值分离，避免输入过程中频繁请求
+  const [searchUsername, setSearchUsername] = useState('')
+  const [appliedUsername, setAppliedUsername] = useState('')
+
   const [statusConfirm, setStatusConfirm] = useState<{ open: boolean; user: User | null; action: 'enable' | 'disable' }>({ open: false, user: null, action: 'disable' })
   const [statusSubmitting, setStatusSubmitting] = useState(false)
   const [showFormModal, setShowFormModal] = useState(false)
@@ -64,7 +68,7 @@ export function Users() {
     if (!_hasHydrated || !isAuthenticated || !token) return
     try {
       setLoading(true)
-      const result = await getUsers({ page: currentPage, pageSize })
+      const result = await getUsers({ page: currentPage, pageSize, username: appliedUsername })
       if (!result.success) {
         setUsers([])
         setTotal(0)
@@ -83,7 +87,21 @@ export function Users() {
   useEffect(() => {
     if (!_hasHydrated || !isAuthenticated || !token) return
     loadUsers()
-  }, [_hasHydrated, isAuthenticated, token, currentPage, pageSize])
+  }, [_hasHydrated, isAuthenticated, token, currentPage, pageSize, appliedUsername])
+
+  // 执行用户名搜索：应用输入值并回到第一页
+  const handleSearch = () => {
+    const keyword = searchUsername.trim()
+    setAppliedUsername(keyword)
+    setCurrentPage(1)
+  }
+
+  // 重置用户名搜索条件
+  const handleResetSearch = () => {
+    setSearchUsername('')
+    setAppliedUsername('')
+    setCurrentPage(1)
+  }
 
   const handleOpenCreate = () => {
     setEditingUser(null)
@@ -137,7 +155,8 @@ export function Users() {
   const endIndex = Math.min(currentPage * pageSize, total)
   const isEnableAction = statusConfirm.action === 'enable'
 
-  if (loading && users.length === 0) {
+  // 仅首屏（未应用搜索条件）整屏展示加载态；应用搜索后保留搜索框，避免输入框中途消失
+  if (loading && users.length === 0 && !appliedUsername) {
     return <PageLoading />
   }
 
@@ -165,12 +184,39 @@ export function Users() {
       </div>
 
       <div className="vben-card flex flex-col" style={{ height: 'calc(100vh - 280px)', minHeight: '400px' }}>
-        <div className="vben-card-header flex-shrink-0 flex items-center justify-between">
+        <div className="vben-card-header flex-shrink-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <h2 className="vben-card-title">
             <UsersIcon className="w-4 h-4" />
             用户列表
           </h2>
-          <span className="badge-primary">{total} 个用户</span>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+              <input
+                type="text"
+                value={searchUsername}
+                onChange={(e) => setSearchUsername(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                placeholder="搜索用户名"
+                className="w-44 sm:w-52 pl-8 pr-8 py-1.5 text-sm border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+              />
+              {searchUsername && (
+                <button
+                  type="button"
+                  onClick={handleResetSearch}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  title="清空"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+            <button onClick={handleSearch} className="btn-ios-secondary">
+              <Search className="w-4 h-4" />
+              搜索
+            </button>
+            <span className="badge-primary whitespace-nowrap">{total} 个用户</span>
+          </div>
         </div>
         <div className="flex-1 overflow-auto">
           <table className="table-ios">
@@ -194,7 +240,7 @@ export function Users() {
                   <td colSpan={10} className="text-center py-8 text-slate-500 dark:text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <UsersIcon className="w-12 h-12 text-slate-300 dark:text-slate-600" />
-                      <p>暂无用户数据</p>
+                      <p>{appliedUsername ? `未找到用户名包含「${appliedUsername}」的用户` : '暂无用户数据'}</p>
                     </div>
                   </td>
                 </tr>
