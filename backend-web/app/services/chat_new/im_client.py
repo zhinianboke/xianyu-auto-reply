@@ -212,8 +212,13 @@ class GoofishImClient:
 
     @property
     def is_connected(self) -> bool:
-        """是否已连接并注册"""
-        return self._connected and self._registered
+        """是否已连接并注册（含底层 ws 真实状态双重检查，避免标志位与实际连接不同步）"""
+        return (
+            self._connected
+            and self._registered
+            and self._ws is not None
+            and not self._ws.closed
+        )
 
     # ==================== 业务接口 ====================
 
@@ -923,6 +928,12 @@ class GoofishImClient:
                     )
                     self._connected = False
                     break
+            else:
+                # async for 正常结束（服务端优雅关闭/网络中断，迭代器自然终止，
+                # 不产生 CLOSED/ERROR 帧）时同步连接状态，避免标志位卡在 True
+                if self._connected:
+                    logger.warning(f"【{self.account_id}】WebSocket连接已关闭")
+                    self._connected = False
         except asyncio.CancelledError:
             pass
         except Exception as e:
