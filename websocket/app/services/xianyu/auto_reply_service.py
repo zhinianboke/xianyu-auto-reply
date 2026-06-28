@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import time
 import traceback
@@ -132,13 +133,52 @@ class AutoReplyService:
             result = await session.execute(stmt)
             self._account = result.scalars().first()
         return self._account
+
+    def _normalize_image_urls(self, images: Any) -> List[str]:
+        """保留非空图片 URL，并按原始顺序去重。"""
+        if not isinstance(images, list):
+            return []
+        normalized: List[str] = []
+        seen = set()
+        for image in images:
+            if not isinstance(image, str):
+                continue
+            url = image.strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            normalized.append(url)
+        return normalized
+
+    def _build_dedup_key(
+        self,
+        chat_id: str,
+        send_message: str,
+        message_type: Optional[str] = None,
+        images: Optional[List[str]] = None,
+        source_message_id: Optional[str] = None,
+    ) -> str:
+        """构建消息等待时间去重键，保持普通文本旧格式不变。"""
+        normalized_images = self._normalize_image_urls(images)
+        if message_type in ("image", "mixed"):
+            if source_message_id:
+                return f"{chat_id}_{send_message}_source:{source_message_id}"
+            if normalized_images:
+                digest = hashlib.sha256(
+                    "\n".join(normalized_images).encode("utf-8")
+                ).hexdigest()[:16]
+                return f"{chat_id}_{send_message}_images:{digest}"
+        return f"{chat_id}_{send_message}"
     
     def _build_auto_reply_log_payload(self, parsed_message: Dict[str, Any]) -> Dict[str, Any]:
         """构建自动回复日志基础数据"""
         send_message = parsed_message.get("send_message", "")
         chat_id = parsed_message.get("chat_id", "")
+        source_message_id = self._extract_source_message_id(parsed_message.get("raw_message"))
+        message_type = parsed_message.get("message_type")
+        images = self._normalize_image_urls(parsed_message.get("images"))
         return {
-            "source_message_id": self._extract_source_message_id(parsed_message.get("raw_message")),
+            "source_message_id": source_message_id,
             "sender_user_id": parsed_message.get("send_user_id", ""),
             "sender_user_name": parsed_message.get("send_user_name", ""),
             "source_message": send_message,
@@ -153,7 +193,13 @@ class AutoReplyService:
             "default_reply_once": False,
             "reply_segments": [],
             "context_snapshot": {
-                "dedup_key": f"{chat_id}_{send_message}" if chat_id or send_message else None,
+                "dedup_key": self._build_dedup_key(
+                    chat_id=chat_id,
+                    send_message=send_message,
+                    message_type=message_type,
+                    images=images,
+                    source_message_id=source_message_id,
+                ) if chat_id or send_message or images else None,
             },
         }
     
@@ -290,7 +336,14 @@ class AutoReplyService:
             logger.warning(f"【{self.cookie_id}】加载自动回复延迟配置失败: {e}，使用默认值0秒")
             return 0
     
-    async def _check_chat_processed(self, chat_id: str, send_message: str) -> bool:
+    async def _check_chat_processed(
+        self,
+        chat_id: str,
+        send_message: str,
+        message_type: Optional[str] = None,
+        images: Optional[List[str]] = None,
+        source_message_id: Optional[str] = None,
+    ) -> bool:
         """检查该会话的该消息是否在等待时间内已处理过(参照旧框架)
         
         Args:
@@ -306,8 +359,13 @@ class AutoReplyService:
         if message_expire_time <= 0:
             return False
         
-        # 使用 chat_id + send_message 作为去重键（参照旧框架）
-        dedup_key = f"{chat_id}_{send_message}"
+        dedup_key = self._build_dedup_key(
+            chat_id=chat_id,
+            send_message=send_message,
+            message_type=message_type,
+            images=images,
+            source_message_id=source_message_id,
+        )
         
         async with self._processed_messages_lock:
             current_time = time.time()
@@ -325,7 +383,14 @@ class AutoReplyService:
             
             return False
     
-    async def _mark_chat_processed(self, chat_id: str, send_message: str) -> None:
+    async def _mark_chat_processed(
+        self,
+        chat_id: str,
+        send_message: str,
+        message_type: Optional[str] = None,
+        images: Optional[List[str]] = None,
+        source_message_id: Optional[str] = None,
+    ) -> None:
         """标记该会话的该消息已处理(参照旧框架)
         
         Args:
@@ -334,8 +399,13 @@ class AutoReplyService:
         """
         message_expire_time = await self._load_message_expire_time()
         
-        # 使用 chat_id + send_message 作为去重键（参照旧框架）
-        dedup_key = f"{chat_id}_{send_message}"
+        dedup_key = self._build_dedup_key(
+            chat_id=chat_id,
+            send_message=send_message,
+            message_type=message_type,
+            images=images,
+            source_message_id=source_message_id,
+        )
         
         async with self._processed_messages_lock:
             current_time = time.time()
@@ -574,6 +644,9 @@ class AutoReplyService:
             chat_id = parsed_message.get("chat_id", "")
             item_id = parsed_message.get("item_id", "")
             msg_time = parsed_message.get("msg_time", "")
+            message_type = parsed_message.get("message_type")
+            images = self._normalize_image_urls(parsed_message.get("images"))
+            source_message_id = log_payload.get("source_message_id")
             
             # 1. 检查是否是自己发出的消息（手动发出）
             # 使用myid判断（参照旧框架）
@@ -653,7 +726,13 @@ class AutoReplyService:
             
             # 5. 检查消息等待时间(去重，参照旧框架reply_scheduler.py)
             # 同一会话的同一消息内容在等待时间内不重复回复
-            if await self._check_chat_processed(chat_id, send_message):
+            if await self._check_chat_processed(
+                chat_id,
+                send_message,
+                message_type=message_type,
+                images=images,
+                source_message_id=source_message_id,
+            ):
                 logger.info(f"【{self.cookie_id}】消息 '{send_message[:30]}...' 在等待时间内已处理过，跳过自动回复")
                 log_payload["process_status"] = "skipped"
                 log_payload["decision_reason"] = "duplicate_message"
@@ -683,11 +762,19 @@ class AutoReplyService:
                     chat_id=chat_id,
                     item_id=item_id,
                     msg_time=msg_time,
+                    message_type=message_type,
+                    images=images,
                 )
                 
                 if reply:
                     # 标记该消息已处理(在发送回复前标记，参照旧框架)
-                    await self._mark_chat_processed(chat_id, send_message)
+                    await self._mark_chat_processed(
+                        chat_id,
+                        send_message,
+                        message_type=message_type,
+                        images=images,
+                        source_message_id=source_message_id,
+                    )
                     
                     # 自动回复延迟：按账号配置在发送前等待指定秒数
                     reply_delay = await self._load_reply_delay()
@@ -1055,6 +1142,8 @@ class AutoReplyService:
         chat_id: str,
         item_id: Optional[str] = None,
         msg_time: str = "",
+        message_type: Optional[str] = None,
+        images: Optional[List[str]] = None,
     ) -> Optional[str]:
         """获取自动回复(主入口)
         
@@ -1067,6 +1156,8 @@ class AutoReplyService:
             chat_id: 会话ID
             item_id: 商品ID(可选)
             msg_time: 消息时间
+            message_type: 消息类型
+            images: 买家图片URL列表
             
         Returns:
             回复内容,None表示不回复
@@ -1101,7 +1192,15 @@ class AutoReplyService:
                     return ai_reply
                 
                 default_reply = await self.get_default_reply(
-                    session, send_user_name, send_user_id, send_message, chat_id, item_id, msg_time
+                    session,
+                    send_user_name,
+                    send_user_id,
+                    send_message,
+                    chat_id,
+                    item_id,
+                    msg_time,
+                    message_type=message_type,
+                    images=images,
                 )
                 if default_reply:
                     if default_reply == "EMPTY_REPLY":
@@ -1382,6 +1481,8 @@ class AutoReplyService:
         item_id: Optional[str],
         msg_time: str,
         reply_trace: Optional[dict],
+        message_type: Optional[str] = None,
+        images: Optional[List[str]] = None,
     ) -> Optional[str]:
         """调用外部 API 获取默认回复内容并处理结果。
 
@@ -1389,6 +1490,8 @@ class AutoReplyService:
         - 调用失败/超时/无有效内容：返回 None，不回复，且不记录 reply_once（便于下次重试）；
         - 调用成功：按需记录 reply_once，返回回复文本（下游按 ###### 分段发送）。
         """
+        api_message_type = message_type if message_type in ("image", "mixed") else None
+        api_images = images if api_message_type else None
         api_reply = await call_reply_api(
             account_id=self.cookie_id,
             message=send_message,
@@ -1399,6 +1502,8 @@ class AutoReplyService:
             send_user_id=send_user_id,
             send_user_name=send_user_name,
             msg_time=msg_time,
+            message_type=api_message_type,
+            images=api_images,
         )
 
         # 失败/无有效内容：不回复（不记录 reply_once，便于下次重试）
@@ -1432,6 +1537,8 @@ class AutoReplyService:
         chat_id: str,
         item_id: Optional[str] = None,
         msg_time: str = "",
+        message_type: Optional[str] = None,
+        images: Optional[List[str]] = None,
     ) -> Optional[str]:
         """获取默认回复
         
@@ -1448,6 +1555,8 @@ class AutoReplyService:
             chat_id: 会话ID
             item_id: 商品ID(可选)
             msg_time: 消息时间
+            message_type: 消息类型
+            images: 买家图片URL列表
             
         Returns:
             回复内容,None表示不回复,"EMPTY_REPLY"表示回复为空
@@ -1505,6 +1614,8 @@ class AutoReplyService:
                         item_id=item_id,
                         msg_time=msg_time,
                         reply_trace=reply_trace,
+                        message_type=message_type,
+                        images=images,
                     )
 
                 # 会话级串行（阻塞等待而非丢弃）：外部接口最长可等待 api_timeout 秒，
@@ -1545,6 +1656,8 @@ class AutoReplyService:
                                 item_id=item_id,
                                 msg_time=msg_time,
                                 reply_trace=reply_trace,
+                                message_type=message_type,
+                                images=images,
                             )
                         # 持锁后重新核对 reply_once：前一条同会话消息可能刚已回复并记录
                         if settings.get("reply_once", False):
@@ -1572,6 +1685,8 @@ class AutoReplyService:
                             item_id=item_id,
                             msg_time=msg_time,
                             reply_trace=reply_trace,
+                            message_type=message_type,
+                            images=images,
                         )
                 except Exception as lock_exc:
                     # Redis 异常等情况降级为无锁直接调用，不阻断正常回复
@@ -1591,6 +1706,8 @@ class AutoReplyService:
                         item_id=item_id,
                         msg_time=msg_time,
                         reply_trace=reply_trace,
+                        message_type=message_type,
+                        images=images,
                     )
 
             if reply_image and reply_image.strip():

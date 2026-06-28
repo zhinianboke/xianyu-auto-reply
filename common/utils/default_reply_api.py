@@ -21,6 +21,7 @@ DEFAULT_API_TIMEOUT = 80
 # 超时时间允许范围（秒）
 MIN_API_TIMEOUT = 1
 MAX_API_TIMEOUT = 120
+MAX_API_IMAGE_URLS = 10
 
 
 def validate_api_url(api_url: str) -> Tuple[bool, str]:
@@ -88,6 +89,25 @@ def normalize_api_timeout(timeout: Optional[int]) -> int:
     return value
 
 
+def normalize_image_urls(images: Optional[list[str]], limit: int = MAX_API_IMAGE_URLS) -> list[str]:
+    """清洗外部 API payload 中的图片 URL。"""
+    if not images:
+        return []
+    normalized: list[str] = []
+    seen = set()
+    for image in images:
+        if not isinstance(image, str):
+            continue
+        url = image.strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        normalized.append(url)
+        if len(normalized) >= limit:
+            break
+    return normalized
+
+
 def parse_api_reply(status: int, body_text: str) -> Optional[str]:
     """解析外部 API 的返回内容，提取要发送给买家的文本。
 
@@ -150,6 +170,8 @@ async def call_reply_api(
     send_user_id: Optional[str] = None,
     send_user_name: Optional[str] = None,
     msg_time: Optional[str] = None,
+    message_type: Optional[str] = None,
+    images: Optional[list[str]] = None,
 ) -> Optional[str]:
     """调用外部 API 获取默认回复内容。
 
@@ -166,6 +188,8 @@ async def call_reply_api(
         send_user_id: 买家ID
         send_user_name: 买家昵称
         msg_time: 消息时间
+        message_type: 消息类型(text/image/mixed/unknown)
+        images: 买家发来的图片URL列表
 
     Returns:
         外部 API 返回的回复文本；失败/超时/无内容时返回 None
@@ -185,6 +209,11 @@ async def call_reply_api(
         "msg_time": msg_time,
     }
     payload.update({key: value for key, value in context_payload.items() if value is not None})
+    if isinstance(message_type, str) and message_type.strip():
+        payload["message_type"] = message_type.strip()
+    normalized_images = normalize_image_urls(images)
+    if normalized_images:
+        payload["images"] = normalized_images
 
     try:
         client_timeout = aiohttp.ClientTimeout(total=timeout_seconds)
