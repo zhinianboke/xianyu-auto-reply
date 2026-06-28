@@ -35,7 +35,7 @@ class FYAccount(TimestampMixin, Base):
         Index("idx_fy_account_created", "created_at"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     owner_id: Mapped[int] = mapped_column(BigInteger, comment="所属用户ID")
     account_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True, comment="账号标识")
     account_type: Mapped[FYAccountType] = mapped_column(

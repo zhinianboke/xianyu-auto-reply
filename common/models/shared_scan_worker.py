@@ -19,7 +19,7 @@ class SharedScanWorker(TimestampMixin, Base):
 
     __tablename__ = "xy_shared_scan_workers"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     shared_session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True, comment="关联的共享会话ID")
     sub_session_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True, index=True, comment="兼职子会话唯一ID（UUID）")
     xianyu_session_id: Mapped[str | None] = mapped_column(String(36), comment="关联的闲鱼QR登录会话ID（qr_login_manager中的session）")

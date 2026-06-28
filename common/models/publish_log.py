@@ -22,7 +22,7 @@ class PublishLog(TimestampMixin, Base):
         Index("idx_publish_user_created", "user_id", "created_at"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment="操作用户ID")
     account_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True, comment="闲鱼账号ID（cookie_id）")
     title: Mapped[str] = mapped_column(String(200), nullable=False, comment="商品标题")

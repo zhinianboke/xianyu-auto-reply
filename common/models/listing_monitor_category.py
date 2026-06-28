@@ -24,7 +24,7 @@ class ListingMonitorCategory(TimestampMixin, Base):
         Index("idx_lmc_owner_deleted", "owner_id", "is_deleted"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     owner_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="归属用户ID")
     name: Mapped[str] = mapped_column(String(100), nullable=False, comment="分类名称")
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0", comment="是否已删除（软删除）")

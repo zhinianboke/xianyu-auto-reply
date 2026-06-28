@@ -23,7 +23,7 @@ class FundFlow(Base):
         Index("idx_ff_user_type_id_desc", "user_id", "type", "id"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment='用户ID')
     type: Mapped[str] = mapped_column(String(32), nullable=False, comment='流水类型：income-收入，expense-支出')
     amount: Mapped[str] = mapped_column(String(32), nullable=False, comment='发生额')

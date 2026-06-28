@@ -20,7 +20,7 @@ class DockRecord(Base):
 
     __tablename__ = "xy_dock_records"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment='用户ID')
     card_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment='来源卡券ID')
     dock_name: Mapped[str] = mapped_column(String(255), nullable=False, comment='对接名称')

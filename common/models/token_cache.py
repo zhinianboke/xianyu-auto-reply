@@ -21,7 +21,7 @@ class TokenCache(TimestampMixin, Base):
 
     __tablename__ = "xy_token_cache"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     user_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, comment="用户ID（myid）")
     token: Mapped[str] = mapped_column(Text, nullable=False, comment="IM Token")
     device_id: Mapped[str] = mapped_column(String(128), nullable=False, comment="设备ID")

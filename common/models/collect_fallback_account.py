@@ -24,7 +24,7 @@ class CollectFallbackAccount(TimestampMixin, Base):
         Index("uk_cfa_owner_category", "owner_id", "category_id", unique=True),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     owner_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="归属用户ID")
     category_id: Mapped[int | None] = mapped_column(BigInteger, comment="所属分类ID（NULL=未分类全局兜底）")
     account_ids: Mapped[list | None] = mapped_column(JSON, comment="兜底采集账号ID列表（JSON数组，多选轮换使用）")

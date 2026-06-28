@@ -31,7 +31,7 @@ class XYAutoReplyMessageLog(Base):
         Index("idx_arml_order_strategy_id", "order_no", "reply_strategy", "id"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     owner_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True, comment="所属系统用户ID")
     owner_username: Mapped[str | None] = mapped_column(String(120), comment="所属系统用户名")
     account_pk: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True, comment="账号主键ID")
@@ -65,5 +65,5 @@ class XYAutoReplyMessageLog(Base):
     raw_message_json: Mapped[dict | None] = mapped_column(JSON, comment="原始消息JSON")
     context_snapshot: Mapped[dict | None] = mapped_column(JSON, comment="上下文快照")
     send_result_json: Mapped[list | dict | None] = mapped_column(JSON, comment="发送结果快照")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment="更新时间")

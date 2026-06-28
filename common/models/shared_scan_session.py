@@ -21,7 +21,7 @@ class SharedScanSession(TimestampMixin, Base):
 
     __tablename__ = "xy_shared_scan_sessions"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     session_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True, index=True, comment="会话唯一ID（UUID）")
     owner_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment="创建者用户ID")
     owner_username: Mapped[str] = mapped_column(String(120), nullable=False, comment="创建者用户名")

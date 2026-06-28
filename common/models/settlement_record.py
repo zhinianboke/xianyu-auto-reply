@@ -18,7 +18,7 @@ class SettlementRecord(Base):
         Index("idx_sr_user_created_id", "user_id", "created_at", "id"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment='用户ID')
     alipay_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, comment='支付宝ID（兼容旧数据）')
     payment_type: Mapped[Optional[str]] = mapped_column(String(16), nullable=True, comment='收款方式：alipay-支付宝，wechat-微信')

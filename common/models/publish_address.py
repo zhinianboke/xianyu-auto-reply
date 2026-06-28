@@ -25,7 +25,7 @@ class PublishAddress(TimestampMixin, Base):
         Index("idx_pa_sort_created", "sort_order", "created_at"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     name: Mapped[str] = mapped_column(String(120), nullable=False, comment="地址名称")
     search_keyword: Mapped[str] = mapped_column(String(200), nullable=False, comment="地址搜索关键词")
     expected_text: Mapped[str | None] = mapped_column(String(200), comment="期望命中的候选文本")

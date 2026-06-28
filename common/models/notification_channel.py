@@ -19,12 +19,12 @@ class NotificationChannel(TimestampMixin, Base):
 
     __tablename__ = "xy_notification_channels"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
-    channel_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    config_payload: Mapped[dict | None] = mapped_column("config", JSON)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="渠道ID")
+    owner_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="所属用户ID")
+    name: Mapped[str] = mapped_column(String(120), nullable=False, comment="渠道名称")
+    channel_type: Mapped[str] = mapped_column(String(32), nullable=False, comment="渠道类型")
+    config_payload: Mapped[dict | None] = mapped_column("config", JSON, comment="渠道配置")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment="是否启用")
 
     subscriptions: Mapped[list["MessageNotification"]] = relationship(
         "MessageNotification",

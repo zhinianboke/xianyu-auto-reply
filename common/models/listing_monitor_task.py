@@ -26,7 +26,7 @@ class ListingMonitorTask(TimestampMixin, Base):
         Index("idx_lmt_owner_deleted", "owner_id", "is_deleted"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     owner_id: Mapped[int | None] = mapped_column(BigInteger, index=True, comment="归属用户ID，用于多用户数据隔离")
     category_id: Mapped[int | None] = mapped_column(BigInteger, comment="所属分类ID（NULL=未分类）")
     monitor_type: Mapped[str] = mapped_column(String(20), nullable=False, default="listing", server_default="listing", comment="监控类型：listing-上新监控，price_drop-降价监控")

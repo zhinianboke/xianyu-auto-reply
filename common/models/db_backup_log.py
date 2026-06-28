@@ -19,7 +19,7 @@ class DbBackupLog(TimestampMixin, Base):
 
     __tablename__ = "xy_db_backup_log"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     # 备份结果状态：success（成功）/ failed（失败）
     status: Mapped[str] = mapped_column(String(20), nullable=False, comment="状态：success/failed")
     # 备份文件名（仅文件名，下载时由后端结合备份目录解析为真实路径）

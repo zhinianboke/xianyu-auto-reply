@@ -35,7 +35,7 @@ class Advertisement(TimestampMixin, Base):
     """广告表"""
     __tablename__ = "xy_advertisements"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="广告ID")
     user_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="申请用户ID")
     title: Mapped[str] = mapped_column(String(200), comment="广告标题")
     content: Mapped[str | None] = mapped_column(Text, nullable=True, comment="广告正文")

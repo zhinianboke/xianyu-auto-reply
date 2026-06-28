@@ -19,7 +19,7 @@ class RechargeOrder(Base):
 
     __tablename__ = "xy_recharge_orders"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     order_no: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True, comment='充值订单号')
     user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment='用户ID')
     amount: Mapped[str] = mapped_column(String(32), nullable=False, comment='充值金额')

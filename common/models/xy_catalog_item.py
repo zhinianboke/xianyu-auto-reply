@@ -28,20 +28,21 @@ class XYCatalogItem(Base):
         Index("idx_cat_owner_created", "owner_id", "created_at"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="商品ID")
+    owner_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="所属用户ID")
     account_pk: Mapped[int] = mapped_column(
         "account_id",
         BigInteger,
         index=True,
+        comment="关联账号ID",
     )
-    item_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    title: Mapped[str | None] = mapped_column(String(255))
-    price: Mapped[str | None] = mapped_column(String(32))
+    item_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="商品标识")
+    title: Mapped[str | None] = mapped_column(String(255), comment="商品标题")
+    price: Mapped[str | None] = mapped_column(String(32), comment="商品价格")
     ai_prompt: Mapped[str | None] = mapped_column(Text, comment="商品AI提示词")
     is_polished: Mapped[bool | None] = mapped_column("is_polished", default=False, comment="是否擦亮")
-    metadata_json: Mapped[dict | None] = mapped_column("metadata", JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    metadata_json: Mapped[dict | None] = mapped_column("metadata", JSON, comment="商品元数据")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), comment="创建时间")
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), onupdate=datetime.now, comment="更新时间")
 
     account: Mapped["XYAccount"] = relationship(

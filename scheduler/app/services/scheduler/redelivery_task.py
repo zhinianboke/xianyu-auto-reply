@@ -650,6 +650,25 @@ class RedeliveryTask:
                                 f"[定时补发货] 订单 {order_no} 写入多数量退化提示失败: {warn_err}"
                             )
 
+                    # 卡券疑似被平台风控拦截未送达：internal API 已等待闲鱼服务端回执判定，
+                    # 并把拦截原因写入订单 delivery_fail_reason。订单已标记 shipped（库存已扣，
+                    # 不自动重发以免资损/再次被同一风控拦截，下轮也不会再捞取），
+                    # 这里把补发货批次日志记为失败（返回 success=False），提示人工核实买家是否收到。
+                    if result_data.get('send_intercepted'):
+                        intercept_reason = (
+                            result_data.get('send_intercept_reason')
+                            or "卡券疑似被平台风控拦截未送达，请人工核实买家是否收到"
+                        )
+                        # 若同时存在多数量退化提示，合并写入，避免外层覆盖 delivery_fail_reason 时丢失
+                        final_reason = (
+                            f"{degraded_warn_msg}；{intercept_reason}" if degraded_warn_msg else intercept_reason
+                        )
+                        logger.warning(
+                            f"[定时补发货] 订单 {order_no} 卡券疑似被平台拦截，"
+                            f"已标记发货但批次日志记为失败: {final_reason}"
+                        )
+                        return False, final_reason, cookie_string
+
                     logger.info(f"[定时补发货] 订单 {order_no} 发货成功")
                     return True, None, cookie_string
                 else:

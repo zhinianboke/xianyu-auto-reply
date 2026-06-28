@@ -21,7 +21,7 @@ class CookieRefreshSchedule(TimestampMixin, Base):
 
     __tablename__ = "xy_cookie_refresh_schedules"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     account_id: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True, comment="账号ID")
     expire_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, comment="当前Cookie续期到期时间")
     last_refresh_at: Mapped[datetime | None] = mapped_column(DateTime, comment="最近一次续期成功时间")

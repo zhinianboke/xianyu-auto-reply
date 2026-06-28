@@ -21,7 +21,7 @@ class XYPlatformBlacklist(TimestampMixin, Base):
         Index("idx_plb_owner_buyer", "owner_id", "buyer_id"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     owner_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment="拉黑用户（本系统用户ID）")
     buyer_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="买家ID")
     buyer_nick: Mapped[str | None] = mapped_column(String(120), nullable=True, comment="买家昵称")

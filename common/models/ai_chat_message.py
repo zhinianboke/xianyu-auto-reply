@@ -25,18 +25,19 @@ class AIChatMessage(Base):
     
     __tablename__ = "xy_ai_chat_messages"
     
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    chat_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    cookie_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
-    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    item_id: Mapped[str | None] = mapped_column(String(64))
-    role: Mapped[str] = mapped_column(String(20), nullable=False)  # user / assistant
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    intent: Mapped[str | None] = mapped_column(String(20))  # price / tech / default
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="消息ID")
+    chat_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True, comment="聊天ID")
+    cookie_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True, comment="账号标识")
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="用户ID")
+    item_id: Mapped[str | None] = mapped_column(String(64), comment="商品ID")
+    role: Mapped[str] = mapped_column(String(20), nullable=False, comment="角色(user/assistant)")  # user / assistant
+    content: Mapped[str] = mapped_column(Text, nullable=False, comment="消息内容")
+    intent: Mapped[str | None] = mapped_column(String(20), comment="意图(price/tech/default)")  # price / tech / default
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
+        comment="创建时间",
     )
     
     __table_args__ = (

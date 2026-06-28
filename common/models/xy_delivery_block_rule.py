@@ -24,7 +24,7 @@ class XYDeliveryBlockRule(TimestampMixin, Base):
         UniqueConstraint("account_id", "rule_code", name="uk_account_rule"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
 
     # 账号标识（对应 xy_accounts.account_id）
     account_id: Mapped[str] = mapped_column(

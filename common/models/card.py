@@ -23,14 +23,14 @@ class Card(Base):
         Index("idx_cards_user_enabled", "user_id", "enabled"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
-    item_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)  # 关联商品ID
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    type: Mapped[str] = mapped_column(String(50), nullable=False)  # api, text, data, image
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    delay_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment='卡券ID')
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment='所属用户ID')
+    item_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True, comment='关联商品ID')  # 关联商品ID
+    name: Mapped[str] = mapped_column(String(255), nullable=False, comment='卡券名称')
+    type: Mapped[str] = mapped_column(String(50), nullable=False, comment='卡券类型(api/text/data/image)')  # api, text, data, image
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='卡券描述')
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment='是否启用')
+    delay_seconds: Mapped[int] = mapped_column(Integer, default=0, comment='延迟秒数')
     delivery_count: Mapped[int] = mapped_column(Integer, default=0, comment='发货次数')
     price: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, comment='对接价格')
     is_dockable: Mapped[bool] = mapped_column(Boolean, default=False, comment='是否可对接')
@@ -39,19 +39,19 @@ class Card(Base):
     dock_visibility: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, comment='对接可见性：public-所有人可见，dealer_only-仅分销商可见')
     
     # 多规格支持
-    is_multi_spec: Mapped[bool] = mapped_column(Boolean, default=False)
-    spec_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    spec_value: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    
+    is_multi_spec: Mapped[bool] = mapped_column(Boolean, default=False, comment='是否多规格')
+    spec_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment='规格名称')
+    spec_value: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment='规格值')
+
     # 根据类型存储不同内容
-    api_config: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 格式
-    text_content: Mapped[Optional[str]] = mapped_column(LONGTEXT, nullable=True)  # 文本卡券内容，使用 LONGTEXT 存储超大内容
-    data_content: Mapped[Optional[str]] = mapped_column(LONGTEXT, nullable=True)  # 批量数据（卡密）内容，使用 LONGTEXT 存储超大内容
-    image_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    image_urls: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON数组，最多3张图片
-    
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    api_config: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='API配置(JSON)')  # JSON 格式
+    text_content: Mapped[Optional[str]] = mapped_column(LONGTEXT, nullable=True, comment='文本卡券内容')  # 文本卡券内容，使用 LONGTEXT 存储超大内容
+    data_content: Mapped[Optional[str]] = mapped_column(LONGTEXT, nullable=True, comment='批量数据（卡密）内容')  # 批量数据（卡密）内容，使用 LONGTEXT 存储超大内容
+    image_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, comment='图片URL')
+    image_urls: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='多图片URL列表(JSON数组，最多3张)')  # JSON数组，最多3张图片
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment='创建时间')
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), comment='更新时间')
 
     # 关系 - 无外键约束
     user = relationship(

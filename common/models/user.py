@@ -38,26 +38,28 @@ class User(TimestampMixin, Base):
         Index("idx_user_created", "created_at"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    external_id: Mapped[str | None] = mapped_column(String(64), index=True)
-    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    phone: Mapped[str | None] = mapped_column(String(32))
-    password_hash: Mapped[str] = mapped_column(String(255))
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="用户ID")
+    external_id: Mapped[str | None] = mapped_column(String(64), index=True, comment="外部ID")
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True, comment="用户名")
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, comment="邮箱")
+    phone: Mapped[str | None] = mapped_column(String(32), comment="手机号")
+    password_hash: Mapped[str] = mapped_column(String(255), comment="密码哈希")
     status: Mapped[UserStatus] = mapped_column(
         Enum(UserStatus),
         default=UserStatus.ACTIVE,
         server_default=UserStatus.ACTIVE.value,
+        comment="用户状态",
     )
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole),
         default=UserRole.MEMBER,
         server_default=UserRole.MEMBER.value,
+        comment="用户角色",
     )
-    account_limit: Mapped[int | None] = mapped_column(nullable=True)
-    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    login_fail_count: Mapped[int] = mapped_column(default=0, server_default="0")
-    login_locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    account_limit: Mapped[int | None] = mapped_column(nullable=True, comment="可添加账号数量")
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="最后登录时间")
+    login_fail_count: Mapped[int] = mapped_column(default=0, server_default="0", comment="登录失败次数")
+    login_locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="登录锁定截止时间")
     dock_code: Mapped[str | None] = mapped_column(String(32), unique=True, nullable=True, comment='对接码，用于分销商识别')
     # 分销秘钥：32位随机字符，全局唯一，支持更换；用于分销接口的身份校验
     secret_key: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, comment='分销秘钥，32位随机字符，全局唯一')

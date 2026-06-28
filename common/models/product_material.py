@@ -22,7 +22,7 @@ class ProductMaterial(TimestampMixin, Base):
         Index("idx_pm_user_created", "user_id", "created_at"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment="所属用户ID")
     title: Mapped[str] = mapped_column(String(200), nullable=False, comment="商品标题")
     description: Mapped[str] = mapped_column(Text, nullable=False, comment="商品描述")

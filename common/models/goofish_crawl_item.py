@@ -15,24 +15,24 @@ class GoofishCrawlItem(Base):
         Index("idx_crawl_job_item", "job_id", "item_id"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    job_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
-    item_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
+    job_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False, comment="关联的抓取任务ID")
+    item_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="闲鱼商品ID")
 
-    title: Mapped[str | None] = mapped_column(Text)
-    price: Mapped[str | None] = mapped_column(String(64))
-    area: Mapped[str | None] = mapped_column(String(120))
-    seller_name: Mapped[str | None] = mapped_column(String(120))
-    item_url: Mapped[str | None] = mapped_column(Text)
-    main_image: Mapped[str | None] = mapped_column(String(512))
-    publish_time: Mapped[str | None] = mapped_column(String(64))
+    title: Mapped[str | None] = mapped_column(Text, comment="商品标题")
+    price: Mapped[str | None] = mapped_column(String(64), comment="商品价格")
+    area: Mapped[str | None] = mapped_column(String(120), comment="所在地区")
+    seller_name: Mapped[str | None] = mapped_column(String(120), comment="卖家昵称")
+    item_url: Mapped[str | None] = mapped_column(Text, comment="商品链接")
+    main_image: Mapped[str | None] = mapped_column(String(512), comment="主图URL")
+    publish_time: Mapped[str | None] = mapped_column(String(64), comment="发布时间")
 
-    want_count: Mapped[int | None] = mapped_column(Integer)
-    view_count: Mapped[int | None] = mapped_column(Integer)
+    want_count: Mapped[int | None] = mapped_column(Integer, comment="想要人数")
+    view_count: Mapped[int | None] = mapped_column(Integer, comment="浏览次数")
 
-    description: Mapped[str | None] = mapped_column(Text)
-    detail_error: Mapped[str | None] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text, comment="商品描述")
+    detail_error: Mapped[str | None] = mapped_column(String(255), comment="详情抓取错误信息")
 
-    raw_json: Mapped[dict | None] = mapped_column(JSON)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    raw_json: Mapped[dict | None] = mapped_column(JSON, comment="原始数据JSON")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, comment="抓取时间")
 

@@ -28,7 +28,7 @@ class Feedback(TimestampMixin, Base):
     """意见反馈表"""
     __tablename__ = "xy_feedbacks"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="反馈ID")
     user_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="用户ID")
     cookie_id: Mapped[str | None] = mapped_column(String(64), comment="关联账号ID")
     title: Mapped[str] = mapped_column(String(100), comment="标题")

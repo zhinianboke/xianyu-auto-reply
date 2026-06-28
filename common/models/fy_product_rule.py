@@ -21,7 +21,7 @@ class FYProductRule(TimestampMixin, Base):
 
     __tablename__ = "fy_product_rules"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     owner_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="所属用户ID")
     account_id: Mapped[str | None] = mapped_column(String(80), index=True, comment="闲鱼账号ID（xy_accounts.account_id）")
     rule_name: Mapped[str] = mapped_column(String(120), nullable=False, comment="规则名称")

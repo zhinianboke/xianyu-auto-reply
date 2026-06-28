@@ -25,7 +25,7 @@ class AgentOrder(Base):
         Index("idx_agent_order_created", "created_at"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment='下单用户ID（发货方）')
     order_no: Mapped[str] = mapped_column(String(64), nullable=False, index=True, comment='闲鱼订单号')
     item_id: Mapped[str] = mapped_column(String(64), nullable=False, comment='商品ID')

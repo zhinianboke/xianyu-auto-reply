@@ -22,7 +22,7 @@ class XYPersonalBlacklist(TimestampMixin, Base):
         Index("idx_pb_owner_account", "owner_id", "account_id"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     owner_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment="用户ID")
     account_id: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="账号ID")
     buyer_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="买家ID")

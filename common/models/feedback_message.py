@@ -18,7 +18,7 @@ class FeedbackMessage(TimestampMixin, Base):
     """反馈消息表（对话记录）"""
     __tablename__ = "xy_feedback_messages"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="消息ID")
     feedback_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="关联反馈ID")
     user_id: Mapped[int] = mapped_column(BigInteger, comment="发送者用户ID")
     content: Mapped[str] = mapped_column(Text, comment="消息内容")

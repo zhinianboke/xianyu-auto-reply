@@ -24,7 +24,7 @@ class FYDeleteRule(TimestampMixin, Base):
         UniqueConstraint("owner_id", "account_id", name="uq_fy_delete_rules_owner_account"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     owner_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="所属用户ID")
     rule_name: Mapped[str] = mapped_column(String(120), nullable=False, comment="规则名称")
     account_id: Mapped[str] = mapped_column(String(80), nullable=False, comment="闲鱼账号ID（xy_accounts.account_id）")

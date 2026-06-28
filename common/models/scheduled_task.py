@@ -18,7 +18,7 @@ class ScheduledTask(TimestampMixin, Base):
 
     __tablename__ = "xy_scheduled_tasks"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     task_code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, comment="任务代码")
     task_name: Mapped[str] = mapped_column(String(100), nullable=False, comment="任务名称")
     interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60, comment="执行间隔(秒)")

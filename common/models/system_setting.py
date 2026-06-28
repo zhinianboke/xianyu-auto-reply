@@ -21,13 +21,14 @@ class SystemSetting(Base):
 
     __tablename__ = "xy_system_settings"
 
-    key: Mapped[str] = mapped_column(String(120), primary_key=True)
-    value: Mapped[str] = mapped_column(Text, nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    key: Mapped[str] = mapped_column(String(120), primary_key=True, comment="设置键")
+    value: Mapped[str] = mapped_column(Text, nullable=False, comment="设置值")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True, comment="设置描述")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+        comment="更新时间",
     )
 

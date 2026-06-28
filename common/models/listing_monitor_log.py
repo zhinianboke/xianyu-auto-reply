@@ -24,7 +24,7 @@ class ListingMonitorLog(TimestampMixin, Base):
         Index("idx_lml_created_at", "created_at"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     monitor_task_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="关联的商品监控任务ID")
     owner_id: Mapped[int | None] = mapped_column(BigInteger, comment="归属用户ID")
     monitor_type: Mapped[str | None] = mapped_column(String(20), comment="监控类型：listing-上新监控，price_drop-降价监控")

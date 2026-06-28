@@ -18,7 +18,7 @@ class AutoRateConfig(TimestampMixin, Base):
 
     __tablename__ = "xy_auto_rate_configs"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     account_id: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, comment="账号ID")
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否启用自动评价")
     rate_type: Mapped[str] = mapped_column(String(20), default="text", comment="评价类型: text-固定文字, api-API获取")

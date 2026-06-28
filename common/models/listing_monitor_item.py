@@ -36,7 +36,7 @@ class ListingMonitorItem(TimestampMixin, Base):
         Index("idx_lmi_owner_publish", "owner_id", "publish_time"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     monitor_task_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="关联的商品监控任务ID")
     owner_id: Mapped[int | None] = mapped_column(BigInteger, comment="归属用户ID")
     item_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="闲鱼商品ID")

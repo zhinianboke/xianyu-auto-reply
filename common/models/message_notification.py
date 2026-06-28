@@ -19,12 +19,12 @@ class MessageNotification(TimestampMixin, Base):
 
     __tablename__ = "xy_message_notifications"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
-    account_pk: Mapped[int] = mapped_column(BigInteger, index=True)
-    account_identifier: Mapped[str] = mapped_column(String(80), nullable=False)
-    channel_id: Mapped[int] = mapped_column(BigInteger, index=True)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment='通知ID')
+    owner_id: Mapped[int] = mapped_column(BigInteger, index=True, comment='所属用户ID')
+    account_pk: Mapped[int] = mapped_column(BigInteger, index=True, comment='关联账号ID')
+    account_identifier: Mapped[str] = mapped_column(String(80), nullable=False, comment='账号标识')
+    channel_id: Mapped[int] = mapped_column(BigInteger, index=True, comment='渠道ID')
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment='是否启用')
 
     channel: Mapped["NotificationChannel"] = relationship(
         "NotificationChannel",

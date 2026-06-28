@@ -25,7 +25,7 @@ class UserPublishAddress(TimestampMixin, Base):
         Index("idx_upa_owner_addr", "owner_id", "address"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     owner_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="归属用户ID")
     address: Mapped[str] = mapped_column(String(200), nullable=False, comment="地址文本（去重键）")
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0", comment="是否已删除（软删除）")

@@ -25,21 +25,22 @@ class XYKeywordRule(TimestampMixin, Base):
         Index("idx_kw_account_active", "account_id", "is_active"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment='规则ID')
+    owner_id: Mapped[int] = mapped_column(BigInteger, index=True, comment='所属用户ID')
     account_pk: Mapped[int | None] = mapped_column(
         "account_id",
         BigInteger,
         nullable=True,
         index=True,
+        comment='关联账号ID',
     )
-    keyword: Mapped[str] = mapped_column(String(120), nullable=False)
-    reply_content: Mapped[str | None] = mapped_column(Text)
-    reply_type: Mapped[str | None] = mapped_column(String(16))
-    image_url: Mapped[str | None] = mapped_column(String(512))
-    item_id: Mapped[str | None] = mapped_column(String(64))
-    priority: Mapped[int] = mapped_column(Integer, default=100)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    keyword: Mapped[str] = mapped_column(String(120), nullable=False, comment='关键词')
+    reply_content: Mapped[str | None] = mapped_column(Text, comment='回复内容')
+    reply_type: Mapped[str | None] = mapped_column(String(16), comment='回复类型(text/image)')
+    image_url: Mapped[str | None] = mapped_column(String(512), comment='图片URL')
+    item_id: Mapped[str | None] = mapped_column(String(64), comment='商品ID')
+    priority: Mapped[int] = mapped_column(Integer, default=100, comment='优先级')
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, comment='是否启用')
 
     account: Mapped["XYAccount"] = relationship(
         "XYAccount",

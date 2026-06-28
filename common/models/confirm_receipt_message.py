@@ -18,12 +18,12 @@ class ConfirmReceiptMessage(Base):
 
     __tablename__ = "xy_confirm_receipt_messages"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    account_id: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)  # 账号ID，一个账号只有一条配置
-    enabled: Mapped[bool] = mapped_column(Boolean, default=False)  # 是否启用
-    message_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 消息文本内容
-    message_image: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)  # 消息图片URL
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="主键ID")
+    account_id: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True, comment="账号ID")  # 账号ID，一个账号只有一条配置
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否启用")  # 是否启用
+    message_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="消息文本内容")  # 消息文本内容
+    message_image: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, comment="消息图片URL")  # 消息图片URL
     
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间")
 

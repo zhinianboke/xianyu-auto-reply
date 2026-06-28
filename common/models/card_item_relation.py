@@ -29,11 +29,11 @@ class CardItemRelation(Base):
         Index("idx_cir_user_item", "user_id", "item_id"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment="所属用户ID")
     card_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment="卡券ID")
     item_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True, comment="商品ID")
     source: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default="own", comment="卡券来源：own-自有，dock_l1-一级对接，dock_l2-二级对接")
     dock_record_id: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0", comment="对接记录ID（对接卡券时关联，0表示自有卡券）")
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间")

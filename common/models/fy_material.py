@@ -46,7 +46,7 @@ class FYMaterial(TimestampMixin, Base):
         Index("idx_fy_material_item", "item_id"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     owner_id: Mapped[int] = mapped_column(BigInteger, comment="所属用户ID")
     account_id: Mapped[str | None] = mapped_column(String(80), comment="闲鱼账号ID（xy_accounts.account_id）")
     rule_id: Mapped[int | None] = mapped_column(BigInteger, comment="来源选品规则ID")

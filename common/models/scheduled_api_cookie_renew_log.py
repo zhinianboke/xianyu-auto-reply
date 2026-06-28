@@ -20,7 +20,7 @@ class ScheduledApiCookieRenewLog(TimestampMixin, Base):
 
     __tablename__ = "xy_scheduled_api_cookie_renew_log"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     batch_id: Mapped[str] = mapped_column(
         String(36), nullable=False, index=True, comment="批次ID，标识一次定时任务执行"
     )
