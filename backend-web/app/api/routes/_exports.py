@@ -30,6 +30,7 @@ from . import (
     chat_quick_phrase,
     chat_customer_order,
     payment,
+    popup_announcements,
     confirm_receipt_messages,
     api_cookie_renew_logs,
     cookie_refresh,
@@ -132,6 +133,7 @@ api_router.include_router(auto_rate.router, prefix="/auto-rate", tags=["自动�
 # 系统设置
 api_router.include_router(system_settings.router, prefix="/system-settings", tags=["系统设置"])
 api_router.include_router(announcements.router, prefix="/announcements", tags=["公告管理"])
+api_router.include_router(popup_announcements.router, prefix="/popup-announcements", tags=["弹窗公告"])
 api_router.include_router(feedback.router, prefix="/feedbacks", tags=["反馈管理"])
 api_router.include_router(advertisements.router, prefix="/advertisements", tags=["广告管理"])
 api_router.include_router(auto_reply_logs.router, tags=["消息日志"])

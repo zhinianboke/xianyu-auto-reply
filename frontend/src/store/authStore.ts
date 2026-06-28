@@ -28,6 +28,8 @@ export const useAuthStore = create<AuthState>()(
         localStorage.setItem('auth_token', token)
         localStorage.setItem('refresh_token', refreshToken)
         localStorage.setItem('user_info', JSON.stringify(user))
+        // 清除弹窗公告会话标记，确保每次登录后重新弹窗展示
+        sessionStorage.removeItem('popup_announcement_shown')
         set({ token, refreshToken, user, isAuthenticated: true })
       },
 

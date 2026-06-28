@@ -5,6 +5,7 @@ import { TopNavbar } from './TopNavbar'
 import { TabsBar } from './TabsBar'
 import { Toast } from '@/components/common/Toast'
 import { PageLoading } from '@/components/common/Loading'
+import { PopupAnnouncementModal } from '@/components/common/PopupAnnouncementModal'
 import { getDefaultLoginBrandingSettings, getSystemSettings, LOGIN_BRANDING_UPDATED_EVENT, normalizeLoginBrandingSettings } from '@/api/settings'
 import type { LoginBrandingSettings } from '@/types'
 import { useUIStore } from '@/store/uiStore'
@@ -97,6 +98,9 @@ export function MainLayout() {
 
       {/* Toast notifications */}
       <Toast />
+
+      {/* 登录弹窗公告 */}
+      <PopupAnnouncementModal />
     </div>
   )
 }

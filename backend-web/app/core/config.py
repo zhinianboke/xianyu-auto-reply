@@ -105,6 +105,12 @@ class BackendWebConfig(BaseConfig):
         alias="ENABLE_REMOTE_ANNOUNCEMENTS",
     )
 
+    # 是否启用远程官方弹窗公告合并展示（官方服务器自身部署时可设为 False，避免重复展示自己的弹窗公告）
+    enable_remote_popup_announcements: bool = Field(
+        default=True,
+        alias="ENABLE_REMOTE_POPUP_ANNOUNCEMENTS",
+    )
+
     @computed_field(return_type=list[str])
     @property
     def cors_origins(self) -> List[str]:

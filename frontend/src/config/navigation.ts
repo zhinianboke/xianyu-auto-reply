@@ -163,7 +163,16 @@ export const adminNavItems: NavEntry[] = [
   },
   { key: 'admin-scheduled-tasks', icon: Timer, label: '定时任务', path: '/admin/scheduled-tasks', adminOnly: true },
   { key: 'admin-announcements', icon: Megaphone, label: '公告管理', path: '/admin/announcements', adminOnly: true },
-  { key: 'admin-ad-manage', icon: Image, label: '广告管理', path: '/admin/ad-manage', adminOnly: true },
+  {
+    key: 'admin-advertising',
+    icon: Image,
+    label: '广告',
+    adminOnly: true,
+    children: [
+      { key: 'admin-ad-manage', icon: Image, label: '广告管理', path: '/admin/ad-manage', adminOnly: true },
+      { key: 'admin-popup-announcements', icon: Megaphone, label: '弹窗公告', path: '/admin/popup-announcements', adminOnly: true },
+    ],
+  },
   { key: 'admin-fund-flows', icon: Wallet, label: '资金流水', path: '/admin/fund-flows', adminOnly: true },
 ]
 

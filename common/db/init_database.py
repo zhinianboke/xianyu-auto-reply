@@ -795,7 +795,21 @@ class DatabaseInitializer:
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='公告信息表';
         """,
-        
+
+        # 22.1 弹窗公告表（用户每次登录时弹窗展示）
+        "xy_popup_announcements": """
+            CREATE TABLE IF NOT EXISTS xy_popup_announcements (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '弹窗公告ID',
+                title VARCHAR(200) NOT NULL COMMENT '公告标题',
+                content TEXT NOT NULL COMMENT '公告内容',
+                link VARCHAR(500) NULL COMMENT '跳转链接',
+                is_enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+                is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='弹窗公告表';
+        """,
+
         # 23. 确认收货消息表
         "xy_confirm_receipt_messages": """
             CREATE TABLE IF NOT EXISTS xy_confirm_receipt_messages (

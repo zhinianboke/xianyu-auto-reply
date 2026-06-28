@@ -13,6 +13,7 @@ from typing import Any
 from app.services.xianyu.delivery_rules.base_rule import BaseDeliveryRule
 from app.services.xianyu.delivery_rules.buyer_credit_rule import BuyerCreditRule
 from app.services.xianyu.delivery_rules.buyer_has_order_rule import BuyerHasOrderRule
+from app.services.xianyu.delivery_rules.buyer_has_order_global_rule import BuyerHasOrderGlobalRule
 from app.services.xianyu.delivery_rules.buyer_unconfirmed_rule import BuyerUnconfirmedRule
 from app.services.xianyu.delivery_rules.personal_blacklist_rule import PersonalBlacklistRule
 
@@ -22,6 +23,7 @@ from app.services.xianyu.delivery_rules.personal_blacklist_rule import PersonalB
 RULE_REGISTRY: dict[str, type[BaseDeliveryRule]] = {
     "buyer_credit_zero": BuyerCreditRule,
     "buyer_has_order": BuyerHasOrderRule,
+    "buyer_has_order_global": BuyerHasOrderGlobalRule,
     "buyer_unconfirmed": BuyerUnconfirmedRule,
     "personal_blacklist": PersonalBlacklistRule,
 }

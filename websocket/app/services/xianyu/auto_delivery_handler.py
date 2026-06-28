@@ -3038,6 +3038,21 @@ class AutoDeliveryHandler:
             except Exception as nick_e:
                 logger.warning(f'{pf}获取买家闲鱼昵称失败（不影响发货流程）: {nick_e}')
 
+        # 查询账号所属用户ID与主键（供按用户维度判断的规则使用，如"买家在同用户其他账号已有订单"）
+        account_owner_id = None
+        account_pk = None
+        try:
+            from common.utils.cookie_refresh import get_account_by_identity
+            from common.db.session import async_session_maker
+
+            async with async_session_maker() as owner_session:
+                _acc = await get_account_by_identity(self.cookie_id, session=owner_session)
+                if _acc:
+                    account_owner_id = _acc.owner_id
+                    account_pk = _acc.id
+        except Exception as owner_e:
+            logger.warning(f'{pf}查询账号owner_id失败（不影响按账号维度的规则）: {self._safe_str(owner_e)}')
+
         # 调用规则引擎执行检查
         try:
             from app.services.xianyu.delivery_rules.rule_engine import execute_rules
@@ -3050,6 +3065,8 @@ class AutoDeliveryHandler:
                 item_id=item_id,
                 chat_id=chat_id,
                 log_prefix=pf,
+                account_pk=account_pk,
+                owner_id=account_owner_id,
             )
         except Exception as e:
             logger.error(f'{pf}规则引擎执行异常: {self._safe_str(e)}，放行')

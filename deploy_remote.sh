@@ -126,6 +126,8 @@ REMOTE_OFFICIAL_BASE_URL=https://xy.zhinianboke.com
 ENABLE_REMOTE_ADS=true
 # 是否启用远程官方公告合并展示（官方服务器自身部署建议设为 false）
 ENABLE_REMOTE_ANNOUNCEMENTS=true
+# 是否启用远程官方弹窗公告合并展示（官方服务器自身部署建议设为 false）
+ENABLE_REMOTE_POPUP_ANNOUNCEMENTS=true
 ENVEOF
     echo -e "${GREEN}✓ 已生成 .env.remote 文件${NC}"
     echo -e "${RED}[重要] 请先编辑 $ENV_FILE 填写远程 MYSQL_HOST / REDIS_HOST 等连接信息，${NC}"
@@ -177,6 +179,7 @@ services:
       - REMOTE_OFFICIAL_BASE_URL=${REMOTE_OFFICIAL_BASE_URL:-https://xy.zhinianboke.com}
       - ENABLE_REMOTE_ADS=${ENABLE_REMOTE_ADS:-true}
       - ENABLE_REMOTE_ANNOUNCEMENTS=${ENABLE_REMOTE_ANNOUNCEMENTS:-true}
+      - ENABLE_REMOTE_POPUP_ANNOUNCEMENTS=${ENABLE_REMOTE_POPUP_ANNOUNCEMENTS:-true}
       - BROWSER_HEADLESS=true
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SQL_ECHO=${SQL_ECHO:-true}

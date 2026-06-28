@@ -318,6 +318,40 @@ function RuleConfigSection({ rule, onUpdate }: { rule: DeliveryBlockRuleItem; on
         </div>
       )
 
+    case 'buyer_has_order_global':
+      return (
+        <div className="rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2">
+          <label className="text-xs font-medium text-slate-600 dark:text-slate-300">判断范围</label>
+          <div className="flex items-center gap-4 mt-1.5">
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input
+                type="radio"
+                name={`scope_${rule.rule_code}`}
+                checked={!config.same_item_only}
+                onChange={() => updateConfig('same_item_only', false)}
+                className="w-3.5 h-3.5 text-blue-600"
+              />
+              <span className="text-xs text-slate-700 dark:text-slate-200">同用户全部账号</span>
+            </label>
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input
+                type="radio"
+                name={`scope_${rule.rule_code}`}
+                checked={!!config.same_item_only}
+                onChange={() => updateConfig('same_item_only', true)}
+                className="w-3.5 h-3.5 text-blue-600"
+              />
+              <span className="text-xs text-slate-700 dark:text-slate-200">仅同商品</span>
+            </label>
+          </div>
+          <p className="text-[10px] text-slate-500 mt-1">
+            {config.same_item_only
+              ? '仅当买家在同用户名下任一账号的同一商品下有其他订单时拦截'
+              : '买家在同用户名下任一账号有任何其他订单时拦截'}
+          </p>
+        </div>
+      )
+
     case 'buyer_unconfirmed':
       return (
         <div className="rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2 space-y-2">

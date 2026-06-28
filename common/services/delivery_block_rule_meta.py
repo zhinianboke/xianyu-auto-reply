@@ -29,6 +29,13 @@ DELIVERY_BLOCK_RULE_METADATA: list[dict[str, Any]] = [
         "default_priority": 20,
     },
     {
+        "rule_code": "buyer_has_order_global",
+        "rule_name": "买家在同用户其他账号已有订单",
+        "rule_description": "检查买家在当前用户名下所有账号中是否已有其他订单，有则禁止发货",
+        "default_config": {"same_item_only": False},
+        "default_priority": 25,
+    },
+    {
         "rule_code": "buyer_unconfirmed",
         "rule_name": "买家存在未确认收货订单",
         "rule_description": "检查买家在当前卖家下是否有未确认收货的订单，有则禁止发货",

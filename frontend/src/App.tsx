@@ -35,6 +35,7 @@ const Settings = React.lazy(() => import('@/pages/settings/Settings').then(m => 
 const MessageFilters = React.lazy(() => import('@/pages/messageFilters/MessageFilters').then(m => ({ default: m.MessageFilters })))
 const Feedback = React.lazy(() => import('@/pages/feedback/Feedback'))
 const Announcements = React.lazy(() => import('@/pages/announcements/Announcements').then(m => ({ default: m.Announcements })))
+const PopupAnnouncements = React.lazy(() => import('@/pages/announcements/PopupAnnouncements').then(m => ({ default: m.PopupAnnouncements })))
 const AdManage = React.lazy(() => import('@/pages/advertisements/AdManage'))
 const AdApply = React.lazy(() => import('@/pages/advertisements/AdApply'))
 const Tutorial = React.lazy(() => import('@/pages/tutorial/Tutorial').then(m => ({ default: m.Tutorial })))
@@ -409,6 +410,7 @@ function App() {
             <Route path="admin/scheduled-tasks" element={<ScheduledTasks />} />
             <Route path="admin/announcements" element={<Announcements />} />
             <Route path="admin/ad-manage" element={<AdManage />} />
+            <Route path="admin/popup-announcements" element={<PopupAnnouncements />} />
           </Route>
 
           {/* Catch all */}
