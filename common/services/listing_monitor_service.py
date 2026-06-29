@@ -858,6 +858,58 @@ class ListingMonitorService:
         await self.session.commit()
         return len(tasks)
 
+    async def reset_items_dm_failed(
+        self,
+        owner_id: Optional[int],
+        item_ids: Sequence[int],
+    ) -> int:
+        """将选中的"私信失败"采集商品重置为"未私信"状态，等待定时任务重试。
+
+        仅处理 dm_status='failed' 的采集商品（含前端展示的"重试中"与"已放弃"两种）：
+        - 清空私信结果字段（dm_status / dm_fail_reason / dm_account_id）；
+        - 重置私信尝试次数 dm_attempts=0，使其重新满足"采集商品发送私信"定时任务
+          的处理条件（dm_attempts < 上限），等待下次定时任务自动重试；
+        - 保持 is_dm_sent=False（确实未私信）。
+        非"私信失败"状态的商品（未私信/等待重试/已发待确认/私信成功）一律跳过，不受影响。
+
+        Args:
+            owner_id: 归属用户ID（普通用户仅能操作本人数据，管理员为 None 不限）
+            item_ids: 选中的采集商品主键ID列表
+
+        Returns: 实际重置的采集商品数
+        """
+        normalized_ids: List[int] = []
+        for raw_id in item_ids:
+            try:
+                pk = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if pk > 0 and pk not in normalized_ids:
+                normalized_ids.append(pk)
+        if not normalized_ids:
+            raise ValueError("请选择要重置的采集商品")
+
+        conditions = [ListingMonitorItem.id.in_(normalized_ids)]
+        # 多用户数据隔离：普通用户仅能操作本人采集商品（与 list_items 一致）
+        if owner_id is not None:
+            conditions.append(ListingMonitorItem.owner_id == owner_id)
+        # 仅重置"私信失败"的数据，避免误重置正常/成功的商品
+        conditions.append(ListingMonitorItem.dm_status == "failed")
+
+        stmt = select(ListingMonitorItem).where(*conditions)
+        items = (await self.session.execute(stmt)).scalars().all()
+        now = get_beijing_now_naive()
+        for item in items:
+            item.is_dm_sent = False
+            item.dm_status = None
+            item.dm_fail_reason = None
+            item.dm_account_id = None
+            item.dm_attempts = 0
+            item.updated_at = now
+
+        await self.session.commit()
+        return len(items)
+
     async def collect_log_account_cookies(
         self,
         owner_id: Optional[int],

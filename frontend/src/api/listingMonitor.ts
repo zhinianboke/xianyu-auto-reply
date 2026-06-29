@@ -340,6 +340,13 @@ export const getListingMonitorItems = (
   return get(`${PREFIX}/items?${searchParams.toString()}`)
 }
 
+// 批量将选中的"私信失败"采集商品重置为"未私信"，等待定时任务重试
+export const resetListingMonitorItemsDm = (
+  itemIds: number[]
+): Promise<ApiResponse<ListingMonitorBatchDeleteResult>> => {
+  return post(`${PREFIX}/items/reset-dm`, { ids: itemIds })
+}
+
 // 采集商品完整详情（含数据库存储的原始详情/搜索数据）
 export interface ListingMonitorItemDetail extends ListingMonitorItem {
   detail_json?: unknown

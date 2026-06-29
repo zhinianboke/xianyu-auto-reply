@@ -109,6 +109,12 @@ class ListingMonitorCopyCookiesRequest(BaseModel):
     ids: List[int] = Field(default_factory=list, description="监控日志ID列表")
 
 
+class ListingMonitorResetItemsDmRequest(BaseModel):
+    """批量重置采集商品私信失败状态请求"""
+
+    ids: List[int] = Field(default_factory=list, description="采集商品主键ID列表")
+
+
 @router.get("", response_model=ApiResponse)
 async def list_listing_monitor_tasks(
     page: int = Query(1, ge=1, description="页码"),
@@ -399,6 +405,26 @@ async def list_listing_monitor_items(
         created_end=created_end,
     )
     return ApiResponse(success=True, message="查询成功", data=data)
+
+
+@router.post("/items/reset-dm", response_model=ApiResponse)
+async def reset_listing_monitor_items_dm(
+    req: ListingMonitorResetItemsDmRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """批量将选中的"私信失败"采集商品重置为"未私信"，等待定时任务重试"""
+    owner_id, _ = resolve_owner_scope(current_user)
+    svc = ListingMonitorService(session)
+    try:
+        success_count = await svc.reset_items_dm_failed(owner_id, req.ids)
+    except ValueError as exc:
+        return ApiResponse(success=False, message=str(exc))
+    return ApiResponse(
+        success=True,
+        message=f"成功重置 {success_count} 条私信失败商品，等待定时任务重试",
+        data={"success_count": success_count, "total_count": len(req.ids)},
+    )
 
 
 @router.get("/items/{item_pk}", response_model=ApiResponse)

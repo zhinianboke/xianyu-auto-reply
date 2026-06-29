@@ -50,6 +50,7 @@ _ITEM_FIELD_LIMITS = {
     "area": 120,
     "pic_url": 1000,
     "seller_id": 120,
+    "seller_user_id": 64,
     "seller_nick": 120,
     "seller_avatar": 1000,
     "want_count": 32,
@@ -451,6 +452,9 @@ class ListingMonitorTaskService:
                     row.area = fields["area"]
                     row.pic_url = fields["pic_url"]
                     row.seller_id = fields["seller_id"]
+                    # 卖家真实ID仅在当前为空时补全，避免覆盖 seller_fill 已通过详情接口补全的值
+                    if not row.seller_user_id and fields["seller_user_id"]:
+                        row.seller_user_id = fields["seller_user_id"]
                     row.seller_nick = fields["seller_nick"]
                     row.seller_avatar = fields["seller_avatar"]
                     row.want_count = fields["want_count"]
@@ -471,6 +475,8 @@ class ListingMonitorTaskService:
                         area=fields["area"],
                         pic_url=fields["pic_url"],
                         seller_id=fields["seller_id"],
+                        # 采集时直接从主图 picUrl 提取卖家真实ID（取不到则 None，由 seller_fill 兜底补全）
+                        seller_user_id=fields["seller_user_id"],
                         seller_nick=fields["seller_nick"],
                         seller_avatar=fields["seller_avatar"],
                         want_count=fields["want_count"],
