@@ -28,8 +28,9 @@ export const useAuthStore = create<AuthState>()(
         localStorage.setItem('auth_token', token)
         localStorage.setItem('refresh_token', refreshToken)
         localStorage.setItem('user_info', JSON.stringify(user))
-        // 清除弹窗公告会话标记，确保每次登录后重新弹窗展示
-        sessionStorage.removeItem('popup_announcement_shown')
+        // 注意：此处不清除弹窗公告会话标记。
+        // setAuth 在每次刷新页面验证 token 后也会被调用，若在此清除标记，
+        // 会导致刷新后公告重复弹出。清除标记的逻辑放在真正的登录成功处（Login.tsx）。
         set({ token, refreshToken, user, isAuthenticated: true })
       },
 

@@ -505,10 +505,21 @@ class ListingMonitorService:
                 select(distinct_item).where(*_item_cond([ListingMonitorItem.created_at >= today_start]))
             )
         ).scalar() or 0
-        # 今日私信数（去重）：今日实际发起私信
+        # 今日私信成功数（去重）：今日实际发起私信（dm_sent_at 在成功/超时未确认时写入）
         today_dm = (
             await self.session.execute(
                 select(distinct_item).where(*_item_cond([ListingMonitorItem.dm_sent_at >= today_start]))
+            )
+        ).scalar() or 0
+        # 今日私信失败数（去重）：今日入库（created_at 在今日）且私信结果为失败（被拦截/账号不存在）
+        today_dm_failed = (
+            await self.session.execute(
+                select(distinct_item).where(
+                    *_item_cond([
+                        ListingMonitorItem.created_at >= today_start,
+                        ListingMonitorItem.dm_status == "failed",
+                    ])
+                )
             )
         ).scalar() or 0
         # 今日下单数（去重）：今日下单成功
@@ -563,6 +574,7 @@ class ListingMonitorService:
             "today_collected": int(today_collected),
             "today_new": int(today_new),
             "today_dm": int(today_dm),
+            "today_dm_failed": int(today_dm_failed),
             "today_ordered": int(today_ordered),
             "today_order_failed": int(today_order_failed),
             "today_order_duplicate": int(today_order_duplicate),

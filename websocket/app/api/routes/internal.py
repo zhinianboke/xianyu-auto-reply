@@ -658,6 +658,67 @@ async def cancel_order(request: CancelOrderRequest):
     return {"success": True, "code": 200, "message": "订单已取消", "data": {"order_no": request.order_no}}
 
 
+async def _record_delivery_log(
+    cookie_id: str,
+    order_no: str,
+    chat_id: str,
+    item_id: str | None,
+    delivery_method: str,
+    send_status: str,
+    send_fail_reason: str | None = None,
+    delivery_content: str = "",
+) -> None:
+    """记录定时/手动发货的消息日志（reply_strategy=auto_delivery）
+
+    与实时自动发货日志格式保持一致，让前端"发送状态"列能统一展示。
+
+    Args:
+        cookie_id: 账号ID
+        order_no: 订单号
+        chat_id: 会话ID
+        item_id: 商品ID
+        delivery_method: 发货方式（manual/scheduled）
+        send_status: 发送状态（success/failed）
+        send_fail_reason: 失败原因（成功时传None）
+        delivery_content: 发货内容（用于日志展示）
+    """
+    try:
+        from app.services.xianyu.auto_reply_log_service import AutoReplyLogService
+        from common.utils.time_utils import get_beijing_now_naive
+
+        # 发货方式中文标签（与前端筛选口径一致）
+        method_label = {"manual": "手动", "scheduled": "定时", "auto": "自动"}.get(
+            delivery_method, delivery_method
+        )
+        log_payload = {
+            "sender_user_id": "system",
+            "sender_user_name": "系统发货",
+            "source_message": f"[{method_label}发货] 订单: {order_no}",
+            "chat_id": chat_id,
+            "item_id": item_id,
+            "order_no": order_no,
+            "msg_time": get_beijing_now_naive(),
+            "process_status": "success" if send_status == "success" else "failed",
+            "decision_reason": "auto_delivery",
+            "reply_strategy": "auto_delivery",
+            "reply_mode": "text",
+            "reply_text": delivery_content[:200] if delivery_content else "",
+            "error_message": send_fail_reason,
+            "send_status": send_status,
+            "send_fail_reason": send_fail_reason,
+            "context_snapshot": {
+                "delivery_method": delivery_method,
+                "order_id": order_no,
+            },
+        }
+
+        log_service = AutoReplyLogService(cookie_id)
+        await log_service.record_message(log_payload)
+    except Exception as e:
+        from loguru import logger
+        logger.error(f"【内部API】写入{delivery_method}发货消息日志失败: {e}")
+
+
 @router.post("/orders/deliver")
 async def deliver_order(request: DeliverOrderRequest):
     """
@@ -1520,6 +1581,30 @@ async def deliver_order(request: DeliverOrderRequest):
         # 追加拦截提示，让手动发货弹窗（backend-web 直接复用本 message）也能看到
         if intercept_written_msg:
             success_msg = f"{success_msg}（{intercept_written_msg}）"
+
+        # ============ 写入发货消息日志（与实时自动发货一致，供"发送状态"列展示） ============
+        # 拦截判定已在上方同步完成，此处可直接定终态：发送层失败 / 平台拦截 → failed，否则 success。
+        if send_failed_count > 0:
+            log_send_status = "failed"
+            log_fail_reason = (
+                f"共 {send_failed_count} 张消息发送失败（第 {','.join(map(str, failed_indices))} 张），请手动补发"
+            )
+        elif card_intercept_reason:
+            log_send_status = "failed"
+            log_fail_reason = intercept_written_msg or card_intercept_reason
+        else:
+            log_send_status = "success"
+            log_fail_reason = None
+        await _record_delivery_log(
+            cookie_id=account_id,
+            order_no=request.order_no,
+            chat_id=request.chat_id,
+            item_id=request.item_id,
+            delivery_method=request.delivery_method,
+            send_status=log_send_status,
+            send_fail_reason=log_fail_reason,
+            delivery_content=combined_content,
+        )
 
         response_data = {
             "order_no": request.order_no,

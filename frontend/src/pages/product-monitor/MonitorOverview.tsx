@@ -4,7 +4,7 @@
  * 功能：
  * 1. 展示商品监控任务总数、启用/停用数
  * 2. 展示今日任务执行成功/失败/部分成功数
- * 3. 展示今日采集数、今日私信数、今日下单数（均按商品ID去重）
+ * 3. 展示今日采集数、今日私信成功/失败数、今日下单数（均按商品ID去重）
  * 4. 展示累计采集/私信/下单数等汇总指标
  * 说明：数据按当前用户隔离，管理员可查看全量统计。
  */
@@ -17,6 +17,7 @@ import {
   CopyX,
   ListChecks,
   MessageSquare,
+  MessageSquareX,
   Package,
   PackageSearch,
   PauseCircle,
@@ -93,7 +94,8 @@ export function MonitorOverview() {
   const todayCards: OverviewCard[] = [
     { icon: PackageSearch, label: '今日采集数', value: data?.today_collected ?? 0, color: 'primary', hint: '按商品ID去重' },
     { icon: PlusCircle, label: '今日新增商品数', value: data?.today_new ?? 0, color: 'info', hint: '按商品ID去重' },
-    { icon: MessageSquare, label: '今日私信数', value: data?.today_dm ?? 0, color: 'success', hint: '按商品ID去重' },
+    { icon: MessageSquare, label: '今日私信成功', value: data?.today_dm ?? 0, color: 'success', hint: '按商品ID去重' },
+    { icon: MessageSquareX, label: '今日私信失败', value: data?.today_dm_failed ?? 0, color: 'danger', hint: '按创建时间统计，按商品ID去重' },
     { icon: ShoppingCart, label: '今日下单数', value: data?.today_ordered ?? 0, color: 'purple', hint: '按商品ID去重' },
     { icon: XCircle, label: '今日下单失败数', value: data?.today_order_failed ?? 0, color: 'danger', hint: '按创建时间统计，按商品ID去重' },
     { icon: CopyX, label: '今日重复跳过数', value: data?.today_order_duplicate ?? 0, color: 'warning', hint: '按创建时间统计，按商品ID去重' },
