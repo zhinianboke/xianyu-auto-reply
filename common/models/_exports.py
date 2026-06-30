@@ -50,6 +50,7 @@ from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_log import ListingMonitorLog
 from common.models.collect_fallback_account import CollectFallbackAccount
 from common.models.order_fallback_account import OrderFallbackAccount
+from common.models.dm_fallback_account import DmFallbackAccount
 from common.models.shared_scan_session import SharedScanSession
 from common.models.shared_scan_worker import SharedScanWorker
 from common.models.auto_reply_message_log import XYAutoReplyMessageLog
@@ -116,6 +117,7 @@ __all__ = [
     "ListingMonitorLog",
     "CollectFallbackAccount",
     "OrderFallbackAccount",
+    "DmFallbackAccount",
     "SharedScanSession",
     "SharedScanWorker",
     "XYAutoReplyMessageLog",

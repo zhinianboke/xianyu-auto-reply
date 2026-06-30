@@ -4,19 +4,22 @@
 功能：
 1. 查询采集商品表中"最近2天下单成功(order_status=success 且 ordered_at>=今日00:00前推2天) 且
    卖家真实ID已补全(seller_user_id 不为空) 且 未私信(is_dm_sent=0)"的数据
-2. 取私信内容(dm_content)；发私信账号严格使用"该商品下单成功时使用的账号"(order_account_id)，
-   即"下单用哪个账号，就用哪个账号发起私信"
-3. 用下单账号发起私信：参照既有发起聊天逻辑，调用 WebSocket 服务的
+2. 取私信内容(dm_content)；发私信使用"账号池"，按优先级失败就换下一个账号，
+   直到池内所有账号都失败才算该条私信失败
+3. 发起私信：参照既有发起聊天逻辑，调用 WebSocket 服务的
    create-chat 创建/获取与卖家的会话，再调用 send-message 发送私信内容
 4. 发送成功后将该采集商品标记为已私信(is_dm_sent=1)，并记录成功私信使用的账号(dm_account_id)
 
-账号规则：
-- 严格使用下单账号(order_account_id)：下单用哪个账号就用哪个账号发私信，不换号
-- 下单账号已删除（账号表查无此账号）：私信无法进行，直接判失败、置终态(dm_attempts 置上限)不再重试
-- 下单账号仍存在但当前不可用（未启用/未启动/WebSocket未连接等）：本次跳过，不计尝试次数，留待下次任务再试
-- 内容发送被拦截(failed)：累计私信尝试次数(dm_attempts)，清空 dm_account_id（下次任务再试）
-- 发送成功/超时未确认：标记已私信(终态)，记录 dm_account_id
-- 历史数据未记录下单账号(order_account_id 为空)时：回退到下单账号池(order_account_ids)+兜底账号轮换发送
+账号池规则（优先级顺序，合并去重）：
+- 下单账号(该商品 order_account_id)优先 → 当前用户的私信兜底账号 → 管理员的私信兜底账号
+  （私信兜底取自专属的 DmFallbackAccountService 配置：本用户·本分类→本用户·无分类→管理员·本分类→管理员·无分类）
+- 失败就换号：两类失败都换下一个账号继续——
+  · 账号级不可用(离线/未就绪/会话创建失败/账号已删)：本次运行内停用该账号、换号
+  · 内容被安全拦截(failed)：换号继续(账号对其它任务可能仍可用，不全局停用)
+- 池内全部失败才算该条失败：
+  · 至少一个账号把内容发到服务端被拦截 → 累计 dm_attempts、置 failed，达上限后停止重试
+  · 全是账号级不可用(内容一次都没真正发出) → 置 waiting、不计 dm_attempts，下轮继续重试
+- 发送成功/超时未确认：标记已私信(终态)，记录成功私信账号 dm_account_id
 
 说明：
 - 仅在"下单成功之后"才发送私信：私信对象是已成功拍下该商品的卖家，故只处理 order_status=success 的数据
@@ -41,11 +44,8 @@ from app.core.http_client import get_http_client
 from common.db.session import async_session_maker
 from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_task import ListingMonitorTask
-from common.models.xy_account import XYAccount
-from common.services.order_account_loader import (
-    load_fallback_accounts,
-    load_xy_accounts_by_ids,
-)
+from common.services.order_account_loader import load_xy_accounts_by_ids
+from common.services.dm_fallback_account_service import DmFallbackAccountService
 from common.utils.time_utils import get_beijing_now_naive
 
 # 单次任务最多扫描的待私信商品数（全局安全上限，避免一次性载入过多；
@@ -85,12 +85,10 @@ class DmSendTaskService:
 
             # 监控任务ID -> 私信内容（缓存）
             task_content_cache: Dict[int, Optional[str]] = {}
-            # 监控任务ID -> 可用账号列表（缓存，保持配置顺序）
-            task_accounts_cache: Dict[int, List[XYAccount]] = {}
+            # 监控任务ID -> 兜底账号池（有序账号ID列表：当前用户兜底 → 管理员兜底，已滤掉不可用）
+            task_accounts_cache: Dict[int, List[str]] = {}
             # 监控任务ID -> 每次最多处理条数（缓存）
             task_batch_cache: Dict[int, int] = {}
-            # 监控任务ID -> 轮换指针（让同一任务的多条商品轮换使用不同账号）
-            task_rr: Dict[int, int] = {}
             # 监控任务ID -> 本次已实际私信处理条数（达到 dm_batch_size 后该任务本次不再处理）
             task_done: Dict[int, int] = {}
             # 本次运行被判定不可用的账号（停用至本次结束）
@@ -111,7 +109,7 @@ class DmSendTaskService:
                         task_batch_cache[task_id],
                     ) = await self._get_task_dm_config(task_id, item_owner_id)
                 dm_content = task_content_cache.get(task_id)
-                accounts = task_accounts_cache.get(task_id) or []
+                base_pool = task_accounts_cache.get(task_id) or []
                 batch_size = task_batch_cache.get(task_id, 5)
 
                 # 未配置私信内容：跳过（不发，也不标记）
@@ -124,19 +122,21 @@ class DmSendTaskService:
                     skipped_batch_full += 1
                     continue
 
-                # 账号选择：严格使用"下单成功的账号"发起私信；
-                # 仅当历史数据未记录下单账号（order_account_id 为空）时，才回退到下单账号池轮换。
+                # 组装本条商品的账号池（优先级保序去重）：
+                # 下单账号(该商品 order_account_id) → 兜底池(当前用户 → 管理员)，再剔除本次运行已停用的死号
+                account_ids: List[str] = []
                 if order_account_id:
-                    account_ids = [order_account_id]
-                    strict = True
-                else:
-                    account_ids = [
-                        a.account_id for a in accounts if a.account_id not in disabled_accounts
-                    ]
-                    strict = False
-                    if not account_ids:
-                        no_account += 1
-                        continue
+                    account_ids.append(order_account_id)
+                for aid in base_pool:
+                    if aid not in account_ids:
+                        account_ids.append(aid)
+                account_ids = [aid for aid in account_ids if aid not in disabled_accounts]
+
+                # 池为空（无下单账号且无可用兜底账号）：置等待，留待下次任务再试
+                if not account_ids:
+                    no_account += 1
+                    await self._mark_dm_waiting(pk, "", None)
+                    continue
 
                 result = await self._send_for_item(
                     pk=pk,
@@ -144,11 +144,8 @@ class DmSendTaskService:
                     seller_user_id=seller_user_id,
                     content=dm_content,
                     account_ids=account_ids,
-                    rr_start=task_rr.get(task_id, 0),
                     disabled_accounts=disabled_accounts,
-                    strict=strict,
                 )
-                task_rr[task_id] = task_rr.get(task_id, 0) + 1
 
                 if result == "sent":
                     sent += 1
@@ -210,22 +207,21 @@ class DmSendTaskService:
 
     async def _get_task_dm_config(
         self, task_id: int, owner_id: Optional[int]
-    ) -> Tuple[Optional[str], List[XYAccount], int]:
-        """获取监控任务的私信内容、可用账号列表与每次最多处理条数（任务须未删除且启用）。
+    ) -> Tuple[Optional[str], List[str], int]:
+        """获取监控任务的私信内容、兜底账号池与每次最多处理条数（任务须未删除且启用）。
 
-        候选账号来源（与自动下单定时任务对齐）：
-        - 任务下单账号(order_account_ids)
-        - + 兜底下单账号（本用户·本分类→本用户·无分类→管理员·本分类→管理员·无分类）
-        按配置顺序合并去重、过滤未登录/已停用/不存在的账号。
+        兜底账号池（有序去重、已滤掉未登录/已停用/不存在的账号）：
+        - 兜底链：本用户·本分类→本用户·无分类→管理员·本分类→管理员·无分类（当前用户先于管理员）
+        发私信时再由调用方把"该商品真实下单成功的账号(order_account_id)"置于此池最前。
+        注意：不纳入任务的下单账号池(order_account_ids)——私信只认该商品真实下单的那一个账号。
 
-        Returns: (dm_content, accounts, dm_batch_size)
+        Returns: (dm_content, ordered_pool_account_ids, dm_batch_size)
         """
         async with async_session_maker() as session:
             task = (
                 await session.execute(
                     select(
                         ListingMonitorTask.dm_content,
-                        ListingMonitorTask.order_account_ids,
                         ListingMonitorTask.dm_batch_size,
                         ListingMonitorTask.category_id,
                     ).where(
@@ -238,35 +234,26 @@ class DmSendTaskService:
             if not task:
                 return None, [], 5
             dm_content = task[0]
-            task_account_ids = list(task[1] or [])
-            batch_size = task[2] if task[2] and task[2] > 0 else 5
-            category_id = task[3]
+            batch_size = task[1] if task[1] and task[1] > 0 else 5
+            category_id = task[2]
             if not dm_content:
                 return dm_content, [], batch_size
 
-            # 加载任务账号（按配置顺序、过滤失效）
-            task_accounts_map: Dict[str, XYAccount] = {}
-            if task_account_ids:
-                task_accounts_map, _ = await load_xy_accounts_by_ids(session, task_account_ids)
+            # 私信兜底链有序账号ID（本用户→管理员）；配置表未就绪/异常时降级为空，避免阻塞整轮私信
+            try:
+                fallback_ids = await DmFallbackAccountService(session).get_effective_fallback_account_ids(
+                    owner_id, category_id
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"【{self.task_name}】加载用户{owner_id}私信兜底账号失败，本次按无兜底处理：{exc}")
+                fallback_ids = []
+            if not fallback_ids:
+                return dm_content, [], batch_size
 
-        # 加载兜底账号（按分类 5 层链）；独立 session 内完成
-        fallback_accounts_map, _ = await load_fallback_accounts(
-            owner_id, category_id, log_prefix=self.task_name
-        )
-
-        # 合并：任务账号在前、兜底在后；按 account_id 去重
-        ordered: List[XYAccount] = []
-        seen: set[str] = set()
-        for aid in task_account_ids:
-            acc = task_accounts_map.get(aid)
-            if acc and acc.account_id not in seen:
-                seen.add(acc.account_id)
-                ordered.append(acc)
-        for aid, acc in fallback_accounts_map.items():
-            if aid not in seen:
-                seen.add(aid)
-                ordered.append(acc)
-        return dm_content, ordered, batch_size
+            # 过滤未登录/已停用/不存在的账号，并按兜底链的优先级顺序输出
+            available_map, _ = await load_xy_accounts_by_ids(session, fallback_ids)
+            ordered_pool = [aid for aid in fallback_ids if aid in available_map]
+        return dm_content, ordered_pool, batch_size
 
     async def _send_for_item(
         self,
@@ -275,26 +262,26 @@ class DmSendTaskService:
         seller_user_id: str,
         content: str,
         account_ids: List[str],
-        rr_start: int,
         disabled_accounts: set[str],
-        strict: bool = False,
     ) -> str:
-        """对单个商品发起私信。
+        """对单个商品发起私信：按优先级顺序遍历账号池，失败就换号，全部失败才算失败。
 
         Args:
-            account_ids: 候选账号ID列表。strict=True 时仅含下单账号一个，必须用它发，不换号。
-            strict: 严格模式——只用下单成功的账号发私信；该账号不可用则本次跳过，
-                    不换号、不全局停用、不累计尝试次数，留待下次任务再试。
+            account_ids: 候选账号ID列表（已按优先级保序：下单账号 → 当前用户兜底 → 管理员兜底）。
+            disabled_accounts: 本次运行内已判定账号级不可用的账号集合（跨商品共享，避免重复尝试死号）。
 
         Returns: "sent" / "failed" / "no_account"
+            - sent：某账号发送成功/超时未确认（置已私信终态）
+            - failed：内容在某账号被服务端拦截且全池都未成功（累计 dm_attempts）
+            - no_account：全是账号级不可用、内容一次都没真正发出（置 waiting，不计尝试，下轮再试）
         """
-        n = len(account_ids)
-        tried = 0
-        for offset in range(n):
-            account_id = account_ids[(rr_start + offset) % n]
+        sent_blocked = False  # 是否有账号把内容发到服务端却被拦截（区分"内容失败"与"账号不可用"）
+        block_reason: Optional[str] = None  # 内容被拦截的原因（优先用于 failed 落库，避免被后续"账号不可用"覆盖）
+        last_reason: Optional[str] = None
+        last_account: str = ""
+        for account_id in account_ids:
             if account_id in disabled_accounts:
                 continue
-            tried += 1
             res, send_fail_msg = await self._send_dm(
                 account_id=account_id,
                 seller_user_id=seller_user_id,
@@ -302,43 +289,40 @@ class DmSendTaskService:
                 content=content,
             )
             if res is None:
-                if strict:
-                    # 区分两种情况（以账号表是否存在为准）：
-                    # 1) 账号已删除（账号表查无此账号）：私信永远无法进行 → 直接判失败、置终态不再重试
-                    # 2) 账号仍存在（仅未启用/未启动/WebSocket未连接等暂时不可用）：记录原因后跳过，留待下次任务再试
-                    if not await self._account_exists(account_id):
-                        logger.warning(
-                            f"【{self.task_name}】商品 {item_id} 下单账号 {account_id} 不存在(已被删除)，"
-                            f"判为私信失败，置终态不再重试"
-                        )
-                        await self._mark_dm_account_missing(pk, account_id)
-                        return "failed"
-                    logger.warning(
-                        f"【{self.task_name}】商品 {item_id} 下单账号 {account_id} 当前不可用(存在但未就绪)，"
-                        f"严格模式不换号，本次跳过留待下次任务再试：{send_fail_msg}"
-                    )
-                    # 记录"等待重试"状态与原因，供前端展示（不计尝试次数、不置已私信，下轮继续重试）
-                    await self._mark_dm_waiting(pk, account_id, send_fail_msg)
-                    return "no_account"
-                # 非严格（历史数据回退池）：本次停用该账号，换下一个，不计尝试次数
+                # 账号级不可用（离线/未就绪/会话创建失败/账号已删）：本次运行停用该账号，换下一个
                 disabled_accounts.add(account_id)
+                last_reason, last_account = send_fail_msg, account_id
                 logger.warning(
-                    f"【{self.task_name}】账号 {account_id} 私信不可用，本次停用，尝试下一个账号：{send_fail_msg}"
+                    f"【{self.task_name}】商品 {item_id} 账号 {account_id} 私信不可用，"
+                    f"本次停用并尝试下一个账号：{send_fail_msg}"
                 )
                 continue
 
             send_status, send_fail_reason, chat_id = res
             if send_status == "failed":
-                # 内容被拦截：累计尝试次数、清空 dm_account_id，本次不再换号
-                await self._record_result(pk, send_status, send_fail_reason, account_id=None, chat_id=chat_id)
-                return "failed"
+                # 内容被安全拦截：换号继续（账号对其它任务可能仍可用，不全局停用）
+                sent_blocked = True
+                block_reason = send_fail_reason
+                last_reason, last_account = send_fail_reason, account_id
+                logger.warning(
+                    f"【{self.task_name}】商品 {item_id} 账号 {account_id} 私信内容被拦截，"
+                    f"尝试下一个账号：{send_fail_reason}"
+                )
+                continue
 
             # 成功 / 超时未确认：标记已私信终态，记录成功账号与会话ID
             await self._record_result(pk, send_status, send_fail_reason, account_id=account_id, chat_id=chat_id)
             return "sent"
 
-        # 所有候选账号都不可用
-        return "no_account" if tried == 0 else "failed"
+        # 池内全部失败
+        if sent_blocked:
+            # 至少一个账号把内容发到服务端被拦截：累计 dm_attempts、置 failed，达上限后停止重试
+            # （用拦截原因落库，而非可能更晚出现的"账号不可用"原因，保证状态与原因一致）
+            await self._record_result(pk, "failed", block_reason, account_id=None)
+            return "failed"
+        # 全是账号级不可用（内容一次都没真正发出）：置 waiting、不计 dm_attempts，下轮继续重试
+        await self._mark_dm_waiting(pk, last_account, last_reason)
+        return "no_account"
 
     async def _send_dm(
         self, account_id: str, seller_user_id: str, item_id: str, content: str
@@ -441,46 +425,8 @@ class DmSendTaskService:
                 item.dm_account_id = None
             await session.commit()
 
-    async def _account_exists(self, account_id: str) -> bool:
-        """判断下单账号是否仍存在于账号表（不论启用/登录状态）。
-
-        用于严格模式区分「账号已删除」与「账号仍存在但暂不可用」：
-        - 账号表（xy_accounts）查无此 account_id → 已被删除，私信无法进行；
-        - 查到则视为存在（即便已停用/未登录/未启动，也只是暂时不可用，等待下次循环）。
-        """
-        if not account_id:
-            return False
-        async with async_session_maker() as session:
-            found = (
-                await session.execute(
-                    select(XYAccount.id).where(XYAccount.account_id == account_id)
-                )
-            ).first()
-            return found is not None
-
-    async def _mark_dm_account_missing(self, pk: int, account_id: str) -> None:
-        """下单账号已不存在（被删除）：私信永远无法进行，置为终态不再重试。
-
-        - dm_attempts 置为上限，使查询条件 dm_attempts < _MAX_DM_ATTEMPTS 直接排除该商品；
-        - is_dm_sent 保持 False（确实未私信），不写 dm_account_id；
-        - 记录明确的失败原因供前端查看。
-        """
-        async with async_session_maker() as session:
-            item = (
-                await session.execute(
-                    select(ListingMonitorItem).where(ListingMonitorItem.id == pk)
-                )
-            ).scalar_one_or_none()
-            if not item:
-                return
-            item.dm_status = "failed"
-            item.dm_fail_reason = f"下单账号 {account_id} 不存在(已被删除)，无法发送私信"[:500]
-            item.dm_attempts = _MAX_DM_ATTEMPTS  # 置上限：直接终态，不再重试
-            item.dm_account_id = None
-            await session.commit()
-
     async def _mark_dm_waiting(self, pk: int, account_id: str, reason: Optional[str]) -> None:
-        """下单账号暂时不可用（仍存在，仅未启用/未启动/未连接）：记录等待原因供前端展示。
+        """账号池暂时不可用（账号未启用/未启动/未连接，或无可用账号）：记录等待原因供前端展示。
 
         - dm_status 置为 "waiting"（非终态，前端展示"等待重试"）；
         - 记录失败/等待原因，便于排查；
@@ -496,10 +442,8 @@ class DmSendTaskService:
             if not item:
                 return
             item.dm_status = "waiting"
-            item.dm_fail_reason = (
-                f"下单账号 {account_id} 当前不可用，等待下次重试：{reason}" if reason
-                else f"下单账号 {account_id} 当前不可用(未启用/未启动)，等待下次重试"
-            )[:500]
+            base = f"私信账号 {account_id} 当前不可用" if account_id else "无可用私信账号"
+            item.dm_fail_reason = (f"{base}，等待下次重试：{reason}" if reason else f"{base}，等待下次重试")[:500]
             await session.commit()
 
 

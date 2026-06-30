@@ -1518,6 +1518,20 @@ class DatabaseInitializer:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户级兜底采集账号配置表（按分类配置）';
         """,
 
+        # 45.8 用户级兜底私信账号配置表（商品下单账号发私信不可用时回退使用）
+        "xy_dm_fallback_accounts": """
+            CREATE TABLE IF NOT EXISTS xy_dm_fallback_accounts (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                owner_id BIGINT NOT NULL COMMENT '归属用户ID',
+                category_id BIGINT DEFAULT NULL COMMENT '所属分类ID（NULL=未分类全局兜底）',
+                account_ids JSON DEFAULT NULL COMMENT '兜底私信账号ID列表（JSON数组，多选轮换使用）',
+                is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                UNIQUE KEY uk_dfa_owner_category (owner_id, category_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户级兜底私信账号配置表（按分类配置）';
+        """,
+
         # 46. 共享扫码登录会话表
         "xy_shared_scan_sessions": """
             CREATE TABLE IF NOT EXISTS xy_shared_scan_sessions (
@@ -1669,6 +1683,10 @@ class DatabaseInitializer:
             ("is_deleted", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）'", "account_ids"),
         ],
         "xy_collect_fallback_accounts": [
+            ("category_id", "BIGINT DEFAULT NULL COMMENT '所属分类ID（NULL=未分类全局兜底）'", "owner_id"),
+            ("is_deleted", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）'", "account_ids"),
+        ],
+        "xy_dm_fallback_accounts": [
             ("category_id", "BIGINT DEFAULT NULL COMMENT '所属分类ID（NULL=未分类全局兜底）'", "owner_id"),
             ("is_deleted", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）'", "account_ids"),
         ],
