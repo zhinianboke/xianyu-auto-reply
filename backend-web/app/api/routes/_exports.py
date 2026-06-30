@@ -57,7 +57,6 @@ from . import (
     listing_monitor,
     collect_fallback_account,
     order_fallback_account,
-    dm_fallback_account,
     external_cookie,
     proxy,
     qr_login,
@@ -107,7 +106,6 @@ api_router.include_router(listing_monitor_category.router, tags=["商品监控�
 api_router.include_router(listing_monitor.router, tags=["商品上新监控"])  # 已定义prefix="/product-monitor/listing-tasks"
 api_router.include_router(collect_fallback_account.router, tags=["兜底采集账号"])  # 已定义prefix="/product-monitor/collect-fallback-accounts"
 api_router.include_router(order_fallback_account.router, tags=["兜底下单账号"])  # 已定义prefix="/product-monitor/order-fallback-accounts"
-api_router.include_router(dm_fallback_account.router, tags=["兜底私信账号"])  # 已定义prefix="/product-monitor/dm-fallback-accounts"
 api_router.include_router(external_cookie.router, tags=["外部Cookie同步"])  # 已定义prefix="/external/account-cookie"
 api_router.include_router(keywords.router, prefix="/keywords-with-item-id", tags=["关键词管理"])
 api_router.include_router(cards.router, prefix="/cards", tags=["卡券管理"])

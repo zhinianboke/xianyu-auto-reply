@@ -127,7 +127,6 @@ export const mainNavItems: NavEntry[] = [
       { key: 'product-monitor-items', icon: Package, label: '采集商品', path: '/product-monitor/items' },
       { key: 'product-monitor-order-fallback', icon: ShoppingCart, label: '下单账号', path: '/product-monitor/order-fallback-accounts' },
       { key: 'product-monitor-collect-fallback', icon: Users, label: '采集账号', path: '/product-monitor/collect-fallback-accounts' },
-      { key: 'product-monitor-dm-fallback', icon: Send, label: '私信账号', path: '/product-monitor/dm-fallback-accounts' },
     ],
   },
   { key: 'keywords', icon: MessageSquare, label: '自动回复', path: '/keywords' },
