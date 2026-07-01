@@ -154,3 +154,96 @@ fetch_pending_orders_task_service = FetchOrdersTaskService(
     query_code="NOT_SHIP",
     max_pages=1,
 )
+
+
+class FetchRefundOrdersTaskService:
+    """定时获取退款订单任务服务
+
+    调用闲鱼退款列表接口（4 个 disputeStatus：1/2/3=退款中、5=退款成功），
+    更新本地订单状态（以闲鱼为准直接覆盖），并对开启「退款订单注销」的账号触发注销接口。
+    """
+
+    def __init__(self, task_name: str = "定时获取退款订单"):
+        self.task_name = task_name
+
+    async def execute(self):
+        """执行获取退款订单任务"""
+        logger.info(f"【{self.task_name}】开始执行")
+        start_time = datetime.now()
+
+        try:
+            accounts = await self._get_active_accounts()
+            if not accounts:
+                logger.info(f"【{self.task_name}】没有启用状态的账号，任务结束")
+                return
+
+            logger.info(f"【{self.task_name}】查询到 {len(accounts)} 个启用状态的账号")
+
+            success_count = 0
+            failed_count = 0
+            total_fetched = 0
+            total_updated = 0
+
+            for account in accounts:
+                # 跳过Session过期冷却期内的账号
+                from common.utils.cookie_refresh import is_account_session_cooled
+                if is_account_session_cooled(account.account_id):
+                    logger.info(
+                        f"【{self.task_name}】账号 {account.account_id} 处于Session过期冷却期内，跳过"
+                    )
+                    continue
+
+                try:
+                    result = await self._fetch_refund_for_account(account)
+                    fetched = result.get("total_fetched", 0)
+                    updated = result.get("updated", 0)
+                    errors = result.get("errors", [])
+                    total_fetched += fetched
+                    total_updated += updated
+                    if errors:
+                        logger.warning(
+                            f"【{self.task_name}】账号 {account.account_id} 获取退款订单有警告: {errors}"
+                        )
+                    success_count += 1
+                    logger.info(
+                        f"【{self.task_name}】账号 {account.account_id} 完成: 共{fetched}条, 更新{updated}"
+                    )
+                except Exception as e:
+                    failed_count += 1
+                    logger.error(
+                        f"【{self.task_name}】账号 {account.account_id} 获取退款订单失败: {e}"
+                    )
+
+                if account != accounts[-1]:
+                    await asyncio.sleep(2)
+
+            elapsed = (datetime.now() - start_time).total_seconds()
+            logger.info(
+                f"【{self.task_name}】执行完成，账号: 成功{success_count}/失败{failed_count}/共{len(accounts)}, "
+                f"退款订单: 获取{total_fetched}/更新{total_updated}, 耗时: {elapsed:.2f}秒"
+            )
+
+        except Exception as e:
+            logger.error(f"【{self.task_name}】执行异常: {e}")
+
+    async def _get_active_accounts(self) -> list:
+        """获取所有启用状态的账号"""
+        async with async_session_maker() as session:
+            inactive_statuses = {"inactive", "disabled", "suspended", "deleted"}
+            stmt = select(XYAccount).where(
+                XYAccount.status.notin_(inactive_statuses)
+            )
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    async def _fetch_refund_for_account(self, account) -> dict:
+        """获取单个账号的退款订单"""
+        async with async_session_maker() as session:
+            order_service = OrderService(session)
+            return await order_service.fetch_refund_orders(account)
+
+
+# 全局实例：获取退款订单
+fetch_refund_orders_task_service = FetchRefundOrdersTaskService(
+    task_name="定时获取退款订单",
+)

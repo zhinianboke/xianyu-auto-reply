@@ -52,7 +52,12 @@ class XYAccount(TimestampMixin, Base):
     proxy_port: Mapped[int | None] = mapped_column(Integer, comment="代理端口")
     proxy_user: Mapped[str | None] = mapped_column(String(120), comment="代理用户名")
     proxy_pass: Mapped[str | None] = mapped_column(String(255), comment="代理密码")
-    
+
+    # 退款订单注销配置字段
+    refund_cancel_enabled: Mapped[bool | None] = mapped_column(Boolean, default=False, comment="退款订单注销开关")
+    refund_cancel_url: Mapped[str | None] = mapped_column(String(255), comment="退款订单注销请求URL")
+    refund_cancel_timeout: Mapped[int | None] = mapped_column(Integer, default=30, comment="退款订单注销超时时间(秒)")
+
     # 相同消息等待时间(秒)
     message_expire_time: Mapped[int] = mapped_column(Integer, default=3600, comment="相同消息等待时间(秒)")
     

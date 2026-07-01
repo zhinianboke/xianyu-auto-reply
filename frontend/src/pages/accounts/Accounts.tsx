@@ -13,9 +13,10 @@ import { useMenuVisibilityStore } from '@/store/menuVisibilityStore'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { DeliveryBlockRulesModal } from './DeliveryBlockRulesModal'
+import { RefundCancelModal } from './RefundCancelModal'
 import type { AccountDetail } from '@/types'
 
-type ModalType = 'qrcode' | 'password' | 'manual' | 'edit' | 'default-reply' | 'ai-settings' | 'proxy-settings' | 'message-expire-time' | 'reply-delay' | 'face-verification' | 'confirm-receipt' | 'auto-rate' | 'delivery-disabled' | null
+type ModalType = 'qrcode' | 'password' | 'manual' | 'edit' | 'default-reply' | 'ai-settings' | 'proxy-settings' | 'message-expire-time' | 'reply-delay' | 'face-verification' | 'confirm-receipt' | 'auto-rate' | 'delivery-disabled' | 'refund-cancel' | null
 
 interface AccountWithKeywordCount extends AccountDetail {
   keywordCount?: number
@@ -225,6 +226,7 @@ export function Accounts() {
 
   // 禁止发货设置状态
   const [deliveryDisabledAccount, setDeliveryDisabledAccount] = useState<AccountWithKeywordCount | null>(null)
+  const [refundCancelAccount, setRefundCancelAccount] = useState<AccountWithKeywordCount | null>(null)
 
   // 确认弹窗状态
   const [deleteAccountConfirm, setDeleteAccountConfirm] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
@@ -1501,6 +1503,12 @@ export function Accounts() {
     setActiveModal('delivery-disabled')
   }
 
+  // ==================== 退款订单注销设置 ====================
+  const openRefundCancelModal = (account: AccountWithKeywordCount) => {
+    setRefundCancelAccount(account)
+    setActiveModal('refund-cancel')
+  }
+
   const handleSaveMessageExpireTime = async () => {
     if (!messageExpireTimeAccount) return
     
@@ -2484,6 +2492,13 @@ export function Accounts() {
                     >
                       <Ban className={`w-3.5 h-3.5 ${account.delivery_disabled ? 'text-red-500' : 'text-slate-400'}`} />
                       <span className="text-slate-700 dark:text-slate-300">禁止发货设置</span>
+                    </button>
+                    <button
+                      onClick={() => { openRefundCancelModal(account); setMoreMenuAccountId(null) }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                    >
+                      <Repeat className="w-3.5 h-3.5 text-orange-500" />
+                      <span className="text-slate-700 dark:text-slate-300">退款订单注销</span>
                     </button>
                   </>
                 )
@@ -3913,6 +3928,15 @@ export function Accounts() {
         <DeliveryBlockRulesModal
           accountId={deliveryDisabledAccount.id}
           accountDisplayId={deliveryDisabledAccount.id}
+          onClose={closeModal}
+        />
+      )}
+
+      {/* 退款订单注销设置弹窗 */}
+      {activeModal === 'refund-cancel' && refundCancelAccount && (
+        <RefundCancelModal
+          accountId={refundCancelAccount.id}
+          accountDisplayId={refundCancelAccount.id}
           onClose={closeModal}
         />
       )}

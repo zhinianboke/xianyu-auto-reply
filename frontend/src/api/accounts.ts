@@ -547,6 +547,32 @@ export const clearProxyConfig = (accountId: string): Promise<ProxyConfigResponse
   return del(`${PROXY_PREFIX}/${accountId}`)
 }
 
+// ==================== 退款订单注销配置 ====================
+
+const REFUND_CANCEL_PREFIX = '/api/v1/refund-cancel'
+
+export interface RefundCancelConfig {
+  enabled: boolean      // 是否开启退款订单注销
+  url?: string | null   // 注销接口请求URL
+  timeout?: number      // 请求超时时间(秒)
+}
+
+export interface RefundCancelConfigResponse {
+  success: boolean
+  message?: string
+  data?: RefundCancelConfig
+}
+
+// 获取退款订单注销配置
+export const getRefundCancelConfig = (accountId: string): Promise<RefundCancelConfigResponse> => {
+  return get(`${REFUND_CANCEL_PREFIX}/${accountId}`)
+}
+
+// 更新退款订单注销配置
+export const updateRefundCancelConfig = (accountId: string, config: RefundCancelConfig): Promise<RefundCancelConfigResponse> => {
+  return put(`${REFUND_CANCEL_PREFIX}/${accountId}`, config)
+}
+
 // ==================== 人脸验证相关 ====================
 const FACE_VERIFICATION_PREFIX = '/api/v1/face-verification'
 

@@ -53,6 +53,8 @@ class XYOrder(TimestampMixin, Base):
     receiver_address: Mapped[str | None] = mapped_column(String(512), comment="收货地址")
     is_rated: Mapped[bool] = mapped_column("is_rated", default=False, comment="是否已评价")
     is_red_flower: Mapped[bool] = mapped_column("is_red_flower", default=False, comment="是否已求小红花")
+    is_unregistered: Mapped[bool] = mapped_column("is_unregistered", default=False, comment="是否已请求注销接口")
+    unregister_error_reason: Mapped[str | None] = mapped_column(String(500), comment="注销接口错误原因")
     # 发货信息
     delivery_method: Mapped[str | None] = mapped_column(String(32), comment="发货方式：manual-手动发货, auto-自动发货, scheduled-定时发货")
     delivery_content: Mapped[str | None] = mapped_column(String(2000), comment="发货内容（卡券内容）")

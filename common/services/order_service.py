@@ -1254,8 +1254,8 @@ class OrderService:
             # 小刀标记：只标记为True不回退
             if parsed.get('is_bargain') and not existing.is_bargain:
                 update_values['is_bargain'] = True
-            # 评价状态：始终更新
-            if parsed.get('is_rated') != existing.is_rated:
+            # 评价状态：始终更新（仅当解析结果提供该字段时，避免退款等场景用 None 覆盖已有值）
+            if parsed.get('is_rated') is not None and parsed.get('is_rated') != existing.is_rated:
                 update_values['is_rated'] = parsed['is_rated']
             # 下单时间
             if parsed.get('placed_at') and not existing.placed_at:
@@ -1315,6 +1315,269 @@ class OrderService:
                     )
                     return 'skipped'
                 return await self._upsert_order(parsed, account, existing=concurrent_existing)
+
+    # ---- 获取退款订单列表（mtop.taobao.idle.merchant.refund.list）----
+
+    async def _fetch_refund_orders_page(
+        self, cookies_str: str, dispute_status: str,
+        account_id: str = None, is_retry: bool = False,
+    ) -> Optional[dict]:
+        """获取闲鱼退款订单列表的单页数据（仅第一页）
+
+        照搬 _fetch_sold_orders_page 的 mtop 调用机制（签名 / 令牌过期自动刷新重试），
+        仅更换 API、请求体与响应解析。
+
+        Args:
+            cookies_str: Cookie字符串
+            dispute_status: 退款查询状态（1/2/3=退款中，5=退款成功）
+            account_id: 账号ID（令牌过期时更新数据库Cookie）
+            is_retry: 是否为令牌过期后的重试请求
+
+        Returns:
+            { items, cookies_str, error }
+        """
+        import json
+        import time
+        import aiohttp
+        from common.utils.xianyu_utils import trans_cookies, generate_sign
+        from common.utils.cookie_refresh import (
+            is_token_expired_error, handle_token_expired_response,
+            update_account_cookies_in_db,
+            is_session_expired_error, trigger_password_login_async,
+            mark_account_session_expired
+        )
+
+        cookies = trans_cookies(cookies_str)
+        timestamp = str(int(time.time() * 1000))
+        data_val = json.dumps({
+            "pageNumber": 1,
+            "rowsPerPage": 20,
+            "queryType": "refund",
+            "refundSearchParam": {
+                "disputeStatus": dispute_status,
+                "queryCode": "ALL",
+            },
+        }, separators=(',', ':'))
+
+        token = cookies.get('_m_h5_tk', '').split('_')[0] if cookies.get('_m_h5_tk') else ''
+        sign = generate_sign(timestamp, token, data_val)
+
+        params = {
+            'jsv': '2.7.2',
+            'appKey': '34839810',
+            't': timestamp,
+            'sign': sign,
+            'v': '1.0',
+            'type': 'json',
+            'accountSite': 'xianyu',
+            'dataType': 'json',
+            'timeout': '20000',
+            'api': 'mtop.taobao.idle.merchant.refund.list',
+            'valueType': 'string',
+            'sessionOption': 'AutoLoginOnly',
+        }
+
+        headers = {
+            'accept': 'application/json',
+            'content-type': 'application/x-www-form-urlencoded',
+            'idle_site_biz_code': 'COMMONPRO',
+            'cookie': cookies_str,
+            'Referer': 'https://seller.goofish.com/?site=COMMONPRO',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36',
+        }
+
+        async with aiohttp.ClientSession(
+            connector=get_goofish_connector(),
+            connector_owner=False,
+            cookie_jar=aiohttp.DummyCookieJar(),
+        ) as session:
+            async with session.post(
+                'https://h5api.m.goofish.com/h5/mtop.taobao.idle.merchant.refund.list/1.0/',
+                params=params,
+                data={'data': data_val},
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=20)
+            ) as response:
+                res_json = await response.json()
+                ret = res_json.get('ret', [])
+                ret_str = ret[0] if ret else ''
+                retry_tag = '[令牌过期重试] ' if is_retry else ''
+
+                if 'SUCCESS' not in ret_str:
+                    # 令牌过期 → 刷新Cookie重试一次
+                    if not is_retry and is_token_expired_error(ret):
+                        logger.warning(
+                            f"账号 {account_id or '未知账号'} 获取退款订单(disputeStatus={dispute_status})令牌过期，准备刷新Cookie后重试"
+                        )
+                        has_new, new_cookies_str = handle_token_expired_response(response, cookies_str)
+                        if has_new:
+                            if account_id:
+                                await update_account_cookies_in_db(account_id, new_cookies_str)
+                            retry_result = await self._fetch_refund_orders_page(
+                                new_cookies_str, dispute_status, account_id, is_retry=True
+                            )
+                            if retry_result and 'cookies_str' not in retry_result:
+                                retry_result['cookies_str'] = new_cookies_str
+                            return retry_result
+                        else:
+                            logger.warning(f"账号 {account_id or '未知账号'} 获取退款订单令牌过期，但响应中没有Set-Cookie，无法重试")
+
+                    # Session 过期 → 标记冷却 + 触发后台密码登录
+                    if is_session_expired_error(ret):
+                        logger.warning(
+                            f"账号 {account_id or '未知账号'} 获取退款订单 Session 过期，触发后台异步密码登录"
+                        )
+                        if account_id:
+                            mark_account_session_expired(account_id)
+                            trigger_password_login_async(account_id)
+
+                    error_msg = ret_str or '未知错误'
+                    logger.warning(
+                        f"账号 {account_id or '未知账号'} {retry_tag}获取退款订单(disputeStatus={dispute_status})失败: ret={ret}"
+                    )
+                    return {'items': [], 'cookies_str': cookies_str, 'error': error_msg}
+
+                logger.info(
+                    f"账号 {account_id or '未知账号'} {retry_tag}获取退款订单(disputeStatus={dispute_status})成功: ret={ret_str}"
+                )
+
+        # 退款列表响应结构：data.data.items（见 退款接口.txt）
+        data_node = res_json.get('data', {}).get('data', {})
+        items = data_node.get('items', [])
+        return {'items': items, 'cookies_str': cookies_str}
+
+    def _parse_refund_item(self, item: dict, status: str) -> Optional[dict]:
+        """解析退款订单列表的单条订单
+
+        Args:
+            item: API 返回的单条退款订单
+            status: 本地状态（refunding / refunded），由调用方按 disputeStatus 传入
+
+        Returns:
+            解析后的订单字典（供 _upsert_order 使用）
+        """
+        from decimal import Decimal
+        from datetime import datetime
+
+        common = item.get('commonData', {})
+        buyer_info = item.get('buyerInfoVO', {})
+        price_vo = item.get('priceVO', {})
+
+        order_no = common.get('orderId', '')
+        if not order_no:
+            return None
+
+        try:
+            quantity = int(price_vo.get('buyNum', '1'))
+        except (ValueError, TypeError):
+            quantity = 1
+        try:
+            # 订单金额 = 单价 auctionPrice × 数量 buyNum（退款接口无 totalPrice 字段）
+            amount = Decimal(price_vo.get('auctionPrice', '0')) * quantity
+        except Exception:
+            amount = None
+
+        placed_at = None
+        create_time_str = common.get('createTime', '')
+        if create_time_str:
+            try:
+                placed_at = datetime.strptime(create_time_str, '%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                pass
+
+        return {
+            'order_no': order_no,
+            'status': status,
+            'item_id': common.get('itemId', ''),
+            'buyer_id': buyer_info.get('buyerId', ''),
+            'buyer_nick': buyer_info.get('userNick', ''),
+            'amount': amount,
+            'quantity': quantity,
+            'placed_at': placed_at,
+        }
+
+    async def fetch_refund_orders(self, account) -> dict:
+        """获取闲鱼退款订单并同步状态 + 触发注销（账号级加锁入口）
+
+        4 个 disputeStatus（1/2/3=退款中、5=退款成功）各取第一页，
+        更新本地订单状态（以闲鱼为准直接覆盖），并对获取到的订单触发退款注销。
+
+        Args:
+            account: XYAccount 对象（需要 cookie / account_id / owner_id）
+
+        Returns:
+            { total_fetched, updated, failed, errors }
+        """
+        from common.db.redis_client import distributed_lock
+
+        account_id = account.account_id
+        # 独立锁：避免与「获取闲鱼订单/待发货订单」抢同一账号锁导致退款任务被跳过（达不到2分钟一次）。
+        # 并发安全由 xy_orders (account_id, order_no) 唯一约束 + _upsert_order 的 IntegrityError 兜底保证。
+        lock_name = f"refund_order_sync:{account_id}"
+        try:
+            async with distributed_lock(lock_name, expire=180, blocking=True, timeout=8) as lock:
+                if not lock.is_locked:
+                    logger.info(f"获取退款订单: 账号 {account_id} 退款同步锁被占用，跳过本次")
+                    return {'total_fetched': 0, 'updated': 0, 'failed': 0, 'errors': ['账号同步锁被占用，已跳过']}
+                return await self._fetch_refund_orders_impl(account)
+        except Exception as e:
+            logger.warning(f"获取退款订单: 账号 {account_id} 获取同步锁异常，降级无锁执行: {e}")
+            return await self._fetch_refund_orders_impl(account)
+
+    async def _fetch_refund_orders_impl(self, account) -> dict:
+        """获取退款订单实际实现（调用方需已持有账号锁）"""
+        from common.services.refund_cancel_service import process_order_unregister
+
+        cookies_str = account.cookie
+        total_fetched = 0
+        updated = 0
+        failed = 0
+        errors = []
+        processed_order_nos = []
+
+        # disputeStatus → 本地状态：1/2/3=退款中，5=退款成功
+        for dispute_status, status in (('1', 'refunding'), ('2', 'refunding'), ('3', 'refunding'), ('5', 'refunded')):
+            try:
+                page_data = await self._fetch_refund_orders_page(
+                    cookies_str, dispute_status, account_id=account.account_id
+                )
+            except Exception as e:
+                failed += 1
+                errors.append(f"disputeStatus={dispute_status} 请求失败: {e}")
+                logger.error(f"获取退款订单(disputeStatus={dispute_status})失败: {e}")
+                continue
+
+            # 同步令牌过期后刷新的 cookie，供后续请求使用
+            if page_data and page_data.get('cookies_str'):
+                cookies_str = page_data['cookies_str']
+
+            for item in (page_data or {}).get('items', []):
+                parsed = self._parse_refund_item(item, status)
+                if not parsed or not parsed.get('order_no'):
+                    continue
+                try:
+                    result = await self._upsert_order(parsed, account)
+                    total_fetched += 1
+                    if result in ('updated', 'inserted'):
+                        updated += 1
+                    if parsed['order_no'] not in processed_order_nos:
+                        processed_order_nos.append(parsed['order_no'])
+                except Exception as e:
+                    await self.session.rollback()
+                    failed += 1
+                    logger.error(f"处理退款订单 {parsed.get('order_no')} 异常: {e}")
+
+        # 对获取到的退款订单触发注销（统一逻辑，内部判断账号开关/发货内容为空/已注销）
+        for order_no in processed_order_nos:
+            try:
+                await process_order_unregister(account.account_id, order_no)
+            except Exception as e:
+                logger.error(f"退款订单 {order_no} 触发注销异常: {e}")
+
+        logger.info(
+            f"获取退款订单完成: 账号 {account.account_id} 处理{total_fetched}条, 更新{updated}条, 失败{failed}"
+        )
+        return {'total_fetched': total_fetched, 'updated': updated, 'failed': failed, 'errors': errors}
 
 
 class OrderDetailService:

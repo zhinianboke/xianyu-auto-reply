@@ -142,6 +142,8 @@ export interface Order {
   is_bargain?: boolean  // 是否小刀
   is_rated?: boolean  // 是否已评价
   is_red_flower?: boolean  // 是否已求小红花
+  is_unregistered?: boolean  // 是否已请求注销接口
+  unregister_error_reason?: string  // 注销接口错误原因
   // 收货人信息
   receiver_name?: string  // 收货人姓名
   receiver_phone?: string  // 收货人手机号

@@ -31,10 +31,18 @@ class OrderFallbackAccountSaveRequest(BaseModel):
 
     category_id: Optional[int] = Field(None, description="所属分类ID（不传=无分类全局兜底）")
     account_ids: List[str] = Field(default_factory=list, description="兜底下单账号ID列表（可多选，可为空）")
+    owner_id: Optional[int] = Field(
+        None, description="目标用户ID（仅管理员可指定，用于编辑其他用户的配置；不传=当前用户）"
+    )
 
 
-def _resolve_owner_id(current_user: User) -> int:
-    """兜底配置为用户级数据：管理员同样按自身ID存储，其配置即作为"管理员兜底"层。"""
+def _resolve_owner_id(current_user: User, requested_owner_id: Optional[int] = None) -> int:
+    """解析配置所属用户：管理员可指定 owner_id 以编辑其他用户的配置；非管理员恒为自身。
+
+    兜底配置为用户级数据：管理员未指定 owner_id 时按自身ID存储，其配置即作为"管理员兜底"层。
+    """
+    if requested_owner_id is not None and is_admin_user(current_user):
+        return requested_owner_id
     return current_user.id
 
 
@@ -43,9 +51,9 @@ async def list_order_fallback_accounts(
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
-    """列出当前用户已配置的兜底下单账号（按分类）"""
+    """列出兜底下单账号配置（按分类）。管理员可查看全部用户的配置。"""
     svc = OrderFallbackAccountService(session)
-    data = await svc.list_configs(_resolve_owner_id(current_user), is_admin_user(current_user))
+    data = await svc.list_configs(current_user.id, is_admin_user(current_user))
     return ApiResponse(success=True, message="查询成功", data=data)
 
 
@@ -59,7 +67,7 @@ async def upsert_order_fallback_accounts(
     svc = OrderFallbackAccountService(session)
     try:
         data = await svc.upsert_config(
-            _resolve_owner_id(current_user),
+            _resolve_owner_id(current_user, req.owner_id),
             req.category_id,
             req.account_ids,
             is_admin_user(current_user),
@@ -72,13 +80,18 @@ async def upsert_order_fallback_accounts(
 @router.delete("", response_model=ApiResponse)
 async def delete_order_fallback_accounts(
     category_id: Optional[int] = Query(None, description="所属分类ID（不传=删除无分类那条）"),
+    owner_id: Optional[int] = Query(
+        None, description="目标用户ID（仅管理员可指定，用于删除其他用户的配置；不传=当前用户）"
+    ),
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
-    """删除某个分类的兜底下单账号配置（软删除）"""
+    """删除某个分类的兜底下单账号配置（软删除）。管理员可删除其他用户的配置。"""
     svc = OrderFallbackAccountService(session)
     try:
-        await svc.delete_config(_resolve_owner_id(current_user), category_id, is_admin_user(current_user))
+        await svc.delete_config(
+            _resolve_owner_id(current_user, owner_id), category_id, is_admin_user(current_user)
+        )
     except ValueError as exc:
         return ApiResponse(success=False, message=str(exc))
     return ApiResponse(success=True, message="删除成功")

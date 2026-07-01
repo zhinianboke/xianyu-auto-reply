@@ -21,6 +21,8 @@ class OrderOut(BaseModel):
     is_bargain: bool = False  # 是否小刀
     is_rated: bool = False  # 是否已评价
     is_red_flower: bool = False  # 是否已求小红花
+    is_unregistered: bool = False  # 是否已请求注销接口
+    unregister_error_reason: str | None = None  # 注销接口错误原因
     # 收货人信息
     receiver_name: str | None = None  # 收货人姓名
     receiver_phone: str | None = None  # 收货人手机号

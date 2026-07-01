@@ -59,6 +59,7 @@ from . import (
     order_fallback_account,
     external_cookie,
     proxy,
+    refund_cancel,
     qr_login,
     qrcode,
     risk_control_logs,
@@ -148,6 +149,7 @@ api_router.include_router(api_cookie_renew_logs.router, prefix="/admin", tags=["
 
 # 代理和上传
 api_router.include_router(proxy.router, prefix="/proxy", tags=["代理配置"])
+api_router.include_router(refund_cancel.router, prefix="/refund-cancel", tags=["退款订单注销配置"])
 api_router.include_router(upload.router, prefix="/upload", tags=["文件上传"])
 api_router.include_router(qrcode.router, tags=["群二维码"])  # 已定义prefix="/qrcode"
 

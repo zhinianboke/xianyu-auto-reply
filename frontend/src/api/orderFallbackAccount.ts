@@ -21,6 +21,8 @@ export interface OrderFallbackAccountStatus {
 
 export interface OrderFallbackAccountConfig {
   id: number | null
+  owner_id?: number | null
+  owner_username?: string | null
   category_id: number | null
   category_name?: string | null
   account_ids: string[]
@@ -35,14 +37,22 @@ export const getOrderFallbackAccounts = (): Promise<ApiResponse<OrderFallbackAcc
 
 export const saveOrderFallbackAccounts = (
   categoryId: number | null,
-  accountIds: string[]
+  accountIds: string[],
+  ownerId?: number | null
 ): Promise<ApiResponse<OrderFallbackAccountConfig>> => {
-  return put(`${PREFIX}`, { category_id: categoryId, account_ids: accountIds })
+  const body: Record<string, unknown> = { category_id: categoryId, account_ids: accountIds }
+  // 管理员编辑其他用户配置时传 owner_id；普通用户不传，后端按当前用户处理
+  if (ownerId != null) body.owner_id = ownerId
+  return put(`${PREFIX}`, body)
 }
 
 export const deleteOrderFallbackAccounts = (
-  categoryId: number | null
+  categoryId: number | null,
+  ownerId?: number | null
 ): Promise<ApiResponse<null>> => {
-  const query = categoryId != null ? `?category_id=${categoryId}` : ''
-  return del(`${PREFIX}${query}`)
+  const params = new URLSearchParams()
+  if (categoryId != null) params.set('category_id', String(categoryId))
+  if (ownerId != null) params.set('owner_id', String(ownerId))
+  const query = params.toString()
+  return del(`${PREFIX}${query ? `?${query}` : ''}`)
 }

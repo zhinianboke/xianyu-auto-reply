@@ -12,7 +12,7 @@ import { BlacklistLevelModal } from './BlacklistLevelModal'
 import type { Order, Account } from '@/types'
 
 // 列配置类型
-type ColumnKey = 'cookie_id' | 'order_id' | 'receiver' | 'item_id' | 'sku_info' | 'buyer_id' | 'buyer_fish_nick' | 'chat_id' | 'quantity' | 'amount' | 'status' | 'delivery_method' | 'delivery_send_status' | 'delivery_fail_reason' | 'is_bargain' | 'is_rated' | 'is_red_flower' | 'is_agent_order' | 'source' | 'placed_at' | 'created_at'
+type ColumnKey = 'cookie_id' | 'order_id' | 'receiver' | 'item_id' | 'sku_info' | 'buyer_id' | 'buyer_fish_nick' | 'chat_id' | 'quantity' | 'amount' | 'status' | 'delivery_method' | 'delivery_send_status' | 'delivery_fail_reason' | 'is_bargain' | 'is_rated' | 'is_red_flower' | 'is_unregistered' | 'unregister_error_reason' | 'is_agent_order' | 'source' | 'placed_at' | 'created_at'
 
 interface ColumnConfig {
   key: ColumnKey
@@ -40,6 +40,8 @@ const defaultColumns: ColumnConfig[] = [
   { key: 'is_bargain', label: '小刀', visible: true, fixed: true },
   { key: 'is_rated', label: '已评价', visible: true, fixed: true },
   { key: 'is_red_flower', label: '小红花', visible: true, fixed: true },
+  { key: 'is_unregistered', label: '已注销', visible: true, fixed: true },
+  { key: 'unregister_error_reason', label: '注销错误', visible: true, fixed: true },
   { key: 'is_agent_order', label: '代销', visible: true, fixed: true },
   { key: 'source', label: '数据来源', visible: true },
   { key: 'placed_at', label: '订单时间', visible: true, fixed: true },
@@ -765,6 +767,24 @@ export function Orders() {
                                 ) : (
                                   <span className="badge-gray">否</span>
                                 )}
+                              </td>
+                            )
+                          case 'is_unregistered':
+                            return (
+                              <td key={col.key} className="whitespace-nowrap">
+                                {order.is_unregistered ? (
+                                  <span className="badge-success">是</span>
+                                ) : (
+                                  <span className="badge-gray">否</span>
+                                )}
+                              </td>
+                            )
+                          case 'unregister_error_reason':
+                            return (
+                              <td key={col.key} className="max-w-[200px] truncate" title={order.unregister_error_reason || ''}>
+                                {order.unregister_error_reason
+                                  ? <span className="text-red-500 text-xs">{order.unregister_error_reason}</span>
+                                  : <span className="text-slate-400">-</span>}
                               </td>
                             )
                           case 'is_agent_order':

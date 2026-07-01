@@ -16,6 +16,7 @@ import { Select } from '@/components/common/Select'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { PageLoading, Loading } from '@/components/common/Loading'
 import { useUIStore } from '@/store/uiStore'
+import { useAuthStore } from '@/store/authStore'
 import { getApiErrorMessage } from '@/utils/apiError'
 import type { ApiResponse } from '@/types'
 
@@ -27,6 +28,8 @@ export interface FallbackAccountStatus {
 
 export interface FallbackConfig {
   id: number | null
+  owner_id?: number | null
+  owner_username?: string | null
   category_id: number | null
   category_name?: string | null
   account_ids: string[]
@@ -41,8 +44,10 @@ interface FallbackAccountManagerProps {
   /** 账号类别中文，如"采集""下单" */
   accountKind: string
   list: () => Promise<ApiResponse<FallbackConfig[]>>
-  save: (categoryId: number | null, accountIds: string[]) => Promise<ApiResponse<FallbackConfig>>
-  remove: (categoryId: number | null) => Promise<ApiResponse<null>>
+  /** 保存配置；ownerId 仅管理员编辑其他用户配置时传入 */
+  save: (categoryId: number | null, accountIds: string[], ownerId?: number | null) => Promise<ApiResponse<FallbackConfig>>
+  /** 删除配置；ownerId 仅管理员删除其他用户配置时传入 */
+  remove: (categoryId: number | null, ownerId?: number | null) => Promise<ApiResponse<null>>
 }
 
 interface AccountOption {
@@ -62,6 +67,10 @@ export function FallbackAccountManager({
   remove,
 }: FallbackAccountManagerProps) {
   const { addToast } = useUIStore()
+  const { user } = useAuthStore()
+  // 管理员可查看/编辑/删除全部用户的兜底配置，需展示所属用户列
+  const isAdmin = Boolean(user?.is_admin)
+  const currentUserId = user?.user_id
 
   const [loading, setLoading] = useState(true)
   const [tableLoading, setTableLoading] = useState(false)
@@ -130,9 +139,11 @@ export function FallbackAccountManager({
   }, [])
 
   // 新建时可选分类：排除已配置的分类；无分类未配置时提供"无分类"项
+  // 管理员查看全量时，新建仅针对自身，故按当前用户自身已配置的分类来排除
   const availableCategoryOptions = useMemo(() => {
-    const configuredIds = new Set(configs.filter((c) => c.category_id != null).map((c) => c.category_id))
-    const hasNoCategory = configs.some((c) => c.category_id == null)
+    const ownConfigs = isAdmin ? configs.filter((c) => c.owner_id === currentUserId) : configs
+    const configuredIds = new Set(ownConfigs.filter((c) => c.category_id != null).map((c) => c.category_id))
+    const hasNoCategory = ownConfigs.some((c) => c.category_id == null)
     const options: { value: string; label: string }[] = []
     if (!hasNoCategory) {
       options.push({ value: NONE_VALUE, label: '无分类（全局兜底）' })
@@ -141,7 +152,7 @@ export function FallbackAccountManager({
       .filter((c) => !configuredIds.has(c.id))
       .forEach((c) => options.push({ value: String(c.id), label: c.name }))
     return options
-  }, [configs, categories])
+  }, [configs, categories, isAdmin, currentUserId])
 
   const handleOpenCreate = () => {
     setEditing(null)
@@ -173,7 +184,8 @@ export function FallbackAccountManager({
     const categoryId = formCategory === NONE_VALUE ? null : Number(formCategory)
     setSaving(true)
     try {
-      const result = await save(categoryId, selectedIds)
+      // 编辑时沿用该配置的所属用户（管理员可编辑他人配置）；新建时归属当前用户
+      const result = await save(categoryId, selectedIds, editing?.owner_id ?? undefined)
       if (!result.success) {
         addToast({ type: 'error', message: result.message || '保存失败' })
         return
@@ -193,7 +205,8 @@ export function FallbackAccountManager({
     if (!deleteTarget) return
     setDeleting(true)
     try {
-      const result = await remove(deleteTarget.category_id)
+      // 管理员删除他人配置时需指定所属用户
+      const result = await remove(deleteTarget.category_id, deleteTarget.owner_id ?? undefined)
       if (!result.success) {
         addToast({ type: 'error', message: result.message || '删除失败' })
         return
@@ -243,10 +256,11 @@ export function FallbackAccountManager({
         </div>
 
         <div className="flex-1 overflow-auto">
-          <table className="table-ios min-w-[720px]">
+          <table className={`table-ios ${isAdmin ? 'min-w-[840px]' : 'min-w-[720px]'}`}>
             <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
               <tr>
                 <th>分类</th>
+                {isAdmin && <th className="whitespace-nowrap min-w-[120px]">所属用户</th>}
                 <th>兜底账号</th>
                 <th>账号状态</th>
                 <th>更新时间</th>
@@ -256,13 +270,13 @@ export function FallbackAccountManager({
             <tbody>
               {tableLoading ? (
                 <tr>
-                  <td colSpan={5} className="text-center py-12">
+                  <td colSpan={isAdmin ? 6 : 5} className="text-center py-12">
                     <Loader2 className="w-6 h-6 animate-spin text-blue-500 mx-auto" />
                   </td>
                 </tr>
               ) : configs.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="text-center py-12 text-slate-400">
+                  <td colSpan={isAdmin ? 6 : 5} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <Users className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>暂无兜底配置，点击右上角新建</p>
@@ -281,6 +295,11 @@ export function FallbackAccountManager({
                           config.category_name || `#${config.category_id}`
                         )}
                       </td>
+                      {isAdmin && (
+                        <td className="whitespace-nowrap text-sm text-slate-600 dark:text-slate-400">
+                          {config.owner_username || (config.owner_id != null ? `#${config.owner_id}` : '-')}
+                        </td>
+                      )}
                       <td className="whitespace-nowrap">{config.account_ids.length} 个账号</td>
                       <td className="whitespace-nowrap">
                         {config.account_ids.length === 0 ? (
@@ -333,6 +352,14 @@ export function FallbackAccountManager({
               </button>
             </div>
             <div className="modal-body space-y-4">
+              {isAdmin && editing?.owner_username && (
+                <div className="input-group">
+                  <label className="input-label">所属用户</label>
+                  <div className="input-ios bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                    {editing.owner_username}
+                  </div>
+                </div>
+              )}
               <div className="input-group">
                 <label className="input-label">分类 <span className="text-red-500">*</span></label>
                 {editing ? (
@@ -421,7 +448,7 @@ export function FallbackAccountManager({
       <ConfirmModal
         isOpen={Boolean(deleteTarget)}
         title="删除兜底配置确认"
-        message={`确定删除该分类（${deleteTarget?.category_id == null ? '无分类' : (deleteTarget?.category_name || '#' + deleteTarget?.category_id)}）的兜底${accountKind}账号配置吗？`}
+        message={`确定删除${isAdmin && deleteTarget?.owner_username ? `用户「${deleteTarget.owner_username}」` : ''}该分类（${deleteTarget?.category_id == null ? '无分类' : (deleteTarget?.category_name || '#' + deleteTarget?.category_id)}）的兜底${accountKind}账号配置吗？`}
         confirmText="删除"
         cancelText="取消"
         type="danger"
