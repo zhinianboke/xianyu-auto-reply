@@ -46,9 +46,11 @@ export interface JoinSharedSessionParams {
 }
 
 export interface WorkerStatusResponse {
-  status: 'qrcode_ready' | 'scanning' | 'success' | 'failed'
+  status: 'qrcode_ready' | 'scanning' | 'verification_required' | 'success' | 'failed'
   account_id?: string
   message?: string
+  /** 触发人脸验证时的人脸二维码(base64 data-url) */
+  face_qr_url?: string
 }
 
 // ==================== 管理员接口 ====================

@@ -337,15 +337,21 @@ async def get_worker_status(
                 data=result_data,
             )
 
-        # 同步中间状态到DB
         new_status = _map_qr_status(current_status)
-        if new_status != worker.status:
+        resp_data: Dict[str, Any] = {"status": new_status}
+
+        if new_status == "verification_required":
+            # 人脸验证是瞬时中间态，不落库(status 字段仅 20 字符，且 DB 状态仅用于展示/恢复，
+            # 真实状态由 qr_login_manager 维护)，仅透传人脸二维码给兼职端展示
+            resp_data["face_qr_url"] = status_info.get("face_qr_url")
+        elif new_status != worker.status:
+            # 同步其它中间状态到DB
             worker.status = new_status
             await db.commit()
 
         return ApiResponse(
             success=True, message="获取成功",
-            data={"status": new_status}
+            data=resp_data
         )
     except Exception as e:
         logger.exception(f"查询兼职扫码状态失败: {sub_session_id}")
@@ -446,6 +452,7 @@ def _map_qr_status(qr_status: Optional[str]) -> str:
         "waiting": "qrcode_ready",
         "scanned": "scanning",
         "success": "success",
+        "verification_required": "verification_required",
         "expired": "failed",
         "cancelled": "failed",
         "not_found": "failed",

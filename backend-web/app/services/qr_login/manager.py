@@ -21,6 +21,8 @@ import qrcode
 import qrcode.constants
 from loguru import logger
 
+from app.services.qr_login.face_verification import run_face_verification
+
 
 def generate_headers() -> Dict[str, str]:
     """生成请求头"""
@@ -64,6 +66,9 @@ class QRLoginSession:
         self.expire_time = 300  # 5分钟过期
         self.params: Dict[str, Any] = {}
         self.verification_url: Optional[str] = None
+        # 人脸验证：二维码渲染后的 base64 PNG data-url 及原始验证 URL
+        self.face_qr_url: Optional[str] = None
+        self.face_qr_content: Optional[str] = None
 
     def is_expired(self) -> bool:
         """检查是否过期"""
@@ -85,11 +90,14 @@ class QRLoginManager:
 
     def __init__(self):
         self.sessions: Dict[str, QRLoginSession] = {}
+        # 人脸验证后台任务的强引用集合，防止 asyncio 只持弱引用导致任务被 GC
+        self._face_tasks: set = set()
         self.headers = generate_headers()
         self.host = "https://passport.goofish.com"
         self.api_mini_login = f"{self.host}/mini_login.htm"
         self.api_generate_qr = f"{self.host}/newlogin/qrcode/generate.do"
         self.api_scan_status = f"{self.host}/newlogin/qrcode/query.do"
+        self.api_face_check = f"{self.host}/iv/photoVerify/check.do"
         self.api_h5_tk = "https://h5api.m.goofish.com/h5/mtop.gaia.nodejs.gaia.idle.data.gw.v2.index.get/1.0/"
         self.proxy: Optional[str] = None
         self.timeout = httpx.Timeout(connect=30.0, read=60.0, write=30.0, pool=60.0)
@@ -332,9 +340,23 @@ class QRLoginManager:
                                 .get("iframeRedirectUrl")
                             )
                             session.verification_url = iframe_url
+                            # 保留本次 query.do 响应的 Cookie(身份锚点)，供人脸验证链路复用
+                            for k, v in resp.cookies.items():
+                                session.cookies[k] = v
+                            # 人脸验证需要额外时间(手机端操作)，在启动异步任务【前】同步重置
+                            # 会话有效期窗口，避免 get_session_status 在调度间隙将其误判为过期
+                            session.created_time = time.time()
+                            session.expire_time = 300
                             logger.warning(
-                                f"账号被风控，需要手机验证: {session_id}, URL: {iframe_url}"
+                                f"账号触发人脸验证，开始自动抓取人脸二维码: {session_id}, URL: {iframe_url}"
                             )
+                            # 不再终止：交给人脸验证处理协程完成后续链路
+                            # 保存任务强引用，防止被 asyncio 垃圾回收(完成后自动移除)
+                            task = asyncio.create_task(
+                                run_face_verification(self, session_id, iframe_url)
+                            )
+                            self._face_tasks.add(task)
+                            task.add_done_callback(self._face_tasks.discard)
                             break
                         else:
                             session.status = "success"
@@ -391,9 +413,10 @@ class QRLoginManager:
 
         result: Dict[str, Any] = {"status": session.status, "session_id": session_id}
 
-        if session.status == "verification_required" and session.verification_url:
+        if session.status == "verification_required":
             result["verification_url"] = session.verification_url
-            result["message"] = "账号被风控，需要手机验证"
+            result["face_qr_url"] = session.face_qr_url
+            result["message"] = "需要人脸验证，请使用手机闲鱼扫描二维码"
 
         if session.status == "success" and session.cookies and session.unb:
             result["cookies"] = self._cookie_marshal(session.cookies)

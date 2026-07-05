@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from 'react'
 import { AlertCircle, CheckCircle, Loader2, QrCode, RefreshCw, Smartphone } from 'lucide-react'
 import { joinSharedSession, getWorkerStatus } from '@/api/sharedScan'
 
-type PageStatus = 'loading' | 'qrcode_ready' | 'scanning' | 'success' | 'failed' | 'error'
+type PageStatus = 'loading' | 'qrcode_ready' | 'scanning' | 'verification_required' | 'success' | 'failed' | 'error'
 
 function createVisitorToken() {
   if (typeof window.crypto?.randomUUID === 'function') {
@@ -38,6 +38,7 @@ export function SharedScanPage() {
   const [sessionId, setSessionId] = useState('')
   const [subSessionId, setSubSessionId] = useState('')
   const [qrcodeUrl, setQrcodeUrl] = useState('')
+  const [faceQrUrl, setFaceQrUrl] = useState('')
   const [status, setStatus] = useState<PageStatus>('loading')
   const [errorMessage, setErrorMessage] = useState('')
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -117,6 +118,10 @@ export function SharedScanPage() {
       const s = res.data?.status
       if (s === 'scanning') {
         setStatus('scanning')
+      } else if (s === 'verification_required') {
+        // 触发人脸验证：展示人脸二维码，保持轮询直到用户手机完成后过渡到 success
+        setStatus('verification_required')
+        if (res.data?.face_qr_url) setFaceQrUrl(res.data.face_qr_url)
       } else if (s === 'success') {
         stopPoll()
         setStatus('success')
@@ -134,6 +139,7 @@ export function SharedScanPage() {
     stopPoll()
     setSubSessionId('')
     setQrcodeUrl('')
+    setFaceQrUrl('')
     if (sessionId) {
       joinSession(sessionId, true)
     }
@@ -193,6 +199,30 @@ export function SharedScanPage() {
                   </button>
                 </>
               )}
+            </div>
+          )}
+
+          {/* 人脸验证 */}
+          {status === 'verification_required' && (
+            <div className="flex flex-col items-center gap-4">
+              <p className="text-base font-semibold text-amber-600 dark:text-amber-400">需要人脸验证</p>
+              <div className="relative w-56 h-56 border-2 border-dashed border-amber-300 dark:border-amber-700 rounded-xl overflow-hidden bg-white flex items-center justify-center">
+                {faceQrUrl ? (
+                  <img src={faceQrUrl} alt="人脸验证二维码" className="w-full h-full object-contain p-2" />
+                ) : (
+                  <div className="flex flex-col items-center gap-2">
+                    <Loader2 className="w-10 h-10 text-amber-500 animate-spin" />
+                    <p className="text-xs text-slate-400">正在获取人脸验证二维码…</p>
+                  </div>
+                )}
+              </div>
+              <p className="text-sm text-slate-600 dark:text-slate-400 text-center">
+                请使用闲鱼 APP 扫描二维码，按提示完成人脸验证
+              </p>
+              <div className="flex items-center gap-1.5 text-blue-500 text-xs">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>验证完成后将自动登录，请勿关闭页面</span>
+              </div>
             </div>
           )}
 

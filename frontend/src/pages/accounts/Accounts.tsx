@@ -125,8 +125,10 @@ export function Accounts() {
   // 扫码登录状态
   const [qrCodeUrl, setQrCodeUrl] = useState('')
   const [, setQrSessionId] = useState('')
-  const [qrStatus, setQrStatus] = useState<'loading' | 'ready' | 'scanned' | 'success' | 'failed' | 'expired' | 'error'>('loading')
+  const [qrStatus, setQrStatus] = useState<'loading' | 'ready' | 'scanned' | 'verification_required' | 'success' | 'failed' | 'expired' | 'error'>('loading')
   const [qrErrorMessage, setQrErrorMessage] = useState('')
+  // 扫码登录触发人脸验证时的人脸二维码(base64)
+  const [qrFaceQrUrl, setQrFaceQrUrl] = useState('')
   const qrCheckIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // 密码登录状态
@@ -408,6 +410,7 @@ export function Accounts() {
     setQrSessionId('')
     setQrStatus('loading')
     setQrErrorMessage('')
+    setQrFaceQrUrl('')
     setPwdAccount('')
     setPwdPassword('')
     setPwdPasswordVisible(false)
@@ -459,6 +462,7 @@ export function Accounts() {
     setActiveModal('qrcode')
     setQrStatus('loading')
     setQrErrorMessage('')
+    setQrFaceQrUrl('')
     try {
       const result = await generateQRLogin()
       if (result.success && result.qr_code_url && result.session_id) {
@@ -527,7 +531,9 @@ export function Accounts() {
             closeModal()
             break
           case 'verification_required':
-            addToast({ type: 'warning', message: '触发人脸验证，系统无法处理，请使用账号密码或者cookies登录' })
+            // 触发人脸验证：展示人脸二维码，保持轮询，用户手机完成后自动过渡到 success
+            setQrStatus('verification_required')
+            if (result.face_qr_url) setQrFaceQrUrl(result.face_qr_url)
             break
           case 'error':
             setQrStatus('error')
@@ -544,6 +550,7 @@ export function Accounts() {
   const refreshQRCode = async () => {
     setQrStatus('loading')
     setQrErrorMessage('')
+    setQrFaceQrUrl('')
     clearQrCheck()
     try {
       const result = await generateQRLogin()
@@ -2579,6 +2586,24 @@ export function Accounts() {
                   <div className=" text-blue-600 dark:text-blue-400 text-sm">
                     <Loader2 className="w-4 h-4 animate-spin" />
                     <span>已扫描，等待确认...</span>
+                  </div>
+                </div>
+              )}
+              {qrStatus === 'verification_required' && (
+                <div className="flex flex-col items-center gap-3">
+                  <p className="text-sm font-medium text-amber-600 dark:text-amber-400">需要人脸验证</p>
+                  {qrFaceQrUrl ? (
+                    <img src={qrFaceQrUrl} alt="人脸验证二维码" className="w-44 h-44 rounded-lg border" />
+                  ) : (
+                    <div className="flex flex-col items-center gap-2 py-6">
+                      <Loader2 className="w-8 h-8 text-amber-500 animate-spin" />
+                      <p className="text-xs text-slate-400 dark:text-slate-500">正在获取人脸验证二维码…</p>
+                    </div>
+                  )}
+                  <p className="text-sm text-slate-600 dark:text-slate-300 text-center">请使用手机闲鱼APP扫描二维码完成人脸验证</p>
+                  <div className="flex items-center gap-1.5 text-blue-600 dark:text-blue-400 text-xs">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>验证完成后将自动登录，请勿关闭窗口</span>
                   </div>
                 </div>
               )}

@@ -364,6 +364,8 @@ export const checkQRLoginStatus = async (sessionId: string): Promise<{
   success: boolean
   status: 'pending' | 'scanned' | 'success' | 'failed' | 'expired' | 'cancelled' | 'verification_required' | 'processing' | 'already_processed' | 'error'
   message?: string
+  face_qr_url?: string
+  verification_url?: string
   account_info?: {
     account_id: string
     is_new_account: boolean
@@ -375,6 +377,8 @@ export const checkQRLoginStatus = async (sessionId: string): Promise<{
     data?: {
       status: string
       message?: string
+      face_qr_url?: string
+      verification_url?: string
       account_info?: { account_id: string; is_new_account: boolean }
     }
   }>(`${QR_LOGIN_PREFIX}/status/${sessionId}`)
@@ -384,6 +388,8 @@ export const checkQRLoginStatus = async (sessionId: string): Promise<{
     success: result.success,
     status: status as 'pending' | 'scanned' | 'success' | 'failed' | 'expired' | 'cancelled' | 'verification_required' | 'processing' | 'already_processed' | 'error',
     message: result.message || result.data?.message,
+    face_qr_url: result.data?.face_qr_url,
+    verification_url: result.data?.verification_url,
     account_info: result.data?.account_info,
   }
 }
