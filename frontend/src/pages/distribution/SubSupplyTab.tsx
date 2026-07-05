@@ -52,13 +52,10 @@ export const SubSupplyTab = forwardRef<SubSupplyTabRef>(function SubSupplyTab(_p
     loadData(1, pageSize)
   }, [])
 
-  // 搜索防抖
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      loadData(1, pageSize)
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [searchText])
+  // 点击「查询」或回车时才发起查询，回到第 1 页
+  const handleSearch = () => {
+    loadData(1, pageSize)
+  }
 
   const handlePageChange = (newPage: number) => {
     if (newPage < 1 || newPage > totalPages) return
@@ -89,10 +86,15 @@ export const SubSupplyTab = forwardRef<SubSupplyTabRef>(function SubSupplyTab(_p
                 type="text"
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
                 className="input-ios pl-9"
                 placeholder="搜索对接名称或卡券名称..."
               />
             </div>
+            <button onClick={handleSearch} className="btn-ios-primary btn-sm">
+              <Search className="w-4 h-4" />
+              查询
+            </button>
           </div>
         </div>
 

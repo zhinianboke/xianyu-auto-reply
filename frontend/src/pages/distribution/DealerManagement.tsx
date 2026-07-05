@@ -23,11 +23,11 @@ export function DealerManagement() {
   const [detailModalOpen, setDetailModalOpen] = useState(false)
   const [selectedDealer, setSelectedDealer] = useState<Dealer | null>(null)
 
-  // 加载分销商列表数据
-  const loadData = useCallback(async (p: number = page, ps: number = pageSize) => {
+  // 加载分销商列表数据（search 传入时覆盖当前 searchText，避免闭包旧值问题）
+  const loadData = useCallback(async (p: number = page, ps: number = pageSize, search: string = searchText) => {
     setLoading(true)
     try {
-      const result = await getDealers(p, ps, searchText)
+      const result = await getDealers(p, ps, search)
       setDealers(result.list)
       setTotal(result.total)
       setPage(result.page)
@@ -44,13 +44,16 @@ export function DealerManagement() {
     loadData(1, pageSize)
   }, [])
 
-  // 搜索防抖
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      loadData(1, pageSize)
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [searchText])
+  // 点击查询或回车后发起查询，回到第 1 页
+  const handleSearch = () => {
+    loadData(1, pageSize)
+  }
+
+  // 重置搜索条件并重新查询
+  const handleReset = () => {
+    setSearchText('')
+    loadData(1, pageSize, '')
+  }
 
   // 查看对接明细
   const handleViewDetails = (dealer: Dealer) => {
@@ -93,6 +96,7 @@ export function DealerManagement() {
                 type="text"
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                 className="input-ios pl-9"
                 placeholder="搜索用户名..."
               />
@@ -100,6 +104,15 @@ export function DealerManagement() {
             <span className="text-sm text-gray-500">
               共 {total} 个分销商
             </span>
+            <div className="flex items-center gap-2 ml-auto">
+              <button onClick={handleSearch} className="btn-ios-primary">
+                <Search className="w-4 h-4" />
+                查询
+              </button>
+              <button onClick={handleReset} className="btn-ios-secondary">
+                重置
+              </button>
+            </div>
           </div>
         </div>
       </div>

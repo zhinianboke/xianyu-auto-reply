@@ -44,13 +44,10 @@ export function SubDealerManagement() {
     loadData(1, pageSize)
   }, [])
 
-  // 搜索防抖
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      loadData(1, pageSize)
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [searchText])
+  // 点击查询/回车时以当前搜索条件回到第1页
+  const handleSearch = () => {
+    loadData(1, pageSize)
+  }
 
   // 查看对接明细
   const handleViewDetails = (dealer: Dealer) => {
@@ -92,6 +89,7 @@ export function SubDealerManagement() {
                 type="text"
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
                 className="input-ios pl-9"
                 placeholder="搜索用户名..."
               />
@@ -99,6 +97,10 @@ export function SubDealerManagement() {
             <span className="text-sm text-gray-500">
               共 {total} 位下级分销商
             </span>
+            <button onClick={handleSearch} className="btn-ios-primary ml-auto">
+              <Search className="w-4 h-4" />
+              查询
+            </button>
           </div>
         </div>
       </div>

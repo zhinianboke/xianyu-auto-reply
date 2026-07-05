@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Calendar, ChevronLeft, ChevronRight, MessageSquare, RefreshCw } from 'lucide-react'
 import { getAccountDetails } from '@/api/accounts'
 import { getAutoReplyLogs, type AutoReplyLogItem } from '@/api/autoReplyLogs'
@@ -213,16 +213,6 @@ export function AutoReplyLogs() {
   useEffect(() => {
     loadLogs(1, pageSize)
   }, [])
-
-  // 切换消息类型时自动重新查询（跳过首次挂载，避免与初始查询重复）
-  const messageTypeMountedRef = useRef(false)
-  useEffect(() => {
-    if (!messageTypeMountedRef.current) {
-      messageTypeMountedRef.current = true
-      return
-    }
-    loadLogs(1, pageSize)
-  }, [messageType]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSearch = () => {
     loadLogs(1, pageSize)

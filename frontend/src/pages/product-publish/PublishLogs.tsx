@@ -7,7 +7,7 @@
  * 3. 显示发布结果
  * 4. 成功的记录可直接跳转查看商品
  */
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { ScrollText, RefreshCw, ExternalLink, ChevronLeft, ChevronRight, Loader2, Trash2 } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
@@ -44,7 +44,6 @@ export function PublishLogs() {
   const [accounts, setAccounts] = useState<any[]>([])
   const [filterAccount, setFilterAccount] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
-  const isFirstFilterRender = useRef(true)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [clearing, setClearing] = useState(false)
 
@@ -73,11 +72,19 @@ export function PublishLogs() {
 
   useEffect(() => { load(page, pageSize) }, [page, pageSize])
 
-  useEffect(() => {
-    if (isFirstFilterRender.current) { isFirstFilterRender.current = false; return }
+  // 点击「查询」：用当前筛选值从第一页加载
+  const handleSearch = () => {
     if (page === 1) load(1, pageSize)
     else setPage(1)
-  }, [filterAccount, filterStatus])
+  }
+
+  // 点击「重置」：清空筛选条件并重新加载
+  const handleReset = () => {
+    setFilterAccount('')
+    setFilterStatus('')
+    if (page === 1) load(1, pageSize, '', '')
+    else setPage(1)
+  }
 
   const handlePageSizeChange = (size: number) => { setPageSize(size); setPage(1) }
 
@@ -135,7 +142,7 @@ export function PublishLogs() {
       {/* 筛选栏 */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="vben-card">
         <div className="vben-card-body">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="flex flex-wrap items-end gap-4">
             <div className="input-group">
               <label className="input-label">筛选账号</label>
               <select className="input-ios" value={filterAccount}
@@ -155,6 +162,16 @@ export function PublishLogs() {
                   <option key={k} value={k}>{v.label}</option>
                 ))}
               </select>
+            </div>
+            <div className="flex items-end gap-2 ml-auto">
+              <button className="btn-ios-primary" onClick={handleSearch} disabled={tableLoading}>
+                查询
+              </button>
+              {(filterAccount || filterStatus) && (
+                <button className="btn-ios-secondary text-red-500" onClick={handleReset} disabled={tableLoading}>
+                  重置
+                </button>
+              )}
             </div>
           </div>
         </div>

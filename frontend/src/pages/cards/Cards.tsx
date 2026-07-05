@@ -45,8 +45,12 @@ export function Cards() {
   const [cards, setCards] = useState<CardData[]>([])
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(0)
+  // 已应用的查询条件（仅在点「查询」或回车时更新，用于实际发起请求）
   const [searchText, setSearchText] = useState('')
   const [typeFilter, setTypeFilter] = useState<string>('')
+  // 草稿状态：承接输入框/下拉的即时输入，不触发查询
+  const [searchDraft, setSearchDraft] = useState('')
+  const [typeDraft, setTypeDraft] = useState<string>('')
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; card: CardData | null }>({ open: false, card: null })
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false)
@@ -96,14 +100,23 @@ export function Cards() {
     loadCards()
   }, [_hasHydrated, isAuthenticated, token])
 
-  // 搜索防抖
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setPage(1)
-      loadCards(1, pageSize, searchText, typeFilter)
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [searchText, typeFilter])
+  // 点击「查询」或搜索框回车：将草稿值应用为查询条件并从第 1 页加载
+  const handleSearch = () => {
+    setSearchText(searchDraft)
+    setTypeFilter(typeDraft)
+    setPage(1)
+    loadCards(1, pageSize, searchDraft, typeDraft)
+  }
+
+  // 重置筛选：清空草稿与已应用条件，并从第 1 页重新加载
+  const handleResetFilter = () => {
+    setSearchDraft('')
+    setTypeDraft('')
+    setSearchText('')
+    setTypeFilter('')
+    setPage(1)
+    loadCards(1, pageSize, '', '')
+  }
 
   // 当前页数据即后端返回的列表
   const pagedCards = cards
@@ -240,15 +253,16 @@ export function Cards() {
       {/* 筛选区域（与商品管理一致） */}
       <div className="vben-card">
         <div className="vben-card-body">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="flex flex-wrap items-end gap-4">
             <div className="input-group">
               <label className="input-label">搜索卡券</label>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                 <input
                   type="text"
-                  value={searchText}
-                  onChange={e => setSearchText(e.target.value)}
+                  value={searchDraft}
+                  onChange={e => setSearchDraft(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleSearch() }}
                   placeholder="搜索卡券名称或描述..."
                   className="input-ios pl-9"
                 />
@@ -257,8 +271,8 @@ export function Cards() {
             <div className="input-group">
               <label className="input-label">卡券类型</label>
               <select
-                value={typeFilter}
-                onChange={e => setTypeFilter(e.target.value)}
+                value={typeDraft}
+                onChange={e => setTypeDraft(e.target.value)}
                 className="input-ios"
               >
                 <option value="">全部</option>
@@ -268,14 +282,18 @@ export function Cards() {
                 <option value="image">图片卡券</option>
               </select>
             </div>
-          </div>
-          {(searchText || typeFilter) && (
-            <div className="mt-3 flex justify-end">
-              <button onClick={() => { setSearchText(''); setTypeFilter('') }} className="btn-ios-secondary btn-sm text-red-500">
-                重置筛选
+            <div className="flex items-end gap-2 ml-auto">
+              <button onClick={handleSearch} className="btn-ios-primary">
+                <Search className="w-4 h-4" />
+                查询
               </button>
+              {(searchDraft || typeDraft) && (
+                <button onClick={handleResetFilter} className="btn-ios-secondary text-red-500">
+                  重置筛选
+                </button>
+              )}
             </div>
-          )}
+          </div>
         </div>
       </div>
 

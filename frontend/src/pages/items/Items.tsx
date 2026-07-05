@@ -1108,8 +1108,8 @@ export function Items() {
       {/* Filters */}
       <div className="vben-card">
         <div className="vben-card-body">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-            <div className="input-group">
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="input-group min-w-[200px]">
               <label className="input-label">筛选账号</label>
               <Select
                 value={selectedAccount}
@@ -1125,35 +1125,25 @@ export function Items() {
                 placeholder="所有账号"
               />
             </div>
-            <div className="input-group">
+            <div className="input-group min-w-[240px] flex-1">
               <label className="input-label">搜索商品</label>
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input
-                    type="text"
-                    value={searchKeyword}
-                    onChange={(e) => setSearchKeyword(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        loadItems(1, pagination.pageSize, filters, searchKeyword)
-                      }
-                    }}
-                    placeholder="搜索商品ID、标题或详情..."
-                    className="input-ios pl-9"
-                  />
-                </div>
-                <button
-                  onClick={() => loadItems(1, pagination.pageSize, filters, searchKeyword)}
-                  className="btn-ios-primary whitespace-nowrap"
-                  disabled={itemsLoading}
-                >
-                  <Search className="w-4 h-4" />
-                  查询
-                </button>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="text"
+                  value={searchKeyword}
+                  onChange={(e) => setSearchKeyword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      loadItems(1, pagination.pageSize, filters, searchKeyword)
+                    }
+                  }}
+                  placeholder="搜索商品ID、标题或详情..."
+                  className="input-ios pl-9"
+                />
               </div>
             </div>
-            <div className="input-group">
+            <div className="input-group min-w-[140px]">
               <label className="input-label">是否擦亮</label>
               <select
                 value={filters.is_polished === null ? '' : String(filters.is_polished)}
@@ -1165,7 +1155,7 @@ export function Items() {
                 <option value="false">未擦亮</option>
               </select>
             </div>
-            <div className="input-group">
+            <div className="input-group min-w-[140px]">
               <label className="input-label">多规格</label>
               <select
                 value={filters.is_multi_spec === null ? '' : String(filters.is_multi_spec)}
@@ -1177,7 +1167,7 @@ export function Items() {
                 <option value="false">关闭</option>
               </select>
             </div>
-            <div className="input-group">
+            <div className="input-group min-w-[140px]">
               <label className="input-label">多数量发货</label>
               <select
                 value={filters.multi_quantity_delivery === null ? '' : String(filters.multi_quantity_delivery)}
@@ -1189,14 +1179,23 @@ export function Items() {
                 <option value="false">关闭</option>
               </select>
             </div>
-          </div>
-          {hasActiveFilters && (
-            <div className="mt-3 flex justify-end">
-              <button onClick={handleResetFilters} className="btn-ios-secondary btn-sm text-red-500">
-                重置筛选
+            {/* 查询/重置按钮统一放在筛选行最右侧 */}
+            <div className="flex items-end gap-2 ml-auto">
+              <button
+                onClick={() => loadItems(1, pagination.pageSize, filters, searchKeyword)}
+                className="btn-ios-primary whitespace-nowrap"
+                disabled={itemsLoading}
+              >
+                <Search className="w-4 h-4" />
+                查询
               </button>
+              {hasActiveFilters && (
+                <button onClick={handleResetFilters} className="btn-ios-secondary text-red-500 whitespace-nowrap">
+                  重置筛选
+                </button>
+              )}
             </div>
-          )}
+          </div>
         </div>
       </div>
 

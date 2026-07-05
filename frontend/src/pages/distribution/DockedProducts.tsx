@@ -73,14 +73,6 @@ export function DockedProducts() {
     loadData(1, pageSize)
   }, [])
 
-  // 搜索防抖
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      loadData(1, pageSize)
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [searchText])
-
   // 修改已开放的下级对接设置
   const handleEditSubDock = (record: DockRecord) => {
     setPriceModalRecord(record)
@@ -223,13 +215,17 @@ export function DockedProducts() {
     loadData(1, newSize)
   }
 
+  // 仅暂存筛选条件，不立即查询（点击「查询」按钮或搜索框回车后才发起查询）
   const handleFilterChange = (key: keyof DockRecordFilterParams, value: boolean | number | null) => {
-    const nextFilters: DockRecordFilterParams = {
-      ...filters,
+    setFilters(prev => ({
+      ...prev,
       [key]: value,
-    }
-    setFilters(nextFilters)
-    loadData(1, pageSize, searchText, nextFilters)
+    }))
+  }
+
+  // 触发查询：携带当前搜索词与全部筛选条件，回到第 1 页
+  const handleSearch = () => {
+    loadData(1, pageSize, searchText, filters)
   }
 
   const handleResetFilters = () => {
@@ -321,8 +317,9 @@ export function DockedProducts() {
                 type="text"
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
                 className="input-ios pl-9"
-                placeholder="搜索对接名称..."
+                placeholder="搜索对接名称...（回车查询）"
               />
             </div>
             <button
@@ -380,6 +377,15 @@ export function DockedProducts() {
                   <option value="false">未开放</option>
                 </select>
               </div>
+            </div>
+            <div className="mt-3 flex justify-end gap-2">
+              <button onClick={handleSearch} className="btn-ios-primary btn-sm">
+                <Search className="w-4 h-4" />
+                查询
+              </button>
+              <button onClick={handleResetFilters} className="btn-ios-secondary btn-sm text-red-500">
+                重置
+              </button>
             </div>
           </div>
         )}

@@ -301,10 +301,12 @@ export function Accounts() {
   }
   
   // 筛选条件变更
+  // 说明：仅暂存筛选条件到 filters，不立即发起查询；
+  // 真正的查询统一由「查询」按钮（handleSearch）或「重置」按钮触发，
+  // 避免下拉变更即时触发查询，符合「点查询才发起请求」的规范。
   const handleFilterChange = (key: keyof AccountFilters, value: string | boolean | null) => {
     const newFilters = { ...filters, [key]: value }
     setFilters(newFilters)
-    loadAccounts(1, pagination.pageSize, newFilters)
   }
   
   // 重置筛选条件
@@ -345,9 +347,9 @@ export function Accounts() {
     handleFilterChange('account_id', keyword || null)
   }
 
-  // 统一「查询」按钮：合并所有文本草稿到 filters 后按筛选条件重新查询
-  // - 文本类筛选（账号ID、禁用原因）只在草稿提交后才生效；点击查询会强制以当前草稿为准
-  // - 下拉类筛选（状态、AI 回复等）已在变更时立即生效，这里直接按当前 filters 重新查询
+  // 统一「查询」按钮：合并当前所有筛选条件后回到第 1 页重新查询
+  // - 下拉类筛选（状态、AI 回复等）变更时只暂存到 filters，这里通过展开 filters 一并带上其当前值
+  // - 文本类筛选（账号ID、禁用原因）以当前草稿输入为准，强制覆盖 filters 中的旧值
   const handleSearch = () => {
     const accountIdKeyword = accountIdInput.trim()
     const disableReasonKeyword = disableReasonInput.trim()

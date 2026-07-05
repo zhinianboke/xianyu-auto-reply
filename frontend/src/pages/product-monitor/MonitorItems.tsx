@@ -114,10 +114,11 @@ export function MonitorItems() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // 仅翻页 / 改每页大小时自动加载；筛选下拉改动不再即时触发，统一由「查询」按钮触发
   useEffect(() => {
     void loadItems(page, pageSize)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, pageSize, taskId, dmState, orderState, sellerFill, hasDetail])
+  }, [page, pageSize])
 
   const handleSearch = () => {
     if (page === 1) {
@@ -222,10 +223,7 @@ export function MonitorItems() {
               <select
                 className="input-ios"
                 value={taskId}
-                onChange={(e) => {
-                  setTaskId(e.target.value === '' ? '' : Number(e.target.value))
-                  setPage(1)
-                }}
+                onChange={(e) => setTaskId(e.target.value === '' ? '' : Number(e.target.value))}
               >
                 <option value="">全部任务</option>
                 {taskOptions.map((opt) => (
@@ -288,10 +286,7 @@ export function MonitorItems() {
               <select
                 className="input-ios"
                 value={dmState}
-                onChange={(e) => {
-                  setDmState(e.target.value)
-                  setPage(1)
-                }}
+                onChange={(e) => setDmState(e.target.value)}
               >
                 <option value="">全部</option>
                 <option value="not_sent">未私信</option>
@@ -306,10 +301,7 @@ export function MonitorItems() {
               <select
                 className="input-ios"
                 value={orderState}
-                onChange={(e) => {
-                  setOrderState(e.target.value)
-                  setPage(1)
-                }}
+                onChange={(e) => setOrderState(e.target.value)}
               >
                 <option value="">全部</option>
                 <option value="not_ordered">未下单</option>
@@ -324,10 +316,7 @@ export function MonitorItems() {
               <select
                 className="input-ios"
                 value={sellerFill}
-                onChange={(e) => {
-                  setSellerFill(e.target.value)
-                  setPage(1)
-                }}
+                onChange={(e) => setSellerFill(e.target.value)}
               >
                 <option value="">全部</option>
                 <option value="filled">已补全</option>
@@ -340,10 +329,7 @@ export function MonitorItems() {
               <select
                 className="input-ios"
                 value={hasDetail}
-                onChange={(e) => {
-                  setHasDetail(e.target.value)
-                  setPage(1)
-                }}
+                onChange={(e) => setHasDetail(e.target.value)}
               >
                 <option value="">全部</option>
                 <option value="true">已获取</option>

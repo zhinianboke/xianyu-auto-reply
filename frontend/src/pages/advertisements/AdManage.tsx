@@ -81,15 +81,18 @@ export default function AdManage() {
   })
   const [deleting, setDeleting] = useState(false)
 
-  const loadAds = async () => {
+  // 加载广告列表；可传入筛选覆盖值，避免 setState 异步导致的读取到旧筛选值
+  const loadAds = async (overrides?: { status?: string; type?: string }) => {
     if (!_hasHydrated || !isAuthenticated || !token) return
+    const statusValue = overrides?.status !== undefined ? overrides.status : filterStatus
+    const typeValue = overrides?.type !== undefined ? overrides.type : filterType
     try {
       setLoading(true)
       const result = await getAllAds({
         page,
         page_size: pageSize,
-        status: filterStatus || undefined,
-        ad_type: filterType || undefined,
+        status: statusValue || undefined,
+        ad_type: typeValue || undefined,
       })
       if (result.success && result.data) {
         setAds(result.data.items)
@@ -104,7 +107,27 @@ export default function AdManage() {
 
   useEffect(() => {
     loadAds()
-  }, [_hasHydrated, isAuthenticated, token, page, pageSize, filterStatus, filterType])
+  }, [_hasHydrated, isAuthenticated, token, page, pageSize])
+
+  // 点击「查询」：使用当前筛选草稿回到第 1 页并加载
+  const handleSearch = () => {
+    if (page !== 1) {
+      setPage(1) // 翻页依赖变化会触发 loadAds
+    } else {
+      loadAds()
+    }
+  }
+
+  // 点击「重置」：清空筛选并重新加载
+  const handleReset = () => {
+    setFilterStatus('')
+    setFilterType('')
+    if (page !== 1) {
+      setPage(1) // 翻页依赖变化会触发 loadAds，此时状态已清空
+    } else {
+      loadAds({ status: '', type: '' }) // 用覆盖值立即加载，避免 setState 异步
+    }
+  }
 
   const openEditModal = (ad: Advertisement) => {
     setEditAd(ad)
@@ -236,26 +259,42 @@ export default function AdManage() {
           <h1 className="page-title">广告管理</h1>
           <p className="page-description">管理所有广告申请</p>
         </div>
-        <button onClick={loadAds} className="btn-ios-secondary">
+        <button onClick={() => loadAds()} className="btn-ios-secondary">
           <RefreshCw className="w-4 h-4" />
           刷新
         </button>
       </div>
 
       {/* 筛选 */}
-      <div className="flex flex-wrap gap-3">
-        <Select
-          value={filterStatus}
-          onChange={setFilterStatus}
-          options={[{ value: '', label: '全部状态' }, ...STATUS_OPTIONS]}
-          className="w-32"
-        />
-        <Select
-          value={filterType}
-          onChange={setFilterType}
-          options={[{ value: '', label: '全部类型' }, ...AD_TYPE_OPTIONS]}
-          className="w-32"
-        />
+      <div className="flex flex-wrap items-end gap-4">
+        <div className="input-group">
+          <label className="input-label">状态</label>
+          <Select
+            value={filterStatus}
+            onChange={setFilterStatus}
+            options={[{ value: '', label: '全部状态' }, ...STATUS_OPTIONS]}
+            className="w-32"
+          />
+        </div>
+        <div className="input-group">
+          <label className="input-label">类型</label>
+          <Select
+            value={filterType}
+            onChange={setFilterType}
+            options={[{ value: '', label: '全部类型' }, ...AD_TYPE_OPTIONS]}
+            className="w-32"
+          />
+        </div>
+        <div className="flex items-end gap-2 ml-auto">
+          <button onClick={handleSearch} className="btn-ios-primary">
+            查询
+          </button>
+          {(filterStatus || filterType) && (
+            <button onClick={handleReset} className="btn-ios-secondary text-red-500">
+              重置
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 表格 */}

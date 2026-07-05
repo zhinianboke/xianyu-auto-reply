@@ -49,10 +49,20 @@ export function FundFlows() {
     loadData(1, pageSize, flowType)
   }, [])
 
-  // 类型筛选变化
+  // 类型筛选变化：仅更新草稿，不即时查询
   const handleTypeChange = (type: string) => {
     setFlowType(type)
-    loadData(1, pageSize, type)
+  }
+
+  // 查询：以当前选中的类型回到第 1 页
+  const handleSearch = () => {
+    loadData(1, pageSize, flowType)
+  }
+
+  // 重置：清空类型筛选并以空值重新查询第 1 页
+  const handleReset = () => {
+    setFlowType('')
+    loadData(1, pageSize, '')
   }
 
   // 分页切换
@@ -100,6 +110,16 @@ export function FundFlows() {
             <span className="text-sm text-gray-500">
               共 {total} 条记录
             </span>
+            <div className="ml-auto flex items-center gap-2">
+              <button onClick={handleSearch} className="btn-ios-primary">
+                查询
+              </button>
+              {flowType && (
+                <button onClick={handleReset} className="btn-ios-secondary text-red-500">
+                  重置
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>

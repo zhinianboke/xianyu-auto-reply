@@ -64,10 +64,16 @@ export function SupplyManagement() {
   }
 
   // 加载数据
-  const loadData = useCallback(async (p: number = page, ps: number = pageSize) => {
+  // search / type 显式传参，避免「重置」时闭包读取到旧的 state 值
+  const loadData = useCallback(async (
+    p: number = page,
+    ps: number = pageSize,
+    search: string = searchText,
+    type: string = typeFilter,
+  ) => {
     setLoading(true)
     try {
-      const result = await getSupplyCards(p, ps, searchText, typeFilter)
+      const result = await getSupplyCards(p, ps, search, type)
       setCards(result.list)
       setTotal(result.total)
       setPage(result.page)
@@ -80,17 +86,23 @@ export function SupplyManagement() {
     }
   }, [searchText, typeFilter, page, pageSize, addToast])
 
+  // 首次挂载初始加载
   useEffect(() => {
     loadData(1, pageSize)
-  }, [typeFilter])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-  // 搜索防抖
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      loadData(1, pageSize)
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [searchText])
+  // 点击「查询」或搜索框回车：使用当前草稿的 searchText + typeFilter 回到第 1 页
+  const handleSearch = () => {
+    loadData(1, pageSize, searchText, typeFilter)
+  }
+
+  // 点击「重置」：清空筛选并立即以空值重载（显式传空，规避旧 state）
+  const handleReset = () => {
+    setSearchText('')
+    setTypeFilter('')
+    loadData(1, pageSize, '', '')
+  }
 
   const handlePageChange = (newPage: number) => {
     if (newPage < 1 || newPage > totalPages) return
@@ -172,6 +184,7 @@ export function SupplyManagement() {
                 type="text"
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
                 className="input-ios pl-9"
                 placeholder="搜索卡券名称或描述..."
               />
@@ -187,6 +200,17 @@ export function SupplyManagement() {
               <option value="data">批量</option>
               <option value="image">图片</option>
             </select>
+            {/* 查询 / 重置 按钮组：右对齐，重置仅在有筛选值时显示 */}
+            <div className="flex items-center gap-2 ml-auto">
+              <button onClick={handleSearch} className="btn-ios-primary">
+                查询
+              </button>
+              {(searchText || typeFilter) && (
+                <button onClick={handleReset} className="btn-ios-secondary text-red-500">
+                  重置
+                </button>
+              )}
+            </div>
           </div>
         </div>
 

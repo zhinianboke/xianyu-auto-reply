@@ -100,10 +100,20 @@ export function AgentOrders() {
     loadData(tab, 1, pageSize, '')
   }
 
-  // 状态筛选
+  // 状态筛选：仅更新草稿，不立即查询（点「查询」按钮后才生效）
   const handleStatusChange = (status: string) => {
     setStatusFilter(status)
-    loadData(activeTab, 1, pageSize, status)
+  }
+
+  // 点击查询：带当前状态草稿回到第1页
+  const handleSearch = () => {
+    loadData(activeTab, 1, pageSize, statusFilter)
+  }
+
+  // 重置筛选：清空状态并以空值查询
+  const handleReset = () => {
+    setStatusFilter('')
+    loadData(activeTab, 1, pageSize, '')
   }
 
   // 分页
@@ -185,6 +195,17 @@ export function AgentOrders() {
                 <option value="settled">已结算</option>
                 <option value="failed">失败</option>
               </select>
+            </div>
+            {/* 查询/重置按钮组，右对齐 */}
+            <div className="flex items-center gap-2 ml-auto">
+              <button onClick={handleSearch} className="btn-ios-primary btn-sm">
+                查询
+              </button>
+              {statusFilter && (
+                <button onClick={handleReset} className="btn-ios-secondary btn-sm text-red-500">
+                  重置
+                </button>
+              )}
             </div>
           </div>
         </div>

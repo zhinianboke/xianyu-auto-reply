@@ -91,17 +91,21 @@ export default function Feedback() {
   })
   const [deleting, setDeleting] = useState(false)
 
-  const loadFeedbacks = async () => {
+  const loadFeedbacks = async (opts?: { resolved?: string; type?: string; pageNum?: number }) => {
     if (!_hasHydrated || !isAuthenticated || !token) return
+    // 允许查询/重置按钮传入即时值，避免 setState 异步导致的旧值查询
+    const resolved = opts?.resolved ?? filterResolved
+    const type = opts?.type ?? filterType
+    const pageNum = opts?.pageNum ?? page
     try {
       setLoading(true)
       // 并行加载列表和统计数据
       const [listResult, statsResult] = await Promise.all([
         getFeedbacks({
-          page,
+          page: pageNum,
           page_size: pageSize,
-          is_resolved: filterResolved === '' ? undefined : filterResolved === 'true',
-          feedback_type: filterType || undefined,
+          is_resolved: resolved === '' ? undefined : resolved === 'true',
+          feedback_type: type || undefined,
         }),
         getFeedbackStats(),
       ])
@@ -136,7 +140,7 @@ export default function Feedback() {
 
   useEffect(() => {
     loadFeedbacks()
-  }, [_hasHydrated, isAuthenticated, token, page, pageSize, filterResolved, filterType])
+  }, [_hasHydrated, isAuthenticated, token, page, pageSize])
 
   // 滚动到消息底部
   useEffect(() => {
@@ -144,6 +148,20 @@ export default function Feedback() {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' })
     }
   }, [detailData?.messages])
+
+  // 点击「查询」按钮：用当前筛选草稿值回到第 1 页查询
+  const handleSearch = () => {
+    setPage(1)
+    loadFeedbacks({ pageNum: 1 })
+  }
+
+  // 点击「重置」按钮：清空筛选条件并回到第 1 页重新加载
+  const handleReset = () => {
+    setFilterResolved('')
+    setFilterType('')
+    setPage(1)
+    loadFeedbacks({ resolved: '', type: '', pageNum: 1 })
+  }
 
   const openAddModal = () => {
     setFormTitle('')
@@ -389,28 +407,44 @@ export default function Feedback() {
       </div>
 
       {/* 筛选 */}
-      <div className="flex flex-wrap gap-3">
-        <Select
-          value={filterResolved}
-          onChange={setFilterResolved}
-          options={[
-            { value: '', label: '全部状态' },
-            { value: 'false', label: '未解决' },
-            { value: 'true', label: '已解决' },
-          ]}
-          className="w-32"
-        />
-        <Select
-          value={filterType}
-          onChange={setFilterType}
-          options={[
-            { value: '', label: '全部类型' },
-            { value: 'FEATURE', label: '需求' },
-            { value: 'BUG', label: 'BUG' },
-            { value: 'OTHER', label: '其他' },
-          ]}
-          className="w-32"
-        />
+      <div className="flex flex-wrap items-end gap-4">
+        <div className="input-group">
+          <label className="input-label">解决状态</label>
+          <Select
+            value={filterResolved}
+            onChange={setFilterResolved}
+            options={[
+              { value: '', label: '全部状态' },
+              { value: 'false', label: '未解决' },
+              { value: 'true', label: '已解决' },
+            ]}
+            className="w-32"
+          />
+        </div>
+        <div className="input-group">
+          <label className="input-label">类型</label>
+          <Select
+            value={filterType}
+            onChange={setFilterType}
+            options={[
+              { value: '', label: '全部类型' },
+              { value: 'FEATURE', label: '需求' },
+              { value: 'BUG', label: 'BUG' },
+              { value: 'OTHER', label: '其他' },
+            ]}
+            className="w-32"
+          />
+        </div>
+        <div className="flex items-end gap-2 ml-auto">
+          <button onClick={handleSearch} className="btn-ios-primary">
+            查询
+          </button>
+          {(filterResolved !== '' || filterType !== '') && (
+            <button onClick={handleReset} className="btn-ios-secondary text-red-500">
+              重置
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 列表 */}
