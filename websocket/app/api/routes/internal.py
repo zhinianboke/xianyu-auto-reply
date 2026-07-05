@@ -2218,3 +2218,25 @@ async def create_chat(account_id: str, request: CreateChatRequest):
             "message": f"创建会话异常: {str(e)}",
             "data": None
         }
+
+
+@router.post("/system/self-restart")
+async def system_self_restart():
+    """
+    重启本服务（消息服务 / websocket）
+
+    由 backend-web 的系统管理接口调用。自动识别运行环境：
+    - docker：本进程延迟自杀退出，容器 restart 策略自动拉起
+    - dev/frozen：派生脱离父进程的协调子进程，杀端口后重新拉起
+
+    先返回成功响应，再在后台触发重启。
+    """
+    from common.utils.service_restart import restart_service
+
+    result = restart_service("websocket")
+    return {
+        "success": bool(result.get("success")),
+        "code": 200 if result.get("success") else 500,
+        "message": result.get("message") or "",
+        "data": {"mode": result.get("mode")},
+    }

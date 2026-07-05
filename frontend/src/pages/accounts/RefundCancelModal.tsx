@@ -23,7 +23,7 @@ export function RefundCancelModal({ accountId, accountDisplayId, onClose }: Prop
   const [saving, setSaving] = useState(false)
   const [enabled, setEnabled] = useState(false)
   const [url, setUrl] = useState('')
-  const [timeout, setTimeoutValue] = useState(30)
+  const [timeout, setTimeoutValue] = useState(60)
 
   useEffect(() => {
     loadConfig()
@@ -36,7 +36,7 @@ export function RefundCancelModal({ accountId, accountDisplayId, onClose }: Prop
       if (res.success && res.data) {
         setEnabled(res.data.enabled)
         setUrl(res.data.url || '')
-        setTimeoutValue(res.data.timeout || 30)
+        setTimeoutValue(res.data.timeout || 60)
       } else {
         addToast({ type: 'error', message: res.message || '加载配置失败' })
       }
@@ -58,8 +58,8 @@ export function RefundCancelModal({ accountId, accountDisplayId, onClose }: Prop
         return
       }
     }
-    if (timeout < 1 || timeout > 120) {
-      addToast({ type: 'warning', message: '超时时间请输入 1-120 秒之间的值' })
+    if (!Number.isFinite(timeout) || timeout < 1) {
+      addToast({ type: 'warning', message: '超时时间请输入大于 0 的秒数' })
       return
     }
 
@@ -159,12 +159,11 @@ export function RefundCancelModal({ accountId, accountDisplayId, onClose }: Prop
                 <input
                   type="number"
                   min={1}
-                  max={120}
                   value={timeout}
-                  onChange={(e) => setTimeoutValue(Math.max(1, Math.min(120, parseInt(e.target.value) || 30)))}
+                  onChange={(e) => setTimeoutValue(Math.max(1, parseInt(e.target.value) || 60))}
                   className="input-ios mt-1 text-sm w-24"
                 />
-                <p className="text-[10px] text-slate-400 mt-0.5">范围 1-120 秒</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">默认 60 秒，不限上限，填写大于 0 的整数即可</p>
               </div>
             </>
           )}

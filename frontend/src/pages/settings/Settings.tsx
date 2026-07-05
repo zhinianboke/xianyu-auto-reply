@@ -33,6 +33,7 @@ import { LoginBrandingSettingsCard } from './LoginBrandingSettingsCard'
 import { MenuVisibilitySettings } from './MenuVisibilitySettings'
 import { ThemeAppearanceSettingsCard } from './ThemeAppearanceSettingsCard'
 import { ThemeFontSettingsCard } from './ThemeFontSettingsCard'
+import { ServiceRestartCard } from './ServiceRestartCard'
 import { useMenuVisibilityStore } from '@/store/menuVisibilityStore'
 import type {
   AuthFooterAdSettings,
@@ -590,6 +591,9 @@ export function Settings() {
           </button>
         </div>
       </div>
+
+      {/* 服务管理：消息服务 / 后端服务 / 定时任务服务 重启（仅管理员可见，置于最上方） */}
+      {user?.is_admin && <ServiceRestartCard />}
 
       {/* 基础设置 + SMTP邮件配置（仅管理员可见） */}
       {user?.is_admin && (

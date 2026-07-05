@@ -47,7 +47,7 @@ async def process_order_unregister(account_id: str, order_no: str) -> None:
         cancel_url = (account.refund_cancel_url or '').strip()
         if not cancel_url:
             return  # 未配置URL
-        timeout_seconds = account.refund_cancel_timeout or 30
+        timeout_seconds = account.refund_cancel_timeout or 60
 
         order = (await session.execute(
             select(XYOrder).where(

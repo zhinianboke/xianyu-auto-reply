@@ -67,6 +67,7 @@ from . import (
     db_backup_logs,
     search,
     shared_scan,
+    system_control,
     system_settings,
     upload,
     user_settings,
@@ -133,6 +134,7 @@ api_router.include_router(auto_rate.router, prefix="/auto-rate", tags=["自动�
 
 # 系统设置
 api_router.include_router(system_settings.router, prefix="/system-settings", tags=["系统设置"])
+api_router.include_router(system_control.router, tags=["系统管理"])  # 已定义prefix="/system-control"
 api_router.include_router(announcements.router, prefix="/announcements", tags=["公告管理"])
 api_router.include_router(popup_announcements.router, prefix="/popup-announcements", tags=["弹窗公告"])
 api_router.include_router(feedback.router, prefix="/feedbacks", tags=["反馈管理"])

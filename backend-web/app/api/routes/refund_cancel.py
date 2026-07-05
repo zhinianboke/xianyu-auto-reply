@@ -18,6 +18,7 @@ from loguru import logger
 from app.api import deps
 from common.models.user import User
 from common.models.xy_account import XYAccount
+from common.utils.auth_scope import resolve_owner_scope
 
 router = APIRouter(tags=["退款订单注销配置"])
 
@@ -28,7 +29,7 @@ class RefundCancelConfig(BaseModel):
     """退款订单注销配置"""
     enabled: bool = False  # 是否开启退款订单注销
     url: Optional[str] = None  # 注销接口请求URL
-    timeout: Optional[int] = 30  # 请求超时时间(秒)
+    timeout: Optional[int] = 60  # 请求超时时间(秒)，默认60秒
 
 
 class RefundCancelConfigResponse(BaseModel):
@@ -46,12 +47,14 @@ async def get_refund_cancel_config(
     current_user: User = Depends(deps.get_current_active_user),
     session: AsyncSession = Depends(deps.get_db_session),
 ):
-    """获取账号的退款订单注销配置"""
+    """获取账号的退款订单注销配置（管理员可操作所有账号，普通用户仅限本人账号）"""
     try:
-        stmt = select(XYAccount).where(
-            XYAccount.owner_id == current_user.id,
-            XYAccount.account_id == account_id,
-        )
+        # 管理员不限制 owner，普通用户仅能访问本人账号
+        owner_id, is_admin = resolve_owner_scope(current_user)
+        conditions = [XYAccount.account_id == account_id]
+        if not is_admin:
+            conditions.append(XYAccount.owner_id == owner_id)
+        stmt = select(XYAccount).where(*conditions)
         result = await session.execute(stmt)
         account = result.scalars().first()
 
@@ -64,7 +67,7 @@ async def get_refund_cancel_config(
         config = RefundCancelConfig(
             enabled=bool(account.refund_cancel_enabled),
             url=account.refund_cancel_url,
-            timeout=account.refund_cancel_timeout or 30,
+            timeout=account.refund_cancel_timeout or 60,
         )
 
         return RefundCancelConfigResponse(success=True, data=config)
@@ -99,18 +102,20 @@ async def update_refund_cancel_config(
                     message="请求URL格式无效，必须以 http:// 或 https:// 开头"
                 )
 
-        # 超时范围校验
-        timeout = config.timeout if config.timeout is not None else 30
-        if timeout < 1 or timeout > 120:
+        # 超时校验：默认60秒，不设上限，只要求为正整数即可
+        timeout = config.timeout if config.timeout is not None else 60
+        if timeout < 1:
             return RefundCancelConfigResponse(
                 success=False,
-                message="超时时间无效，请输入 1-120 秒之间的值"
+                message="超时时间无效，请输入大于 0 的秒数"
             )
 
-        stmt = select(XYAccount).where(
-            XYAccount.owner_id == current_user.id,
-            XYAccount.account_id == account_id,
-        )
+        # 管理员不限制 owner，普通用户仅能操作本人账号
+        owner_id, is_admin = resolve_owner_scope(current_user)
+        conditions = [XYAccount.account_id == account_id]
+        if not is_admin:
+            conditions.append(XYAccount.owner_id == owner_id)
+        stmt = select(XYAccount).where(*conditions)
         result = await session.execute(stmt)
         account = result.scalars().first()
 
