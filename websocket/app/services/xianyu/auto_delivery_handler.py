@@ -1552,7 +1552,8 @@ class AutoDeliveryHandler:
 
                 except Exception as e:
                     fail_msg = f"自动发货处理异常: {str(e)}"
-                    logger.error(fail_msg)
+                    # 记录完整堆栈，便于定位真实报错位置（fail_msg 仍用简短消息通知买家，不泄露堆栈）
+                    logger.exception(f"【{self.cookie_id}】{fail_msg}")
                     # card_only 模式同上：避免覆盖禁止发货原因 + 重复通知买家
                     if skip_confirm_for_card_only:
                         logger.info(
@@ -1581,7 +1582,8 @@ class AutoDeliveryHandler:
                         logger.warning(f'[{msg_time}] 【{self.cookie_id}】Redis分布式锁释放异常: {order_id}, error={e}')
 
         except Exception as e:
-            logger.error(f"统一自动发货处理异常: {self._safe_str(e)}")
+            # 记录完整堆栈，便于定位真实报错位置
+            logger.exception(f"统一自动发货处理异常: {self._safe_str(e)}")
 
 
     # ==================== 确认发货 ====================
