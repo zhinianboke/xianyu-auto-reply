@@ -4,7 +4,7 @@
 功能：
 1. 账号登录日志分页查询（按账号 / 时间范围 / 登录状态筛选）
 2. 普通用户仅可查询自己账号的登录日志，管理员可查全部
-3. 提供清理 30 天前历史日志能力
+3. 提供清理 10 天前历史日志能力
 """
 from __future__ import annotations
 
@@ -118,10 +118,10 @@ class AccountLoginLogService:
         ]
         return items, total
 
-    async def cleanup_logs_older_than_days(self, days: int = 30) -> int:
+    async def cleanup_logs_older_than_days(self, days: int = 10) -> int:
         """删除 N 天前的历史登录日志，返回受影响行数。
 
-        默认保留最近 30 天，便于「日志管理」界面一键清理过期数据。
+        默认保留最近 10 天，便于「日志管理」界面一键清理过期数据。
         """
         if days < 1:
             days = 1

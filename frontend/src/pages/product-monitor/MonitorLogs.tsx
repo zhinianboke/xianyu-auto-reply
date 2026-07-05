@@ -6,11 +6,12 @@
  * 2. 支持按监控任务筛选
  */
 import { useEffect, useState } from 'react'
-import { CheckSquare, ChevronLeft, ChevronRight, Copy, Loader2, RefreshCw, ScrollText, Square } from 'lucide-react'
+import { CheckSquare, ChevronLeft, ChevronRight, Copy, Loader2, RefreshCw, ScrollText, Square, Trash2 } from 'lucide-react'
 import {
   getListingMonitorLogs,
   getListingMonitorTaskOptions,
   copyListingMonitorLogCookies,
+  clearListingMonitorLogs,
   MONITOR_TYPE_LABELS,
   MONITOR_TYPE_OPTIONS,
   type ListingMonitorLog,
@@ -44,6 +45,8 @@ export function MonitorLogs() {
   const [totalPages, setTotalPages] = useState(0)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [copying, setCopying] = useState(false)
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
+  const [clearing, setClearing] = useState(false)
 
   const loadTaskOptions = async () => {
     try {
@@ -152,6 +155,29 @@ export function MonitorLogs() {
     }
   }
 
+  const handleClearLogs = async () => {
+    setClearing(true)
+    try {
+      const result = await clearListingMonitorLogs()
+      if (result.success) {
+        addToast({ type: 'success', message: result.message || '清空成功' })
+        setShowClearConfirm(false)
+        // 清空后回到第一页：已在第一页则直接刷新，否则由分页副作用触发重新加载
+        if (page === 1) {
+          loadLogs(1, pageSize)
+        } else {
+          setPage(1)
+        }
+      } else {
+        addToast({ type: 'error', message: result.message || '清空监控日志失败' })
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '清空监控日志失败') })
+    } finally {
+      setClearing(false)
+    }
+  }
+
   if (loading) {
     return <PageLoading />
   }
@@ -173,6 +199,15 @@ export function MonitorLogs() {
           <button className="btn-ios-secondary" onClick={() => loadLogs(page, pageSize)} disabled={tableLoading}>
             {tableLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             刷新
+          </button>
+          <button
+            className="btn-ios-danger"
+            onClick={() => setShowClearConfirm(true)}
+            disabled={tableLoading || clearing}
+            title="清空10天前的日志"
+          >
+            <Trash2 className="w-4 h-4" />
+            清空日志
           </button>
         </div>
       </div>
@@ -367,6 +402,35 @@ export function MonitorLogs() {
           </div>
         )}
       </div>
+
+      {showClearConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl max-w-md w-full p-6">
+            <h3 className="text-lg font-semibold mb-4">确认清空日志</h3>
+            <p className="text-slate-600 dark:text-slate-400 mb-6">
+              此操作将清空10天前的监控日志数据，最近10天的日志将被保留。确定要继续吗？
+            </p>
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setShowClearConfirm(false)} disabled={clearing} className="btn-ios-secondary">
+                取消
+              </button>
+              <button onClick={handleClearLogs} disabled={clearing} className="btn-ios-danger">
+                {clearing ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    清空中...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    确认清空
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

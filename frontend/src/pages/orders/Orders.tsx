@@ -279,6 +279,11 @@ export function Orders() {
   }
 
   const handleFetchXianyuOrders = async () => {
+    // 未选择账号时给出提示，不再默认禁用按钮
+    if (!selectedAccount) {
+      addToast({ type: 'warning', message: '请先选择账号' })
+      return
+    }
     setFetchingXianyuOrders(true)
     try {
       const result = await fetchXianyuOrders(selectedAccount || undefined)
@@ -366,7 +371,7 @@ export function Orders() {
           <p className="page-description">查看和管理所有订单信息</p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-          <button onClick={handleFetchXianyuOrders} disabled={fetchingXianyuOrders || !selectedAccount} className="btn-ios-primary w-full sm:w-auto" title={!selectedAccount ? '请先选择账号' : '只能获取近3个月内的订单'}>
+          <button onClick={handleFetchXianyuOrders} disabled={fetchingXianyuOrders} className="btn-ios-primary w-full sm:w-auto" title="只能获取近3个月内的订单">
             {fetchingXianyuOrders ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (

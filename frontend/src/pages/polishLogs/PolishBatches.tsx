@@ -44,7 +44,7 @@ export function PolishBatches() {
       clearLogs={clearPolishLogs}
       columns={columns}
       detailPath={(batchId) => `/admin/polish-batches/${batchId}`}
-      clearConfirmMessage="此操作将清空30天前的擦亮日志数据，最近30天的日志将被保留。确定要继续吗？"
+      clearConfirmMessage="此操作将清空10天前的擦亮日志数据，最近10天的日志将被保留。确定要继续吗？"
       showPageSizeSelector={false}
     />
   )

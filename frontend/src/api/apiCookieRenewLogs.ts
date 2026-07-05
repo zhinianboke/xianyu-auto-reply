@@ -4,7 +4,7 @@
  * 功能：
  * 1. 获取接口续期Cookies批次列表
  * 2. 获取接口续期Cookies批次详情
- * 3. 清空30天前的历史日志
+ * 3. 清空10天前的历史日志
  */
 import {
   createBatchLogApi,

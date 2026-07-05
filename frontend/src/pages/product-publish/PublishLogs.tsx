@@ -120,7 +120,7 @@ export function PublishLogs() {
           <button
             onClick={() => setShowClearConfirm(true)}
             className="btn-ios-danger"
-            title="清空30天前的日志"
+            title="清空10天前的日志"
             disabled={tableLoading || clearing}
           >
             <Trash2 className="w-4 h-4" />
@@ -290,7 +290,7 @@ export function PublishLogs() {
           <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl max-w-md w-full p-6">
             <h3 className="text-lg font-semibold mb-4">确认清空日志</h3>
             <p className="text-slate-600 dark:text-slate-400 mb-6">
-              此操作将清空30天前的发布日志数据，最近30天的日志将被保留。确定要继续吗？
+              此操作将清空10天前的发布日志数据，最近10天的日志将被保留。确定要继续吗？
             </p>
             <div className="flex justify-end gap-3">
               <button

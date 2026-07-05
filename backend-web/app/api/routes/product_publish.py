@@ -445,7 +445,7 @@ async def clear_publish_logs(
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
-    """清空发布日志（只清空30天前的数据）"""
+    """清空发布日志（只清空10天前的数据）"""
     from datetime import timedelta
 
     from loguru import logger
@@ -454,20 +454,20 @@ async def clear_publish_logs(
     from common.models.publish_log import PublishLog
 
     try:
-        thirty_days_ago = get_beijing_now_naive() - timedelta(days=30)
+        ten_days_ago = get_beijing_now_naive() - timedelta(days=10)
         stmt = delete(PublishLog).where(
             PublishLog.user_id == current_user.id,
-            PublishLog.created_at < thirty_days_ago,
+            PublishLog.created_at < ten_days_ago,
         )
 
         result = await session.execute(stmt)
         await session.commit()
 
         deleted_count = result.rowcount or 0
-        logger.info(f"[发布日志] 用户 {current_user.id} 已清空 {deleted_count} 条30天前的日志")
+        logger.info(f"[发布日志] 用户 {current_user.id} 已清空 {deleted_count} 条10天前的日志")
         return ApiResponse(
             success=True,
-            message=f"已清空 {deleted_count} 条30天前的发布日志",
+            message=f"已清空 {deleted_count} 条10天前的发布日志",
         )
     except Exception as e:
         await session.rollback()

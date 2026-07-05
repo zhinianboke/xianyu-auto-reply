@@ -9,11 +9,12 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Sequence
 
-from sqlalchemy import case, desc, func, or_, select
+from loguru import logger
+from sqlalchemy import case, delete, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.listing_monitor_task import ListingMonitorTask
@@ -29,6 +30,9 @@ _VALID_PAGE_SIZES = (10, 20, 50, 100)
 
 # 合法监控类型：listing-上新监控，price_drop-降价监控
 _VALID_MONITOR_TYPES = ("listing", "price_drop")
+
+# 监控日志保留天数：清空日志与定时自动清理均只删除该天数之前的数据
+LOG_RETENTION_DAYS = 10
 
 
 def _to_decimal(value: Any) -> Optional[Decimal]:
@@ -1068,6 +1072,31 @@ class ListingMonitorService:
             "page_size": page_size,
             "total_pages": (total + page_size - 1) // page_size if total else 0,
         }
+
+    async def clear_logs(self, owner_id: Optional[int]) -> Dict[str, Any]:
+        """清空监控日志：仅删除 LOG_RETENTION_DAYS 天之前的记录（日志表直接物理删除）。
+
+        Args:
+            owner_id: 数据隔离范围；普通用户仅清理本人日志，管理员（None）清理全部。
+
+        Returns:
+            {"deleted_count": 删除条数}
+        """
+        cutoff_time = get_beijing_now_naive() - timedelta(days=LOG_RETENTION_DAYS)
+        conditions = [ListingMonitorLog.created_at < cutoff_time]
+        if owner_id is not None:
+            conditions.append(ListingMonitorLog.owner_id == owner_id)
+
+        stmt = delete(ListingMonitorLog).where(*conditions)
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+
+        deleted_count = result.rowcount or 0
+        logger.info(
+            f"[商品监控日志] 已清空 {deleted_count} 条 {LOG_RETENTION_DAYS} 天前的监控日志"
+            f"（owner_id={owner_id}，清理时间界限: {cutoff_time}）"
+        )
+        return {"deleted_count": deleted_count}
 
     async def list_items(
         self,

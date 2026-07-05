@@ -112,7 +112,7 @@ export function BatchLogList<T extends BatchLogBase>({
   columns,
   detailPath,
   clearLogs,
-  clearConfirmMessage = '此操作将清空30天前的日志数据，最近30天的日志将被保留。确定要继续吗？',
+  clearConfirmMessage = '此操作将清空10天前的日志数据，最近10天的日志将被保留。确定要继续吗？',
   loadErrorMessage = '加载数据失败',
   emptyText = '暂无执行记录',
   showPageSizeSelector = true,
@@ -200,7 +200,7 @@ export function BatchLogList<T extends BatchLogBase>({
             <button
               onClick={() => setShowClearConfirm(true)}
               className="btn-ios-danger"
-              title="清空30天前的日志"
+              title="清空10天前的日志"
             >
               <Trash2 className="w-4 h-4" />
               清空日志

@@ -347,6 +347,27 @@ async def list_listing_monitor_logs(
     return ApiResponse(success=True, message="查询成功", data=data)
 
 
+@router.delete("/logs/clear", response_model=ApiResponse)
+async def clear_listing_monitor_logs(
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """清空监控日志（只清空10天前的数据，保留最近10天）"""
+    owner_id, _ = resolve_owner_scope(current_user)
+    svc = ListingMonitorService(session)
+    try:
+        data = await svc.clear_logs(owner_id)
+        deleted_count = data.get("deleted_count", 0)
+        return ApiResponse(
+            success=True,
+            message=f"已清空 {deleted_count} 条10天前的监控日志",
+            data=data,
+        )
+    except Exception as exc:  # noqa: BLE001
+        await session.rollback()
+        return ApiResponse(success=False, message=f"清空监控日志失败: {exc}")
+
+
 @router.post("/logs/copy-cookies", response_model=ApiResponse)
 async def copy_listing_monitor_log_cookies(
     req: ListingMonitorCopyCookiesRequest,

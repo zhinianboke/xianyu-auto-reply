@@ -44,7 +44,7 @@ export function RedeliveryBatches() {
       clearLogs={clearRedeliveryLogs}
       columns={columns}
       detailPath={(batchId) => `/admin/redelivery-batches/${batchId}`}
-      clearConfirmMessage="此操作将清空30天前的补发货日志数据，最近30天的日志将被保留。确定要继续吗？"
+      clearConfirmMessage="此操作将清空10天前的补发货日志数据，最近10天的日志将被保留。确定要继续吗？"
       showPageSizeSelector={false}
     />
   )

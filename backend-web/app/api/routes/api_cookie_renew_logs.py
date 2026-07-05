@@ -4,7 +4,7 @@
 功能：
 1. 提供接口续期Cookies批次列表查询接口（按日期范围、分页）
 2. 提供接口续期Cookies批次详情查询接口（含批次汇总和该批次所有账号日志）
-3. 提供清空30天前历史日志接口
+3. 提供清空10天前历史日志接口
 """
 from __future__ import annotations
 
@@ -220,21 +220,21 @@ async def clear_api_cookie_renew_logs(
     _: User = Depends(deps.get_current_admin_user),
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> dict:
-    """清空30天前的接口续期Cookies日志（保留最近30天）。"""
+    """清空10天前的接口续期Cookies日志（保留最近10天）。"""
     try:
-        thirty_days_ago = get_beijing_now_naive() - timedelta(days=30)
+        ten_days_ago = get_beijing_now_naive() - timedelta(days=10)
         stmt = delete(ScheduledApiCookieRenewLog).where(
-            ScheduledApiCookieRenewLog.created_at < thirty_days_ago
+            ScheduledApiCookieRenewLog.created_at < ten_days_ago
         )
         result = await session.execute(stmt)
         await session.commit()
         deleted_count = result.rowcount or 0
         logger.info(
-            f"[接口续期Cookies日志] 已清空 {deleted_count} 条 30 天前的日志"
+            f"[接口续期Cookies日志] 已清空 {deleted_count} 条 10 天前的日志"
         )
         return {
             "success": True,
-            "message": f"已清空 {deleted_count} 条 30 天前的接口续期Cookies日志",
+            "message": f"已清空 {deleted_count} 条 10 天前的接口续期Cookies日志",
             "data": {"deleted_count": deleted_count},
         }
     except Exception as exc:

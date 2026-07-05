@@ -4,7 +4,7 @@
  * 功能：
  * 1. 显示账号密码登录日志列表（每次 try_password_login_refresh 调用一条）
  * 2. 支持按账号、时间范围、登录状态筛选与分页查询
- * 3. 管理员支持「清理30天前」与「清空全部」两种清理操作
+ * 3. 管理员支持「清理10天前」与「清空全部」两种清理操作
  */
 import { useEffect, useMemo, useState } from 'react'
 import {
@@ -108,7 +108,7 @@ export function AccountLoginLogs() {
   const [total, setTotal] = useState(0)
 
   // 清理确认弹窗
-  type ClearMode = 'older_than_30d' | 'all' | null
+  type ClearMode = 'older_than_10d' | 'all' | null
   const [clearMode, setClearMode] = useState<ClearMode>(null)
   const [clearing, setClearing] = useState(false)
 
@@ -186,9 +186,9 @@ export function AccountLoginLogs() {
     if (!clearMode) return
     setClearing(true)
     try {
-      if (clearMode === 'older_than_30d') {
-        await clearAccountLoginLogs({ days: 30 })
-        addToast({ type: 'success', message: '已清理 30 天前的账号登录日志' })
+      if (clearMode === 'older_than_10d') {
+        await clearAccountLoginLogs({ days: 10 })
+        addToast({ type: 'success', message: '已清理 10 天前的账号登录日志' })
       } else {
         await clearAccountLoginLogs()
         addToast({ type: 'success', message: '已清空所有账号登录日志' })
@@ -259,11 +259,11 @@ export function AccountLoginLogs() {
           {user?.is_admin ? (
             <>
               <button
-                onClick={() => setClearMode('older_than_30d')}
+                onClick={() => setClearMode('older_than_10d')}
                 className="btn-ios-secondary"
               >
                 <Trash2 className="w-4 h-4" />
-                清理30天前
+                清理10天前
               </button>
               <button onClick={() => setClearMode('all')} className="btn-ios-danger">
                 <Trash2 className="w-4 h-4" />
@@ -491,13 +491,13 @@ export function AccountLoginLogs() {
       {user?.is_admin ? (
         <ConfirmModal
           isOpen={clearMode !== null}
-          title={clearMode === 'older_than_30d' ? '清理确认' : '清空确认'}
+          title={clearMode === 'older_than_10d' ? '清理确认' : '清空确认'}
           message={
-            clearMode === 'older_than_30d'
-              ? '将删除 30 天前的全部账号登录日志（保留最近 30 天数据），此操作不可恢复，是否继续？'
+            clearMode === 'older_than_10d'
+              ? '将删除 10 天前的全部账号登录日志（保留最近 10 天数据），此操作不可恢复，是否继续？'
               : '将清空全部账号登录日志（包含历史所有数据），此操作不可恢复，是否继续？'
           }
-          confirmText={clearMode === 'older_than_30d' ? '清理' : '清空'}
+          confirmText={clearMode === 'older_than_10d' ? '清理' : '清空'}
           cancelText="取消"
           type="danger"
           loading={clearing}

@@ -5,7 +5,7 @@
  * 1. 查询上新监控任务分页列表
  * 2. 新建、编辑、启停、批量删除监控任务
  */
-import { get, post, put } from '@/utils/request'
+import { del, get, post, put } from '@/utils/request'
 import type { ApiResponse } from '@/types'
 
 const PREFIX = '/api/v1/product-monitor/listing-tasks'
@@ -254,6 +254,11 @@ export const getListingMonitorLogs = (
   if (params?.status) searchParams.append('status', params.status)
   if (params?.monitorType) searchParams.append('monitor_type', params.monitorType)
   return get(`${PREFIX}/logs?${searchParams.toString()}`)
+}
+
+// 清空监控日志（只清空10天前的数据，保留最近10天）
+export const clearListingMonitorLogs = (): Promise<ApiResponse<{ deleted_count: number }>> => {
+  return del(`${PREFIX}/logs/clear`)
 }
 
 // ==================== 采集商品 ====================
