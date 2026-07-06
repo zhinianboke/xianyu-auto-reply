@@ -427,6 +427,13 @@ export function RiskLogs() {
                 ({todayRate?.remote_success ?? '-'}/{todayRate?.remote_total ?? '-'})
               </span>
             </div>
+            {/* 处理中（仅统计当日，未计入成功率分母） */}
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-sm text-slate-500 dark:text-slate-400">处理中</span>
+              <span className="text-lg font-bold text-amber-600 dark:text-amber-400">
+                {todayRate?.processing ?? '-'}
+              </span>
+            </div>
           </div>
         </div>
       </div>

@@ -127,8 +127,8 @@ class RiskControlLogService:
         - 远程成功率 = 当日远程成功记录数 / 当日远程总记录数
 
         说明：
-        - 处理中（processing_status == 'processing'）的记录不计入统计，分子和分母都排除，
-          仅统计已出结果（success/failed）的记录。
+        - 处理中（processing_status == 'processing'）的记录不计入成功率统计，分子和分母都排除，
+          成功率仅统计已出结果（success/failed）的记录；处理中记录单独以 processing 字段返回。
         - 远程口径为 call_type == 'remote'；其余（含 'local' 与 NULL）一律计入本机，
           保证 本机数 + 远程数 == 总数，三个维度各自使用自己的分母，避免分母用错。
         - 普通用户仅统计自己的账号数据，管理员统计全部数据（由 owner_id 控制）。
@@ -137,36 +137,45 @@ class RiskControlLogService:
             owner_id: 所有者ID筛选，None 表示不限制（管理员）
 
         Returns:
-            包含 date 及 total/success/rate、local_*、remote_* 的字典
+            包含 date 及 total/success/rate、local_*、remote_*、processing 的字典
         """
         now = get_beijing_now_naive()
         start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end_dt = now.replace(hour=23, minute=59, second=59, microsecond=999999)
 
-        # 当日范围过滤条件（排除处理中记录，分子分母均不计入处理中）
-        base_filters = [
+        # 当日范围过滤条件（仅限定当天与所有者，处理中状态在各聚合中单独区分）
+        day_filters = [
             XYRiskControlLog.created_at >= start_dt,
             XYRiskControlLog.created_at <= end_dt,
-            XYRiskControlLog.processing_status != "processing",
         ]
         if owner_id is not None:
-            base_filters.append(XYRiskControlLog.owner_id == owner_id)
+            day_filters.append(XYRiskControlLog.owner_id == owner_id)
 
         is_success = XYRiskControlLog.processing_status == "success"
         is_remote = XYRiskControlLog.call_type == "remote"
+        is_processing = XYRiskControlLog.processing_status == "processing"
+        # 成功率口径：仅统计已出结果（非处理中）的记录
+        is_settled = XYRiskControlLog.processing_status != "processing"
 
-        # 一次查询用条件聚合得到：总数、成功数、远程总数、远程成功数
+        # 一次查询用条件聚合得到：总数、成功数、远程总数、远程成功数、处理中数
+        # 成功率相关的 total/success/remote_* 均只计入已出结果（settled）记录，
+        # processing 单独统计当日处理中记录数，两者互不影响。
         stmt = (
             select(
-                func.count().label("total"),
-                func.coalesce(func.sum(case((is_success, 1), else_=0)), 0).label("success"),
-                func.coalesce(func.sum(case((is_remote, 1), else_=0)), 0).label("remote_total"),
+                func.coalesce(func.sum(case((is_settled, 1), else_=0)), 0).label("total"),
                 func.coalesce(
-                    func.sum(case((and_(is_remote, is_success), 1), else_=0)), 0
+                    func.sum(case((and_(is_settled, is_success), 1), else_=0)), 0
+                ).label("success"),
+                func.coalesce(
+                    func.sum(case((and_(is_settled, is_remote), 1), else_=0)), 0
+                ).label("remote_total"),
+                func.coalesce(
+                    func.sum(case((and_(is_settled, is_remote, is_success), 1), else_=0)), 0
                 ).label("remote_success"),
+                func.coalesce(func.sum(case((is_processing, 1), else_=0)), 0).label("processing"),
             )
             .select_from(XYRiskControlLog)
-            .where(*base_filters)
+            .where(*day_filters)
         )
         row = (await self.session.execute(stmt)).one()
 
@@ -174,6 +183,7 @@ class RiskControlLogService:
         success = int(row.success or 0)
         remote_total = int(row.remote_total or 0)
         remote_success = int(row.remote_success or 0)
+        processing = int(row.processing or 0)
 
         # 本机 = 总数 - 远程，保证两类相加等于总数（NULL/local 都归本机）
         local_total = total - remote_total
@@ -193,4 +203,5 @@ class RiskControlLogService:
             "remote_total": remote_total,
             "remote_success": remote_success,
             "remote_rate": _rate(remote_success, remote_total),
+            "processing": processing,
         }

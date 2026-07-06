@@ -10,6 +10,8 @@ import os
 import random
 import re
 import shutil
+import signal
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -538,56 +540,28 @@ class PlaywrightSliderService:
         timed_out = False
         
         def _force_close_on_timeout():
-            """超时后强制关闭浏览器，解除阻塞的 Playwright 调用"""
+            """超时后强制杀掉浏览器进程树，解除阻塞的 Playwright 调用。
+
+            关键：这里绝不能调用 self.context.close()/self.browser.close()。
+            本回调运行在 threading.Timer 的独立线程，而 sync Playwright 对象
+            绑定其创建线程（浏览器任务线程池的某个线程）。跨线程关闭会抛
+            "cannot switch to a different thread" 而失败，历史上正因如此导致
+            Chrome 无法回收、堆积成 <defunct> 僵尸进程，最终 "can't start new
+            thread"。因此超时路径只按 user_data_dir 做 OS 级进程强杀（跨线程
+            安全）；强杀后创建线程上阻塞的 Playwright 调用会立即抛错返回，再由
+            run() 的 finally 在正确的线程上执行 self.close() 完成 Playwright
+            侧清理。
+            """
             nonlocal timed_out
             timed_out = True
-            logger.error(f"【{self.pure_user_id}】⏰ 浏览器超时守护触发（{browser_timeout}秒），强制关闭浏览器释放资源")
-            
-            # 先记录浏览器进程PID（用于兜底强杀）
-            browser_pid = None
-            try:
-                if hasattr(self, 'context') and self.context:
-                    # persistent_context 模式下，browser 属性可能不存在
-                    # 尝试从 context 获取 browser 再获取 PID
-                    ctx_browser = getattr(self.context, 'browser', None)
-                    if ctx_browser:
-                        proc = getattr(ctx_browser, 'process', None)
-                        if proc:
-                            browser_pid = proc.pid
-                elif hasattr(self, 'browser') and self.browser:
-                    proc = getattr(self.browser, 'process', None)
-                    if proc:
-                        browser_pid = proc.pid
-            except Exception:
-                pass
-            
-            # 尝试通过 Playwright API 关闭
-            try:
-                if hasattr(self, 'context') and self.context:
-                    self.context.close()
-                elif hasattr(self, 'browser') and self.browser:
-                    self.browser.close()
-                logger.info(f"【{self.pure_user_id}】超时守护：浏览器已通过API关闭")
-                return
-            except Exception as e:
-                logger.warning(f"【{self.pure_user_id}】超时关闭浏览器API调用失败: {e}")
-            
-            # 兜底：通过PID强制杀掉浏览器进程树
-            if browser_pid:
-                try:
-                    import subprocess
-                    import sys
-                    if sys.platform == 'win32':
-                        subprocess.run(
-                            ['taskkill', '/F', '/PID', str(browser_pid), '/T'],
-                            capture_output=True, timeout=5
-                        )
-                    else:
-                        import signal
-                        os.killpg(os.getpgid(browser_pid), signal.SIGKILL)
-                    logger.info(f"【{self.pure_user_id}】超时守护：已强制终止浏览器进程 PID={browser_pid}")
-                except Exception as kill_e:
-                    logger.warning(f"【{self.pure_user_id}】强制杀进程失败: {kill_e}")
+            logger.error(f"【{self.pure_user_id}】⏰ 浏览器超时守护触发（{browser_timeout}秒），强制杀掉浏览器进程释放资源")
+            killed = self._kill_browser_processes()
+            if killed > 0:
+                logger.info(f"【{self.pure_user_id}】超时守护：已强杀 {killed} 个浏览器进程")
+            elif killed < 0:
+                logger.info(f"【{self.pure_user_id}】超时守护：已尝试强杀本次浏览器进程")
+            else:
+                logger.warning(f"【{self.pure_user_id}】超时守护：未匹配到需强杀的浏览器进程（可能尚未启动或已退出）")
         
         try:
             # 初始化浏览器
@@ -1217,6 +1191,112 @@ class PlaywrightSliderService:
         except Exception as e:
             logger.error(f"【{self.pure_user_id}】获取滑块验证成功后的cookie失败: {str(e)}")
             return None
+
+    def _kill_browser_processes(self) -> int:
+        """按本次唯一的 user_data_dir 精确强杀 Chromium 进程（含子进程）。
+
+        仅用于超时守护等"跨线程"场景：sync Playwright 对象绑定创建线程，
+        无法在定时器线程上安全关闭；OS 级按进程强杀则跨线程安全、Linux/
+        Windows 均可靠。BROWSER_ARGS 含 --no-zygote，Chromium 各子进程命令行
+        都会带 --user-data-dir，故按 user_data_dir 匹配可覆盖主进程与子进程。
+
+        user_data_dir 每个实例唯一（见 __init__），只匹配命令行包含该目录的
+        进程，绝不误伤用户自己的 Chrome。
+
+        Returns:
+            实际强杀的进程数量；Windows 无法精确计数时返回 -1 表示"已尝试"；
+            未匹配到任何进程返回 0。
+        """
+        udir = getattr(self, 'user_data_dir', '') or ''
+        if not udir:
+            return 0
+        try:
+            if sys.platform == 'win32':
+                # Windows：用 WMI 精确匹配 --user-data-dir 启动参数后强杀。
+                # 用 -match + [regex]::Escape + 右边界，避免 user_1 误伤 user_10，
+                # 也不会命中用户自己的 Chrome（该目录为本项目专用）。
+                ps = (
+                    "$re = '--user-data-dir[= ]' + [regex]::Escape('" + udir + "') "
+                    "+ '($|[\\s\"''])'; "
+                    "Get-CimInstance Win32_Process | "
+                    "Where-Object { $_.CommandLine -match $re } | "
+                    "ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force "
+                    "-ErrorAction SilentlyContinue } catch {} }"
+                )
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                    capture_output=True, timeout=15,
+                )
+                return -1
+            # Linux/macOS：按命令行匹配后逐个 SIGKILL
+            return self._kill_by_cmdline_match(udir)
+        except Exception as e:
+            logger.warning(f"【{self.pure_user_id}】超时强杀浏览器进程失败（可忽略）: {e}")
+            return 0
+
+    def _kill_by_cmdline_match(self, udir: str) -> int:
+        """（非 Windows）扫描进程命令行，SIGKILL 所有以本次 user_data_dir 启动的进程。
+
+        优先读取 /proc（Linux/Docker 主场景，纯 stdlib、无需 psutil）；无 /proc
+        的环境（如 macOS）退回 ps 命令兜底。
+
+        为避免 user_1 误伤 user_10 这类前缀包含，匹配 --user-data-dir 启动参数
+        且其后为边界（空格/引号/结尾），而不是简单的子串包含；同时该目录
+        （browser_data/user_*）为本项目专用，绝不会命中用户自己的 Chrome。
+
+        Args:
+            udir: 本次实例唯一的 user_data_dir，用于精确匹配
+
+        Returns:
+            实际强杀的进程数量
+        """
+        # --user-data-dir=<udir> 或 --user-data-dir <udir>，其后必须是边界字符
+        pattern = re.compile(r"--user-data-dir[= ]" + re.escape(udir) + r"(?=$|[\s\"'])")
+        self_pid = os.getpid()
+        killed = 0
+        if os.path.isdir("/proc"):
+            for entry in os.listdir("/proc"):
+                if not entry.isdigit():
+                    continue
+                pid = int(entry)
+                if pid == self_pid:
+                    continue
+                try:
+                    with open(f"/proc/{entry}/cmdline", "rb") as f:
+                        cmdline = f.read().replace(b"\x00", b" ").decode("utf-8", "ignore")
+                except (FileNotFoundError, ProcessLookupError, PermissionError):
+                    continue
+                if pattern.search(cmdline):
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                        killed += 1
+                    except (ProcessLookupError, PermissionError):
+                        continue
+            return killed
+        # 无 /proc：用 ps 兜底
+        try:
+            out = subprocess.run(
+                ["ps", "-eo", "pid=,command="],
+                capture_output=True, text=True, timeout=10,
+            ).stdout
+        except Exception:
+            return killed
+        for line in out.splitlines():
+            line = line.strip()
+            if not line or not pattern.search(line):
+                continue
+            pid_str = line.split(None, 1)[0]
+            if not pid_str.isdigit():
+                continue
+            pid = int(pid_str)
+            if pid == self_pid:
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+                killed += 1
+            except (ProcessLookupError, PermissionError):
+                continue
+        return killed
 
     def _cleanup(self):
         """清理资源 - 与旧框架保持一致的简洁实现"""

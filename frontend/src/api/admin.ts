@@ -248,6 +248,7 @@ export interface RiskTodaySuccessRate {
   remote_total: number
   remote_success: number
   remote_rate: number
+  processing: number
 }
 
 // 获取当日风控成功率（当日成功记录数 / 当日总记录数）
