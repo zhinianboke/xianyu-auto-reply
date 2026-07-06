@@ -127,7 +127,7 @@ class RiskControlLogService:
         - 远程成功率 = 当日远程成功记录数 / 当日远程总记录数
 
         说明：
-        - 处理中（processing_status == 'processing'）的记录不计入成功率统计，分子和分母都排除，
+        - 处理中（'processing'）与已取消（'cancelled'）的记录不计入成功率统计，分子和分母都排除，
           成功率仅统计已出结果（success/failed）的记录；处理中记录单独以 processing 字段返回。
         - 远程口径为 call_type == 'remote'；其余（含 'local' 与 NULL）一律计入本机，
           保证 本机数 + 远程数 == 总数，三个维度各自使用自己的分母，避免分母用错。
@@ -154,8 +154,8 @@ class RiskControlLogService:
         is_success = XYRiskControlLog.processing_status == "success"
         is_remote = XYRiskControlLog.call_type == "remote"
         is_processing = XYRiskControlLog.processing_status == "processing"
-        # 成功率口径：仅统计已出结果（非处理中）的记录
-        is_settled = XYRiskControlLog.processing_status != "processing"
+        # 成功率口径：仅统计已出结果的记录，排除处理中（processing）与已取消（cancelled）
+        is_settled = XYRiskControlLog.processing_status.notin_(["processing", "cancelled"])
 
         # 一次查询用条件聚合得到：总数、成功数、远程总数、远程成功数、处理中数
         # 成功率相关的 total/success/remote_* 均只计入已出结果（settled）记录，
