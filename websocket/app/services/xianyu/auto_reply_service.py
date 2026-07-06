@@ -695,6 +695,13 @@ class AutoReplyService:
                         logger.info(f"【{self.cookie_id}】自动回复延迟 {reply_delay} 秒后发送")
                         await asyncio.sleep(reply_delay)
                     
+                    # 延迟结束后再次检测是否被人工介入暂停
+                    if pause_manager.is_chat_paused(chat_id, self.cookie_id):
+                        logger.info(f"【{self.cookie_id}】自动回复延迟结束，但检测到会话 {chat_id} 已被人工介入暂停，放弃发送回复")
+                        log_payload["process_status"] = "skipped"
+                        log_payload["decision_reason"] = "chat_paused_after_delay"
+                        return
+                    
                     # 检查是否是图片发送指令
                     # 格式：__IMAGE_SEND__|类型标识|image_url
                     # 类型标识：KW:keyword（关键词）、DR:item_id（默认回复）、空（不需要更新）
