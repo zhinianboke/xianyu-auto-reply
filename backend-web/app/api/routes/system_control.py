@@ -36,7 +36,7 @@ router = APIRouter(prefix="/system-control", tags=["系统管理"])
 settings = get_settings()
 
 # 探测服务在线状态的 HTTP 超时（秒）：无重试，避免离线服务拖慢状态查询
-_HEALTH_PROBE_TIMEOUT = 15.0
+_HEALTH_PROBE_TIMEOUT = 30.0
 
 # 三个服务对应的 HTTP 基址（用于 docker 环境远程触发自重启）
 _SERVICE_URL_MAP = {
