@@ -127,6 +127,8 @@ class RiskControlLogService:
         - 远程成功率 = 当日远程成功记录数 / 当日远程总记录数
 
         说明：
+        - 处理中（processing_status == 'processing'）的记录不计入统计，分子和分母都排除，
+          仅统计已出结果（success/failed）的记录。
         - 远程口径为 call_type == 'remote'；其余（含 'local' 与 NULL）一律计入本机，
           保证 本机数 + 远程数 == 总数，三个维度各自使用自己的分母，避免分母用错。
         - 普通用户仅统计自己的账号数据，管理员统计全部数据（由 owner_id 控制）。
@@ -141,10 +143,11 @@ class RiskControlLogService:
         start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end_dt = now.replace(hour=23, minute=59, second=59, microsecond=999999)
 
-        # 当日范围过滤条件
+        # 当日范围过滤条件（排除处理中记录，分子分母均不计入处理中）
         base_filters = [
             XYRiskControlLog.created_at >= start_dt,
             XYRiskControlLog.created_at <= end_dt,
+            XYRiskControlLog.processing_status != "processing",
         ]
         if owner_id is not None:
             base_filters.append(XYRiskControlLog.owner_id == owner_id)
