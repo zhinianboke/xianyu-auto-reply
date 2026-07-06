@@ -17,8 +17,8 @@ from common.core.config import get_settings
 BEIJING_TZ = timezone(timedelta(hours=8))
 
 # IM Token 缓存 TTL 的兜底默认区间（小时），当环境变量未配置或配置非法时使用
-DEFAULT_TOKEN_CACHE_TTL_MIN_HOURS = 4.0
-DEFAULT_TOKEN_CACHE_TTL_MAX_HOURS = 7.0
+DEFAULT_TOKEN_CACHE_TTL_MIN_HOURS = 5.0
+DEFAULT_TOKEN_CACHE_TTL_MAX_HOURS = 10.0
 
 
 def get_beijing_now() -> datetime:
@@ -54,7 +54,7 @@ def random_token_cache_expiry() -> Tuple[datetime, float]:
 
     TTL 小时数在环境变量配置的区间内随机取值：
     ``TOKEN_CACHE_TTL_MIN_HOURS`` ~ ``TOKEN_CACHE_TTL_MAX_HOURS``，
-    未配置时默认 4~7 小时；配置非法（任一值 <=0 或 min>max）时回退默认区间。
+    未配置时默认 5~10 小时；配置非法（任一值 <=0 或 min>max）时回退默认区间。
     区间随机可避免大量账号 Token 同一时刻集中过期、触发并发刷新。
 
     Returns:

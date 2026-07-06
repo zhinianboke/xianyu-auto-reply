@@ -87,9 +87,9 @@ class BaseConfig(BaseSettings):
 
     # IM Token 缓存（xy_token_cache 表）的随机过期时间区间（小时）。
     # 实际 TTL 在区间内随机取值，避免大量账号 Token 同时过期造成并发刷新。
-    # 未配置时默认 4~7 小时；配置非法（<=0 或 min>max）时回退默认。
-    token_cache_ttl_min_hours: float = Field(default=4.0, alias="TOKEN_CACHE_TTL_MIN_HOURS")
-    token_cache_ttl_max_hours: float = Field(default=7.0, alias="TOKEN_CACHE_TTL_MAX_HOURS")
+    # 未配置时默认 5~10 小时；配置非法（<=0 或 min>max）时回退默认。
+    token_cache_ttl_min_hours: float = Field(default=5.0, alias="TOKEN_CACHE_TTL_MIN_HOURS")
+    token_cache_ttl_max_hours: float = Field(default=10.0, alias="TOKEN_CACHE_TTL_MAX_HOURS")
 
     # 滑块验证 - 真实鼠标模式开关
     # 开启后：用 pyautogui 驱动“物理光标”回放真人轨迹完成滑块（成功率高，但会占用桌面鼠标，
