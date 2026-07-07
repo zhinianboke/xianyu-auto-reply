@@ -415,9 +415,13 @@ async def solve_captcha(request: SolveCaptchaRequest):
             url_provider = _remote_url_provider
             logger.info(f"【过滑块接口】account_id={safe_id} 已携带 Cookie，启用链接过期自动重取")
 
+        # 远程过滑块接口：real_mouse 排队时按远程权重放行。
+        # 远程内部再分两级严格优先——没传 Cookie 的（"remote"）优先于传了 Cookie 的（"remote_cookie"）。
+        remote_weight_class = "remote_cookie" if existing_cookies_str else "remote"
         success, cookies, engine = await run_browser_task(
             run_slider_verification_with_fallback,
             safe_id, url, True, False, timeout, existing_cookies_str, url_provider,
+            weight_class=remote_weight_class,
         )
     except Exception as e:
         logger.error(f"【过滑块接口】account_id={safe_id} 执行异常: {e}")

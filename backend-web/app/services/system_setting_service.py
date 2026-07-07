@@ -62,6 +62,9 @@ DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
     # register_default_days：注册用户默认有效天数，空表示注册不设置到期日（永不过期）
     "user.renew_month_price": ("", "用户续期一个月的价格（元），空=未配置"),
     "user.register_default_days": ("", "注册用户默认有效天数（空=不设置到期日）"),
+    # real_mouse 过滑块本地/远程排队权重（默认 1:1，多来源同时排队时按比例放行）
+    "captcha.real_mouse_weight_local": ("1", "real_mouse过滑块本地排队权重"),
+    "captcha.real_mouse_weight_remote": ("1", "real_mouse过滑块远程排队权重"),
 }
 
 # 不需要XSS转义的键（布尔值、数字等）
@@ -109,6 +112,9 @@ NO_ESCAPE_KEYS = {
     "captcha.remote_secret_key",
     # 是否传递账号Cookie：布尔字符串"true"/"false"，无需转义
     "captcha.remote_pass_cookies",
+    # real_mouse 排队权重：数字字符串，无需 XSS 转义
+    "captcha.real_mouse_weight_local",
+    "captcha.real_mouse_weight_remote",
 }
 
 

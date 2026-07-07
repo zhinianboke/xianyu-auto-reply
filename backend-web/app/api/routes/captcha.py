@@ -65,12 +65,27 @@ class RemoteConfigUpdate(BaseModel):
     url: str = ""
     secret_key: str = ""
     pass_cookies: bool = False   # 是否在调用远程接口时传递账号 Cookie（默认关闭）
+    # real_mouse 过滑块本地/远程排队权重（>=0），多来源同时排队时按比例放行，默认 1:1
+    local_weight: float = 1
+    remote_weight: float = 1
 
 
 # 远程过滑块全局配置存储 key（system_settings，全局唯一，仅管理员可读写）
 REMOTE_CONFIG_URL_KEY = "captcha.remote_service_url"
 REMOTE_CONFIG_SECRET_KEY = "captcha.remote_secret_key"
 REMOTE_CONFIG_PASS_COOKIES_KEY = "captcha.remote_pass_cookies"
+# real_mouse 排队权重（与 common/services/captcha/weighted_scheduler.py 的键保持一致）
+REMOTE_CONFIG_WEIGHT_LOCAL_KEY = "captcha.real_mouse_weight_local"
+REMOTE_CONFIG_WEIGHT_REMOTE_KEY = "captcha.real_mouse_weight_remote"
+
+
+def _sanitize_weight(value, default: float = 1.0) -> float:
+    """把权重值规整为非负浮点数，非法则回退默认（1）。"""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    return v if v >= 0 else default
 
 
 # ==================== 工具函数 ====================
@@ -583,6 +598,8 @@ async def get_remote_config(
                 REMOTE_CONFIG_URL_KEY,
                 REMOTE_CONFIG_SECRET_KEY,
                 REMOTE_CONFIG_PASS_COOKIES_KEY,
+                REMOTE_CONFIG_WEIGHT_LOCAL_KEY,
+                REMOTE_CONFIG_WEIGHT_REMOTE_KEY,
             ])
         )
     )).scalars().all()
@@ -591,6 +608,8 @@ async def get_remote_config(
         "url": m.get(REMOTE_CONFIG_URL_KEY, ""),
         "secret_key": m.get(REMOTE_CONFIG_SECRET_KEY, ""),
         "pass_cookies": (m.get(REMOTE_CONFIG_PASS_COOKIES_KEY, "") or "").strip().lower() == "true",
+        "local_weight": _sanitize_weight(m.get(REMOTE_CONFIG_WEIGHT_LOCAL_KEY), 1.0),
+        "remote_weight": _sanitize_weight(m.get(REMOTE_CONFIG_WEIGHT_REMOTE_KEY), 1.0),
     })
 
 
@@ -610,5 +629,16 @@ async def update_remote_config(
         REMOTE_CONFIG_PASS_COOKIES_KEY,
         "true" if request.pass_cookies else "false",
         "远程过滑块是否传递账号Cookie",
+    )
+    # real_mouse 排队权重：规整为非负数后落库（字符串存储），供 websocket 侧调度器读取
+    await svc.set_setting(
+        REMOTE_CONFIG_WEIGHT_LOCAL_KEY,
+        str(_sanitize_weight(request.local_weight, 1.0)),
+        "real_mouse过滑块本地排队权重",
+    )
+    await svc.set_setting(
+        REMOTE_CONFIG_WEIGHT_REMOTE_KEY,
+        str(_sanitize_weight(request.remote_weight, 1.0)),
+        "real_mouse过滑块远程排队权重",
     )
     return ApiResponse(success=True, message="保存成功")

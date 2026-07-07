@@ -150,13 +150,20 @@ export const testRemoteSliderSolve = async (
 }
 
 // 读取远程过滑块全局配置（仅管理员）
-export const getRemoteCaptchaConfig = async (): Promise<ApiResponse<{ url: string; secret_key: string; pass_cookies: boolean }>> => {
+export const getRemoteCaptchaConfig = async (): Promise<ApiResponse<{ url: string; secret_key: string; pass_cookies: boolean; local_weight: number; remote_weight: number }>> => {
   return get(`${API_PREFIX}/captcha/remote-config`)
 }
 
 // 保存远程过滑块全局配置（仅管理员）
-export const saveRemoteCaptchaConfig = async (url: string, secret_key: string, pass_cookies: boolean): Promise<ApiResponse> => {
-  return put(`${API_PREFIX}/captcha/remote-config`, { url, secret_key, pass_cookies })
+// local_weight / remote_weight：real_mouse 过滑块本地/远程排队权重（>=0），多来源同时排队时按比例放行
+export const saveRemoteCaptchaConfig = async (
+  url: string,
+  secret_key: string,
+  pass_cookies: boolean,
+  local_weight: number,
+  remote_weight: number,
+): Promise<ApiResponse> => {
+  return put(`${API_PREFIX}/captcha/remote-config`, { url, secret_key, pass_cookies, local_weight, remote_weight })
 }
 
 // ========== 风控日志 ==========

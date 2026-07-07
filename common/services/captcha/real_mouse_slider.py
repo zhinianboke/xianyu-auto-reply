@@ -33,6 +33,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from loguru import logger
 
 from common.services.captcha.slider_stealth import URL_EXPIRED, CAPTCHA_NOT_REQUIRED
+from common.services.captcha.weighted_scheduler import real_mouse_scheduler
 
 from playwright.sync_api import sync_playwright
 
@@ -49,8 +50,9 @@ except Exception as _e:  # noqa: BLE001  （任何导入异常都视为不可用
     logger.warning(f"真实鼠标引擎不可用（pyautogui 导入失败，将回退原逻辑）: {_e}")
 
 
-# 物理光标全局唯一 → 串行执行
-_REAL_MOUSE_LOCK = threading.Lock()
+# 物理光标全局唯一 → 串行执行。
+# 串行由 real_mouse_scheduler（加权公平单槽位调度器）保证：多来源同时排队时按权重放行，
+# 只有一方排队时该方独占。替代了原先的普通 threading.Lock（无优先级、盲抢）。
 
 # 风控未放行的 URL 关键字
 _PUNISH = ("punish", "x5step=2", "action=captcha", "pureCaptcha", "/captcha")
@@ -451,8 +453,13 @@ def run_real_mouse_verification(
     existing_cookies_str: str = "",
     browser_timeout: int = 60,
     url_provider: Optional[Callable[[], Optional[str]]] = None,
+    weight_class: str = "local",
 ) -> Tuple[bool, Optional[Dict[str, str]]]:
     """真实鼠标滑块验证入口（串行执行，物理光标唯一）。
+
+    Args:
+        weight_class: 排队来源类别（"local"=本地Token刷新 / "remote"=远程无cookie /
+            "remote_cookie"=远程有cookie）。本地与远程按权重公平放行；远程内部无cookie 严格优先于有cookie。
 
     Returns:
         (是否成功, x5* cookies 字典 | None)
@@ -465,10 +472,14 @@ def run_real_mouse_verification(
         logger.error("真实鼠标引擎缺少真人轨迹样本（human_trails/human_trail_pass_*.json）")
         return False, None
 
-    with _REAL_MOUSE_LOCK:
+    # 加权公平排队：阻塞直到轮到本来源（无限等待，与旧 with lock 语义一致）
+    if not real_mouse_scheduler.acquire(weight_class):
+        logger.warning(f"【{user_id}】真实鼠标引擎排队获取执行权失败")
+        return False, None
+    try:
         solver = _RealMouseSolver(user_id)
         # 看门狗：总预算内若 solve()/close() 卡死，强杀浏览器解除阻塞，
-        # 保证本函数一定返回（否则上层风控日志会一直停留在“处理中”，且全局锁被长期占用）。
+        # 保证本函数一定返回（否则上层风控日志会一直停留在“处理中”，且执行权被长期占用）。
         budget = max(browser_timeout, 40) + 20
         watchdog = threading.Timer(budget, solver.force_kill)
         watchdog.daemon = True
@@ -487,3 +498,5 @@ def run_real_mouse_verification(
                 pass
             watchdog.cancel()
         return ok, cookies
+    finally:
+        real_mouse_scheduler.release()

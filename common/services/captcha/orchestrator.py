@@ -145,6 +145,7 @@ def run_slider_verification_with_fallback(
     existing_cookies_str: str = "",
     url_provider: Optional[Callable[[], Optional[str]]] = None,
     remote_config: Optional[dict] = None,
+    weight_class: str = "local",
 ) -> Tuple[bool, Optional[Dict[str, str]], Optional[str]]:
     """主引擎 + DrissionPage 兜底的滑块验证编排。
 
@@ -159,6 +160,8 @@ def run_slider_verification_with_fallback(
         remote_config: 远程过滑块配置 dict {url, secret, pass_cookies, device_id} | None。
             pass_cookies 为 True 时，会把 existing_cookies_str 与 device_id 一并传给远程端，
             供其在链接过期时重取新链接继续处理。
+        weight_class: 排队来源类别（"local"=本地Token刷新 / "remote"=远程过滑块接口），
+            仅 real_mouse 引擎排队时按权重放行使用；默认 "local"。
 
     Returns:
         (是否成功, cookies 字典 | None, 通过引擎 | None)
@@ -243,6 +246,7 @@ def run_slider_verification_with_fallback(
                     existing_cookies_str=existing_cookies_str,
                     browser_timeout=max(browser_timeout, 40),
                     url_provider=url_provider,
+                    weight_class=weight_class,
                 )
             except Exception as rm_e:
                 logger.warning(f"【{user_id}】真实鼠标引擎执行异常: {rm_e}")
