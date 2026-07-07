@@ -7,7 +7,7 @@
  * 3. 响应式设计（移动端抽屉模式）
  * 4. 侧边栏收缩/展开
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
@@ -42,6 +42,7 @@ export function Sidebar({ systemName = '闲鱼管理系统' }: SidebarProps) {
   const { hiddenMenuKeys, isExeMode } = useMenuVisibilityStore()
   const { sidebarCollapsed, sidebarMobileOpen, setSidebarMobileOpen, setSidebarCollapsed } = useUIStore()
   const location = useLocation()
+  const navRef = useRef<HTMLElement>(null)
   const isAdmin = Boolean(user?.is_admin)
   const visibleMainNavItems = useMemo(
     () => getVisibleNavEntries(mainNavItems, hiddenMenuKeys, isAdmin, isExeMode),
@@ -97,6 +98,24 @@ export function Sidebar({ systemName = '闲鱼管理系统' }: SidebarProps) {
     setSidebarMobileOpen(false)
   }
 
+  const preserveSidebarScroll = () => {
+    const nav = navRef.current
+    if (!nav) return
+
+    const scrollTop = nav.scrollTop
+    window.requestAnimationFrame(() => {
+      nav.scrollTop = scrollTop
+      window.requestAnimationFrame(() => {
+        nav.scrollTop = scrollTop
+      })
+    })
+  }
+
+  const handleNavLinkClick = () => {
+    preserveSidebarScroll()
+    closeMobileSidebar()
+  }
+
   const toggleGroup = (groupKey: string) => {
     setExpandedGroups((prev) => {
       const newSet = new Set(prev)
@@ -117,7 +136,7 @@ export function Sidebar({ systemName = '闲鱼管理系统' }: SidebarProps) {
     return (
       <NavLink
         to={item.path}
-        onClick={closeMobileSidebar}
+        onClick={handleNavLinkClick}
         title={!showLabel ? item.label : undefined}
         className={({ isActive }) =>
           cn(
@@ -169,7 +188,7 @@ export function Sidebar({ systemName = '闲鱼管理系统' }: SidebarProps) {
                 <NavLink
                   key={child.path}
                   to={child.path}
-                  onClick={closeMobileSidebar}
+                  onClick={handleNavLinkClick}
                   className={({ isActive }) =>
                     cn(
                       'flex items-center gap-2 px-3 py-2 text-sm transition-colors',
@@ -236,7 +255,7 @@ export function Sidebar({ systemName = '闲鱼管理系统' }: SidebarProps) {
           'fixed inset-0 bg-black/60 z-40 sm:hidden',
           sidebarMobileOpen ? 'pointer-events-auto' : 'pointer-events-none'
         )}
-        onClick={closeMobileSidebar}
+        onClick={handleNavLinkClick}
       />
 
       {/* Sidebar */}
@@ -271,7 +290,7 @@ export function Sidebar({ systemName = '闲鱼管理系统' }: SidebarProps) {
           </div>
           {sidebarMobileOpen && (
             <button
-              onClick={closeMobileSidebar}
+              onClick={handleNavLinkClick}
               className="sm:hidden p-1.5 hover:bg-slate-100 dark:hover:bg-white/10 rounded transition-colors text-slate-400 hover:text-slate-900 dark:hover:text-white"
             >
               <X className="w-4 h-4" />
@@ -281,6 +300,8 @@ export function Sidebar({ systemName = '闲鱼管理系统' }: SidebarProps) {
 
         {/* Navigation */}
         <nav
+          ref={navRef}
+          style={{ overflowAnchor: 'none' }}
           className={cn(
             'flex-1 overflow-y-auto py-3 space-y-0.5 sidebar-scrollbar',
             !showLabel ? 'px-1.5' : 'px-2'
@@ -369,3 +390,4 @@ export function Sidebar({ systemName = '闲鱼管理系统' }: SidebarProps) {
     </>
   )
 }
+
