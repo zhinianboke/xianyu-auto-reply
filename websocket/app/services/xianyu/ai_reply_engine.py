@@ -924,6 +924,12 @@ class AIReplyEngine:
                     reply = await self._call_openai_api(settings, messages)
                 
                 if reply:
+                    # 二次检测：大模型返回后，若人工已介入暂停，则放弃本次回复
+                    from app.services.xianyu.resource_manager import pause_manager
+                    if pause_manager.is_chat_paused(chat_id, cookie_id):
+                        logger.info(f"【{cookie_id}】AI回复生成成功，但检测到会话 {chat_id} 已被人工介入暂停，跳过保存和发送")
+                        return None
+
                     # 保存AI回复（带重试机制，防止连接丢失）
                     await self._save_ai_message_with_retry(
                         cookie_id, chat_id, user_id, item_id, reply, intent
