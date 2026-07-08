@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Index, JSON, Numeric, String, Text
+from sqlalchemy import BigInteger, Boolean, Index, JSON, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base, TimestampMixin
@@ -30,7 +30,8 @@ class ProductMaterial(TimestampMixin, Base):
     original_price: Mapped[float | None] = mapped_column(Numeric(12, 2), comment="原价")
     category: Mapped[str | None] = mapped_column(String(100), comment="商品分类")
     images: Mapped[list | None] = mapped_column(JSON, comment="图片URL列表（最多9张）")
-    delivery_method: Mapped[str] = mapped_column(String(20), default="express", comment="发货方式：express-快递, pickup-自提, virtual-无需邮寄")
+    delivery_method: Mapped[str] = mapped_column(String(20), default="free_shipping", comment="发货方式：free_shipping-包邮, distance_billing-按距离计费, fixed_fee-一口价, no_shipping-无需邮寄")
+    support_pickup: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否支持自提：1是 0否")
     postage: Mapped[float] = mapped_column(Numeric(8, 2), default=0, comment="邮费，0表示包邮")
     address: Mapped[str | None] = mapped_column(String(200), comment="宝贝所在地")
     brand: Mapped[str | None] = mapped_column(String(100), comment="品牌")

@@ -24,6 +24,13 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const rawInitialDeliveryMethod = initial?.delivery_method as string | undefined
+  const initialDeliveryMethod: ProductDeliveryMethod =
+    rawInitialDeliveryMethod === 'distance_billing' || rawInitialDeliveryMethod === 'fixed_fee' || rawInitialDeliveryMethod === 'no_shipping'
+      ? rawInitialDeliveryMethod
+      : rawInitialDeliveryMethod === 'virtual'
+        ? 'no_shipping'
+        : 'free_shipping'
   const [form, setForm] = useState<MaterialCreateParams>({
     title: initial?.title ?? '',
     description: initial?.description ?? '',
@@ -31,7 +38,8 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
     original_price: initial?.original_price ?? undefined,
     category: initial?.category ?? '',
     images: initial?.images ?? [],
-    delivery_method: initial?.delivery_method ?? 'express',
+    delivery_method: initialDeliveryMethod,
+    support_pickup: initial?.support_pickup ?? false,
     postage: initial?.postage ?? 0,
     address: initial?.address ?? '',
     brand: initial?.brand ?? '',
@@ -68,7 +76,7 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
     setForm(f => ({
       ...f,
       delivery_method: deliveryMethod,
-      postage: deliveryMethod === 'express' ? f.postage : 0,
+      postage: deliveryMethod === 'fixed_fee' ? f.postage : 0,
     }))
   }
 
@@ -80,7 +88,7 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
     try {
       const payload = {
         ...form,
-        postage: form.delivery_method === 'express' ? form.postage : 0,
+        postage: form.delivery_method === 'fixed_fee' ? form.postage : 0,
       }
       if (initial) {
         const res = await updateMaterial(initial.id, payload)
@@ -144,19 +152,31 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
                 <input className="input-ios" placeholder="请输入品牌"
                   value={form.brand} onChange={e => setForm(f => ({ ...f, brand: e.target.value }))} />
               </div>
-              <div className="input-group">
+              <div className="input-group sm:col-span-2">
                 <label className="input-label">发货方式</label>
-                <select className="input-ios" value={form.delivery_method}
-                  onChange={e => updateDeliveryMethod(e.target.value as ProductDeliveryMethod)}>
-                  <option value="express">快递发货</option>
-                  <option value="pickup">自提</option>
-                  <option value="virtual">无需邮寄</option>
-                </select>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <select className="input-ios w-full sm:w-[320px]" value={form.delivery_method}
+                    onChange={e => updateDeliveryMethod(e.target.value as ProductDeliveryMethod)}>
+                    <option value="free_shipping">包邮</option>
+                    <option value="distance_billing">按距离计费</option>
+                    <option value="fixed_fee">一口价</option>
+                    <option value="no_shipping">无需邮寄</option>
+                  </select>
+                  <label className="switch-ios flex-shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(form.support_pickup)}
+                      onChange={e => setForm(f => ({ ...f, support_pickup: e.target.checked }))}
+                    />
+                    <span className="switch-slider"></span>
+                  </label>
+                  <span className="text-sm text-slate-600 dark:text-slate-300 flex-shrink-0">支持自提</span>
+                </div>
               </div>
-              {form.delivery_method === 'express' && (
+              {form.delivery_method === 'fixed_fee' && (
                 <div className="input-group">
-                  <label className="input-label">邮费（元，0=包邮）</label>
-                  <input type="number" className="input-ios" placeholder="0" min="0" step="0.01"
+                  <label className="input-label">运费（元）</label>
+                  <input type="number" className="input-ios w-full sm:w-[320px]" placeholder="0" min="0" step="0.01"
                     value={form.postage || ''} onChange={e => setForm(f => ({ ...f, postage: parseFloat(e.target.value) || 0 }))} />
                 </div>
               )}

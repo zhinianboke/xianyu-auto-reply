@@ -13,7 +13,7 @@ const PREFIX = '/api/v1/product-publish'
 
 // ==================== 类型定义 ====================
 
-export type ProductDeliveryMethod = 'express' | 'pickup' | 'virtual'
+export type ProductDeliveryMethod = 'free_shipping' | 'distance_billing' | 'fixed_fee' | 'no_shipping'
 
 export interface ProductMaterial {
   id: number
@@ -26,6 +26,7 @@ export interface ProductMaterial {
   category?: string | null
   images: string[]
   delivery_method: ProductDeliveryMethod
+  support_pickup: boolean
   postage: number
   address?: string | null
   brand?: string | null
@@ -43,6 +44,7 @@ export interface MaterialCreateParams {
   category?: string
   images: string[]
   delivery_method?: ProductDeliveryMethod
+  support_pickup?: boolean
   postage?: number
   address?: string
   brand?: string
@@ -195,6 +197,7 @@ export const publishSingle = (params: {
   images: string[]        // 本地绝对路径，由 uploadProductImages 返回
   address?: string
   delivery_method?: string
+  support_pickup?: boolean
   postage?: number
   brand?: string
   condition?: string

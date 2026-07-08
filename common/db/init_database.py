@@ -1176,7 +1176,8 @@ class DatabaseInitializer:
                 original_price DECIMAL(12,2) DEFAULT NULL COMMENT '原价（划线价）',
                 category VARCHAR(100) DEFAULT NULL COMMENT '商品分类',
                 images JSON DEFAULT NULL COMMENT '图片URL列表（最多9张）',
-                delivery_method VARCHAR(20) DEFAULT 'express' COMMENT '发货方式：express-快递, pickup-自提, virtual-无需邮寄',
+                delivery_method VARCHAR(20) DEFAULT 'free_shipping' COMMENT '发货方式：free_shipping-包邮, distance_billing-按距离计费, fixed_fee-一口价, no_shipping-无需邮寄',
+                support_pickup TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否支持自提：1是 0否',
                 postage DECIMAL(8,2) DEFAULT 0 COMMENT '邮费，0表示包邮',
                 address VARCHAR(200) DEFAULT NULL COMMENT '宝贝所在地',
                 brand VARCHAR(100) DEFAULT NULL COMMENT '品牌',
@@ -1799,6 +1800,9 @@ class DatabaseInitializer:
             ("resolved_address_id", "BIGINT DEFAULT NULL COMMENT '本次发布命中的地址池ID'", "error_message"),
             ("resolved_address_text", "VARCHAR(200) DEFAULT NULL COMMENT '本次发布实际使用的地址搜索词'", "resolved_address_id"),
             ("address_source", "VARCHAR(20) DEFAULT NULL COMMENT '地址来源：material/account_pool/global_pool'", "resolved_address_text"),
+        ],
+        "xy_product_materials": [
+            ("support_pickup", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否支持自提：1是 0否'", "delivery_method"),
         ],
         "xy_account_login_logs": [
             ("updated_cookie_names", "VARCHAR(500) DEFAULT NULL COMMENT '接口续期更新的Cookie字段名（逗号分隔）'", "error_message"),

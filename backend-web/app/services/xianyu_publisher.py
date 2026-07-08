@@ -363,6 +363,8 @@ class XianyuPublisher:
             await asyncio.sleep(1)
 
             await self._set_delivery_method(item_data)
+            await self._fill_postage(item_data)
+            await self._set_support_pickup(item_data)
 
             await self._set_item_address(item_data)
 
@@ -1577,57 +1579,80 @@ class XianyuPublisher:
             logger.info("ℹ️ 未设置原价，跳过")
 
     async def _set_delivery_method(self, item_data: dict):
-        """按素材配置选择发货方式。
+        """按素材配置选择发货方式"""
+        delivery_method = str(item_data.get("delivery_method") or "free_shipping").strip().lower()
+        delivery_method_map = {
+            "free_shipping": "0",
+            "express": "0",
+            "distance_billing": "1",
+            "fixed_fee": "2",
+            "no_shipping": "3",
+            "virtual": "3",
+        }
+        radio_value = delivery_method_map.get(delivery_method, "0")
 
-        旧流程没有真正区分 express/pickup，统一点选「包邮」。配置为 virtual 时，
-        直接选择闲鱼发布页固定的「无需邮寄」单选项。
-        """
-        delivery_method = str(item_data.get("delivery_method") or "express").strip().lower()
-        if delivery_method == "virtual":
-            await self._set_no_shipping()
+        logger.info(f"\n[步骤12] 🚚 设置发货方式: {delivery_method} (value={radio_value})...")
+
+        delivery_radio = self.page.locator(f'label:has(input.ant-radio-input[value="{radio_value}"])').first
+        if await delivery_radio.count() == 0:
+            raise Exception(f'未找到发货方式选项 input.ant-radio-input[value="{radio_value}"]')
+
+        await delivery_radio.click()
+        logger.info("✅ 已选择发货方式")
+
+    async def _fill_postage(self, item_data: dict):
+        """填写一口价运费"""
+        delivery_method = str(item_data.get("delivery_method") or "free_shipping").strip().lower()
+        if delivery_method != "fixed_fee":
             return
 
-        await self._set_free_shipping()
+        postage = item_data.get("postage", 0)
+        logger.info(f"\n[步骤12.05] 🚚 输入一口价运费: {postage}")
 
-    async def _set_no_shipping(self):
-        """设置发货方式为无需邮寄"""
-        logger.info("\n[步骤12] 🚚 设置发货方式为无需邮寄...")
-
-        no_shipping_radio = self.page.locator('label:has(input.ant-radio-input[value="3"])').first
-        if await no_shipping_radio.count() == 0:
-            raise Exception("未找到无需邮寄选项 input.ant-radio-input[value=\"3\"]")
-
-        await no_shipping_radio.click()
-        logger.info("✅ 已选择无需邮寄")
-
-    async def _set_free_shipping(self) -> bool:
-        """设置发货方式为包邮（按原项目流程）"""
-        logger.info("\n[步骤12] 🚚 设置发货方式为包邮...")
-
-        free_shipping_selectors = [
-            'button:has-text("包邮")',
-            'div:has-text("包邮")',
-            '[class*="free-shipping"]',
-            '[class*="包邮"]',
+        postage_selectors = [
+            'input[placeholder*="邮费"]',
+            'input[placeholder*="运费"]',
+            'xpath=//*[contains(normalize-space(.), "邮费")]/following::input[1]',
+            'xpath=//*[contains(normalize-space(.), "运费")]/following::input[1]',
         ]
 
-        free_shipping_btn = None
-        for selector in free_shipping_selectors:
+        postage_input = None
+        for selector in postage_selectors:
             try:
-                free_shipping_btn = await self.page.query_selector(selector)
-                if free_shipping_btn:
-                    logger.info(f"✅ 找到包邮按钮: {selector}")
+                postage_input = await self.page.wait_for_selector(selector, timeout=2000)
+                if postage_input:
+                    logger.info(f"✅ 找到运费输入框: {selector}")
                     break
             except Exception:
                 continue
 
-        if free_shipping_btn:
-            await free_shipping_btn.click()
-            logger.info("✅ 已选择包邮")
-            return True
+        if not postage_input:
+            raise Exception("未找到一口价运费输入框")
 
-        logger.warning("⚠️ 未找到包邮按钮")
-        return False
+        await postage_input.fill(str(postage))
+        logger.info("✅ 已输入一口价运费")
+
+    async def _set_support_pickup(self, item_data: dict):
+        """设置支持自提开关"""
+        support_pickup = bool(item_data.get("support_pickup"))
+
+        logger.info(f"\n[步骤12.1] 🚚 设置支持自提: {'开启' if support_pickup else '关闭'}...")
+
+        pickup_switch = self.page.locator('div:has-text("支持自提")').locator('xpath=following-sibling::button[@role="switch"][1]').first
+        if await pickup_switch.count() == 0:
+            raise Exception('未找到支持自提开关 button[role="switch"]')
+
+        is_checked = (await pickup_switch.get_attribute("aria-checked")) == "true"
+        if is_checked == support_pickup:
+            logger.info("✅ 支持自提状态已符合预期")
+            return
+
+        await pickup_switch.click()
+        updated_checked = (await pickup_switch.get_attribute("aria-checked")) == "true"
+        if updated_checked != support_pickup:
+            raise Exception("切换支持自提开关失败")
+
+        logger.info(f"✅ 已{'开启' if support_pickup else '关闭'}支持自提")
 
     async def _click_publish_button(self, result: dict):
         """点击发布按钮并等待发布结果（按原项目流程）"""

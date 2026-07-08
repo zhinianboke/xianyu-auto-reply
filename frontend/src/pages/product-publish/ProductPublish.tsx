@@ -34,6 +34,7 @@ interface PublishForm {
   category: string
   address: string
   delivery_method: ProductDeliveryMethod
+  support_pickup: boolean
   postage: string
   brand: string
   condition: string
@@ -109,7 +110,7 @@ export function ProductPublish() {
   const [imagePreviews, setImagePreviews] = useState<string[]>([])
   const [form, setForm] = useState<PublishForm>({
     account_id: '', title: '', description: '', price: '', original_price: '',
-    category: '', address: '', delivery_method: 'express', postage: '0', brand: '', condition: '全新',
+    category: '', address: '', delivery_method: 'free_shipping', support_pickup: false, postage: '0', brand: '', condition: '全新',
   })
 
   useEffect(() => {
@@ -150,11 +151,19 @@ export function ProductPublish() {
 
   /** 从素材库导入 */
   const applyMaterial = (m: ProductMaterial) => {
+    const rawDeliveryMethod = m.delivery_method as string | undefined
+    const deliveryMethod: ProductDeliveryMethod =
+      rawDeliveryMethod === 'distance_billing' || rawDeliveryMethod === 'fixed_fee' || rawDeliveryMethod === 'no_shipping'
+        ? rawDeliveryMethod
+        : rawDeliveryMethod === 'virtual'
+          ? 'no_shipping'
+          : 'free_shipping'
     setForm(f => ({
       ...f, title: m.title, description: m.description, price: String(m.price),
       original_price: m.original_price ? String(m.original_price) : '',
       category: m.category || '', address: m.address || '',
-      delivery_method: m.delivery_method || 'express',
+      delivery_method: deliveryMethod,
+      support_pickup: m.support_pickup ?? false,
       postage: String(m.postage ?? 0), brand: m.brand || '', condition: m.condition || '全新',
     }))
     const urls = m.images || []
@@ -168,7 +177,7 @@ export function ProductPublish() {
     setForm(f => ({
       ...f,
       delivery_method: deliveryMethod,
-      postage: deliveryMethod === 'express' ? f.postage : '0',
+      postage: deliveryMethod === 'fixed_fee' ? f.postage : '0',
     }))
   }
 
@@ -188,7 +197,8 @@ export function ProductPublish() {
         original_price: form.original_price ? parseFloat(form.original_price) : undefined,
         category: form.category || undefined, images: imagePaths, address: form.address || undefined,
         delivery_method: form.delivery_method,
-        postage: form.delivery_method === 'express' ? parseFloat(form.postage) || 0 : 0,
+        support_pickup: form.support_pickup,
+        postage: form.delivery_method === 'fixed_fee' ? parseFloat(form.postage) || 0 : 0,
         brand: form.brand || undefined, condition: form.condition,
       })
       const message = res.message || (res.success ? '商品发布成功' : '发布失败')
@@ -310,21 +320,33 @@ export function ProductPublish() {
                 ))}
               </div>
             </div>
-            {/* 发货 + 邮费 */}
+            {/* 发货方式 */}
             <div className="grid grid-cols-2 gap-4">
-              <div className="input-group">
+              <div className="input-group col-span-2">
                 <label className="input-label">发货方式</label>
-                <select className="input-ios" value={form.delivery_method}
-                  onChange={e => updateDeliveryMethod(e.target.value as ProductDeliveryMethod)}>
-                  <option value="express">快递发货</option>
-                  <option value="pickup">自提</option>
-                  <option value="virtual">无需邮寄</option>
-                </select>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <select className="input-ios w-full sm:w-[320px]" value={form.delivery_method}
+                    onChange={e => updateDeliveryMethod(e.target.value as ProductDeliveryMethod)}>
+                    <option value="free_shipping">包邮</option>
+                    <option value="distance_billing">按距离计费</option>
+                    <option value="fixed_fee">一口价</option>
+                    <option value="no_shipping">无需邮寄</option>
+                  </select>
+                  <label className="switch-ios flex-shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={form.support_pickup}
+                      onChange={e => setForm(f => ({ ...f, support_pickup: e.target.checked }))}
+                    />
+                    <span className="switch-slider"></span>
+                  </label>
+                  <span className="text-sm text-slate-600 dark:text-slate-300 flex-shrink-0">支持自提</span>
+                </div>
               </div>
-              {form.delivery_method === 'express' && (
+              {form.delivery_method === 'fixed_fee' && (
                 <div className="input-group">
-                  <label className="input-label">邮费（元，0=包邮）</label>
-                  <input type="number" className="input-ios" placeholder="0" min="0" step="0.01"
+                  <label className="input-label">运费（元）</label>
+                  <input type="number" className="input-ios w-full sm:w-[320px]" placeholder="0" min="0" step="0.01"
                     value={form.postage} onChange={e => setForm(f => ({ ...f, postage: e.target.value }))} />
                 </div>
               )}
