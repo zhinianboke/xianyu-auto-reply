@@ -12,7 +12,13 @@ import React, { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { Send, FolderOpen, Loader2, CheckCircle, XCircle, ExternalLink, Upload, Trash2, X } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
-import { publishSingle, getMaterials, uploadProductImages, type ProductMaterial } from '@/api/productPublish'
+import {
+  publishSingle,
+  getMaterials,
+  uploadProductImages,
+  type ProductDeliveryMethod,
+  type ProductMaterial,
+} from '@/api/productPublish'
 import { getAccountDetails } from '@/api/accounts'
 import { PageLoading } from '@/components/common/Loading'
 
@@ -27,7 +33,7 @@ interface PublishForm {
   original_price: string
   category: string
   address: string
-  delivery_method: 'express' | 'pickup'
+  delivery_method: ProductDeliveryMethod
   postage: string
   brand: string
   condition: string
@@ -148,7 +154,7 @@ export function ProductPublish() {
       ...f, title: m.title, description: m.description, price: String(m.price),
       original_price: m.original_price ? String(m.original_price) : '',
       category: m.category || '', address: m.address || '',
-      delivery_method: (m.delivery_method as 'express' | 'pickup') || 'express',
+      delivery_method: m.delivery_method || 'express',
       postage: String(m.postage ?? 0), brand: m.brand || '', condition: m.condition || '全新',
     }))
     const urls = m.images || []
@@ -156,6 +162,14 @@ export function ProductPublish() {
     setImagePreviews(urls)
     setShowPicker(false)
     addToast({ type: 'success', message: '已从素材库导入' })
+  }
+
+  const updateDeliveryMethod = (deliveryMethod: ProductDeliveryMethod) => {
+    setForm(f => ({
+      ...f,
+      delivery_method: deliveryMethod,
+      postage: deliveryMethod === 'express' ? f.postage : '0',
+    }))
   }
 
   /** 发布商品 */
@@ -173,7 +187,8 @@ export function ProductPublish() {
         price: parseFloat(form.price),
         original_price: form.original_price ? parseFloat(form.original_price) : undefined,
         category: form.category || undefined, images: imagePaths, address: form.address || undefined,
-        delivery_method: form.delivery_method, postage: parseFloat(form.postage) || 0,
+        delivery_method: form.delivery_method,
+        postage: form.delivery_method === 'express' ? parseFloat(form.postage) || 0 : 0,
         brand: form.brand || undefined, condition: form.condition,
       })
       const message = res.message || (res.success ? '商品发布成功' : '发布失败')
@@ -300,16 +315,19 @@ export function ProductPublish() {
               <div className="input-group">
                 <label className="input-label">发货方式</label>
                 <select className="input-ios" value={form.delivery_method}
-                  onChange={e => setForm(f => ({ ...f, delivery_method: e.target.value as 'express' | 'pickup' }))}>
+                  onChange={e => updateDeliveryMethod(e.target.value as ProductDeliveryMethod)}>
                   <option value="express">快递发货</option>
                   <option value="pickup">自提</option>
+                  <option value="virtual">无需邮寄</option>
                 </select>
               </div>
-              <div className="input-group">
-                <label className="input-label">邮费（元，0=包邮）</label>
-                <input type="number" className="input-ios" placeholder="0" min="0" step="0.01"
-                  value={form.postage} onChange={e => setForm(f => ({ ...f, postage: e.target.value }))} />
-              </div>
+              {form.delivery_method === 'express' && (
+                <div className="input-group">
+                  <label className="input-label">邮费（元，0=包邮）</label>
+                  <input type="number" className="input-ios" placeholder="0" min="0" step="0.01"
+                    value={form.postage} onChange={e => setForm(f => ({ ...f, postage: e.target.value }))} />
+                </div>
+              )}
             </div>
             {/* 所在地 */}
             <div className="input-group">

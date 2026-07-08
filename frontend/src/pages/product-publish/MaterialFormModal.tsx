@@ -7,7 +7,7 @@ import { X, Loader2, Upload, Trash2 } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import {
   createMaterial, updateMaterial, uploadProductImages,
-  type ProductMaterial, type MaterialCreateParams,
+  type ProductDeliveryMethod, type ProductMaterial, type MaterialCreateParams,
 } from '@/api/productPublish'
 
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
@@ -64,18 +64,30 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
     setForm(f => ({ ...f, images: (f.images || []).filter((_, i) => i !== idx) }))
   }
 
+  const updateDeliveryMethod = (deliveryMethod: ProductDeliveryMethod) => {
+    setForm(f => ({
+      ...f,
+      delivery_method: deliveryMethod,
+      postage: deliveryMethod === 'express' ? f.postage : 0,
+    }))
+  }
+
   const handleSave = async () => {
     if (!form.title.trim()) { addToast({ type: 'warning', message: '请填写商品标题' }); return }
     if (!form.description.trim()) { addToast({ type: 'warning', message: '请填写商品描述' }); return }
     if (!form.price || form.price <= 0) { addToast({ type: 'warning', message: '请填写有效价格' }); return }
     setSaving(true)
     try {
+      const payload = {
+        ...form,
+        postage: form.delivery_method === 'express' ? form.postage : 0,
+      }
       if (initial) {
-        const res = await updateMaterial(initial.id, form)
+        const res = await updateMaterial(initial.id, payload)
         if (!res.success) { addToast({ type: 'error', message: res.message || '更新失败' }); return }
         addToast({ type: 'success', message: '素材更新成功' })
       } else {
-        const res = await createMaterial(form)
+        const res = await createMaterial(payload)
         if (!res.success) { addToast({ type: 'error', message: res.message || '创建失败' }); return }
         addToast({ type: 'success', message: '素材创建成功' })
       }
@@ -135,9 +147,10 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
               <div className="input-group">
                 <label className="input-label">发货方式</label>
                 <select className="input-ios" value={form.delivery_method}
-                  onChange={e => setForm(f => ({ ...f, delivery_method: e.target.value as 'express' | 'pickup' }))}>
+                  onChange={e => updateDeliveryMethod(e.target.value as ProductDeliveryMethod)}>
                   <option value="express">快递发货</option>
                   <option value="pickup">自提</option>
+                  <option value="virtual">无需邮寄</option>
                 </select>
               </div>
               {form.delivery_method === 'express' && (

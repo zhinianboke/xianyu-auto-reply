@@ -362,7 +362,7 @@ class XianyuPublisher:
             logger.info("\n[步骤11] ⏭️ 跳过服务选择...")
             await asyncio.sleep(1)
 
-            await self._set_free_shipping()
+            await self._set_delivery_method(item_data)
 
             await self._set_item_address(item_data)
 
@@ -1576,7 +1576,31 @@ class XianyuPublisher:
         else:
             logger.info("ℹ️ 未设置原价，跳过")
 
-    async def _set_free_shipping(self):
+    async def _set_delivery_method(self, item_data: dict):
+        """按素材配置选择发货方式。
+
+        旧流程没有真正区分 express/pickup，统一点选「包邮」。配置为 virtual 时，
+        直接选择闲鱼发布页固定的「无需邮寄」单选项。
+        """
+        delivery_method = str(item_data.get("delivery_method") or "express").strip().lower()
+        if delivery_method == "virtual":
+            await self._set_no_shipping()
+            return
+
+        await self._set_free_shipping()
+
+    async def _set_no_shipping(self):
+        """设置发货方式为无需邮寄"""
+        logger.info("\n[步骤12] 🚚 设置发货方式为无需邮寄...")
+
+        no_shipping_radio = self.page.locator('label:has(input.ant-radio-input[value="3"])').first
+        if await no_shipping_radio.count() == 0:
+            raise Exception("未找到无需邮寄选项 input.ant-radio-input[value=\"3\"]")
+
+        await no_shipping_radio.click()
+        logger.info("✅ 已选择无需邮寄")
+
+    async def _set_free_shipping(self) -> bool:
         """设置发货方式为包邮（按原项目流程）"""
         logger.info("\n[步骤12] 🚚 设置发货方式为包邮...")
 
@@ -1600,8 +1624,10 @@ class XianyuPublisher:
         if free_shipping_btn:
             await free_shipping_btn.click()
             logger.info("✅ 已选择包邮")
-        else:
-            logger.warning("⚠️ 未找到包邮按钮")
+            return True
+
+        logger.warning("⚠️ 未找到包邮按钮")
+        return False
 
     async def _click_publish_button(self, result: dict):
         """点击发布按钮并等待发布结果（按原项目流程）"""

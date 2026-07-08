@@ -30,7 +30,7 @@ class ProductMaterial(TimestampMixin, Base):
     original_price: Mapped[float | None] = mapped_column(Numeric(12, 2), comment="原价")
     category: Mapped[str | None] = mapped_column(String(100), comment="商品分类")
     images: Mapped[list | None] = mapped_column(JSON, comment="图片URL列表（最多9张）")
-    delivery_method: Mapped[str] = mapped_column(String(20), default="express", comment="发货方式：express-快递, pickup-自提")
+    delivery_method: Mapped[str] = mapped_column(String(20), default="express", comment="发货方式：express-快递, pickup-自提, virtual-无需邮寄")
     postage: Mapped[float] = mapped_column(Numeric(8, 2), default=0, comment="邮费，0表示包邮")
     address: Mapped[str | None] = mapped_column(String(200), comment="宝贝所在地")
     brand: Mapped[str | None] = mapped_column(String(100), comment="品牌")

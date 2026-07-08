@@ -13,6 +13,8 @@ const PREFIX = '/api/v1/product-publish'
 
 // ==================== 类型定义 ====================
 
+export type ProductDeliveryMethod = 'express' | 'pickup' | 'virtual'
+
 export interface ProductMaterial {
   id: number
   user_id: number
@@ -23,7 +25,7 @@ export interface ProductMaterial {
   original_price?: number | null
   category?: string | null
   images: string[]
-  delivery_method: 'express' | 'pickup'
+  delivery_method: ProductDeliveryMethod
   postage: number
   address?: string | null
   brand?: string | null
@@ -40,7 +42,7 @@ export interface MaterialCreateParams {
   original_price?: number | null
   category?: string
   images: string[]
-  delivery_method?: 'express' | 'pickup'
+  delivery_method?: ProductDeliveryMethod
   postage?: number
   address?: string
   brand?: string

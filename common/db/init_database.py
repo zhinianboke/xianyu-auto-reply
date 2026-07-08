@@ -1176,7 +1176,7 @@ class DatabaseInitializer:
                 original_price DECIMAL(12,2) DEFAULT NULL COMMENT '原价（划线价）',
                 category VARCHAR(100) DEFAULT NULL COMMENT '商品分类',
                 images JSON DEFAULT NULL COMMENT '图片URL列表（最多9张）',
-                delivery_method VARCHAR(20) DEFAULT 'express' COMMENT '发货方式：express-快递, pickup-自提',
+                delivery_method VARCHAR(20) DEFAULT 'express' COMMENT '发货方式：express-快递, pickup-自提, virtual-无需邮寄',
                 postage DECIMAL(8,2) DEFAULT 0 COMMENT '邮费，0表示包邮',
                 address VARCHAR(200) DEFAULT NULL COMMENT '宝贝所在地',
                 brand VARCHAR(100) DEFAULT NULL COMMENT '品牌',
