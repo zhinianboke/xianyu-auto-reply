@@ -9,7 +9,7 @@ import asyncio
 import base64
 import json
 import time
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, List, Tuple
 
 from loguru import logger
 
@@ -200,6 +200,10 @@ class MessageHandler:
                                         return ext_json_dict.get("messageId")
                                 except (json.JSONDecodeError, TypeError):
                                     pass
+
+                    message_id = message_1.get("3")
+                    if message_id:
+                        return str(message_id)
             # 卡片更新消息：消息ID在message["4"]中
             if isinstance(message_data, dict) and "4" in message_data:
                 message_4 = message_data.get("4")
@@ -216,6 +220,82 @@ class MessageHandler:
             logger.debug(f"【{self.cookie_id}】提取消息ID失败: {safe_str(e)}")
         
         return None
+
+    def _normalize_image_urls(self, urls: Any) -> List[str]:
+        """保留非空图片 URL，并按原始顺序去重。"""
+        if not isinstance(urls, list):
+            return []
+        normalized: List[str] = []
+        seen = set()
+        for url in urls:
+            if not isinstance(url, str):
+                continue
+            clean_url = url.strip()
+            if not clean_url or clean_url in seen:
+                continue
+            seen.add(clean_url)
+            normalized.append(clean_url)
+        return normalized
+
+    def _decode_chat_content(self, message_1: dict, fallback_text: str = "") -> Tuple[str, List[str], str]:
+        """解析闲鱼自定义消息体，仅暴露文本和图片 URL。"""
+        text_content = ""
+        image_urls: List[str] = []
+        content_type = None
+
+        try:
+            message_6 = message_1.get("6", {})
+            if not isinstance(message_6, dict):
+                return (fallback_text or "", [], "text" if fallback_text else "unknown")
+            message_6_3 = message_6.get("3", {})
+            if not isinstance(message_6_3, dict):
+                return (fallback_text or "", [], "text" if fallback_text else "unknown")
+
+            custom_data = message_6_3.get("1", "")
+            if not custom_data or not isinstance(custom_data, str):
+                return (fallback_text or "", [], "text" if fallback_text else "unknown")
+
+            decoded = json.loads(base64.b64decode(custom_data).decode("utf-8"))
+            if not isinstance(decoded, dict):
+                return (fallback_text or "", [], "text" if fallback_text else "unknown")
+
+            content_type = decoded.get("contentType")
+            text_obj = decoded.get("text")
+            if isinstance(text_obj, dict):
+                text_content = str(text_obj.get("text", "") or "")
+            elif isinstance(text_obj, str):
+                text_content = text_obj
+            elif text_obj is not None:
+                text_content = str(text_obj)
+
+            if content_type == 2 and isinstance(decoded.get("image"), dict):
+                pics = decoded.get("image", {}).get("pics", [])
+                if isinstance(pics, list):
+                    image_urls.extend(
+                        pic.get("url", "")
+                        for pic in pics
+                        if isinstance(pic, dict)
+                    )
+
+            legacy_pic_url = decoded.get("picUrl")
+            if isinstance(legacy_pic_url, str):
+                image_urls.append(legacy_pic_url)
+
+            image_urls = self._normalize_image_urls(image_urls)
+            if not text_content and fallback_text and not image_urls:
+                text_content = fallback_text
+
+            if text_content and image_urls:
+                message_type = "mixed"
+            elif image_urls:
+                message_type = "image"
+            elif text_content or content_type == 1:
+                message_type = "text"
+            else:
+                message_type = "unknown"
+            return (text_content, image_urls, message_type)
+        except Exception:
+            return (fallback_text or "", [], "text" if fallback_text else "unknown")
     
     async def is_message_processed(self, message_id: str) -> bool:
         """检查消息是否已处理"""
@@ -267,11 +347,17 @@ class MessageHandler:
             else:
                 msg_time = time.strftime("%Y-%m-%d %H:%M:%S")
             
-            # 判断消息格式：有"10"字段且有reminderContent是普通聊天消息
-            if message_10 and message_10.get("reminderContent"):
+            message_type = "unknown"
+            images: List[str] = []
+
+            # 判断消息格式：有"10"字段且存在reminderContent是普通聊天消息
+            if isinstance(message_10, dict) and "reminderContent" in message_10:
                 # 普通聊天消息格式
                 send_user_id = message_10.get("senderUserId", "unknown")
                 reminder_content = message_10.get("reminderContent", "")
+                decoded_text, images, message_type = self._decode_chat_content(message_1, reminder_content)
+                if not reminder_content and decoded_text:
+                    reminder_content = decoded_text
                 # 提取发送者名称（参照旧框架：优先使用senderNick，再用reminderTitle）
                 # 注意：需要检查空字符串
                 send_user_name = message_10.get("senderNick") or message_10.get("reminderTitle") or "系统"
@@ -289,6 +375,8 @@ class MessageHandler:
                 message_6 = message_1.get("6", {})
                 message_6_3 = message_6.get("3", {})
                 reminder_content = message_6_3.get("2", "")  # 卡片消息的文本内容
+                if reminder_content:
+                    message_type = "text"
                 
                 # 卡片消息通常是系统消息，用户名设为"系统"
                 send_user_name = "系统"
@@ -303,6 +391,8 @@ class MessageHandler:
                 "chat_id": chat_id,
                 "item_id": item_id,
                 "msg_time": msg_time,
+                "message_type": message_type,
+                "images": images,
                 "raw_message": message,
             }
             
