@@ -50,6 +50,7 @@ const DECISION_REASON_LABELS: Record<string, string> = {
   failed: '处理失败',
   auto_delivery: '自动发货',
   chat_paused: '会话已暂停',
+  chat_paused_after_delay: '延迟后会话已暂停',
   empty_reply: '回复内容为空',
   default_reply_once: '默认回复仅回复一次',
 }

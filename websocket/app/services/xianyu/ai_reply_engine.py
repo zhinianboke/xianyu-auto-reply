@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from common.db.session import async_session_maker
 from common.models.xy_account import XYAccount
 from common.models.ai_chat_message import AIChatMessage
+from app.services.xianyu.resource_manager import pause_manager
 from common.services.ai_provider_service import (
     DEFAULT_AI_BASE_URL,
     build_anthropic_url,
@@ -925,7 +926,6 @@ class AIReplyEngine:
                 
                 if reply:
                     # 二次检测：大模型返回后，若人工已介入暂停，则放弃本次回复
-                    from app.services.xianyu.resource_manager import pause_manager
                     if pause_manager.is_chat_paused(chat_id, cookie_id):
                         logger.info(f"【{cookie_id}】AI回复生成成功，但检测到会话 {chat_id} 已被人工介入暂停，跳过保存和发送")
                         return None

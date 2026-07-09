@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 
 from common.utils.xianyu_utils import decrypt
+from common.utils.xianyu_message_parser import parse_content_payloads
 
 
 class PushMessageParser:
@@ -218,9 +219,13 @@ class PushMessageParser:
 
     def _decode_content(self, msg_1: dict) -> Tuple[str, List[str], str]:
         """
-        从推送消息中解码 base64 内容
+        从推送消息中解码内容（兼容明文 JSON 与 base64 两种载荷）
 
-        参照 chat_new.py 的 _parse_message 逻辑
+        IM 主动推送的图片/文本内容 JSON 实际位于 msg["1"]["6"]["3"]["5"]，且为
+        【明文 JSON 字符串】；旧格式则在 ["1"] 为 base64。信封字段在此提取，内容
+        解析（识别明文/base64、判定文本/图片/语音）统一交由公共模块
+        common.utils.xianyu_message_parser 处理，与 HTTP 历史消息、自动回复侧共用
+        同一套逻辑，避免各写一套互相不同步。
 
         Returns:
             (text, images, msg_type) 三元组
@@ -232,36 +237,8 @@ class PushMessageParser:
             msg_6_3 = msg_6.get("3", {})
             if not isinstance(msg_6_3, dict):
                 return ("", [], "text")
-            custom_data = msg_6_3.get("1", "")
-            if not custom_data or not isinstance(custom_data, str):
-                return ("", [], "text")
 
-            decoded = json.loads(base64.b64decode(custom_data).decode("utf-8"))
-            content_type = decoded.get("contentType", 0)
-
-            if content_type == 1 and "text" in decoded:
-                text_obj = decoded["text"]
-                if isinstance(text_obj, dict):
-                    return (text_obj.get("text", ""), [], "text")
-                return (str(text_obj), [], "text")
-
-            if content_type == 2 and "image" in decoded:
-                pics = decoded.get("image", {}).get("pics", [])
-                urls = [p.get("url", "") for p in pics if p.get("url")]
-                return ("", urls, "image")
-
-            if content_type == 3 and "audio" in decoded:
-                return ("[语音消息]", [], "text")
-
-            if "text" in decoded:
-                text_obj = decoded["text"]
-                if isinstance(text_obj, dict):
-                    return (text_obj.get("text", str(text_obj)), [], "text")
-                return (str(text_obj), [], "text")
-
-            if "picUrl" in decoded:
-                return ("", [decoded["picUrl"]], "image")
-
-            return ("", [], "text")
+            # 候选载荷按优先级：["5"]（实时推送明文 JSON）→ ["1"]（旧格式 base64）
+            return parse_content_payloads([msg_6_3.get("5", ""), msg_6_3.get("1", "")])
         except Exception:
             return ("", [], "text")

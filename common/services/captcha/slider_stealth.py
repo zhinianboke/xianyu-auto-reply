@@ -905,7 +905,13 @@ class PlaywrightSliderService:
                         continue
 
                     # 检查验证结果
-                    success = self.verification_checker.check_verification_success_fast(slider_button)
+                    # 二次确认（等 x5sec 落盘）的等待上限按"距浏览器超时的剩余预算"动态给定，
+                    # 预留 3 秒安全边际给后续取 cookie，避免二次确认等太久被超时守护强杀。
+                    elapsed = time.time() - browser_start_time
+                    confirm_budget = max(1.0, browser_timeout - elapsed - 3.0)
+                    success = self.verification_checker.check_verification_success_fast(
+                        slider_button, max_confirm_wait=confirm_budget
+                    )
 
                     if success:
                         logger.info(f"【{self.pure_user_id}】✅ 滑块验证成功（第{attempt}次）")

@@ -29,6 +29,9 @@ class XYAutoReplyMessageLog(Base):
         Index("idx_arml_status_strategy_created", "process_status", "reply_strategy", "created_at"),
         Index("idx_arml_strategy_created", "reply_strategy", "created_at"),
         Index("idx_arml_order_strategy_id", "order_no", "reply_strategy", "id"),
+        # 订单列表「发送状态」筛选专用：WHERE reply_strategy='auto_delivery' GROUP BY order_no（无 order_no 限定），
+        # reply_strategy 置于最左以直接定位、order_no 有序分组、id 覆盖取 MAX，避免百万级日志全索引扫描
+        Index("idx_arml_strategy_order_id", "reply_strategy", "order_no", "id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")

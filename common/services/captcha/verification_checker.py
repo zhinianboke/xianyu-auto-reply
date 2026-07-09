@@ -195,7 +195,11 @@ class VerificationChecker:
             logger.error(f"【{self.pure_user_id}】计算滑动距离时出错: {str(e)}")
             return 0
 
-    def check_verification_success_fast(self, slider_button: ElementHandle) -> bool:
+    def check_verification_success_fast(
+        self,
+        slider_button: ElementHandle,
+        max_confirm_wait: Optional[float] = None,
+    ) -> bool:
         """严格判定本次滑动是否真正通过风控
 
         判定流程：
@@ -205,6 +209,10 @@ class VerificationChecker:
 
         Args:
             slider_button: 滑块按钮元素
+            max_confirm_wait: 二次确认（等待 x5sec 落盘）的最长等待秒数。
+                由上层按"距浏览器超时的剩余预算"传入，避免二次确认等待过久
+                被超时守护强杀；为 None 时使用 _confirm_success_after_visual
+                的默认值。
 
         Returns:
             True 真正验证通过；False 视觉通过但风控未放行 / 不明确
@@ -223,7 +231,7 @@ class VerificationChecker:
                     error_msg = str(frame_check_error).lower()
                     if 'detached' in error_msg or 'disconnected' in error_msg:
                         logger.info(f"【{self.pure_user_id}】✓ Frame已被分离，进入二次确认")
-                        return self._confirm_success_after_visual()
+                        return self._confirm_success_after_visual(max_confirm_wait)
             else:
                 target_frame = self.page
                 logger.info(f"【{self.pure_user_id}】在主页面检查验证结果")
@@ -236,7 +244,7 @@ class VerificationChecker:
 
             if not container_exists or not container_visible:
                 logger.info(f"【{self.pure_user_id}】✓ 滑块容器已消失，进入二次确认")
-                return self._confirm_success_after_visual()
+                return self._confirm_success_after_visual(max_confirm_wait)
 
             # 容器还在，等待更长时间
             logger.info(f"【{self.pure_user_id}】滑块容器仍存在，等待验证结果...")
@@ -247,7 +255,7 @@ class VerificationChecker:
 
             if not container_exists or not container_visible:
                 logger.info(f"【{self.pure_user_id}】✓ 滑块容器已消失，进入二次确认")
-                return self._confirm_success_after_visual()
+                return self._confirm_success_after_visual(max_confirm_wait)
 
             # 检查成功标志
             for selector in self.SUCCESS_SELECTORS:
@@ -255,7 +263,7 @@ class VerificationChecker:
                     element = self.page.query_selector(selector)
                     if element and element.is_visible():
                         logger.info(f"【{self.pure_user_id}】✓ 检测到成功标志: {selector}")
-                        return self._confirm_success_after_visual()
+                        return self._confirm_success_after_visual(max_confirm_wait)
                 except Exception:
                     continue
 
@@ -264,7 +272,7 @@ class VerificationChecker:
                 slider = self.page.query_selector("#nc_1_n1z")
                 if not slider or not slider.is_visible():
                     logger.info(f"【{self.pure_user_id}】✓ 滑块按钮消失，进入二次确认")
-                    return self._confirm_success_after_visual()
+                    return self._confirm_success_after_visual(max_confirm_wait)
             except Exception:
                 pass
 
@@ -275,16 +283,32 @@ class VerificationChecker:
             logger.error(f"【{self.pure_user_id}】检查验证结果时出错: {e}")
             return False
 
-    def _confirm_success_after_visual(self) -> bool:
+    def _confirm_success_after_visual(self, max_confirm_wait: Optional[float] = None) -> bool:
         """视觉通过后再做一次"风控真通过"二次确认
 
-        - 最多等 8 秒，每 0.3 秒轮询一次
-        - 任一时刻满足 URL 不在 punish 且 x5sec 已新下发 即返回 True
-        - 若超时后 URL 仍在 x5step=2/punish/pureCaptcha 则返回 False
-        - 若超时后 URL 离开了 punish 但 x5sec 未更新，也按 True 处理
-          （部分场景下 x5sec 通过 Service Worker 异步写入，可能稍迟）
+        判定以"是否已新下发 x5sec"为唯一充分条件，与最终取 cookie 阶段
+        （_get_cookies_after_success 要求 cookie 必须含 x5sec）保持语义一致，
+        避免"视觉像过了但风控未真正放行"的假阳性提前结束重试：
+
+        - 在等待窗口内每 0.3 秒轮询一次（给 x5sec 经 Service Worker 异步写入留时间）
+        - 任一时刻满足 URL 不在 punish 且 x5sec 已新下发 → 立即返回 True
+        - 超时后仍在 punish/x5step=2/pureCaptcha → 返回 False（肯定没过）
+        - 超时后 URL 已离开 punish 但整个窗口内从未见到新 x5sec → 返回 False
+          （宁可判失败让上层继续重试，也不放过无 x5sec 的假通过）
+
+        Args:
+            max_confirm_wait: 最长等待秒数。由上层按"距浏览器超时的剩余预算"
+                传入，避免固定长等待被超时守护强杀；为 None 时用默认 3 秒。
+                下限保护为 1 秒，确保 x5sec 至少有一点异步写入时间。
         """
-        max_wait = 2.0
+        # 等待窗口自适应：默认 3 秒；上层传入剩余预算时按预算走，但不低于 1 秒。
+        # x5sec 常经 Service Worker 异步写入，窗口过短（历史上为 2 秒）会等不到
+        # 落盘而误判为未下发；窗口过长又会被浏览器超时守护强杀，故由上层按剩余
+        # 预算动态给定最稳妥。
+        if max_confirm_wait is None:
+            max_wait = 3.0
+        else:
+            max_wait = max(1.0, float(max_confirm_wait))
         interval = 0.3
         waited = 0.0
         last_url = ""
@@ -323,15 +347,19 @@ class VerificationChecker:
             )
             return False
 
-        # URL 已离开 punish，但 x5sec 没更新（可能 SW 异步写入），保守按通过
+        # URL 已离开 punish，且窗口内确实见到新 x5sec：真通过
         if x5sec_seen_new:
             logger.info(f"【{self.pure_user_id}】✅ 真通过：x5sec 已新下发")
             return True
 
+        # URL 离开了 punish 但整个窗口内从未下发新 x5sec：判失败。
+        # 最终取 cookie 阶段同样要求必须含 x5sec，这里提前判失败可让
+        # 上层继续重试，而非因假阳性提前结束、白白耗掉一次重试机会。
         logger.warning(
-            f"【{self.pure_user_id}】⚠️  URL 已离开 punish 但 x5sec 未变更（{last_url[:120]}），按通过处理"
+            f"【{self.pure_user_id}】❌ URL 已离开 punish 但始终未下发新 x5sec"
+            f"（{last_url[:120]}），判定未通过，交由上层重试"
         )
-        return True
+        return False
 
     def _check_container_status(self, target_frame: Any) -> Tuple[bool, bool]:
         """检查容器状态
@@ -370,22 +398,3 @@ class VerificationChecker:
                 return (False, False)
             logger.warning(f"【{self.pure_user_id}】检查容器状态时出错: {e}")
             return (True, True)
-
-    def check_success_simple(self) -> bool:
-        """简单检查滑块验证是否成功（兜底方法）"""
-        try:
-            for selector in self.SUCCESS_SELECTORS:
-                try:
-                    element = self.page.query_selector(selector)
-                    if element and element.is_visible():
-                        return True
-                except Exception:
-                    continue
-
-            slider = self.page.query_selector("#nc_1_n1z")
-            if not slider or not slider.is_visible():
-                return True
-
-            return False
-        except Exception:
-            return False

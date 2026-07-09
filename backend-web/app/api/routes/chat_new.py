@@ -32,6 +32,7 @@ from common.models import User, XYAccount
 from common.schemas.common import ApiResponse
 from common.utils.auth_scope import is_admin_user
 from common.utils.xianyu_utils import trans_cookies
+from common.utils.xianyu_message_parser import load_content_json, interpret_content
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -747,64 +748,29 @@ def _parse_message(model: dict, myid: str) -> dict | None:
         msg_images = []
 
         if custom_data:
-            try:
-                decoded = json.loads(
-                    base64.b64decode(custom_data).decode("utf-8")
-                )
-                content_type = decoded.get("contentType", 0)
-
-                if content_type == 1 and "text" in decoded:
-                    # 文本消息: {"contentType":1, "text":{"text":"实际消息"}}
-                    msg_type = "text"
-                    text_obj = decoded["text"]
-                    if isinstance(text_obj, dict):
-                        msg_text = text_obj.get("text", "")
+            # 文本/图片/语音等通用内容解析统一走公共模块（HTTP 历史消息载荷为 base64）；
+            # 卡片(card)与 summary 降级为本 HTTP 接口特有。这里用 load_content_json 只做解码
+            # （不套 looks_like_content 内容白名单），保证纯 {title/template} 卡片（不带
+            # contentType/内容键）仍能进入下方 elif 分支被识别为 card，而非被误降级成 summary。
+            decoded = load_content_json(custom_data)
+            if decoded is not None:
+                msg_text, msg_images, msg_type = interpret_content(decoded)
+                if msg_type == "image" and not msg_images:
+                    # 图片但未取到 URL，占位提示
+                    msg_text = "[图片]"
+                elif not msg_type:
+                    # 公共模块未识别：卡片/系统消息或未知类型，走本接口特有降级
+                    content_type = decoded.get("contentType", 0)
+                    if "title" in decoded or "template" in decoded:
+                        msg_type = "card"
+                        msg_text = str(
+                            decoded.get("title", decoded.get("template", "[卡片消息]"))
+                        )
                     else:
-                        msg_text = str(text_obj)
-
-                elif content_type == 2 and "image" in decoded:
-                    # 图片消息: {"contentType":2, "image":{"pics":[{"url":"..."}]}}
-                    msg_type = "image"
-                    pics = decoded.get("image", {}).get("pics", [])
-                    msg_images = [
-                        pic.get("url", "") for pic in pics if pic.get("url")
-                    ]
-                    if not msg_images:
-                        msg_text = "[图片]"
-
-                elif content_type == 3 and "audio" in decoded:
-                    # 语音消息
-                    msg_type = "text"
-                    msg_text = "[语音消息]"
-
-                elif "text" in decoded:
-                    # 兼容: text 可能是字符串或对象
-                    msg_type = "text"
-                    text_obj = decoded["text"]
-                    if isinstance(text_obj, dict):
-                        msg_text = text_obj.get("text", str(text_obj))
-                    else:
-                        msg_text = str(text_obj)
-
-                elif "picUrl" in decoded:
-                    # 兼容旧格式图片
-                    msg_type = "image"
-                    msg_images = [decoded["picUrl"]]
-
-                elif "title" in decoded or "template" in decoded:
-                    # 卡片/系统消息
-                    msg_type = "card"
-                    msg_text = str(
-                        decoded.get("title", decoded.get("template", "[卡片消息]"))
-                    )
-
-                else:
-                    # 未知类型，用 summary 降级
-                    msg_type = "text"
-                    summary = custom.get("summary", "")
-                    msg_text = str(summary) if summary else f"[未知消息类型:{content_type}]"
-
-            except Exception:
+                        msg_type = "text"
+                        summary = custom.get("summary", "")
+                        msg_text = str(summary) if summary else f"[未知消息类型:{content_type}]"
+            else:
                 # base64解码或JSON解析失败，用 summary 降级
                 summary = custom.get("summary", "")
                 msg_text = str(summary) if summary else "[无法解析的消息]"

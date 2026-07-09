@@ -15,6 +15,7 @@ from loguru import logger
 
 from .utils import safe_str
 from common.utils.xianyu_utils import decrypt
+from common.utils.xianyu_message_parser import decode_first_content, interpret_content
 
 
 class MessageHandler:
@@ -266,7 +267,7 @@ class MessageHandler:
                 msg_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(msg_time / 1000))
             else:
                 msg_time = time.strftime("%Y-%m-%d %H:%M:%S")
-            
+
             # 判断消息格式：有"10"字段且有reminderContent是普通聊天消息
             if message_10 and message_10.get("reminderContent"):
                 # 普通聊天消息格式
@@ -275,6 +276,26 @@ class MessageHandler:
                 # 提取发送者名称（参照旧框架：优先使用senderNick，再用reminderTitle）
                 # 注意：需要检查空字符串
                 send_user_name = message_10.get("senderNick") or message_10.get("reminderTitle") or "系统"
+
+                # 解析真实消息内容（复用公共模块）。买家发图片时 reminderContent 只是
+                # 占位符 "[图片]"，这里从原始报文解码出真实图片 URL，并把 send_message
+                # 直接替换为图片链接，使下游 AI 回复、关键词匹配、消息通知都能拿到链接。
+                # 内容载荷在 message["1"]["6"]["3"]["5"]（明文JSON）或 ["1"]（base64）。
+                _m6 = message_1.get("6", {})
+                _m6_3 = _m6.get("3", {}) if isinstance(_m6, dict) else {}
+                _candidates = (
+                    [_m6_3.get("5", ""), _m6_3.get("1", "")]
+                    if isinstance(_m6_3, dict) else []
+                )
+                content_dict = decode_first_content(_candidates)
+                if content_dict is not None:
+                    parsed_text, parsed_images, parsed_type = interpret_content(content_dict)
+                    if parsed_type == "image" and parsed_images:
+                        # 多张图片用换行拼接为链接文本，直接替换 send_message
+                        reminder_content = "\n".join(parsed_images)
+                    elif parsed_type == "text" and parsed_text:
+                        # 用解码出的准确文本（回退保留 reminderContent）
+                        reminder_content = parsed_text
             else:
                 # 卡片消息格式（如评价请求、确认收货等系统卡片）
                 # 结构: {"1": {"1": {"1": "xxx@goofish"}, "2": "xxx@goofish", "6": {"3": {"2": "消息内容"}}}}
@@ -295,7 +316,7 @@ class MessageHandler:
             
             # 提取商品ID
             item_id = self._extract_item_id(message)
-            
+
             return {
                 "send_user_id": send_user_id,
                 "send_user_name": send_user_name,
