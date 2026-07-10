@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Bot, Loader2, Pencil, Plus, Save, Search, Trash2, Upload, X } from 'lucide-react'
+import { Bot, Copy, Loader2, Pencil, Plus, Save, Search, Trash2, Upload, X } from 'lucide-react'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { useUIStore } from '@/store/uiStore'
 import {
@@ -102,35 +102,37 @@ export function AiListingModal({ onClose, onTaskStarted }: Props) {
 
   useEffect(() => { loadConfigs() }, [])
 
+  const configToForm = (config: AiListingConfig): AiListingConfigParams => ({
+    name: config.name,
+    prompt: config.prompt,
+    reference_text: config.reference_text || '',
+    price_mode: config.price_mode,
+    fixed_price: config.fixed_price ?? null,
+    price_min: config.price_min ?? null,
+    price_max: config.price_max ?? null,
+    text_api_url: config.text_api_url,
+    text_api_key: config.text_api_key,
+    text_model: config.text_model,
+    image_mode: config.image_mode,
+    image_api_url: config.image_api_url || 'https://api.openai.com/v1',
+    image_api_key: config.image_api_key || '',
+    image_model: config.image_model || '',
+    image_prompt: config.image_prompt || '',
+    image_polish_enabled: Boolean(config.image_polish_enabled) || (config.image_mode === 'ai' && (config.random_image_count || 1) > 1),
+    image_polish_sequential: Boolean(config.image_polish_sequential),
+    random_images: config.random_images || [],
+    random_image_count: config.random_image_count || 1,
+    material_defaults: {
+      ...defaultForm.material_defaults,
+      ...(config.material_defaults || {}),
+    },
+  })
+
   const applyConfig = (config: AiListingConfig) => {
     setSelectedId(config.id)
     setDraftMode(false)
     setEditingId(null)
-    setForm({
-      name: config.name,
-      prompt: config.prompt,
-      reference_text: config.reference_text || '',
-      price_mode: config.price_mode,
-      fixed_price: config.fixed_price ?? null,
-      price_min: config.price_min ?? null,
-      price_max: config.price_max ?? null,
-      text_api_url: config.text_api_url,
-      text_api_key: config.text_api_key,
-      text_model: config.text_model,
-      image_mode: config.image_mode,
-      image_api_url: config.image_api_url || 'https://api.openai.com/v1',
-      image_api_key: config.image_api_key || '',
-      image_model: config.image_model || '',
-      image_prompt: config.image_prompt || '',
-      image_polish_enabled: Boolean(config.image_polish_enabled) || (config.image_mode === 'ai' && (config.random_image_count || 1) > 1),
-      image_polish_sequential: Boolean(config.image_polish_sequential),
-      random_images: config.random_images || [],
-      random_image_count: config.random_image_count || 1,
-      material_defaults: {
-        ...defaultForm.material_defaults,
-        ...(config.material_defaults || {}),
-      },
-    })
+    setForm(configToForm(config))
   }
 
   const createNew = () => {
@@ -146,6 +148,17 @@ export function AiListingModal({ onClose, onTaskStarted }: Props) {
   const startEdit = (config: AiListingConfig) => {
     applyConfig(config)
     setEditingId(config.id)
+  }
+
+  const duplicateConfig = (config: AiListingConfig) => {
+    setSelectedId(null)
+    setDraftMode(true)
+    setEditingId(null)
+    setForm({
+      ...configToForm(config),
+      name: `${config.name} - 副本`,
+    })
+    addToast({ type: 'info', message: '已复制铺货配置，请保存为新配置' })
   }
 
   const updateDefaults = (patch: Partial<AiListingConfigParams['material_defaults']>) => {
@@ -371,6 +384,16 @@ export function AiListingModal({ onClose, onTaskStarted }: Props) {
                             disabled={saving}
                           >
                             {editing && saving ? <Loader2 className="w-4 h-4 animate-spin text-blue-500" /> : editing ? <Save className="w-4 h-4 text-blue-500" /> : <Pencil className="w-4 h-4 text-blue-500" />}
+                          </button>
+                          <button
+                            className="table-action-btn"
+                            title="复制"
+                            onClick={e => {
+                              e.stopPropagation()
+                              duplicateConfig(config)
+                            }}
+                          >
+                            <Copy className="w-4 h-4 text-cyan-500" />
                           </button>
                           <button
                             className="table-action-btn"
