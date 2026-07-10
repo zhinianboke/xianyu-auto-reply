@@ -16,6 +16,11 @@ import {
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
 const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '其他']
 
+function normalizeMoney(value: number | null | undefined): number | null | undefined {
+  if (value === null || value === undefined || Number.isNaN(value)) return value
+  return Math.round(value * 100) / 100
+}
+
 const defaultForm: AiListingConfigParams = {
   name: '',
   prompt: '',
@@ -169,9 +174,9 @@ export function AiListingModal({ onClose, onTaskStarted }: Props) {
     if (!form.name.trim()) return '请填写配置名称'
     if (!form.prompt.trim()) return '请填写商品生成提示词'
     if (!form.text_api_url.trim() || !form.text_api_key.trim() || !form.text_model.trim()) return '请填写文案AI配置'
-    if (form.price_mode === 'fixed' && (!form.fixed_price || form.fixed_price <= 0)) return '请填写有效固定价格'
+    if (form.price_mode === 'fixed' && (!form.fixed_price || form.fixed_price < 0.01)) return '固定价格最小为0.01'
     if (form.price_mode === 'range') {
-      if (!form.price_min || !form.price_max || form.price_min <= 0 || form.price_max <= 0) return '请填写有效价格范围'
+      if (!form.price_min || !form.price_max || form.price_min < 0.01 || form.price_max < 0.01) return '价格范围最小为0.01'
       if (form.price_max < form.price_min) return '最高价格不能小于最低价格'
     }
     if (form.image_mode === 'random') {
@@ -201,11 +206,16 @@ export function AiListingModal({ onClose, onTaskStarted }: Props) {
     try {
       const payload = {
         ...form,
+        fixed_price: normalizeMoney(form.fixed_price) ?? null,
+        price_min: normalizeMoney(form.price_min) ?? null,
+        price_max: normalizeMoney(form.price_max) ?? null,
         image_polish_enabled: effectiveImagePolishEnabled,
         random_image_count: Math.max(1, Math.min(Number(form.random_image_count || 1), 9)),
         material_defaults: {
           ...form.material_defaults,
-          postage: form.material_defaults.delivery_method === 'express' ? Number(form.material_defaults.postage || 0) : 0,
+          postage: form.material_defaults.delivery_method === 'express'
+            ? (normalizeMoney(Number(form.material_defaults.postage || 0)) ?? 0)
+            : 0,
         },
       }
       const res = selectedId
@@ -471,17 +481,17 @@ export function AiListingModal({ onClose, onTaskStarted }: Props) {
                   {form.price_mode === 'fixed' ? (
                     <div className="input-group">
                       <label className="input-label">固定价格</label>
-                      <input type="number" className="input-ios" disabled={!isEditing} min="0" step="0.01" value={form.fixed_price || ''} onChange={e => setForm(f => ({ ...f, fixed_price: parseFloat(e.target.value) || null }))} />
+                      <input type="number" className="input-ios" disabled={!isEditing} min="0.01" step="0.01" value={form.fixed_price || ''} onChange={e => setForm(f => ({ ...f, fixed_price: parseFloat(e.target.value) || null }))} />
                     </div>
                   ) : (
                     <>
                       <div className="input-group">
                         <label className="input-label">最低价格</label>
-                        <input type="number" className="input-ios" disabled={!isEditing} min="0" step="0.01" value={form.price_min || ''} onChange={e => setForm(f => ({ ...f, price_min: parseFloat(e.target.value) || null }))} />
+                        <input type="number" className="input-ios" disabled={!isEditing} min="0.01" step="0.01" value={form.price_min || ''} onChange={e => setForm(f => ({ ...f, price_min: parseFloat(e.target.value) || null }))} />
                       </div>
                       <div className="input-group">
                         <label className="input-label">最高价格</label>
-                        <input type="number" className="input-ios" disabled={!isEditing} min="0" step="0.01" value={form.price_max || ''} onChange={e => setForm(f => ({ ...f, price_max: parseFloat(e.target.value) || null }))} />
+                        <input type="number" className="input-ios" disabled={!isEditing} min="0.01" step="0.01" value={form.price_max || ''} onChange={e => setForm(f => ({ ...f, price_max: parseFloat(e.target.value) || null }))} />
                       </div>
                     </>
                   )}

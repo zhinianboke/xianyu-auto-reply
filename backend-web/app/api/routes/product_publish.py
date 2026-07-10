@@ -46,8 +46,8 @@ class MaterialCreateRequest(BaseModel):
     """创建素材请求"""
     title: str = Field(..., min_length=1, max_length=200, description="商品标题")
     description: str = Field(..., min_length=1, description="商品描述")
-    price: float = Field(..., gt=0, description="售价")
-    original_price: Optional[float] = Field(None, description="原价（划线价）")
+    price: float = Field(..., ge=0.01, multiple_of=0.01, description="售价")
+    original_price: Optional[float] = Field(None, ge=0.01, multiple_of=0.01, description="原价（划线价）")
     category: Optional[str] = Field(None, max_length=100, description="商品分类")
     images: List[str] = Field(default=[], description="图片URL列表（最多9张）")
     delivery_method: str = Field("express", description="发货方式：express/pickup")
@@ -62,8 +62,8 @@ class MaterialUpdateRequest(BaseModel):
     """更新素材请求（所有字段均可选）"""
     title: Optional[str] = Field(None, max_length=200)
     description: Optional[str] = None
-    price: Optional[float] = Field(None, gt=0)
-    original_price: Optional[float] = None
+    price: Optional[float] = Field(None, ge=0.01, multiple_of=0.01)
+    original_price: Optional[float] = Field(None, ge=0.01, multiple_of=0.01)
     category: Optional[str] = None
     images: Optional[List[str]] = None
     delivery_method: Optional[str] = None
@@ -102,9 +102,9 @@ class AiListingConfigRequest(BaseModel):
     prompt: str = Field(..., min_length=1, description="商品生成提示词")
     reference_text: Optional[str] = Field(None, description="参考文案")
     price_mode: str = Field("fixed", description="价格模式：fixed/range")
-    fixed_price: Optional[float] = Field(None, ge=0, description="固定价格")
-    price_min: Optional[float] = Field(None, ge=0, description="最低价格")
-    price_max: Optional[float] = Field(None, ge=0, description="最高价格")
+    fixed_price: Optional[float] = Field(None, ge=0.01, multiple_of=0.01, description="固定价格")
+    price_min: Optional[float] = Field(None, ge=0.01, multiple_of=0.01, description="最低价格")
+    price_max: Optional[float] = Field(None, ge=0.01, multiple_of=0.01, description="最高价格")
     text_api_url: str = Field(..., min_length=1, max_length=500, description="文案AI接口地址")
     text_api_key: str = Field(..., min_length=1, description="文案AI Key")
     text_model: str = Field(..., min_length=1, max_length=120, description="文案AI模型")
@@ -708,11 +708,11 @@ def _validate_ai_listing_config(req: AiListingConfigRequest) -> str | None:
     if req.price_mode not in {"fixed", "range"}:
         return "价格模式不正确"
     if req.price_mode == "fixed":
-        if not req.fixed_price or req.fixed_price <= 0:
-            return "固定价格必须大于0"
+        if not req.fixed_price or req.fixed_price < 0.01:
+            return "固定价格最小为0.01"
     else:
-        if not req.price_min or not req.price_max or req.price_min <= 0 or req.price_max <= 0:
-            return "价格范围必须大于0"
+        if not req.price_min or not req.price_max or req.price_min < 0.01 or req.price_max < 0.01:
+            return "价格范围最小为0.01"
         if req.price_max < req.price_min:
             return "最高价格不能小于最低价格"
     if req.image_mode not in {"ai", "random"}:

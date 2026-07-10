@@ -13,6 +13,11 @@ import {
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
 const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '其他']
 
+function normalizeMoney(value: number | null | undefined): number | undefined {
+  if (value === null || value === undefined || Number.isNaN(value)) return undefined
+  return Math.round(value * 100) / 100
+}
+
 interface Props {
   initial: ProductMaterial | null
   onClose: () => void
@@ -68,16 +73,25 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
   const handleSave = async () => {
     if (!form.title.trim()) { addToast({ type: 'warning', message: '请填写商品标题' }); return }
     if (!form.description.trim()) { addToast({ type: 'warning', message: '请填写商品描述' }); return }
-    if (!form.price || form.price <= 0) { addToast({ type: 'warning', message: '请填写有效价格' }); return }
+    const normalizedPrice = normalizeMoney(form.price)
+    const normalizedOriginalPrice = normalizeMoney(form.original_price)
+    if (!normalizedPrice || normalizedPrice < 0.01) { addToast({ type: 'warning', message: '售价最小为0.01' }); return }
+    if (normalizedOriginalPrice !== undefined && normalizedOriginalPrice < 0.01) { addToast({ type: 'warning', message: '原价最小为0.01' }); return }
     if (!form.images || form.images.length === 0) { addToast({ type: 'warning', message: '请至少上传一张商品图片' }); return }
+    const payload = {
+      ...form,
+      price: normalizedPrice,
+      original_price: normalizedOriginalPrice,
+      postage: normalizeMoney(form.postage) ?? 0,
+    }
     setSaving(true)
     try {
       if (initial) {
-        const res = await updateMaterial(initial.id, form)
+        const res = await updateMaterial(initial.id, payload)
         if (!res.success) { addToast({ type: 'error', message: res.message || '更新失败' }); return }
         addToast({ type: 'success', message: '素材更新成功' })
       } else {
-        const res = await createMaterial(form)
+        const res = await createMaterial(payload)
         if (!res.success) { addToast({ type: 'error', message: res.message || '创建失败' }); return }
         addToast({ type: 'success', message: '素材创建成功' })
       }
@@ -106,12 +120,12 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
               </div>
               <div className="input-group">
                 <label className="input-label">售价（元）<span className="text-red-500">*</span></label>
-                <input type="number" className="input-ios" placeholder="0.00" min="0" step="0.01"
+                <input type="number" className="input-ios" placeholder="0.01" min="0.01" step="0.01"
                   value={form.price || ''} onChange={e => setForm(f => ({ ...f, price: parseFloat(e.target.value) || 0 }))} />
               </div>
               <div className="input-group">
                 <label className="input-label">原价（划线价，选填）</label>
-                <input type="number" className="input-ios" placeholder="0.00" min="0" step="0.01"
+                <input type="number" className="input-ios" placeholder="0.01" min="0.01" step="0.01"
                   value={form.original_price || ''} onChange={e => setForm(f => ({ ...f, original_price: parseFloat(e.target.value) || undefined }))} />
               </div>
               <div className="input-group">
