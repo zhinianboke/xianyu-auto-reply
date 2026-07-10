@@ -55,8 +55,7 @@ export interface AiListingMaterialDefaults {
   category?: string
   condition?: string
   brand?: string
-  delivery_method?: ProductDeliveryMethod
-  support_pickup?: boolean
+  delivery_method?: 'express' | 'pickup'
   postage?: number
   address?: string
   remark?: string
