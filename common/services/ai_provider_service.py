@@ -8,6 +8,7 @@ AI服务商工具
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -185,8 +186,12 @@ def normalize_openai_base_url(base_url: str) -> str:
     base = base.rstrip("/")
     if base.endswith("/chat/completions"):
         base = base[: -len("/chat/completions")]
+    if base.endswith("/images/generations"):
+        base = base[: -len("/images/generations")]
     if base.endswith("/models"):
         base = base[: -len("/models")]
+    if not re.search(r"/v[0-9A-Za-z._-]+$", base):
+        base = f"{base}/v1"
     return base
 
 
