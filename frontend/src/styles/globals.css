@@ -379,6 +379,7 @@
     @apply fixed inset-0 bg-black/50 dark:bg-black/70 z-50
            flex items-center justify-center p-4
            animate-fade-in;
+    margin-top: 0 !important;
   }
 
   .modal-content {
