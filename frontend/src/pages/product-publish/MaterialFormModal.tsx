@@ -24,6 +24,7 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [previewImage, setPreviewImage] = useState<string | null>(null)
   const [form, setForm] = useState<MaterialCreateParams>({
     title: initial?.title ?? '',
     description: initial?.description ?? '',
@@ -68,6 +69,7 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
     if (!form.title.trim()) { addToast({ type: 'warning', message: '请填写商品标题' }); return }
     if (!form.description.trim()) { addToast({ type: 'warning', message: '请填写商品描述' }); return }
     if (!form.price || form.price <= 0) { addToast({ type: 'warning', message: '请填写有效价格' }); return }
+    if (!form.images || form.images.length === 0) { addToast({ type: 'warning', message: '请至少上传一张商品图片' }); return }
     setSaving(true)
     try {
       if (initial) {
@@ -147,7 +149,7 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
                     value={form.postage || ''} onChange={e => setForm(f => ({ ...f, postage: parseFloat(e.target.value) || 0 }))} />
                 </div>
               )}
-              <div className="input-group">
+              <div className="sm:col-span-2 input-group">
                 <label className="input-label">宝贝所在地</label>
                 <input className="input-ios" placeholder="如：北京市朝阳区；仅做素材记录，发布时统一走随机地址"
                   value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} />
@@ -167,11 +169,13 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
               </div>
             </div>
             <div className="input-group">
-              <label className="input-label">商品图片（最多9张）</label>
+              <label className="input-label">商品图片（最多9张） <span className="text-red-500">*</span></label>
               <div className="flex flex-wrap gap-2 mt-1.5">
                 {(form.images || []).map((url, i) => (
                   <div key={i} className="relative w-20 h-20 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-600 group">
-                    <img src={url} alt="" className="w-full h-full object-cover" />
+                    <button type="button" className="w-full h-full cursor-zoom-in" onClick={() => setPreviewImage(url)}>
+                      <img src={url} alt="" className="w-full h-full object-cover" />
+                    </button>
                     {i === 0 && (
                       <span className="absolute bottom-0 left-0 right-0 bg-blue-500/80 text-white text-[10px] text-center py-0.5">封面</span>
                     )}
@@ -201,6 +205,22 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
           </button>
         </div>
       </div>
+
+      {previewImage && (
+        <div className="modal-overlay" style={{ zIndex: 70 }}>
+          <div className="modal-content max-w-4xl">
+            <div className="modal-header">
+              <h2 className="modal-title">图片预览</h2>
+              <button className="modal-close" onClick={() => setPreviewImage(null)}>
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="modal-body flex items-center justify-center">
+              <img src={previewImage} alt="预览图片" className="max-w-full max-h-[70vh] object-contain rounded-lg" />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

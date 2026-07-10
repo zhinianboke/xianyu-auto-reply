@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 商品素材库页面
  *
  * 功能：
@@ -8,19 +8,28 @@
  * 4. 勾选批量删除
  * 5. 素材用于单品发布和批量发布
  */
-import { useState, useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Plus, Pencil, Trash2, RefreshCw, Image, ChevronLeft, ChevronRight, Search, X } from 'lucide-react'
+import { Plus, Pencil, Trash2, RefreshCw, Image, ChevronLeft, ChevronRight, Search, X, Bot } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
-import { getMaterials, deleteMaterial, batchDeleteMaterials, type ProductMaterial } from '@/api/productPublish'
+import {
+  getMaterials,
+  deleteMaterial,
+  batchDeleteMaterials,
+  getAiListingTaskStatus,
+  getAiListingTasks,
+  type AiListingTaskStatus,
+  type ProductMaterial,
+} from '@/api/productPublish'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { MaterialFormModal } from './MaterialFormModal'
+import { AiListingModal } from './AiListingModal'
 
 const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '其他']
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
-
+const AI_LISTING_TASK_STORAGE_KEY = 'product_publish_ai_listing_task_ids'
 export function ProductMaterials() {
   const { addToast } = useUIStore()
   const { user } = useAuthStore()
@@ -33,23 +42,26 @@ export function ProductMaterials() {
   const [pageSize, setPageSize] = useState(20)
   const [totalPages, setTotalPages] = useState(0)
   const [showModal, setShowModal] = useState(false)
+  const [showAiListingModal, setShowAiListingModal] = useState(false)
   const [editTarget, setEditTarget] = useState<ProductMaterial | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; item: ProductMaterial | null }>({ open: false, item: null })
   const [deleting, setDeleting] = useState(false)
+  const [aiListingTasks, setAiListingTasks] = useState<AiListingTaskStatus[]>([])
+  const [taskSyncLoaded, setTaskSyncLoaded] = useState(false)
+  const aiListingTasksRef = useRef<AiListingTaskStatus[]>([])
+  const materialRefreshTickRef = useRef(0)
 
-  // 筛选状态
   const [filterTitle, setFilterTitle] = useState('')
   const [filterCategory, setFilterCategory] = useState('')
   const [filterCondition, setFilterCondition] = useState('')
 
-  // 批量选择状态
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false)
   const [batchDeleting, setBatchDeleting] = useState(false)
+  const runningTaskCount = aiListingTasks.filter(item => !item.finished).length
 
-  /** 加载素材列表 */
-  const load = async (p = page, size = pageSize) => {
-    setTableLoading(true)
+  const load = async (p = page, size = pageSize, options?: { silent?: boolean }) => {
+    if (!options?.silent) setTableLoading(true)
     try {
       const filters: { title?: string; category?: string; condition?: string } = {}
       if (filterTitle.trim()) filters.title = filterTitle.trim()
@@ -60,37 +72,136 @@ export function ProductMaterials() {
         setMaterials(res.data.list)
         setTotal(res.data.total)
         setTotalPages(res.data.total_pages)
-        // 清除不在当前页的选中项
         const currentIds = new Set(res.data.list.map(m => m.id))
         setSelectedIds(prev => prev.filter(id => currentIds.has(id)))
       } else {
         addToast({ type: 'error', message: res.message || '加载失败' })
       }
     } catch {
-      addToast({ type: 'error', message: '网络错误，请重试' })
+      if (!options?.silent) {
+        addToast({ type: 'error', message: '网络错误，请重试' })
+      }
     } finally {
       setLoading(false)
-      setTableLoading(false)
+      if (!options?.silent) setTableLoading(false)
     }
   }
 
   useEffect(() => { load(page, pageSize) }, [page, pageSize])
 
-  /** 执行筛选 */
+  useEffect(() => {
+    aiListingTasksRef.current = aiListingTasks
+  }, [aiListingTasks])
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(AI_LISTING_TASK_STORAGE_KEY)
+      const taskIds = raw ? JSON.parse(raw) : []
+      if (!Array.isArray(taskIds) || taskIds.length === 0) return
+      setAiListingTasks(taskIds.map((taskId: string) => ({
+        task_id: String(taskId),
+        config_id: 0,
+        config_name: '',
+        total: 0,
+        current: 0,
+        success: 0,
+        failed: 0,
+        status: 'pending',
+        message: '等待同步任务状态',
+        progress_percent: 0,
+        active_stage: 'pending',
+        stage_label: '等待开始',
+        stage_detail: '',
+        step_counts: {
+          text: { done: 0, total: 0 },
+          image_polish: { done: 0, total: 0 },
+          image_generate: { done: 0, total: 0 },
+          material_create: { done: 0, total: 0 },
+        },
+        created_material_ids: [],
+        errors: [],
+        finished: false,
+      })))
+    } catch {
+      localStorage.removeItem(AI_LISTING_TASK_STORAGE_KEY)
+    }
+  }, [])
+
+  useEffect(() => {
+    let stopped = false
+    const currentTasks = aiListingTasksRef.current
+    const hasRunningTasks = currentTasks.some(item => !item.finished)
+    if (taskSyncLoaded && !hasRunningTasks) return
+
+    const syncTasks = async () => {
+      try {
+        const previousTasks = aiListingTasksRef.current
+        const previousRunning = previousTasks.some(item => !item.finished)
+        const listRes = await getAiListingTasks()
+        if (!listRes.success || !listRes.data || stopped) return
+
+        const remoteTasks = listRes.data
+        const remoteTaskMap = new Map(remoteTasks.map(item => [item.task_id, item]))
+        const rememberedTaskIds = previousTasks.map(item => item.task_id)
+        const mergedTaskIds = rememberedTaskIds.length > 0
+          ? rememberedTaskIds
+          : remoteTasks.filter(item => !item.finished).map(item => item.task_id)
+        const detailedTasks = await Promise.all(mergedTaskIds.map(async taskId => {
+          const remoteTask = remoteTaskMap.get(taskId)
+          if (remoteTask) return remoteTask
+          const res = await getAiListingTaskStatus(taskId)
+          return res.success && res.data ? res.data : null
+        }))
+        if (stopped) return
+
+        const nextTasks = detailedTasks.filter((item): item is AiListingTaskStatus => Boolean(item))
+        setTaskSyncLoaded(true)
+        aiListingTasksRef.current = nextTasks
+        setAiListingTasks(nextTasks)
+        const nextTaskIds = nextTasks.map(item => item.task_id)
+        if (nextTaskIds.length > 0) {
+          localStorage.setItem(AI_LISTING_TASK_STORAGE_KEY, JSON.stringify(nextTaskIds))
+        } else {
+          localStorage.removeItem(AI_LISTING_TASK_STORAGE_KEY)
+        }
+
+        const nextRunning = nextTasks.some(item => !item.finished)
+        if (nextRunning) {
+          materialRefreshTickRef.current += 1
+          if (materialRefreshTickRef.current % 2 === 0) {
+            void load(page, pageSize, { silent: true })
+          }
+        } else {
+          materialRefreshTickRef.current = 0
+        }
+        if (previousRunning && !nextRunning) {
+          void load(page, pageSize, { silent: true })
+        }
+      } catch {
+        // 保留当前任务状态，下一轮继续轮询
+      }
+    }
+
+    syncTasks()
+    const timer = window.setInterval(syncTasks, 1500)
+    return () => {
+      stopped = true
+      window.clearInterval(timer)
+    }
+  }, [page, pageSize, filterTitle, filterCategory, filterCondition, taskSyncLoaded, aiListingTasks.length, runningTaskCount])
+
   const handleFilter = () => {
     setPage(1)
     setSelectedIds([])
     load(1, pageSize)
   }
 
-  /** 重置筛选 */
   const handleResetFilter = () => {
     setFilterTitle('')
     setFilterCategory('')
     setFilterCondition('')
     setPage(1)
     setSelectedIds([])
-    // 直接用空筛选加载
     setTableLoading(true)
     getMaterials(1, pageSize).then(res => {
       if (res.success) {
@@ -107,7 +218,6 @@ export function ProductMaterials() {
     })
   }
 
-  /** 确认删除单条 */
   const handleConfirmDelete = async () => {
     if (!deleteConfirm.item) return
     setDeleting(true)
@@ -128,7 +238,6 @@ export function ProductMaterials() {
     }
   }
 
-  /** 批量删除 */
   const handleBatchDelete = async () => {
     if (selectedIds.length === 0) return
     setBatchDeleting(true)
@@ -149,7 +258,6 @@ export function ProductMaterials() {
     }
   }
 
-  /** 全选/取消全选当前页 */
   const handleSelectAll = () => {
     if (materials.length === 0) return
     const currentPageIds = materials.map(m => m.id)
@@ -161,22 +269,76 @@ export function ProductMaterials() {
     }
   }
 
-  /** 切换单条选中 */
   const toggleSelect = (id: number) => {
     setSelectedIds(prev =>
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
     )
   }
 
-  const allCurrentSelected = materials.length > 0 && materials.every(m => selectedIds.includes(m.id))
+  const closeAiListingTask = (taskId: string) => {
+    setAiListingTasks(prev => {
+      const nextTasks = prev.filter(item => item.task_id !== taskId)
+      const nextTaskIds = nextTasks.map(item => item.task_id)
+      if (nextTaskIds.length > 0) {
+        localStorage.setItem(AI_LISTING_TASK_STORAGE_KEY, JSON.stringify(nextTaskIds))
+      } else {
+        localStorage.removeItem(AI_LISTING_TASK_STORAGE_KEY)
+      }
+      return nextTasks
+    })
+  }
 
+  const handleAiListingTaskStarted = (taskId: string, total: number, configId: number, configName: string) => {
+    setAiListingTasks(prev => {
+      const nextTasks = [
+        {
+          task_id: taskId,
+          config_id: configId,
+          config_name: configName,
+          total,
+          current: 0,
+          success: 0,
+          failed: 0,
+          status: 'pending' as const,
+          message: '任务已提交，正在后台生成',
+          progress_percent: 0,
+          active_stage: 'pending',
+          stage_label: '任务已提交',
+          stage_detail: '等待后台开始处理',
+          step_counts: {
+            text: { done: 0, total },
+            image_polish: { done: 0, total },
+            image_generate: { done: 0, total },
+            material_create: { done: 0, total },
+          },
+          created_material_ids: [],
+          errors: [],
+          finished: false,
+        },
+        ...prev.filter(item => item.task_id !== taskId),
+      ]
+      localStorage.setItem(AI_LISTING_TASK_STORAGE_KEY, JSON.stringify(nextTasks.map(item => item.task_id)))
+      return nextTasks
+    })
+  }
+
+  const runningAiListingTasks = aiListingTasks.filter(item => !item.finished)
+  const aiListingTaskLimitReached = runningTaskCount >= 5
+  const allCurrentSelected = materials.length > 0 && materials.every(m => selectedIds.includes(m.id))
   const handlePageSizeChange = (size: number) => { setPageSize(size); setPage(1) }
+
+  const handleOpenAiListingModal = () => {
+    if (aiListingTaskLimitReached) {
+      addToast({ type: 'warning', message: '最多只能同时执行5个AI铺货任务，请等待生成完成后再继续铺货' })
+      return
+    }
+    setShowAiListingModal(true)
+  }
 
   if (loading) return <PageLoading />
 
   return (
     <div className="space-y-3 sm:space-y-4">
-      {/* 标题栏 */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h1 className="page-title">商品素材库</h1>
@@ -191,13 +353,78 @@ export function ProductMaterials() {
           <button className="btn-ios-secondary" onClick={() => load(page, pageSize)} disabled={tableLoading}>
             <RefreshCw className={`w-4 h-4 ${tableLoading ? 'animate-spin' : ''}`} />刷新
           </button>
+          <button
+            className="btn-ios-primary"
+            style={{
+              backgroundColor: 'transparent',
+              borderColor: 'transparent',
+              backgroundImage:
+                'linear-gradient(135deg, rgb(var(--theme-gradient-from)) 0%, rgb(var(--theme-gradient-via)) 55%, rgb(var(--theme-gradient-to)) 100%)',
+            }}
+            disabled={aiListingTaskLimitReached}
+            onClick={handleOpenAiListingModal}
+          >
+            <Bot className="w-4 h-4" />AI铺货
+          </button>
           <button className="btn-ios-primary" onClick={() => { setEditTarget(null); setShowModal(true) }}>
             <Plus className="w-4 h-4" />新建素材
           </button>
         </div>
       </div>
 
-      {/* 筛选栏 */}
+      {aiListingTasks.length > 0 && (
+        <div className="vben-card">
+          <div className="vben-card-body py-3 px-4">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 min-w-[180px]">
+                <Bot className="w-4 h-4 text-blue-500" />
+                <span className="font-medium text-slate-700 dark:text-slate-200">AI铺货后台任务</span>
+                <span className="text-xs text-slate-400">运行中 {runningAiListingTasks.length}/5</span>
+              </div>
+              {aiListingTasks.map(task => {
+                const progress = Math.max(0, Math.min(100, Number(task.progress_percent || 0)))
+                return (
+                  <div key={task.task_id} className="flex items-start gap-3 rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2.5">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-slate-700 dark:text-slate-200 truncate">{task.config_name || `配置 ID ${task.config_id}`}</div>
+                          <div className="mt-1 flex items-center gap-2 min-w-0 text-xs text-slate-400">
+                            <span className="flex-shrink-0">任务 {task.task_id.slice(0, 8)}</span>
+                            {!task.finished && <span className="inline-flex w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse flex-shrink-0" />}
+                            <span className="truncate">{task.stage_label || task.message}</span>
+                          </div>
+                        </div>
+                        <span className="text-xs text-slate-400 flex-shrink-0">{progress.toFixed(0)}%</span>
+                      </div>
+                      <div className="mt-2 h-2 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-[width] duration-1000 ease-out bg-gradient-to-r from-sky-500 via-blue-500 to-violet-500"
+                          style={{ width: `${progress}%` }}
+                        />
+                      </div>
+                      <div className="mt-2 text-xs text-slate-500 truncate">
+                        {task.current}/{task.total}，成功 {task.success}，失败 {task.failed}，{task.stage_detail || task.message}
+                      </div>
+                      {task.errors.length > 0 && (
+                        <div className="mt-1 text-xs text-red-500 truncate">
+                          {task.errors[task.errors.length - 1]}
+                        </div>
+                      )}
+                    </div>
+                    {task.finished && (
+                      <button className="btn-ios-secondary btn-sm" onClick={() => closeAiListingTask(task.task_id)}>
+                        关闭
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="vben-card">
         <div className="vben-card-body py-3 px-4">
           <div className="flex flex-wrap items-center gap-3">
@@ -210,19 +437,11 @@ export function ProductMaterials() {
                 onKeyDown={e => e.key === 'Enter' && handleFilter()}
               />
             </div>
-            <select
-              className="input-ios w-32"
-              value={filterCategory}
-              onChange={e => { setFilterCategory(e.target.value); }}
-            >
+            <select className="input-ios w-32" value={filterCategory} onChange={e => { setFilterCategory(e.target.value) }}>
               <option value="">全部分类</option>
               {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
-            <select
-              className="input-ios w-28"
-              value={filterCondition}
-              onChange={e => { setFilterCondition(e.target.value); }}
-            >
+            <select className="input-ios w-28" value={filterCondition} onChange={e => { setFilterCondition(e.target.value) }}>
               <option value="">全部成色</option>
               {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
@@ -238,7 +457,6 @@ export function ProductMaterials() {
         </div>
       </div>
 
-      {/* 表格卡片 */}
       <motion.div
         initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
         className="vben-card flex flex-col"
@@ -314,12 +532,10 @@ export function ProductMaterials() {
                   </td>
                   <td>
                     <div className="table-actions">
-                      <button className="table-action-btn" title="编辑"
-                        onClick={() => { setEditTarget(m); setShowModal(true) }}>
+                      <button className="table-action-btn" title="编辑" onClick={() => { setEditTarget(m); setShowModal(true) }}>
                         <Pencil className="w-4 h-4 text-blue-500" />
                       </button>
-                      <button className="table-action-btn" title="删除"
-                        onClick={() => setDeleteConfirm({ open: true, item: m })}>
+                      <button className="table-action-btn" title="删除" onClick={() => setDeleteConfirm({ open: true, item: m })}>
                         <Trash2 className="w-4 h-4 text-red-500" />
                       </button>
                     </div>
@@ -330,13 +546,15 @@ export function ProductMaterials() {
           </table>
         </div>
 
-        {/* 分页 */}
         {total > 0 && (
           <div className="flex-shrink-0 flex flex-col sm:flex-row items-center justify-between px-4 py-3 border-t border-slate-200 dark:border-slate-700 gap-3">
             <div className="flex items-center gap-2 text-sm text-slate-500">
               <span>每页</span>
-              <select value={pageSize} onChange={e => handlePageSizeChange(Number(e.target.value))}
-                className="px-2 py-1 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <select
+                value={pageSize}
+                onChange={e => handlePageSizeChange(Number(e.target.value))}
+                className="px-2 py-1 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
                 <option value={10}>10 条</option>
                 <option value={20}>20 条</option>
                 <option value={50}>50 条</option>
@@ -346,12 +564,18 @@ export function ProductMaterials() {
             </div>
             <div className="flex items-center gap-2">
               <span className="text-sm text-slate-500">第 {page} / {totalPages} 页</span>
-              <button onClick={() => setPage(p => p - 1)} disabled={page <= 1 || tableLoading}
-                className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+              <button
+                onClick={() => setPage(p => p - 1)}
+                disabled={page <= 1 || tableLoading}
+                className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
                 <ChevronLeft className="w-4 h-4" />
               </button>
-              <button onClick={() => setPage(p => p + 1)} disabled={page >= totalPages || tableLoading}
-                className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+              <button
+                onClick={() => setPage(p => p + 1)}
+                disabled={page >= totalPages || tableLoading}
+                className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
                 <ChevronRight className="w-4 h-4" />
               </button>
             </div>
@@ -359,7 +583,6 @@ export function ProductMaterials() {
         )}
       </motion.div>
 
-      {/* 新建/编辑弹窗 */}
       {showModal && (
         <MaterialFormModal
           initial={editTarget}
@@ -368,7 +591,13 @@ export function ProductMaterials() {
         />
       )}
 
-      {/* 删除确认弹窗 */}
+      {showAiListingModal && (
+        <AiListingModal
+          onClose={() => setShowAiListingModal(false)}
+          onTaskStarted={handleAiListingTaskStarted}
+        />
+      )}
+
       <ConfirmModal
         isOpen={deleteConfirm.open}
         title="确认删除"
@@ -380,7 +609,6 @@ export function ProductMaterials() {
         onCancel={() => setDeleteConfirm({ open: false, item: null })}
       />
 
-      {/* 批量删除确认弹窗 */}
       <ConfirmModal
         isOpen={batchDeleteConfirm}
         title="确认批量删除"
