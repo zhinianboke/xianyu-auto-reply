@@ -71,9 +71,16 @@ export const getCards = async (params?: CardQueryParams): Promise<CardPaginatedR
 }
 
 // 获取全部卡券（不分页，用于关联弹窗等场景）
+// lite=1：仅返回列表所需轻字段（剔除卡密/文本/API配置/图片等大字段），
+// 避免卡券过多时一次性传输超大 JSON 导致界面卡顿；完整内容用 getCard 按需获取
 export const getAllCards = async (): Promise<CardData[]> => {
-  const result = await get<CardPaginatedResult>(`${CARD_PREFIX}?page_size=9999`)
+  const result = await get<CardPaginatedResult>(`${CARD_PREFIX}?page_size=9999&lite=1`)
   return result?.list || []
+}
+
+// 获取单个卡券完整详情（用于列表中按需查看详情，补齐轻量列表未返回的大字段）
+export const getCard = (cardId: number): Promise<CardData> => {
+  return get<CardData>(`${CARD_PREFIX}/${cardId}`)
 }
 
 // 按商品ID获取卡券列表

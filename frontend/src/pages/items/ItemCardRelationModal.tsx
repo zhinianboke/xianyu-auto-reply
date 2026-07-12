@@ -4,9 +4,9 @@
  * 功能：左右双栏布局，左侧待选卡券列表，右侧已选卡券列表
  * 勾选/取消勾选自动同步两侧显示，保存时写入关联表
  */
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, type UIEvent } from 'react'
 import { X, Loader2, Search, CheckSquare, Square, Ticket, Eye } from 'lucide-react'
-import { getAllCards, getCardsByItemId, updateItemCards, type CardData, type CardRelationItem } from '@/api/cards'
+import { getAllCards, getCard, getCardsByItemId, updateItemCards, type CardData, type CardRelationItem } from '@/api/cards'
 import { getDockRecords } from '@/api/distribution'
 import type { DockRecord } from '@/api/distribution'
 import { CardDetailModal } from '@/pages/cards/CardDetailModal'
@@ -29,6 +29,10 @@ const cardTypeLabels: Record<string, string> = {
   yifan_api: '亦凡API',
 }
 
+// 每次滚动加载的卡券行数（左右列表共用）：卡券很多时只渲染可视范围，
+// 滚动到底部再追加，保证 DOM 数量恒定，搜索仍对内存中全部卡券本地过滤
+const PAGE_SIZE = 60
+
 interface ItemCardRelationModalProps {
   /** 商品ID */
   itemId: string
@@ -49,11 +53,50 @@ export function ItemCardRelationModal({ itemId, itemName, onClose, onSaved }: It
   const [leftSearch, setLeftSearch] = useState('')
   const [rightSearch, setRightSearch] = useState('')
   const [viewingCard, setViewingCard] = useState<CardData | null>(null)
+  const [detailLoadingKey, setDetailLoadingKey] = useState<string | null>(null)
+  // 左右列表当前渲染的行数（滚动到底部时递增）
+  const [leftVisibleCount, setLeftVisibleCount] = useState(PAGE_SIZE)
+  const [rightVisibleCount, setRightVisibleCount] = useState(PAGE_SIZE)
 
   // 加载卡券列表和已关联的卡券
   useEffect(() => {
     loadData()
   }, [])
+
+  // 搜索条件变化时，重置已渲染行数，从头开始展示过滤后的结果
+  useEffect(() => {
+    setLeftVisibleCount(PAGE_SIZE)
+  }, [leftSearch])
+  useEffect(() => {
+    setRightVisibleCount(PAGE_SIZE)
+  }, [rightSearch])
+
+  // 滚动到接近底部时追加渲染下一批
+  const handleListScroll = (
+    e: UIEvent<HTMLDivElement>,
+    total: number,
+    setCount: (updater: (prev: number) => number) => void,
+  ) => {
+    const el = e.currentTarget
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
+      setCount(prev => (prev < total ? prev + PAGE_SIZE : prev))
+    }
+  }
+
+  // 按需拉取卡券完整详情后再打开详情弹窗
+  // （轻量列表未返回文本/卡密/API配置等大字段，需单独获取）
+  const openCardDetail = async (card: UnifiedCardItem) => {
+    if (card.id === undefined) return
+    setDetailLoadingKey(card.uniqueKey)
+    try {
+      const full = await getCard(card.id)
+      setViewingCard(full)
+    } catch {
+      addToast({ type: 'error', message: '加载卡券详情失败' })
+    } finally {
+      setDetailLoadingKey(null)
+    }
+  }
 
   const loadData = async () => {
     setLoading(true)
@@ -262,14 +305,17 @@ export function ItemCardRelationModal({ itemId, itemName, onClose, onSaved }: It
                     />
                   </div>
                 </div>
-                <div className="flex-1 overflow-y-auto">
+                <div
+                  className="flex-1 overflow-y-auto"
+                  onScroll={e => handleListScroll(e, filteredLeftCards.length, setLeftVisibleCount)}
+                >
                   {filteredLeftCards.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-8 text-gray-400">
                       <Ticket className="w-8 h-8 mb-2" />
                       <p className="text-sm">暂无卡券</p>
                     </div>
                   ) : (
-                    filteredLeftCards.map(card => {
+                    filteredLeftCards.slice(0, leftVisibleCount).map(card => {
                       const checked = selectedKeys.has(card.uniqueKey)
                       return (
                         <div
@@ -302,16 +348,26 @@ export function ItemCardRelationModal({ itemId, itemName, onClose, onSaved }: It
                           </div>
                           {card.source === 'own' && (
                           <button
-                            onClick={(e) => { e.stopPropagation(); setViewingCard(card) }}
-                            className="p-1 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded transition-colors flex-shrink-0"
+                            onClick={(e) => { e.stopPropagation(); openCardDetail(card) }}
+                            disabled={detailLoadingKey === card.uniqueKey}
+                            className="p-1 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded transition-colors flex-shrink-0 disabled:opacity-50"
                             title="查看详情"
                           >
-                            <Eye className="w-4 h-4 text-blue-500" />
+                            {detailLoadingKey === card.uniqueKey ? (
+                              <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
+                            ) : (
+                              <Eye className="w-4 h-4 text-blue-500" />
+                            )}
                           </button>
                           )}
                         </div>
                       )
                     })
+                  )}
+                  {filteredLeftCards.length > leftVisibleCount && (
+                    <div className="py-2 text-center text-xs text-gray-400">
+                      向下滚动加载更多（剩余 {filteredLeftCards.length - leftVisibleCount} 个）
+                    </div>
                   )}
                 </div>
               </div>
@@ -334,14 +390,17 @@ export function ItemCardRelationModal({ itemId, itemName, onClose, onSaved }: It
                     />
                   </div>
                 </div>
-                <div className="flex-1 overflow-y-auto">
+                <div
+                  className="flex-1 overflow-y-auto"
+                  onScroll={e => handleListScroll(e, selectedCards.length, setRightVisibleCount)}
+                >
                   {selectedCards.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-8 text-gray-400">
                       <Ticket className="w-8 h-8 mb-2" />
                       <p className="text-sm">{selectedKeys.size === 0 ? '请在左侧勾选卡券' : '无匹配结果'}</p>
                     </div>
                   ) : (
-                    selectedCards.map(card => (
+                    selectedCards.slice(0, rightVisibleCount).map(card => (
                       <div
                         key={card.uniqueKey}
                         className="flex items-center gap-3 px-4 py-2.5 border-b border-gray-100 dark:border-gray-800"
@@ -365,11 +424,16 @@ export function ItemCardRelationModal({ itemId, itemName, onClose, onSaved }: It
                         </div>
                         {card.source === 'own' && (
                         <button
-                          onClick={() => setViewingCard(card)}
-                          className="p-1 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded transition-colors flex-shrink-0"
+                          onClick={() => openCardDetail(card)}
+                          disabled={detailLoadingKey === card.uniqueKey}
+                          className="p-1 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded transition-colors flex-shrink-0 disabled:opacity-50"
                           title="查看详情"
                         >
-                          <Eye className="w-4 h-4 text-blue-500" />
+                          {detailLoadingKey === card.uniqueKey ? (
+                            <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
+                          ) : (
+                            <Eye className="w-4 h-4 text-blue-500" />
+                          )}
                         </button>
                         )}
                         <button
@@ -381,6 +445,11 @@ export function ItemCardRelationModal({ itemId, itemName, onClose, onSaved }: It
                         </button>
                       </div>
                     ))
+                  )}
+                  {selectedCards.length > rightVisibleCount && (
+                    <div className="py-2 text-center text-xs text-gray-400">
+                      向下滚动加载更多（剩余 {selectedCards.length - rightVisibleCount} 个）
+                    </div>
                   )}
                 </div>
               </div>
