@@ -495,6 +495,82 @@ class AccountService:
             await self.session.refresh(account)
         return account, created
 
+    async def upsert_account_from_password(
+        self,
+        owner_id: int,
+        account_id: str,
+        account: str,
+        password: str,
+        cookies: str,
+        unb: str | None,
+        show_browser: bool = False,
+    ) -> tuple[XYAccount, bool]:
+        """协议化账号密码登录成功后保存账号（按前端传入的 account_id upsert）。
+
+        与扫码登录 upsert_account_from_qr 的差异：按 account_id（非 unb）定位，
+        并保存 username/login_password/show_browser/login_method='password'。
+
+        Args:
+            owner_id: 所属用户ID
+            account_id: 前端传入的业务账号ID（定位键）
+            account: 登录账号（手机号/邮箱），写入 username
+            password: 明文登录密码，写入 login_password（供后台自动刷新复用）
+            cookies: 登录成功后的 Cookie 字符串
+            unb: 从 Cookie 提取的 unb
+            show_browser: 是否有头模式（沿用请求传入值）
+        Returns:
+            (账号对象, 是否新建)
+        Raises:
+            ValueError: account_id 已被其他用户占用
+        """
+        existing = await self.get_account_by_identifier(account_id)
+        # account_id 已被其他用户占用时禁止覆盖，直接报错（与 websocket 版一致）
+        if existing and existing.owner_id != owner_id:
+            raise ValueError(f"账号ID {account_id} 已被其他用户占用，无法登录")
+
+        now = datetime.now(tz=UTC)
+        created = False
+        if existing:
+            existing.cookie = cookies
+            existing.metadata_json = clear_cookie_refresh_snapshot(existing.metadata_json)
+            existing.username = account
+            existing.login_password = password
+            existing.show_browser = show_browser
+            existing.login_method = "password"
+            existing.status = "active"
+            existing.disable_reason = None
+            existing.last_login_at = now
+            if unb:
+                existing.unb = unb
+            if hasattr(existing, "updated_at"):
+                existing.updated_at = now
+            account_obj = existing
+        else:
+            await AccountLimitService(self.session).ensure_can_add_account(owner_id)
+            account_obj = XYAccount(
+                owner_id=owner_id,
+                account_id=account_id,
+                cookie=cookies,
+                username=account,
+                login_password=password,
+                show_browser=show_browser,
+                login_method="password",
+                status="active",
+                auto_confirm=False,
+                pause_duration=10,
+                unb=unb,
+                last_login_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+            created = True
+
+        self.session.add(account_obj)
+        await self.session.commit()
+        if created:
+            await self.session.refresh(account_obj)
+        return account_obj, created
+
     async def update_auto_polish(self, account: XYAccount, auto_polish: bool) -> None:
         """更新商品自动擦亮开关"""
         account.auto_polish = auto_polish

@@ -404,6 +404,8 @@ export const checkPasswordLoginStatus = async (sessionId: string): Promise<{
   cookie_count?: number
   verification_url?: string
   screenshot_path?: string
+  // 协议登录：触发人脸时的人脸二维码（base64 data-url）
+  face_qr_url?: string
   error?: string
 }> => {
   const result = await get<{
@@ -414,6 +416,7 @@ export const checkPasswordLoginStatus = async (sessionId: string): Promise<{
     cookie_count?: number
     verification_url?: string
     screenshot_path?: string
+    face_qr_url?: string
     error?: string
   }>(`${PASSWORD_LOGIN_PREFIX}/check/${sessionId}`)
   return {
@@ -425,8 +428,14 @@ export const checkPasswordLoginStatus = async (sessionId: string): Promise<{
     cookie_count: result.cookie_count,
     verification_url: result.verification_url,
     screenshot_path: result.screenshot_path,
+    face_qr_url: result.face_qr_url,
     error: result.error,
   }
+}
+
+// 取消密码登录会话
+export const cancelPasswordLogin = (sessionId: string): Promise<{ success: boolean; message?: string }> => {
+  return del(`${PASSWORD_LOGIN_PREFIX}/cancel/${sessionId}`)
 }
 
 // AI 服务商类型

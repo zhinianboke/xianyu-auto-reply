@@ -5,8 +5,8 @@
 - 闲鱼/阿里 baxia 风控能区分「CDP 注入的鼠标事件」与「真实硬件鼠标事件」。
   实测：Playwright(CDP) 即使回放真人轨迹也被判 code=300（拒），而用 pyautogui 驱动
   物理光标回放同一条真人轨迹则 code=0（通过）。
-- 因此本引擎用 pyautogui（Windows SendInput）驱动**物理光标**，回放预先录制的真人滑动
-  轨迹，完成 NC 滑块验证。
+- 因此本引擎用 pyautogui 驱动**物理光标**，回放预先录制的真人滑动轨迹，
+  完成 NC 滑块验证；登录场景复用业务滑块同一套回放逻辑，仅使用登录专用长位移样本。
 
 代价与限制：
 - 运行期间会**接管桌面物理光标约 2~3 秒**，期间人不能同时用鼠标；
@@ -34,6 +34,10 @@ from loguru import logger
 
 from common.services.captcha.slider_stealth import URL_EXPIRED, CAPTCHA_NOT_REQUIRED
 from common.services.captcha.weighted_scheduler import real_mouse_scheduler
+from common.services.captcha.windows_foreground import (
+    activate_page_window,
+    activate_window,
+)
 
 from playwright.sync_api import sync_playwright
 
@@ -69,7 +73,9 @@ _CAP_JS = r"""
 (() => {
   if (window.__cal) return;
   window.__cal = [];
-  document.addEventListener('mousemove', e => { window.__cal.push([e.clientX, e.clientY, e.screenX, e.screenY]); }, true);
+  document.addEventListener('mousemove', e => {
+    window.__cal.push([e.clientX, e.clientY, e.screenX, e.screenY, e.timeStamp, e.buttons]);
+  }, true);
 })();
 """
 
@@ -93,17 +99,41 @@ def _trails_dir() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "human_trails")
 
 
-def _load_drags() -> List[List[Tuple[float, float, float]]]:
-    """加载所有真人通过轨迹，提取「按下拖动段」为相对位移序列 [(dx, dy, dt_ms), ...]。"""
+def _detect_scene(url: str) -> str:
+    """按验证链接 URL 判滑块场景：登录滑块 vs 业务滑块。
+
+    登录滑块出现在 passport 登录接口 punish（/newlogin/login.do/_____tmd_____/punish），
+    其滑条更宽、需登录专用长位移轨迹并强制最大化窗口；其余（token/业务刷新）为 business。
+    业务滑块 URL 不含 /newlogin/login.do，故不会误判。
+    """
+    return "login" if "/newlogin/login.do" in (url or "") else "business"
+
+
+def _load_drags(scene: str = "business") -> List[List[Tuple[float, float, float]]]:
+    """加载真人通过轨迹，提取「按下拖动段」为相对位移序列 [(dx, dy, dt_ms), ...]。
+
+    Args:
+        scene: "business"（默认，业务/Token 刷新滑块，样本 human_trail_pass_*.json）
+               或 "login"（登录滑块，样本 human_trail_login_*.json，长位移）
+    """
+    pattern = "human_trail_login_*.json" if scene == "login" else "human_trail_pass_*.json"
     drags: List[List[Tuple[float, float, float]]] = []
-    for f in sorted(glob.glob(os.path.join(_trails_dir(), "human_trail_pass_*.json"))):
+    for f in sorted(glob.glob(os.path.join(_trails_dir(), pattern))):
         try:
-            trail = json.load(open(f, encoding="utf-8")).get("trail", [])
+            if scene == "login":
+                data = json.load(open(f, encoding="utf-8"))
+                if data.get("passed") is False:
+                    logger.warning(f"跳过未通过的真人轨迹样本: {f}")
+                    continue
+                trail = data.get("trail", [])
+            else:
+                trail = json.load(open(f, encoding="utf-8")).get("trail", [])
         except Exception as e:
             logger.warning(f"加载真人轨迹失败 {f}: {e}")
             continue
-        moves = [e for e in trail if e[0] == "mousemove"]
-        seg = [e for e in moves if len(e) >= 5 and e[4] == 1]  # buttons==1 拖动中
+        # 登录与业务滑块共用同一套拖动段提取逻辑，仅样本文件不同。
+        moves = [e for e in trail if isinstance(e, list) and len(e) >= 5 and e[0] == "mousemove"]
+        seg = [e for e in moves if len(e) >= 5 and e[4] == 1]
         if len(seg) < 5:
             continue
         x0, y0, prev = seg[0][1], seg[0][2], seg[0][3]
@@ -130,6 +160,19 @@ def _human_mouse_to(tx: int, ty: int, dur: float) -> None:
         time.sleep(dur / n * random.uniform(0.6, 1.4))
 
 
+def _choose_drag(drags: List[List[Tuple[float, float, float]]]) -> List[Tuple[float, float, float]]:
+    """加权随机选择轨迹：仍然随机，但降低过短、过快样本被选中的概率。"""
+    weights: List[float] = []
+    for drag in drags:
+        points = len(drag)
+        duration_ms = sum(point[2] for point in drag)
+        if points < 25 or duration_ms < 800:
+            weights.append(0.25)
+            continue
+        weights.append(1.0 + min(points, 80) / 25.0 + min(duration_ms, 1800) / 900.0)
+    return random.choices(drags, weights=weights, k=1)[0]
+
+
 class _RealMouseSolver:
     """单次真实鼠标滑块求解（自建浏览器、自然指纹）。"""
 
@@ -146,6 +189,7 @@ class _RealMouseSolver:
         os.makedirs(self.user_data_dir, exist_ok=True)
         self._slide_code: Optional[int] = None
         self._timed_out = False
+        self._window_handle: Optional[int] = None
 
     # ---------- 浏览器 ----------
     def init_browser(self) -> None:
@@ -176,6 +220,7 @@ class _RealMouseSolver:
 
         self.context.on("response", _on_resp)
         self.page = self.context.new_page()
+        self.page.bring_to_front()
 
     def close(self) -> None:
         for fn in (
@@ -257,10 +302,60 @@ class _RealMouseSolver:
         return out
 
     # ---------- 核心 ----------
-    def solve(self, url: str, drags: List[List[Tuple[float, float, float]]],
-              browser_timeout: int, url_provider: Optional[Callable[[], Optional[str]]]) -> Tuple[bool, Optional[Dict[str, str]]]:
+    def _maximize_window(self) -> None:
+        """通过 CDP 强制最大化窗口（登录滑块必须最大化才能用长位移轨迹通过）。"""
+        try:
+            session = self.context.new_cdp_session(self.page)
+            win = session.send("Browser.getWindowForTarget")
+            session.send(
+                "Browser.setWindowBounds",
+                {"windowId": win["windowId"], "bounds": {"windowState": "maximized"}},
+            )
+        except Exception as e:
+            logger.warning(f"【{self.pure_id}】强制最大化窗口失败（继续）: {e}")
+
+    def _ensure_login_window_foreground(self) -> bool:
+        """激活本次登录验证 Chrome，并校验物理输入的真实前台归属。"""
+        try:
+            self.page.bring_to_front()
+            if self._window_handle:
+                success, detail = activate_window(self._window_handle)
+                if success:
+                    return True
+            success, hwnd, detail = activate_page_window(self.page)
+            if success and hwnd:
+                first_detection = self._window_handle is None
+                self._window_handle = hwnd
+                if first_detection:
+                    logger.info(
+                        f"【{self.pure_id}】登录滑块已锁定 Windows 前台窗口: {detail}"
+                    )
+                return True
+            logger.error(
+                f"【{self.pure_id}】登录滑块无法激活 Windows 前台窗口，"
+                f"已取消物理鼠标回放: {detail}"
+            )
+        except Exception as e:
+            logger.error(
+                f"【{self.pure_id}】登录滑块 Windows 前台校验异常，"
+                f"已取消物理鼠标回放: {e}"
+            )
+        return False
+
+    def solve(
+        self,
+        url: str,
+        drags: List[List[Tuple[float, float, float]]],
+        browser_timeout: int,
+        url_provider: Optional[Callable[[], Optional[str]]],
+        scene: str = "business",
+    ) -> Tuple[bool, Optional[Dict[str, str]]]:
         start = time.time()
         self.init_browser()
+        # 登录场景强制最大化（业务场景保持原有窗口行为不变）
+        if scene == "login":
+            self._maximize_window()
+            self._ensure_login_window_foreground()
 
         # 导航（命中过期页则用 url_provider 刷新一次）
         target = url
@@ -270,6 +365,9 @@ class _RealMouseSolver:
             except Exception as e:
                 logger.warning(f"【{self.pure_id}】真实鼠标引擎导航异常（继续）: {e}")
             time.sleep(random.uniform(1.2, 1.8))
+            if scene == "login":
+                self._maximize_window()
+                self._ensure_login_window_foreground()
             try:
                 content = self.page.content()
             except Exception:
@@ -317,14 +415,37 @@ class _RealMouseSolver:
                 logger.warning(f"【{self.pure_id}】真实鼠标引擎未找到滑块（第{attempt}次尝试）")
                 break
 
+            # pyautogui 发送的是系统级输入，必须确认本次 Chrome 是 Windows 真实前台窗口。
+            if scene == "login":
+                self._maximize_window()
+                if not self._ensure_login_window_foreground():
+                    return False, None
+
             # 计算坐标 + 物理鼠标回放真人轨迹（每次随机挑一条轨迹，降低重复模式风险）
-            if not self._do_real_slide(frame, btn, drag=random.choice(drags)):
+            selected_drag = _choose_drag(drags) if scene == "login" else random.choice(drags)
+            if scene == "login":
+                logger.info(
+                    f"【{self.pure_id}】登录滑块回放真人原始样本: "
+                    f"点数={len(selected_drag) - 1}, "
+                    f"位移={selected_drag[-1][0]:.0f}px, "
+                    f"按下至末点={sum(point[2] for point in selected_drag):.0f}ms, "
+                    f"首点等待={selected_drag[1][2]:.0f}ms"
+                )
+            if not self._do_real_slide(
+                frame,
+                btn,
+                track,
+                drag=selected_drag,
+                scene=scene,
+            ):
                 break
 
             # 判定本次结果
             res = self._wait_result(pre_x5, start, browser_timeout)
             if res is True:
                 cookies = self._collect_success()
+                if scene == "login" and cookies:
+                    logger.info(f"【{self.pure_id}】登录滑块第{attempt}次回放通过")
                 # 仅当真正拿到 x5sec 才算成功；否则按失败返回
                 # （是否回退原引擎由编排层根据 CAPTCHA_REAL_MOUSE 决定，本引擎只负责返回结果）
                 return (True, cookies) if cookies else (False, None)
@@ -338,13 +459,26 @@ class _RealMouseSolver:
             break
         return False, None
 
-    def _do_real_slide(self, frame, btn, drag: List[Tuple[float, float, float]]) -> bool:
+    def _do_real_slide(
+        self,
+        frame,
+        btn,
+        track,
+        drag: List[Tuple[float, float, float]],
+        scene: str = "business",
+    ) -> bool:
         """对当前滑块做一次：坐标校准 + 物理鼠标接近/按下/回放真人轨迹/松手。返回是否完成滑动。"""
         box = btn.bounding_box()
         if not box:
             return False
         mx = box["x"] + box["width"] / 2
         my = box["y"] + box["height"] / 2
+        if scene == "login":
+            track_box = track.bounding_box() if track else None
+            if track_box:
+                candidate_x = track_box["x"] + track_box["width"] - 1 - drag[-1][0]
+                if box["x"] <= candidate_x <= box["x"] + box["width"]:
+                    mx = candidate_x
         dpr = self.page.evaluate("() => window.devicePixelRatio") or 1.0
 
         # 校准：主视口坐标 -> 屏幕坐标 的平移量
@@ -370,10 +504,16 @@ class _RealMouseSolver:
 
         self._slide_code = None  # 每次滑动前重置，避免读到上一次的返回码
 
-        # 物理鼠标接近 + 按下 + 回放真人轨迹 + 松手
+        # 坐标校准后再次校验，避免校准期间被其他程序抢走 Windows 前台窗口。
+        if scene == "login" and not self._ensure_login_window_foreground():
+            return False
+
+        # 登录与业务场景共用同一套已验证的 pyautogui 回放算法；登录仅保留长位移样本和前台校验。
         ax, ay = to_screen(mx - 50, my - 40)
-        _human_mouse_to(ax, ay, 0.3)
         sx, sy = to_screen(mx, my)
+        if scene == "login":
+            logger.info(f"【{self.pure_id}】登录滑块使用业务同款 pyautogui 回放: 起点=({sx},{sy})")
+        _human_mouse_to(ax, ay, 0.3)
         _human_mouse_to(sx, sy, 0.2)
         time.sleep(0.15)
         pyautogui.mouseDown()
@@ -381,11 +521,38 @@ class _RealMouseSolver:
         for i, (dx, dy, dt) in enumerate(drag):
             if i == 0:
                 continue
-            tx, ty = to_screen(mx + dx + random.uniform(-1, 1), my + dy + random.uniform(-1, 1))
+            tx, ty = to_screen(
+                mx + dx + random.uniform(-1, 1),
+                my + dy + random.uniform(-1, 1),
+            )
             pyautogui.moveTo(tx, ty)
-            time.sleep(max(0.0, (dt / 1000.0) * random.uniform(0.85, 1.15)))
+            time.sleep(
+                max(0.0, (dt / 1000.0) * random.uniform(0.85, 1.15))
+            )
         time.sleep(0.08)
         pyautogui.mouseUp()
+        if scene == "login":
+            try:
+                observed = frame.evaluate("() => window.__cal || []") or []
+                pressed = [event for event in observed if len(event) >= 6 and event[5] == 1]
+                pressed_duration = (
+                    pressed[-1][4] - pressed[0][4] if len(pressed) >= 2 else 0
+                )
+                actual_start = pressed[0][2:4] if pressed else []
+                actual_end = pressed[-1][2:4] if pressed else []
+                actual_distance = (
+                    pressed[-1][2] - pressed[0][2] if len(pressed) >= 2 else 0
+                )
+                logger.info(
+                    f"【{self.pure_id}】登录滑块页面接收鼠标移动事件: "
+                    f"总计={len(observed)}个, 按下={len(pressed)}个, "
+                    f"按下时长={pressed_duration:.0f}ms, 起点={mx:.0f}, "
+                    f"目标={mx + drag[-1][0]:.0f}, 实际首点={actual_start}, "
+                    f"实际末点={actual_end}, 实际位移={actual_distance:.0f}px"
+                )
+            except Exception:
+                # 成功后页面可能立即跳转并销毁 frame，无需作为异常处理。
+                pass
         return True
 
     def _wait_result(self, pre_x5: str, start: float, browser_timeout: int) -> Optional[bool]:
@@ -467,9 +634,12 @@ def run_real_mouse_verification(
     if not REAL_MOUSE_AVAILABLE:
         return False, None
 
-    drags = _load_drags()
+    # 按 URL 自动判场景：登录滑块用登录轨迹并强制最大化；业务滑块保持原有行为
+    scene = _detect_scene(url)
+    drags = _load_drags(scene)
     if not drags:
-        logger.error("真实鼠标引擎缺少真人轨迹样本（human_trails/human_trail_pass_*.json）")
+        sample = "human_trail_login_*.json" if scene == "login" else "human_trail_pass_*.json"
+        logger.error(f"真实鼠标引擎缺少真人轨迹样本（human_trails/{sample}，scene={scene}）")
         return False, None
 
     # 加权公平排队：阻塞直到轮到本来源（无限等待，与旧 with lock 语义一致）
@@ -487,7 +657,9 @@ def run_real_mouse_verification(
         ok: bool = False
         cookies: Optional[Dict[str, str]] = None
         try:
-            ok, cookies = solver.solve(url, drags, browser_timeout, url_provider)
+            ok, cookies = solver.solve(
+                url, drags, browser_timeout, url_provider, scene=scene
+            )
         except Exception as e:
             logger.error(f"【{user_id}】真实鼠标引擎执行异常: {e}")
             ok, cookies = False, None

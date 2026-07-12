@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, RefreshCw, QrCode, Key, Edit2, Trash2, Power, PowerOff, X, Loader2, Clock, CheckCircle, MessageSquare, Bot, Globe, Timer, ScanFace, ChevronLeft, ChevronRight, ChevronDown, ImagePlus, Filter, Repeat, MoreHorizontal, PackageCheck, Star, ShieldCheck, Flower2, Eye, EyeOff, Ban, Download, Upload, Send } from 'lucide-react'
-import { getAccountDetailsPaginated, deleteAccount, updateAccountCookie, updateAccountStatus, updateAccountsStatusBatch, closeAccountsNoticeBatch, clearTokenCacheBatch, updateAccountRemark, addAccount, generateQRLogin, checkQRLoginStatus, passwordLogin, checkPasswordLoginStatus, updateAccountAutoConfirm, updateAccountPauseDuration, updateAccountMessageExpireTime, updateAccountReplyDelay, updateAccountLoginInfo, updateAccountScheduledRedelivery, updateAccountScheduledRate, updateAccountAutoPolish, updateAccountConfirmBeforeSend, updateAccountSendBeforeConfirm, updateAccountAutoRedFlower, updateAccountAiReplyBlockOrderedUsers, getAIReplySettings, updateAIReplySettings, testAIConnection, fetchAIModels, AI_PROVIDER_OPTIONS, AI_PROVIDER_DEFAULT_BASE_URLS, getProxyConfig, updateProxyConfig, getFaceVerificationScreenshot, deleteFaceVerificationScreenshot, getConfirmReceiptMessage, updateConfirmReceiptMessage, uploadConfirmReceiptImage, exportAccountsExcel, importAccountsExcel, type AIProviderType, type AIModelOption, type ProxyConfig, type FaceVerificationScreenshot, type AccountFilterParams } from '@/api/accounts'
+import { Plus, RefreshCw, QrCode, Key, Edit2, Trash2, Power, PowerOff, X, Loader2, Clock, CheckCircle, MessageSquare, Bot, Globe, Timer, ScanFace, ChevronLeft, ChevronRight, ChevronDown, ImagePlus, Filter, Repeat, MoreHorizontal, PackageCheck, Star, ShieldCheck, Flower2, Eye, EyeOff, Ban, Download, Upload, Send, AlertCircle } from 'lucide-react'
+import { getAccountDetailsPaginated, deleteAccount, updateAccountCookie, updateAccountStatus, updateAccountsStatusBatch, closeAccountsNoticeBatch, clearTokenCacheBatch, updateAccountRemark, addAccount, generateQRLogin, checkQRLoginStatus, passwordLogin, checkPasswordLoginStatus, cancelPasswordLogin, updateAccountAutoConfirm, updateAccountPauseDuration, updateAccountMessageExpireTime, updateAccountReplyDelay, updateAccountLoginInfo, updateAccountScheduledRedelivery, updateAccountScheduledRate, updateAccountAutoPolish, updateAccountConfirmBeforeSend, updateAccountSendBeforeConfirm, updateAccountAutoRedFlower, updateAccountAiReplyBlockOrderedUsers, getAIReplySettings, updateAIReplySettings, testAIConnection, fetchAIModels, AI_PROVIDER_OPTIONS, AI_PROVIDER_DEFAULT_BASE_URLS, getProxyConfig, updateProxyConfig, getFaceVerificationScreenshot, deleteFaceVerificationScreenshot, getConfirmReceiptMessage, updateConfirmReceiptMessage, uploadConfirmReceiptImage, exportAccountsExcel, importAccountsExcel, type AIProviderType, type AIModelOption, type ProxyConfig, type FaceVerificationScreenshot, type AccountFilterParams } from '@/api/accounts'
 import { getDefaultReply, updateDefaultReply, uploadDefaultReplyImage } from '@/api/keywords'
 import { getAutoRateConfig, updateAutoRateConfig } from '@/api/autoRate'
 import { checkAdminDefaultPassword } from '@/api/auth'
@@ -78,6 +78,7 @@ export function Accounts() {
   const [loading, setLoading] = useState(true)
   const [accounts, setAccounts] = useState<AccountWithKeywordCount[]>([])
   const [activeModal, setActiveModal] = useState<ModalType>(null)
+  const activeModalRef = useRef<ModalType>(null)
   const [pagination, setPagination] = useState<AccountPagination>({
     page: 1,
     pageSize: 100,
@@ -137,11 +138,18 @@ export function Accounts() {
   const [pwdPasswordVisible, setPwdPasswordVisible] = useState(false)
   const [pwdLoading, setPwdLoading] = useState(false)
   const [pwdShowBrowser, setPwdShowBrowser] = useState(false)
-  const [, setPwdSessionId] = useState('')
+  const [pwdSessionId, setPwdSessionId] = useState('')
   const [pwdStatus, setPwdStatus] = useState<'idle' | 'processing' | 'verification_required' | 'success' | 'failed'>('idle')
+  const [pwdErrorMessage, setPwdErrorMessage] = useState('')
   const [pwdVerificationUrl, setPwdVerificationUrl] = useState('')
   const [pwdScreenshotPath, setPwdScreenshotPath] = useState('')
+  // 协议登录触发人脸时的人脸二维码(base64 data-url)
+  const [pwdFaceQrUrl, setPwdFaceQrUrl] = useState('')
   const pwdCheckIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pwdSuccessCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pwdLoginClosedRef = useRef(false)
+  const pwdLoginRequestIdRef = useRef(0)
+  const pwdSessionIdRef = useRef('')
 
   // 手动输入状态
   const [manualAccountId, setManualAccountId] = useState('')
@@ -383,6 +391,10 @@ export function Accounts() {
   }
 
   useEffect(() => {
+    activeModalRef.current = activeModal
+  }, [activeModal])
+
+  useEffect(() => {
     if (!_hasHydrated || !isAuthenticated || !token) return
     loadAccounts()
   }, [_hasHydrated, isAuthenticated, token])
@@ -403,10 +415,43 @@ export function Accounts() {
     }
   }, [])
 
+  const clearPwdSuccessCloseTimer = useCallback(() => {
+    if (pwdSuccessCloseTimerRef.current) {
+      clearTimeout(pwdSuccessCloseTimerRef.current)
+      pwdSuccessCloseTimerRef.current = null
+    }
+  }, [])
+
+  const cancelPwdSession = useCallback(async (sessionId?: string) => {
+    const targetSessionId = sessionId || pwdSessionId
+    if (!targetSessionId) return
+
+    try {
+      await cancelPasswordLogin(targetSessionId)
+    } catch {
+      addToast({ type: 'error', message: '取消账号密码登录会话失败' })
+    } finally {
+      setPwdSessionId((currentSessionId) => (
+        !currentSessionId || currentSessionId === targetSessionId ? '' : currentSessionId
+      ))
+      if (pwdSessionIdRef.current === targetSessionId) {
+        pwdSessionIdRef.current = ''
+      }
+    }
+  }, [addToast, pwdSessionId])
+
   // 关闭弹窗时清理
   const closeModal = useCallback(() => {
+    if (activeModal === 'password' && pwdStatus !== 'success') {
+      pwdLoginClosedRef.current = true
+      pwdLoginRequestIdRef.current += 1
+      if (pwdSessionId) {
+        void cancelPwdSession(pwdSessionId)
+      }
+    }
     clearQrCheck()
     clearPwdCheck()
+    clearPwdSuccessCloseTimer()
     setActiveModal(null)
     setQrCodeUrl('')
     setQrSessionId('')
@@ -419,15 +464,17 @@ export function Accounts() {
     setPwdLoading(false)
     setPwdSessionId('')
     setPwdStatus('idle')
+    setPwdErrorMessage('')
     setPwdVerificationUrl('')
     setPwdScreenshotPath('')
+    setPwdFaceQrUrl('')
     setManualAccountId('')
     setManualCookie('')
     setManualLoading(false)
     setEditPasswordVisible(false)
     setAiTimeRangeStart('')
     setAiTimeRangeEnd('')
-  }, [clearQrCheck, clearPwdCheck])
+  }, [activeModal, cancelPwdSession, clearPwdCheck, clearPwdSuccessCloseTimer, clearQrCheck, pwdSessionId, pwdStatus])
 
   // ==================== 管理员默认密码检查 ====================
   /**
@@ -574,9 +621,17 @@ export function Accounts() {
   // ==================== 密码登录 ====================
   const startPwdCheck = (sessionId: string) => {
     clearPwdCheck()
+    const pwdCheckRequestId = pwdLoginRequestIdRef.current
     pwdCheckIntervalRef.current = setInterval(async () => {
       try {
         const result = await checkPasswordLoginStatus(sessionId)
+        if (
+          pwdLoginClosedRef.current ||
+          pwdLoginRequestIdRef.current !== pwdCheckRequestId ||
+          (pwdSessionIdRef.current && pwdSessionIdRef.current !== sessionId)
+        ) {
+          return
+        }
         
         switch (result.status) {
           case 'processing':
@@ -584,19 +639,30 @@ export function Accounts() {
             break
           case 'verification_required':
             setPwdStatus('verification_required')
+            clearPwdSuccessCloseTimer()
+            // 协议登录：人脸二维码；浏览器兜底路：截图/验证链接（保持兼容）
+            if (result.face_qr_url) setPwdFaceQrUrl(result.face_qr_url)
             if (result.verification_url) setPwdVerificationUrl(result.verification_url)
             if (result.screenshot_path) setPwdScreenshotPath(result.screenshot_path)
             break
           case 'success':
             setPwdStatus('success')
             clearPwdCheck()
+            pwdSessionIdRef.current = ''
+            setPwdSessionId('')
             addToast({
               type: 'success',
               message: result.is_new_account
                 ? `新账号 ${result.account_id} 添加成功`
                 : `账号 ${result.account_id} 登录成功`,
             })
-            setTimeout(() => {
+            clearPwdSuccessCloseTimer()
+            const successRequestId = pwdLoginRequestIdRef.current
+            pwdSuccessCloseTimerRef.current = setTimeout(() => {
+              pwdSuccessCloseTimerRef.current = null
+              if (pwdLoginRequestIdRef.current !== successRequestId) return
+              if (pwdSessionIdRef.current) return
+              if (activeModalRef.current !== 'password') return
               closeModal()
               loadAccounts()
             }, 1500)
@@ -604,6 +670,7 @@ export function Accounts() {
           case 'failed':
           case 'not_found':
             setPwdStatus('failed')
+            setPwdErrorMessage(result.error || result.message || '登录失败')
             clearPwdCheck()
             addToast({ type: 'error', message: result.error || result.message || '登录失败' })
             break
@@ -621,29 +688,58 @@ export function Accounts() {
       return
     }
 
+    pwdLoginClosedRef.current = false
+    const pwdLoginRequestId = pwdLoginRequestIdRef.current + 1
+    pwdLoginRequestIdRef.current = pwdLoginRequestId
+    const isCurrentPwdLoginRequest = () => (
+      pwdLoginRequestIdRef.current === pwdLoginRequestId && !pwdLoginClosedRef.current
+    )
     setPwdLoading(true)
     setPwdStatus('processing')
+    setPwdErrorMessage('')
+    setPwdVerificationUrl('')
+    setPwdScreenshotPath('')
+    setPwdFaceQrUrl('')
     try {
+      clearPwdCheck()
+      clearPwdSuccessCloseTimer()
+      if (pwdSessionId) {
+        await cancelPwdSession(pwdSessionId)
+      }
+      if (!isCurrentPwdLoginRequest()) return
+
       const result = await passwordLogin({
         account_id: pwdAccount.trim(),
         account: pwdAccount.trim(),
         password: pwdPassword,
         show_browser: pwdShowBrowser,
       })
+      if (!isCurrentPwdLoginRequest()) {
+        if (result.session_id) {
+          await cancelPwdSession(result.session_id)
+        }
+        return
+      }
       if (result.success && result.session_id) {
+        pwdSessionIdRef.current = result.session_id
         setPwdSessionId(result.session_id)
         addToast({ type: 'info', message: '登录任务已启动，请等待...' })
         // 开始轮询状态
         startPwdCheck(result.session_id)
       } else {
         setPwdStatus('failed')
+        setPwdErrorMessage(result.message || '登录失败')
         addToast({ type: 'error', message: result.message || '登录失败' })
       }
     } catch {
+      if (!isCurrentPwdLoginRequest()) return
       setPwdStatus('failed')
+      setPwdErrorMessage('登录请求失败')
       addToast({ type: 'error', message: '登录请求失败' })
     } finally {
-      setPwdLoading(false)
+      if (isCurrentPwdLoginRequest()) {
+        setPwdLoading(false)
+      }
     }
   }
 
@@ -1741,10 +1837,21 @@ export function Accounts() {
   // 组件卸载时清理
   useEffect(() => {
     return () => {
+      const activePwdSessionId = pwdSessionIdRef.current
+      if (activePwdSessionId) {
+        pwdLoginClosedRef.current = true
+        pwdLoginRequestIdRef.current += 1
+        void cancelPasswordLogin(activePwdSessionId).finally(() => {
+          if (pwdSessionIdRef.current === activePwdSessionId) {
+            pwdSessionIdRef.current = ''
+          }
+        })
+      }
       clearQrCheck()
       clearPwdCheck()
+      clearPwdSuccessCloseTimer()
     }
-  }, [clearQrCheck, clearPwdCheck])
+  }, [clearPwdCheck, clearPwdSuccessCloseTimer, clearQrCheck])
 
   if (loading) {
     return <PageLoading />
@@ -2670,15 +2777,25 @@ export function Accounts() {
                   <Key className="w-7 h-7 text-amber-600 dark:text-amber-400" />
                 </div>
                 <p className="text-sm font-medium text-slate-700 dark:text-slate-200">需要人脸验证</p>
-                {pwdScreenshotPath && (
-                  <img src={pwdScreenshotPath} alt="验证截图" className="mt-3 max-w-full rounded-lg border" />
+                {/* 协议登录：展示人脸二维码，扫码认证后自动登录 */}
+                {pwdFaceQrUrl ? (
+                  <>
+                    <img src={pwdFaceQrUrl} alt="人脸验证二维码" className="mt-3 w-44 h-44 rounded-lg border" />
+                    <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">请使用闲鱼App扫一扫完成人脸认证，认证后将自动登录</p>
+                  </>
+                ) : (
+                  <>
+                    {pwdScreenshotPath && (
+                      <img src={pwdScreenshotPath} alt="验证截图" className="mt-3 max-w-full rounded-lg border" />
+                    )}
+                    {pwdVerificationUrl && (
+                      <a href={pwdVerificationUrl} target="_blank" rel="noopener noreferrer" className="mt-3 text-blue-600 hover:underline text-sm">
+                        点击打开验证链接
+                      </a>
+                    )}
+                    <p className="mt-2 text-xs text-slate-400">请在手机上完成验证后等待</p>
+                  </>
                 )}
-                {pwdVerificationUrl && (
-                  <a href={pwdVerificationUrl} target="_blank" rel="noopener noreferrer" className="mt-3 text-blue-600 hover:underline text-sm">
-                    点击打开验证链接
-                  </a>
-                )}
-                <p className="mt-2 text-xs text-slate-400">请在手机上完成验证后等待</p>
               </div>
             )}
             {pwdStatus === 'success' && (
@@ -2695,7 +2812,33 @@ export function Accounts() {
                   <X className="w-7 h-7 text-red-600 dark:text-red-400" />
                 </div>
                 <p className="mt-3 font-medium text-red-600 dark:text-red-400">登录失败</p>
-                <button onClick={() => setPwdStatus('idle')} className="mt-3 btn-ios-secondary btn-sm">
+                <div className="mt-4 w-full rounded-lg border border-red-200 bg-red-50 px-3 py-3 text-left dark:border-red-800/70 dark:bg-red-900/20">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600 dark:text-red-400" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-red-700 dark:text-red-300">失败原因</p>
+                      <p className="mt-1 break-words text-sm leading-5 text-red-700 dark:text-red-200">
+                        {pwdErrorMessage || '登录失败，请稍后重试'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearPwdCheck()
+                    clearPwdSuccessCloseTimer()
+                    if (pwdSessionId) {
+                      void cancelPwdSession(pwdSessionId)
+                    }
+                    setPwdErrorMessage('')
+                    setPwdVerificationUrl('')
+                    setPwdScreenshotPath('')
+                    setPwdFaceQrUrl('')
+                    setPwdStatus('idle')
+                  }}
+                  className="mt-4 btn-ios-secondary btn-sm"
+                >
                   重试
                 </button>
               </div>

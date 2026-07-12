@@ -3,3 +3,6 @@
 
 # Shell 脚本强制使用 LF 换行符
 *.sh text eol=lf
+
+# Windows 批处理脚本强制使用 CRLF 换行符（仅在 Windows 运行，避免跨平台编辑后换行错乱）
+*.bat text eol=crlf
