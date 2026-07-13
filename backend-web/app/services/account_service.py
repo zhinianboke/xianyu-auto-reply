@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.services.account_limit_service import AccountLimitService
 from common.models.xy_account import XYAccount
+from common.models.user import User
 from common.utils.cookie_refresh import clear_cookie_refresh_snapshot
 
 # UTC时区常量
@@ -82,6 +83,7 @@ class AccountService:
         account_id: str | None = None,
         online: bool | None = None,
         online_account_ids: list[str] | None = None,
+        owner_username: str | None = None,
     ) -> tuple[list[XYAccount], int]:
         """获取账号列表（分页），支持多条件筛选
         
@@ -175,6 +177,17 @@ class AccountService:
             account_id_keyword = account_id.strip()
             if account_id_keyword:
                 conditions.append(XYAccount.account_id.ilike(f"%{account_id_keyword}%"))
+
+        # 所属用户名模糊搜索（管理员按账号归属用户筛选）：
+        # 账号表无用户名字段，故通过子查询匹配 users.username，再以 owner_id IN (...) 过滤。
+        # ilike 自动参数化避免 SQL 注入；普通用户已被上方 owner_id 作用域限制，故此条件不影响数据隔离。
+        if owner_username is not None:
+            owner_username_keyword = owner_username.strip()
+            if owner_username_keyword:
+                owner_ids_subq = select(User.id).where(
+                    User.username.ilike(f"%{owner_username_keyword}%")
+                )
+                conditions.append(XYAccount.owner_id.in_(owner_ids_subq))
 
         # 在线状态筛选：在线集合来自 websocket 实时连接（不在库内），
         # 故以 account_id IN / NOT IN 在线集合 的方式参与 SQL 条件，保证分页正确。
@@ -494,6 +507,82 @@ class AccountService:
         if created:
             await self.session.refresh(account)
         return account, created
+
+    async def upsert_account_from_password(
+        self,
+        owner_id: int,
+        account_id: str,
+        account: str,
+        password: str,
+        cookies: str,
+        unb: str | None,
+        show_browser: bool = False,
+    ) -> tuple[XYAccount, bool]:
+        """协议化账号密码登录成功后保存账号（按前端传入的 account_id upsert）。
+
+        与扫码登录 upsert_account_from_qr 的差异：按 account_id（非 unb）定位，
+        并保存 username/login_password/show_browser/login_method='password'。
+
+        Args:
+            owner_id: 所属用户ID
+            account_id: 前端传入的业务账号ID（定位键）
+            account: 登录账号（手机号/邮箱），写入 username
+            password: 明文登录密码，写入 login_password（供后台自动刷新复用）
+            cookies: 登录成功后的 Cookie 字符串
+            unb: 从 Cookie 提取的 unb
+            show_browser: 是否有头模式（沿用请求传入值）
+        Returns:
+            (账号对象, 是否新建)
+        Raises:
+            ValueError: account_id 已被其他用户占用
+        """
+        existing = await self.get_account_by_identifier(account_id)
+        # account_id 已被其他用户占用时禁止覆盖，直接报错（与 websocket 版一致）
+        if existing and existing.owner_id != owner_id:
+            raise ValueError(f"账号ID {account_id} 已被其他用户占用，无法登录")
+
+        now = datetime.now(tz=UTC)
+        created = False
+        if existing:
+            existing.cookie = cookies
+            existing.metadata_json = clear_cookie_refresh_snapshot(existing.metadata_json)
+            existing.username = account
+            existing.login_password = password
+            existing.show_browser = show_browser
+            existing.login_method = "password"
+            existing.status = "active"
+            existing.disable_reason = None
+            existing.last_login_at = now
+            if unb:
+                existing.unb = unb
+            if hasattr(existing, "updated_at"):
+                existing.updated_at = now
+            account_obj = existing
+        else:
+            await AccountLimitService(self.session).ensure_can_add_account(owner_id)
+            account_obj = XYAccount(
+                owner_id=owner_id,
+                account_id=account_id,
+                cookie=cookies,
+                username=account,
+                login_password=password,
+                show_browser=show_browser,
+                login_method="password",
+                status="active",
+                auto_confirm=False,
+                pause_duration=10,
+                unb=unb,
+                last_login_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+            created = True
+
+        self.session.add(account_obj)
+        await self.session.commit()
+        if created:
+            await self.session.refresh(account_obj)
+        return account_obj, created
 
     async def update_auto_polish(self, account: XYAccount, auto_polish: bool) -> None:
         """更新商品自动擦亮开关"""

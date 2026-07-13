@@ -42,6 +42,7 @@ export interface AccountFilterParams {
   online?: boolean | null                // 在线状态（true=在线/false=离线）
   disable_reason?: string | null         // 禁用原因关键词（模糊搜索）
   account_id?: string | null             // 账号ID关键词（模糊搜索）
+  owner_username?: string | null         // 所属用户名关键词（模糊搜索，管理员用）
 }
 
 // 获取账号详情列表（分页）
@@ -115,6 +116,10 @@ export const getAccountDetailsPaginated = async (
     // 账号ID：模糊搜索关键词，去除前后空白后再判断是否传参，避免发送空字符串
     if (filters.account_id && filters.account_id.trim()) {
       params.append('account_id', filters.account_id.trim())
+    }
+    // 所属用户名：模糊搜索关键词，去除前后空白后再判断是否传参，避免发送空字符串
+    if (filters.owner_username && filters.owner_username.trim()) {
+      params.append('owner_username', filters.owner_username.trim())
     }
   }
   
@@ -404,6 +409,8 @@ export const checkPasswordLoginStatus = async (sessionId: string): Promise<{
   cookie_count?: number
   verification_url?: string
   screenshot_path?: string
+  // 协议登录：触发人脸时的人脸二维码（base64 data-url）
+  face_qr_url?: string
   error?: string
 }> => {
   const result = await get<{
@@ -414,6 +421,7 @@ export const checkPasswordLoginStatus = async (sessionId: string): Promise<{
     cookie_count?: number
     verification_url?: string
     screenshot_path?: string
+    face_qr_url?: string
     error?: string
   }>(`${PASSWORD_LOGIN_PREFIX}/check/${sessionId}`)
   return {
@@ -425,8 +433,14 @@ export const checkPasswordLoginStatus = async (sessionId: string): Promise<{
     cookie_count: result.cookie_count,
     verification_url: result.verification_url,
     screenshot_path: result.screenshot_path,
+    face_qr_url: result.face_qr_url,
     error: result.error,
   }
+}
+
+// 取消密码登录会话
+export const cancelPasswordLogin = (sessionId: string): Promise<{ success: boolean; message?: string }> => {
+  return del(`${PASSWORD_LOGIN_PREFIX}/cancel/${sessionId}`)
 }
 
 // AI 服务商类型

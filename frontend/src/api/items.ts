@@ -78,6 +78,32 @@ export const getItemsPaginated = async (
   return result
 }
 
+// ==================== 卡券关联商品选择弹窗 ====================
+
+// 可选商品轻量项（仅选择场景所需字段）
+export interface SelectableItem {
+  item_id: string
+  title?: string | null
+  price?: string | null
+}
+
+// 获取全部匹配的可选商品轻量项（供「全选当前筛选结果」）
+export const getAllSelectableItemKeys = (
+  keyword: string = ''
+): Promise<{ list: SelectableItem[]; total: number }> => {
+  const params = new URLSearchParams()
+  if (keyword && keyword.trim()) params.append('keyword', keyword.trim())
+  const qs = params.toString()
+  return get(`${ITEM_PREFIX}/selectable/all${qs ? `?${qs}` : ''}`)
+}
+
+// 获取卡券已关联商品的轻量详情（弹窗右侧「已选商品」展示用）
+export const getItemsByCardId = (
+  cardId: number
+): Promise<{ list: SelectableItem[]; total: number }> => {
+  return get(`${ITEM_PREFIX}/by-card/${cardId}`)
+}
+
 // 删除商品（账号可选）
 // - 传入 cookieId：按账号删除
 // - cookieId 为空（账号已删除的孤儿商品）：后端按商品ID删除

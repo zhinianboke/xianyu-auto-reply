@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select, delete, func, or_, and_, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, load_only
 from loguru import logger
 
 from common.models.card import Card
@@ -34,6 +34,16 @@ class CardService:
         cards = result.scalars().all()
         return [self._card_to_dict_simple(card) for card in cards]
 
+    # 轻量模式只需查询的列（剔除 text_content/data_content/api_config/image_urls
+    # 等大字段，避免一次性返回全部卡券时传输/读取超大内容）
+    _LITE_COLUMNS = (
+        Card.id, Card.user_id, Card.item_id, Card.name, Card.type,
+        Card.enabled, Card.delay_seconds, Card.delivery_count, Card.price,
+        Card.is_dockable, Card.fee_payer, Card.min_price, Card.dock_visibility,
+        Card.is_multi_spec, Card.spec_name, Card.spec_value,
+        Card.created_at, Card.updated_at,
+    )
+
     async def get_cards_paginated(
         self,
         user_id: int | None,
@@ -41,16 +51,21 @@ class CardService:
         page_size: int = 20,
         search: str = "",
         card_type: str = "",
+        lite: bool = False,
     ) -> Dict[str, Any]:
         """分页获取卡券列表
-        
+
         Args:
             user_id: 用户ID，None表示查询所有用户（管理员）
             page: 页码（从1开始）
             page_size: 每页数量
             search: 搜索关键词（匹配名称或描述）
             card_type: 卡券类型过滤（api/text/data/image）
-            
+            lite: 轻量模式。为 True 时仅返回列表/选择场景所需的轻字段，
+                剔除 text_content/data_content/api_config/image_urls 等大字段，
+                用于「商品关联卡券」等需要一次性拉取全部卡券的场景，显著减小
+                响应体与数据库读取量。完整内容请调用 get_card_by_id 按需获取。
+
         Returns:
             包含分页数据的字典：{list, total, page, page_size, total_pages}
         """
@@ -80,13 +95,17 @@ class CardService:
         data_stmt = select(Card).order_by(Card.id.desc()).offset(offset).limit(page_size)
         if base_conditions:
             data_stmt = data_stmt.where(*base_conditions)
+        # 轻量模式只查询必要列，避免读取 LONGTEXT 等大字段
+        if lite:
+            data_stmt = data_stmt.options(load_only(*self._LITE_COLUMNS))
         result = await self.session.execute(data_stmt)
         cards = result.scalars().all()
-        
+
         total_pages = (total + page_size - 1) // page_size if total > 0 else 0
-        
+
+        to_dict = self._card_to_dict_lite if lite else self._card_to_dict_simple
         return {
-            "list": [self._card_to_dict_simple(card) for card in cards],
+            "list": [to_dict(card) for card in cards],
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -755,6 +774,34 @@ class CardService:
             "created_at": safe_isoformat(card.created_at),
             "updated_at": safe_isoformat(card.updated_at),
             "item_ids": [r.item_id for r in card.item_relations] if hasattr(card, 'item_relations') and card.item_relations else [],
+        }
+
+    def _card_to_dict_lite(self, card: Card) -> Dict[str, Any]:
+        """将卡券对象转换为轻量字典（仅列表/选择场景所需字段）。
+
+        刻意剔除 text_content / data_content / api_config / image_urls 等大字段，
+        用于「商品关联卡券」选择弹窗等需要一次性拉取全部卡券的场景，避免传输
+        超大 JSON 拖慢界面。需要完整内容时请调用 get_card_by_id 按需获取。
+        """
+        return {
+            "id": card.id,
+            "user_id": card.user_id,
+            "item_id": card.item_id,
+            "name": card.name,
+            "type": card.type,
+            "enabled": card.enabled,
+            "delay_seconds": card.delay_seconds,
+            "delivery_count": card.delivery_count,
+            "price": card.price,
+            "is_dockable": card.is_dockable,
+            "fee_payer": card.fee_payer,
+            "min_price": card.min_price,
+            "dock_visibility": card.dock_visibility,
+            "is_multi_spec": card.is_multi_spec,
+            "spec_name": card.spec_name,
+            "spec_value": card.spec_value,
+            "created_at": safe_isoformat(card.created_at),
+            "updated_at": safe_isoformat(card.updated_at),
         }
 
     def _card_to_dict_simple(self, card: Card) -> Dict[str, Any]:

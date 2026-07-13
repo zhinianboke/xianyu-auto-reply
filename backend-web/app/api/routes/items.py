@@ -20,6 +20,7 @@ from common.schemas.item import (
 from common.services.item_offline_service import batch_offline_items_from_xianyu
 from app.services.account_service import AccountService
 from app.services.item_service import ItemService
+from app.services.selectable_item_service import SelectableItemService
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,43 @@ async def list_items_paginated(
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
     }
+
+
+@items_router.get("/selectable/all")
+async def list_selectable_items_all(
+    keyword: str | None = Query(default=None, max_length=255, description="关键字（商品ID/标题）"),
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+):
+    """卡券关联商品选择弹窗：获取全部匹配的可选商品轻量项（供「全选筛选结果」）
+
+    仅返回 item_id/title/price 轻字段，管理员可查看所有商品。
+    """
+    owner_id, _ = resolve_owner_scope(current_user)
+    items = await SelectableItemService(session).get_all_selectable_item_keys(
+        owner_id=owner_id,
+        search=keyword or "",
+    )
+    return {"list": items, "total": len(items)}
+
+
+@items_router.get("/by-card/{card_id}")
+async def list_items_by_card(
+    card_id: int,
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+):
+    """卡券关联商品选择弹窗：获取卡券已关联商品的轻量详情（供右侧「已选商品」展示）
+
+    仅返回 item_id/title/price；已删除商品不在此返回，选中态由
+    GET /cards/{card_id}/items 提供，保存时不丢失。
+    """
+    owner_id, _ = resolve_owner_scope(current_user)
+    items = await SelectableItemService(session).get_associated_items(
+        card_id=card_id,
+        owner_id=owner_id,
+    )
+    return {"list": items, "total": len(items)}
 
 
 @items_router.get("/cookie/{cookie_id}")

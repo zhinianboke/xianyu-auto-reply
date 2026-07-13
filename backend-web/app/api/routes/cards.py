@@ -13,6 +13,7 @@ from common.schemas.common import ApiResponse
 from common.utils.auth_scope import resolve_owner_scope
 from common.utils.local_image_upload import ImageUploadError, save_uploaded_image
 from app.services.card_service import CardService
+from app.services.selectable_card_service import SelectableCardService
 
 router = APIRouter(tags=["cards"])
 
@@ -164,6 +165,7 @@ async def get_cards(
     page_size: int = Query(default=20, ge=1, le=9999, description="每页数量"),
     search: str = Query(default="", description="搜索关键词（名称或描述）"),
     card_type: str = Query(default="", alias="type", description="卡券类型过滤"),
+    lite: bool = Query(default=False, description="轻量模式：仅返回列表所需字段，剔除卡密/文本等大字段"),
     current_user: User = Depends(deps.get_current_active_user),
     card_service: CardService = Depends(get_card_service),
 ):
@@ -175,6 +177,7 @@ async def get_cards(
         page_size=page_size,
         search=search,
         card_type=card_type,
+        lite=lite,
     )
     return result
 
@@ -189,6 +192,44 @@ async def get_cards_by_item(
     user_id, _ = resolve_owner_scope(current_user)
     cards = await card_service.get_cards_by_item_id(user_id, item_id)
     return cards
+
+
+@router.get("/selectable")
+async def get_selectable_cards(
+    item_id: str = Query(..., description="商品ID"),
+    page: int = Query(default=1, ge=1, description="页码"),
+    page_size: int = Query(default=50, ge=1, le=200, description="每页数量"),
+    search: str = Query(default="", description="搜索关键词（名称/类型/ID/对接名称）"),
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+):
+    """商品关联卡券选择弹窗：合并分页获取可选卡券（自有 + 对接），管理员可查看所有
+
+    注意：本路由必须定义在 `GET /{card_id}` 之前，否则 "selectable" 会被
+    当作 card_id 解析。
+    """
+    user_id, _ = resolve_owner_scope(current_user)
+    service = SelectableCardService(session)
+    return await service.get_selectable_cards_paginated(
+        item_id=item_id,
+        user_id=user_id,
+        page=page,
+        page_size=page_size,
+        search=search,
+    )
+
+
+@router.get("/selectable/all")
+async def get_all_selectable_cards(
+    search: str = Query(default="", description="搜索关键词（名称/类型/ID/对接名称）"),
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+):
+    """商品关联卡券选择弹窗：获取全部匹配的可选卡券轻量项（供「全选筛选结果」）"""
+    user_id, _ = resolve_owner_scope(current_user)
+    service = SelectableCardService(session)
+    items = await service.get_all_selectable_card_keys(user_id=user_id, search=search)
+    return {"list": items, "total": len(items)}
 
 
 @router.post("")

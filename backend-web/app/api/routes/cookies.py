@@ -237,6 +237,7 @@ async def list_cookie_details_paginated(
     online: bool | None = Query(default=None, description="在线状态筛选：true=在线/false=离线"),
     disable_reason: str | None = Query(default=None, max_length=255, description="禁用原因模糊搜索关键词"),
     account_id: str | None = Query(default=None, max_length=255, description="账号ID模糊搜索关键词"),
+    owner_username: str | None = Query(default=None, max_length=255, description="所属用户名模糊搜索关键词（管理员按账号归属用户筛选）"),
     current_user: User = Depends(deps.get_current_active_user),
     account_service: AccountService = Depends(deps.get_account_service),
     session = Depends(deps.get_db_session),
@@ -281,6 +282,7 @@ async def list_cookie_details_paginated(
         account_id=account_id,
         online=online,
         online_account_ids=list(online_ids),
+        owner_username=owner_username,
     )
     
     # 获取所有账号的消息过滤规则数量
