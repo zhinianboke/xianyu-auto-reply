@@ -301,12 +301,9 @@ class AiListingGenerationService:
                 "images": images,
             }
             payload.setdefault("condition", "全新")
-            if payload.get("delivery_method") not in {"express", "pickup"}:
-                payload["delivery_method"] = "express"
-            payload.pop("support_pickup", None)
+            payload.setdefault("delivery_method", "free_shipping")
+            payload.setdefault("support_pickup", False)
             payload.setdefault("postage", 0)
-            if payload["delivery_method"] == "pickup":
-                payload["postage"] = 0
             if not payload["title"]:
                 raise ValueError("AI未返回商品标题")
             if not payload["description"]:

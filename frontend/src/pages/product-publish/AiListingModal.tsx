@@ -11,6 +11,7 @@ import {
   uploadProductImages,
   type AiListingConfig,
   type AiListingConfigParams,
+  type ProductDeliveryMethod,
 } from '@/api/productPublish'
 
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
@@ -45,7 +46,8 @@ const defaultForm: AiListingConfigParams = {
     category: '',
     condition: '全新',
     brand: '',
-    delivery_method: 'express',
+    delivery_method: 'free_shipping',
+    support_pickup: false,
     postage: 0,
     address: '',
     remark: '',
@@ -213,7 +215,7 @@ export function AiListingModal({ onClose, onTaskStarted }: Props) {
         random_image_count: Math.max(1, Math.min(Number(form.random_image_count || 1), 9)),
         material_defaults: {
           ...form.material_defaults,
-          postage: form.material_defaults.delivery_method === 'express'
+          postage: form.material_defaults.delivery_method === 'fixed_fee'
             ? (normalizeMoney(Number(form.material_defaults.postage || 0)) ?? 0)
             : 0,
         },
@@ -657,17 +659,26 @@ export function AiListingModal({ onClose, onTaskStarted }: Props) {
                   </div>
                   <div className="input-group">
                     <label className="input-label">发货方式</label>
-                    <select className="input-ios" disabled={!isEditing} value={form.material_defaults.delivery_method || 'express'} onChange={e => updateDefaults({ delivery_method: e.target.value as 'express' | 'pickup', postage: e.target.value === 'express' ? form.material_defaults.postage : 0 })}>
-                      <option value="express">快递发货</option>
-                      <option value="pickup">自提</option>
+                    <select className="input-ios" disabled={!isEditing} value={form.material_defaults.delivery_method || 'free_shipping'} onChange={e => updateDefaults({ delivery_method: e.target.value as ProductDeliveryMethod, postage: e.target.value === 'fixed_fee' ? form.material_defaults.postage : 0 })}>
+                      <option value="free_shipping">包邮</option>
+                      <option value="distance_billing">按距离计费</option>
+                      <option value="fixed_fee">一口价</option>
+                      <option value="no_shipping">无需邮寄</option>
                     </select>
                   </div>
-                  {form.material_defaults.delivery_method === 'express' && (
+                  {form.material_defaults.delivery_method === 'fixed_fee' && (
                     <div className="input-group">
                       <label className="input-label">运费</label>
                       <input type="number" className="input-ios" disabled={!isEditing} min="0" step="0.01" value={form.material_defaults.postage || ''} onChange={e => updateDefaults({ postage: parseFloat(e.target.value) || 0 })} />
                     </div>
                   )}
+                  <div className="input-group">
+                    <label className="input-label">支持自提</label>
+                    <label className="switch-ios mt-2">
+                      <input type="checkbox" disabled={!isEditing} checked={Boolean(form.material_defaults.support_pickup)} onChange={e => updateDefaults({ support_pickup: e.target.checked })} />
+                      <span className="switch-slider"></span>
+                    </label>
+                  </div>
                   <div className="input-group md:col-span-3">
                     <label className="input-label">宝贝所在地</label>
                     <input className="input-ios" disabled={!isEditing} value={form.material_defaults.address || ''} onChange={e => updateDefaults({ address: e.target.value })} />

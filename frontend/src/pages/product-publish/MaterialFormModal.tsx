@@ -7,7 +7,7 @@ import { X, Loader2, Upload, Trash2 } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import {
   createMaterial, updateMaterial, uploadProductImages,
-  type ProductMaterial, type MaterialCreateParams,
+  type ProductDeliveryMethod, type ProductMaterial, type MaterialCreateParams,
 } from '@/api/productPublish'
 
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
@@ -30,6 +30,13 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [previewImage, setPreviewImage] = useState<string | null>(null)
+  const rawInitialDeliveryMethod = initial?.delivery_method as string | undefined
+  const initialDeliveryMethod: ProductDeliveryMethod =
+    rawInitialDeliveryMethod === 'distance_billing' || rawInitialDeliveryMethod === 'fixed_fee' || rawInitialDeliveryMethod === 'no_shipping'
+      ? rawInitialDeliveryMethod
+      : rawInitialDeliveryMethod === 'virtual'
+        ? 'no_shipping'
+        : 'free_shipping'
   const [form, setForm] = useState<MaterialCreateParams>({
     title: initial?.title ?? '',
     description: initial?.description ?? '',
@@ -37,7 +44,8 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
     original_price: initial?.original_price ?? undefined,
     category: initial?.category ?? '',
     images: initial?.images ?? [],
-    delivery_method: initial?.delivery_method ?? 'express',
+    delivery_method: initialDeliveryMethod,
+    support_pickup: initial?.support_pickup ?? false,
     postage: initial?.postage ?? 0,
     address: initial?.address ?? '',
     brand: initial?.brand ?? '',
@@ -70,6 +78,14 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
     setForm(f => ({ ...f, images: (f.images || []).filter((_, i) => i !== idx) }))
   }
 
+  const updateDeliveryMethod = (deliveryMethod: ProductDeliveryMethod) => {
+    setForm(f => ({
+      ...f,
+      delivery_method: deliveryMethod,
+      postage: deliveryMethod === 'fixed_fee' ? f.postage : 0,
+    }))
+  }
+
   const handleSave = async () => {
     if (!form.title.trim()) { addToast({ type: 'warning', message: '请填写商品标题' }); return }
     if (!form.description.trim()) { addToast({ type: 'warning', message: '请填写商品描述' }); return }
@@ -78,14 +94,14 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
     if (!normalizedPrice || normalizedPrice < 0.01) { addToast({ type: 'warning', message: '售价最小为0.01' }); return }
     if (normalizedOriginalPrice !== undefined && normalizedOriginalPrice < 0.01) { addToast({ type: 'warning', message: '原价最小为0.01' }); return }
     if (!form.images || form.images.length === 0) { addToast({ type: 'warning', message: '请至少上传一张商品图片' }); return }
-    const payload = {
-      ...form,
-      price: normalizedPrice,
-      original_price: normalizedOriginalPrice,
-      postage: normalizeMoney(form.postage) ?? 0,
-    }
     setSaving(true)
     try {
+      const payload = {
+        ...form,
+        price: normalizedPrice,
+        original_price: normalizedOriginalPrice,
+        postage: form.delivery_method === 'fixed_fee' ? (normalizeMoney(form.postage) ?? 0) : 0,
+      }
       if (initial) {
         const res = await updateMaterial(initial.id, payload)
         if (!res.success) { addToast({ type: 'error', message: res.message || '更新失败' }); return }
@@ -148,18 +164,31 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
                 <input className="input-ios" placeholder="请输入品牌"
                   value={form.brand} onChange={e => setForm(f => ({ ...f, brand: e.target.value }))} />
               </div>
-              <div className="input-group">
+              <div className="input-group sm:col-span-2">
                 <label className="input-label">发货方式</label>
-                <select className="input-ios" value={form.delivery_method}
-                  onChange={e => setForm(f => ({ ...f, delivery_method: e.target.value as 'express' | 'pickup' }))}>
-                  <option value="express">快递发货</option>
-                  <option value="pickup">自提</option>
-                </select>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <select className="input-ios w-full sm:w-[320px]" value={form.delivery_method}
+                    onChange={e => updateDeliveryMethod(e.target.value as ProductDeliveryMethod)}>
+                    <option value="free_shipping">包邮</option>
+                    <option value="distance_billing">按距离计费</option>
+                    <option value="fixed_fee">一口价</option>
+                    <option value="no_shipping">无需邮寄</option>
+                  </select>
+                  <label className="switch-ios flex-shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(form.support_pickup)}
+                      onChange={e => setForm(f => ({ ...f, support_pickup: e.target.checked }))}
+                    />
+                    <span className="switch-slider"></span>
+                  </label>
+                  <span className="text-sm text-slate-600 dark:text-slate-300 flex-shrink-0">支持自提</span>
+                </div>
               </div>
-              {form.delivery_method === 'express' && (
+              {form.delivery_method === 'fixed_fee' && (
                 <div className="input-group">
-                  <label className="input-label">邮费（元，0=包邮）</label>
-                  <input type="number" className="input-ios" placeholder="0" min="0" step="0.01"
+                  <label className="input-label">运费（元）</label>
+                  <input type="number" className="input-ios w-full sm:w-[320px]" placeholder="0" min="0" step="0.01"
                     value={form.postage || ''} onChange={e => setForm(f => ({ ...f, postage: parseFloat(e.target.value) || 0 }))} />
                 </div>
               )}

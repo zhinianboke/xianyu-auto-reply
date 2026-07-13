@@ -50,7 +50,8 @@ class MaterialCreateRequest(BaseModel):
     original_price: Optional[float] = Field(None, ge=0.01, multiple_of=0.01, description="原价（划线价）")
     category: Optional[str] = Field(None, max_length=100, description="商品分类")
     images: List[str] = Field(default=[], description="图片URL列表（最多9张）")
-    delivery_method: str = Field("express", description="发货方式：express/pickup")
+    delivery_method: str = Field("free_shipping", description="发货方式：free_shipping/distance_billing/fixed_fee/no_shipping")
+    support_pickup: bool = Field(False, description="是否支持自提")
     postage: float = Field(0, ge=0, description="邮费，0表示包邮")
     address: Optional[str] = Field(None, max_length=200, description="宝贝所在地")
     brand: Optional[str] = Field(None, max_length=100, description="品牌")
@@ -67,6 +68,7 @@ class MaterialUpdateRequest(BaseModel):
     category: Optional[str] = None
     images: Optional[List[str]] = None
     delivery_method: Optional[str] = None
+    support_pickup: Optional[bool] = None
     postage: Optional[float] = Field(None, ge=0)
     address: Optional[str] = None
     brand: Optional[str] = None
@@ -84,7 +86,8 @@ class PublishSingleRequest(BaseModel):
     category: Optional[str] = Field(None, description="商品分类")
     images: List[str] = Field(..., min_length=1, description="图片本地路径列表（至少1张）")
     address: Optional[str] = None
-    delivery_method: str = Field("express", description="发货方式：express/pickup")
+    delivery_method: str = Field("free_shipping", description="发货方式：free_shipping/distance_billing/fixed_fee/no_shipping")
+    support_pickup: bool = Field(False, description="是否支持自提")
     postage: float = Field(0, ge=0, description="邮费，0表示包邮")
     brand: Optional[str] = Field(None, description="品牌")
     condition: str = Field("全新", description="成色")
