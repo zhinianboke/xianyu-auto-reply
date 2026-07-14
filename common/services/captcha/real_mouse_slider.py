@@ -40,6 +40,12 @@ from common.services.captcha.windows_foreground import (
     activate_page_window,
     activate_window,
 )
+from common.services.captcha.win_input import (
+    precise_sleep,
+    send_button,
+    send_move_abs,
+    timer_resolution,
+)
 
 from playwright.sync_api import sync_playwright
 
@@ -697,25 +703,42 @@ class _RealMouseSolver:
         _human_mouse_to(ax, ay, 0.3)
         _human_mouse_to(sx, sy, 0.2)
         time.sleep(0.15)
-        pyautogui.mouseDown()
         if scene == "business":
-            time.sleep(random.uniform(0.065, 0.085))
+            # 业务滑块使用已验证的 SendInput + 精密时序：同帧内短间隔点背靠背发送，
+            # 让 Chrome 产生接近真人硬件鼠标的 coalesced 子事件密度。
+            timer_resolution(True)
+            send_button(True)
+            try:
+                time.sleep(random.uniform(0.065, 0.085))
+                started = time.perf_counter()
+                elapsed = 0.0
+                for i, (dx, dy, dt) in enumerate(drag):
+                    if i == 0:
+                        continue
+                    tx, ty = to_screen(mx + dx, my + dy)
+                    send_move_abs(tx, ty)
+                    elapsed += dt / 1000.0
+                    if dt >= 3.0:
+                        precise_sleep(started + elapsed)
+                time.sleep(0.08)
+            finally:
+                send_button(False)
+                timer_resolution(False)
         else:
+            # 登录滑块保持原有 pyautogui 轨迹、坐标抖动和逐点时序，不受业务优化影响。
+            pyautogui.mouseDown()
             time.sleep(0.12)
-        for i, (dx, dy, dt) in enumerate(drag):
-            if i == 0:
-                continue
-            if scene == "business":
-                tx, ty = to_screen(mx + dx, my + dy)
-            else:
+            for i, (dx, dy, dt) in enumerate(drag):
+                if i == 0:
+                    continue
                 tx, ty = to_screen(
                     mx + dx + random.uniform(-1, 1),
                     my + dy + random.uniform(-1, 1),
                 )
-            pyautogui.moveTo(tx, ty)
-            time.sleep(max(0.0, (dt / 1000.0) * random.uniform(0.85, 1.15)))
-        time.sleep(0.08)
-        pyautogui.mouseUp()
+                pyautogui.moveTo(tx, ty)
+                time.sleep(max(0.0, (dt / 1000.0) * random.uniform(0.85, 1.15)))
+            time.sleep(0.08)
+            pyautogui.mouseUp()
         if scene == "login":
             try:
                 observed = frame.evaluate("() => window.__cal || []") or []
