@@ -15,6 +15,7 @@ from typing import Callable, Dict, Optional, Tuple
 from loguru import logger
 
 from common.services.captcha.slider_stealth import run_slider_verification, CAPTCHA_NOT_REQUIRED, URL_EXPIRED
+from common.services.captcha.remote_timeout import get_remote_solve_timeout
 from common.services.captcha.drissionpage_slider import (
     run_drissionpage_verification,
     DRISSIONPAGE_AVAILABLE,
@@ -112,7 +113,7 @@ def _call_remote_solve(
             remote_url,
             json=payload,
             # 连接 8s 内必须建立，读取给足远程求解时间；超时/连不上 → 回退本机
-            timeout=(8, max(90, int(browser_timeout) + 60)),
+            timeout=(8, get_remote_solve_timeout(browser_timeout)),
         )
     except requests.exceptions.RequestException as e:
         logger.warning(f"【{user_id}】远程过滑块超时/不可用，回退本机逻辑: {e}")

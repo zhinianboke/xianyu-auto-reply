@@ -7,11 +7,13 @@ WebSocket 服务客户端
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
 from app.core.config import get_settings
 from app.core.http_client import get_http_client
+from common.services.captcha.remote_timeout import get_remote_solve_timeout
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -242,7 +244,8 @@ class WebSocketServiceClient:
 
     async def solve_captcha(self, account_id: str, url: str, browser_timeout: int = 40,
                             call_type: str = "remote", call_user: str | None = None,
-                            cookies: str = "", device_id: str = "") -> dict:
+                            cookies: str = "", device_id: str = "",
+                            extended_queue_timeout: bool = False) -> dict:
         """调用 websocket 服务独立过滑块（模式B：仅凭 punish 链接求解）。
 
         注意：过滑块（含重试/看门狗）耗时可能达数十秒，远超共享 http_client 的 30s 超时，
@@ -256,6 +259,8 @@ class WebSocketServiceClient:
             call_user: 调用用户名（远程调用按秘钥查到），用于风控日志
             cookies: 可选账号 Cookie（调用方开启"传递Cookie"开关时传入），链接过期时凭此重取新链接
             device_id: 可选设备 ID，配合 cookies 重新请求 token 接口使用
+            extended_queue_timeout: 是否为真人鼠标远程接口预留串行排队时间；默认关闭，
+                避免改变 login、聊天等现有调用的失败等待时间
 
         Returns:
             websocket 返回的响应字典（success / data.engine / data.cookies）
@@ -263,7 +268,11 @@ class WebSocketServiceClient:
         import aiohttp
 
         endpoint = f"{self.base_url}/internal/captcha/solve"
-        total_timeout = max(90, int(browser_timeout) + 60)  # 给 websocket 端足够时间（含重试+看门狗）
+        total_timeout = (
+            get_remote_solve_timeout(browser_timeout)
+            if extended_queue_timeout
+            else max(90, int(browser_timeout) + 60)
+        )
         try:
             async with aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=total_timeout)
@@ -278,6 +287,15 @@ class WebSocketServiceClient:
                     "device_id": device_id or "",
                 }) as resp:
                     return await resp.json(content_type=None)
+        except asyncio.TimeoutError:
+            logger.error(
+                f"过滑块服务等待超时: account_id={account_id}, "
+                f"总超时={total_timeout:.0f}秒"
+            )
+            return {
+                "success": False,
+                "message": f"过滑块服务等待超时（{total_timeout:.0f}秒）",
+            }
         except Exception as e:
             logger.error(f"过滑块失败: account_id={account_id}, 错误: {e}")
             return {"success": False, "message": f"过滑块失败: {str(e)}"}

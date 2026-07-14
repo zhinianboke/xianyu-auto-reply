@@ -17,6 +17,8 @@ from typing import Dict, Optional, Tuple
 import httpx
 from loguru import logger
 
+from common.services.captcha.remote_timeout import get_remote_solve_timeout
+
 
 async def solve_remote(
     remote_url: str,
@@ -53,7 +55,7 @@ async def solve_remote(
         payload["device_id"] = device_id or ""
 
     # 连接 8s 内必须建立，读取给足远程求解时间；超时/连不上 → 回退本机
-    timeout = httpx.Timeout(max(90, int(browser_timeout) + 60), connect=8.0)
+    timeout = httpx.Timeout(get_remote_solve_timeout(browser_timeout), connect=8.0)
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(remote_url, json=payload)

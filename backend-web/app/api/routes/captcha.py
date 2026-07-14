@@ -508,6 +508,7 @@ async def slider_solve(
         call_user=user.username,
         cookies=(request.cookies or "").strip(),
         device_id=(request.device_id or "").strip(),
+        extended_queue_timeout=True,
     )
 
     if isinstance(result_data, dict) and result_data.get("success"):

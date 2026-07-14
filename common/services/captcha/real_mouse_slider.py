@@ -5,8 +5,8 @@
 - 闲鱼/阿里 baxia 风控能区分「CDP 注入的鼠标事件」与「真实硬件鼠标事件」。
   实测：Playwright(CDP) 即使回放真人轨迹也被判 code=300（拒），而用 pyautogui 驱动
   物理光标回放同一条真人轨迹则 code=0（通过）。
-- 因此本引擎用 pyautogui 驱动**物理光标**，回放预先录制的真人滑动轨迹，
-  完成 NC 滑块验证；登录场景复用业务滑块同一套回放逻辑，仅使用登录专用长位移样本。
+- 因此业务场景用 SendInput、登录场景用 pyautogui 驱动物理光标，回放预先录制的真人轨迹，
+  完成 NC 滑块验证；登录场景继续使用登录专用长位移样本和原有回放逻辑。
 
 代价与限制：
 - 运行期间会**接管桌面物理光标约 2~3 秒**，期间人不能同时用鼠标；
@@ -501,8 +501,9 @@ class _RealMouseSolver:
         except Exception as e:
             logger.warning(f"【{self.pure_id}】强制最大化窗口失败（继续）: {e}")
 
-    def _ensure_login_window_foreground(self) -> bool:
-        """激活本次登录验证 Chrome，并校验物理输入的真实前台归属。"""
+    def _ensure_window_foreground(self, scene: str) -> bool:
+        """激活当前验证 Chrome，并校验物理输入的真实前台归属。"""
+        scene_name = "登录滑块" if scene == "login" else "业务滑块"
         try:
             self.page.bring_to_front()
             if self._window_handle:
@@ -515,16 +516,16 @@ class _RealMouseSolver:
                 self._window_handle = hwnd
                 if first_detection:
                     logger.info(
-                        f"【{self.pure_id}】登录滑块已锁定 Windows 前台窗口: {detail}"
+                        f"【{self.pure_id}】{scene_name}已锁定 Windows 前台窗口: {detail}"
                     )
                 return True
             logger.error(
-                f"【{self.pure_id}】登录滑块无法激活 Windows 前台窗口，"
+                f"【{self.pure_id}】{scene_name}无法激活 Windows 前台窗口，"
                 f"已取消物理鼠标回放: {detail}"
             )
         except Exception as e:
             logger.error(
-                f"【{self.pure_id}】登录滑块 Windows 前台校验异常，"
+                f"【{self.pure_id}】{scene_name} Windows 前台校验异常，"
                 f"已取消物理鼠标回放: {e}"
             )
         return False
@@ -542,7 +543,7 @@ class _RealMouseSolver:
         # 登录场景强制最大化（业务场景保持原有窗口行为不变）
         if scene == "login":
             self._maximize_window()
-            self._ensure_login_window_foreground()
+            self._ensure_window_foreground(scene)
 
         # 导航（命中过期页则用 url_provider 刷新一次）
         target = url
@@ -554,7 +555,7 @@ class _RealMouseSolver:
             time.sleep(random.uniform(1.2, 1.8))
             if scene == "login":
                 self._maximize_window()
-                self._ensure_login_window_foreground()
+                self._ensure_window_foreground(scene)
             try:
                 content = self.page.content()
             except Exception:
@@ -602,14 +603,14 @@ class _RealMouseSolver:
                 logger.warning(f"【{self.pure_id}】真实鼠标引擎未找到滑块（第{attempt}次尝试）")
                 break
 
-            # pyautogui 发送的是系统级输入，必须确认本次 Chrome 是 Windows 真实前台窗口。
+            # SendInput/pyautogui 都是系统级输入，必须确认本次 Chrome 是 Windows 真实前台窗口。
             if scene == "login":
                 self._maximize_window()
-                if not self._ensure_login_window_foreground():
-                    return False, None
+            if not self._ensure_window_foreground(scene):
+                return False, None
 
             # 计算坐标 + 物理鼠标回放真人轨迹（每次随机挑一条轨迹，降低重复模式风险）
-            selected_drag = _choose_drag(drags) if scene == "login" else random.choice(drags)
+            selected_drag = _choose_drag(drags)
             if scene == "login":
                 logger.info(
                     f"【{self.pure_id}】登录滑块回放真人原始样本: "
@@ -617,6 +618,13 @@ class _RealMouseSolver:
                     f"位移={selected_drag[-1][0]:.0f}px, "
                     f"按下至末点={sum(point[2] for point in selected_drag):.0f}ms, "
                     f"首点等待={selected_drag[1][2]:.0f}ms"
+                )
+            else:
+                logger.info(
+                    f"【{self.pure_id}】业务滑块第{attempt}次选用真人轨迹: "
+                    f"点数={len(selected_drag)}, "
+                    f"位移={selected_drag[-1][0]:.0f}px, "
+                    f"时长={sum(point[2] for point in selected_drag):.0f}ms"
                 )
             if not self._do_real_slide(
                 frame,
@@ -637,10 +645,31 @@ class _RealMouseSolver:
                 # （是否回退原引擎由编排层根据 CAPTCHA_REAL_MOUSE 决定，本引擎只负责返回结果）
                 return (True, cookies) if cookies else (False, None)
 
-            # 本次未过：若还有重试机会且时间充足，点“重试”按钮重置滑块后再滑
+            # 本次未过：业务远程调用优先重新获取新鲜 URL，避免在已被风控拒绝的旧页面上
+            # 连续重复轨迹；login 或没有 URL 刷新能力时，保持原页面点击重试逻辑。
             if attempt < max_attempts and (time.time() - start) < (browser_timeout - 5):
-                logger.info(f"【{self.pure_id}】真实鼠标引擎第{attempt}次未通过，点击重试后再滑")
-                self._click_retry()
+                logger.info(f"【{self.pure_id}】真实鼠标引擎第{attempt}次未通过，准备刷新或重试")
+                refreshed = False
+                if scene == "business" and url_provider is not None:
+                    try:
+                        fresh = url_provider()
+                    except Exception as refresh_error:
+                        logger.warning(f"【{self.pure_id}】失败后刷新验证链接异常，沿用当前页面: {refresh_error}")
+                        fresh = None
+                    if fresh == CAPTCHA_NOT_REQUIRED:
+                        logger.info(f"【{self.pure_id}】失败后刷新 token 已可用，无需继续滑块")
+                        return True, None
+                    if isinstance(fresh, str) and fresh:
+                        try:
+                            self.page.goto(fresh, wait_until="domcontentloaded", timeout=15000)
+                            time.sleep(random.uniform(1.2, 1.8))
+                            if "抱歉，页面访问出现了问题" not in self.page.content():
+                                refreshed = True
+                                logger.info(f"【{self.pure_id}】失败后已切换到新鲜验证链接重试")
+                        except Exception as refresh_error:
+                            logger.warning(f"【{self.pure_id}】失败后导航新验证链接异常，沿用当前页面: {refresh_error}")
+                if not refreshed:
+                    self._click_retry()
                 time.sleep(random.uniform(1.0, 1.8))
                 continue
             break
@@ -668,34 +697,49 @@ class _RealMouseSolver:
                     mx = candidate_x
         dpr = self.page.evaluate("() => window.devicePixelRatio") or 1.0
 
-        # 校准：主视口坐标 -> 屏幕坐标 的平移量
-        try:
-            frame.evaluate("() => { window.__cal = []; }")
-        except Exception:
-            pass
-        self.page.mouse.move(mx, my, steps=3)
-        time.sleep(0.2)
-        cal = []
-        try:
-            cal = frame.evaluate("() => window.__cal || []") or self.page.evaluate("() => window.__cal || []")
-        except Exception:
-            pass
-        if not cal:
-            logger.warning(f"【{self.pure_id}】真实鼠标引擎坐标校准失败")
-            return False
-        c = cal[-1]
-        off_x, off_y = c[2] - mx, c[3] - my
+        if scene == "business":
+            # 业务滑块避免用 page.mouse.move 注入一次 CDP 合成移动事件；通过真实窗口几何关系
+            # 完成 CSS 视口坐标到物理屏幕坐标的映射，与测试目录验证通过的 raw 模式一致。
+            geometry = self.page.evaluate(
+                "() => ({sx: window.screenX, sy: window.screenY, ow: window.outerWidth, "
+                "oh: window.outerHeight, iw: window.innerWidth, ih: window.innerHeight})"
+            )
+            border_x = max(0.0, (geometry["ow"] - geometry["iw"]) / 2.0)
+            top_chrome = max(0.0, (geometry["oh"] - geometry["ih"]) - border_x)
+            off_x = geometry["sx"] + border_x
+            off_y = geometry["sy"] + top_chrome
 
-        def to_screen(vx: float, vy: float) -> Tuple[int, int]:
-            return int(round((vx + off_x) * dpr)), int(round((vy + off_y) * dpr))
+            def to_screen(vx: float, vy: float) -> Tuple[int, int]:
+                return int(round((off_x + vx) * dpr)), int(round((off_y + vy) * dpr))
+        else:
+            # 登录滑块保持原 CDP 校准逻辑，不改变 login 的滑动行为。
+            try:
+                frame.evaluate("() => { window.__cal = []; }")
+            except Exception:
+                pass
+            self.page.mouse.move(mx, my, steps=3)
+            time.sleep(0.2)
+            cal = []
+            try:
+                cal = frame.evaluate("() => window.__cal || []") or self.page.evaluate("() => window.__cal || []")
+            except Exception:
+                pass
+            if not cal:
+                logger.warning(f"【{self.pure_id}】真实鼠标引擎坐标校准失败")
+                return False
+            c = cal[-1]
+            off_x, off_y = c[2] - mx, c[3] - my
+
+            def to_screen(vx: float, vy: float) -> Tuple[int, int]:
+                return int(round((vx + off_x) * dpr)), int(round((vy + off_y) * dpr))
 
         self._slide_code = None  # 每次滑动前重置，避免读到上一次的返回码
 
         # 坐标校准后再次校验，避免校准期间被其他程序抢走 Windows 前台窗口。
-        if scene == "login" and not self._ensure_login_window_foreground():
+        if not self._ensure_window_foreground(scene):
             return False
 
-        # 登录与业务场景共用同一套已验证的 pyautogui 回放算法；登录仅保留长位移样本和前台校验。
+        # 保持已验证的固定接近动作；登录和业务均使用稳定坐标校准。
         ax, ay = to_screen(mx - 50, my - 40)
         sx, sy = to_screen(mx, my)
         if scene == "login":
