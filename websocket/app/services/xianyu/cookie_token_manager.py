@@ -647,17 +647,38 @@ class CookieTokenManager:
 
                     return cookies_str
                 else:
-                    logger.error(f"【{self.cookie_id}】滑块验证失败")
+                    remote_fail_reason = None
+                    captcha_engine_for_log = captcha_engine
+                    if isinstance(captcha_engine, str) and captcha_engine.startswith("remote:"):
+                        remote_fail_reason = captcha_engine.split(":", 1)[1].strip() or "远程过滑块未通过"
+                        captcha_engine_for_log = "remote"
+
+                    if remote_fail_reason:
+                        logger.error(f"【{self.cookie_id}】滑块验证失败: {remote_fail_reason}")
+                    else:
+                        logger.error(f"【{self.cookie_id}】滑块验证失败")
                     
                     # 更新风控日志为失败状态
                     captcha_duration = time.time() - captcha_start_time
                     if log_id:
                         try:
                             from common.db.compat import db_manager
+                            processing_result = (
+                                f'远程过滑块失败：{remote_fail_reason}，耗时: {captcha_duration:.2f}秒'
+                                if remote_fail_reason
+                                else f'滑块验证失败，耗时: {captcha_duration:.2f}秒'
+                            )
+                            update_kwargs = {
+                                "processing_status": "failed",
+                                "processing_result": processing_result,
+                            }
+                            if captcha_engine_for_log == "remote":
+                                update_kwargs["captcha_engine"] = "remote"
+                            if remote_fail_reason:
+                                update_kwargs["error_message"] = remote_fail_reason
                             db_manager.update_risk_control_log(
                                 log_id=log_id,
-                                processing_status='failed',
-                                processing_result=f'滑块验证失败，耗时: {captcha_duration:.2f}秒'
+                                **update_kwargs,
                             )
                         except Exception as update_e:
                             logger.error(f"【{self.cookie_id}】更新风控日志失败: {update_e}")

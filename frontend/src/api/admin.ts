@@ -150,7 +150,14 @@ export const testRemoteSliderSolve = async (
 }
 
 // 读取远程过滑块全局配置（仅管理员）
-export const getRemoteCaptchaConfig = async (): Promise<ApiResponse<{ url: string; secret_key: string; pass_cookies: boolean; local_weight: number; remote_weight: number }>> => {
+export const getRemoteCaptchaConfig = async (): Promise<ApiResponse<{
+  url: string
+  secret_key: string
+  pass_cookies: boolean
+  block_remote_calls: boolean
+  local_weight: number
+  remote_weight: number
+}>> => {
   return get(`${API_PREFIX}/captcha/remote-config`)
 }
 
@@ -160,10 +167,18 @@ export const saveRemoteCaptchaConfig = async (
   url: string,
   secret_key: string,
   pass_cookies: boolean,
+  block_remote_calls: boolean,
   local_weight: number,
   remote_weight: number,
 ): Promise<ApiResponse> => {
-  return put(`${API_PREFIX}/captcha/remote-config`, { url, secret_key, pass_cookies, local_weight, remote_weight })
+  return put(`${API_PREFIX}/captcha/remote-config`, {
+    url,
+    secret_key,
+    pass_cookies,
+    block_remote_calls,
+    local_weight,
+    remote_weight,
+  })
 }
 
 // ========== 风控日志 ==========
@@ -256,6 +271,8 @@ export interface RiskTodaySuccessRate {
   remote_success: number
   remote_rate: number
   processing: number
+  local_processing: number
+  remote_processing: number
 }
 
 // 获取当日风控成功率（当日成功记录数 / 当日总记录数）

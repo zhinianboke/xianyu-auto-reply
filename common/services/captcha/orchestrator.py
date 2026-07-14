@@ -81,7 +81,7 @@ def _call_remote_solve(
     browser_timeout: int,
     cookies_str: str = "",
     device_id: str = "",
-) -> Tuple[str, Optional[Dict[str, str]]]:
+) -> Tuple[str, Optional[Dict[str, str]], Optional[str]]:
     """调用远程过滑块接口。
 
     Args:
@@ -90,10 +90,11 @@ def _call_remote_solve(
         device_id: 设备 ID，配合 cookies_str 供远程端重新请求 token 接口使用。
 
     Returns:
-        (status, cookies)
+        (status, cookies, message)
         status: 'ok'（远程通过，cookies 为 x5*）/ 'fail'（远程有返回但未通过）/
                 'url_expired'（远程反馈验证链接已过期，调用方应刷新URL后重试）/
                 'fallback'（超时或网络不可用，应回退本机逻辑）
+        message: 远程接口返回的失败原因或本地解析原因
     """
     import requests
 
@@ -117,24 +118,27 @@ def _call_remote_solve(
         )
     except requests.exceptions.RequestException as e:
         logger.warning(f"【{user_id}】远程过滑块超时/不可用，回退本机逻辑: {e}")
-        return "fallback", None
+        return "fallback", None, str(e)
 
     try:
         data = resp.json()
     except Exception as e:
         # 远程有响应但响应体异常：视为远程未通过（非超时 → 不回退）
         logger.warning(f"【{user_id}】远程过滑块响应解析失败，判失败（不回退）: {e}")
-        return "fail", None
+        return "fail", None, f"远程响应解析失败: {e}"
 
     if isinstance(data, dict) and data.get("success"):
         cookies = (data.get("data") or {}).get("cookies") or {}
         if cookies:
-            return "ok", cookies
+            return "ok", cookies, None
+    message = ""
+    if isinstance(data, dict):
+        message = str(data.get("message") or "").strip()
     # 远程明确反馈"验证链接已过期"：调用方需刷新URL后重试（老版本远程端无此字段，自然走 fail）
     if isinstance(data, dict) and (data.get("data") or {}).get("url_expired"):
         logger.info(f"【{user_id}】远程反馈验证链接已过期(url_expired)")
-        return "url_expired", None
-    return "fail", None
+        return "url_expired", None, message or "远程反馈验证链接已过期"
+    return "fail", None, message or "远程过滑块未通过"
 
 
 def run_slider_verification_with_fallback(
@@ -184,7 +188,7 @@ def run_slider_verification_with_fallback(
             else:
                 r_cookies = ""
                 r_device_id = ""
-            status, r_cookies_out = _call_remote_solve(
+            status, r_cookies_out, remote_message = _call_remote_solve(
                 r_url, r_secret, user_id, url, browser_timeout, r_cookies, r_device_id
             )
             if status == "ok" and _has_x5sec(r_cookies_out):
@@ -210,15 +214,16 @@ def run_slider_verification_with_fallback(
                 if not (fresh and isinstance(fresh, str)):
                     logger.info(f"【{user_id}】重取验证链接失败，远程过滑块按失败处理（不回退）")
                     return False, None, "remote"
-                status, r_cookies_out = _call_remote_solve(
+                status, r_cookies_out, remote_message = _call_remote_solve(
                     r_url, r_secret, user_id, fresh, browser_timeout, r_cookies, r_device_id
                 )
                 if status == "ok" and _has_x5sec(r_cookies_out):
                     logger.info(f"【{user_id}】远程过滑块成功（刷新链接后），采用远程结果")
                     return True, r_cookies_out, "remote"
             if status in ("fail", "url_expired"):
-                logger.info(f"【{user_id}】远程过滑块未通过（非超时），按配置不回退本机，返回失败")
-                return False, None, "remote"
+                reason = remote_message or "远程过滑块未通过"
+                logger.info(f"【{user_id}】远程过滑块未通过（非超时），按配置不回退本机，返回失败: {reason}")
+                return False, None, f"remote:{reason}"
             # status == 'fallback' → 落到下面的本机逻辑
 
     # 0. 真实鼠标模式（可选，环境变量 CAPTCHA_REAL_MOUSE=true 开启）：

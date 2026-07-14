@@ -27,3 +27,21 @@ export function formatDateTime(value?: string | Date | null): string {
     second: '2-digit',
   })
 }
+
+/**
+ * 获取北京时间日期字符串，格式为 input[type="date"] 可直接使用的 YYYY-MM-DD。
+ *
+ * @param value 可选日期，默认当前时间
+ * @returns 北京时间日期字符串
+ */
+export function getBeijingDateInputValue(value: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(value)
+
+  const partMap = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  return `${partMap.year}-${partMap.month}-${partMap.day}`
+}

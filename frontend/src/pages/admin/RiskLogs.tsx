@@ -19,6 +19,7 @@ import { PageLoading } from '@/components/common/Loading'
 import { Select } from '@/components/common/Select'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { getApiErrorMessage } from '@/utils/request'
+import { getBeijingDateInputValue } from '@/utils/date'
 import type { Account } from '@/types'
 
 export function RiskLogs() {
@@ -30,7 +31,7 @@ export function RiskLogs() {
   const [selectedAccount, setSelectedAccount] = useState('')
 
   // 时间筛选 - 默认当天
-  const today = new Date().toISOString().split('T')[0]
+  const today = getBeijingDateInputValue()
   const [startDate, setStartDate] = useState(today)
   const [endDate, setEndDate] = useState(today)
 
@@ -56,11 +57,22 @@ export function RiskLogs() {
   const [remoteUrl, setRemoteUrl] = useState('')
   const [remoteSecret, setRemoteSecret] = useState('')
   const [passCookies, setPassCookies] = useState(false)
+  const [blockRemoteCalls, setBlockRemoteCalls] = useState(true)
   // real_mouse 过滑块本地/远程排队权重（字符串便于输入框编辑，保存时规整为非负数），默认 1
   const [localWeight, setLocalWeight] = useState('1')
   const [remoteWeight, setRemoteWeight] = useState('1')
   const [savingConfig, setSavingConfig] = useState(false)
   const [testing, setTesting] = useState(false)
+
+  const getCallTypeLabel = (callType?: string | null) => (callType === 'remote' ? '远程' : '本机')
+
+  const getProcessingStatusLabel = (log: RiskLog) => {
+    if (log.processing_status === 'success') return '成功'
+    if (log.processing_status === 'failed') return '失败'
+    if (log.processing_status === 'processing') return `处理中（${getCallTypeLabel(log.call_type)}）`
+    if (log.processing_status === 'cancelled') return '已取消'
+    return log.processing_status || '-'
+  }
 
   const loadLogs = async (nextPage: number = currentPage, nextPageSize: number = pageSize) => {
     if (!_hasHydrated || !isAuthenticated || !token) return
@@ -117,6 +129,7 @@ export function RiskLogs() {
         setRemoteUrl(res.data.url || '')
         setRemoteSecret(res.data.secret_key || '')
         setPassCookies(!!res.data.pass_cookies)
+        setBlockRemoteCalls(!!res.data.block_remote_calls)
         setLocalWeight(String(res.data.local_weight ?? 1))
         setRemoteWeight(String(res.data.remote_weight ?? 1))
       }
@@ -137,6 +150,7 @@ export function RiskLogs() {
         remoteUrl.trim(),
         remoteSecret.trim(),
         passCookies,
+        blockRemoteCalls,
         normWeight(localWeight),
         normWeight(remoteWeight),
       )
@@ -303,6 +317,30 @@ export function RiskLogs() {
               <p className="font-medium text-slate-700 dark:text-slate-200">调用远程接口时传递账号 Cookie</p>
               <p className="mt-0.5 text-xs text-amber-600 dark:text-amber-400">
                 默认关闭。传递 Cookie 可进一步提高过滑块成功率（链接过期时远程端可凭此自动重取新链接），远程系统不会保存该值；请仅在信任该远程服务时开启。
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-start gap-3 mt-4">
+            <button
+              type="button"
+              onClick={() => setBlockRemoteCalls((v) => !v)}
+              role="switch"
+              aria-checked={blockRemoteCalls}
+              className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors shrink-0 mt-0.5 ${
+                blockRemoteCalls ? 'bg-red-500' : 'bg-gray-300 dark:bg-slate-600'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  blockRemoteCalls ? 'translate-x-5' : 'translate-x-0.5'
+                }`}
+              />
+            </button>
+            <div className="text-sm">
+              <p className="font-medium text-slate-700 dark:text-slate-200">禁止远程调用本机过滑块接口</p>
+              <p className="mt-0.5 text-xs text-red-600 dark:text-red-400">
+                开启后，外部系统调用 backend-web 的 /captcha/slider-solve 接口会被直接拒绝；本机内部触发的过滑块不受影响。
               </p>
             </div>
           </div>
@@ -478,9 +516,21 @@ export function RiskLogs() {
             </div>
             {/* 处理中（仅统计当日，未计入成功率分母） */}
             <div className="flex items-baseline gap-1.5">
-              <span className="text-sm text-slate-500 dark:text-slate-400">处理中</span>
+              <span className="text-sm text-slate-500 dark:text-slate-400">处理中总计</span>
               <span className="text-lg font-bold text-amber-600 dark:text-amber-400">
                 {todayRate?.processing ?? '-'}
+              </span>
+            </div>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-sm text-slate-500 dark:text-slate-400">本机处理中</span>
+              <span className="text-lg font-bold text-blue-600 dark:text-blue-400">
+                {todayRate?.local_processing ?? '-'}
+              </span>
+            </div>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-sm text-slate-500 dark:text-slate-400">远程处理中</span>
+              <span className="text-lg font-bold text-orange-600 dark:text-orange-400">
+                {todayRate?.remote_processing ?? '-'}
               </span>
             </div>
           </div>
@@ -503,6 +553,7 @@ export function RiskLogs() {
                 <th>账号ID</th>
                 <th>事件描述</th>
                 <th>处理结果</th>
+                <th>失败原因</th>
                 <th>处理状态</th>
                 <th>验证引擎</th>
                 <th>调用类型</th>
@@ -514,7 +565,7 @@ export function RiskLogs() {
             <tbody>
               {logs.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="text-center py-8 text-slate-500 dark:text-slate-400">
+                  <td colSpan={10} className="text-center py-8 text-slate-500 dark:text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <ShieldAlert className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>暂无风控日志</p>
@@ -546,6 +597,14 @@ export function RiskLogs() {
                         {log.processing_result || '-'}
                       </span>
                     </td>
+                    <td className="max-w-[200px] text-slate-500 dark:text-slate-400">
+                      <span
+                        className="block truncate cursor-help"
+                        title={log.error_message || ''}
+                      >
+                        {log.error_message || '-'}
+                      </span>
+                    </td>
                     <td>
                       <span className={`text-xs px-2 py-1 rounded ${
                         log.processing_status === 'success' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
@@ -553,11 +612,7 @@ export function RiskLogs() {
                         log.processing_status === 'processing' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' :
                         'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
                       }`}>
-                        {log.processing_status === 'success' ? '成功' :
-                         log.processing_status === 'failed' ? '失败' :
-                         log.processing_status === 'processing' ? '处理中' :
-                         log.processing_status === 'cancelled' ? '已取消' :
-                         log.processing_status || '-'}
+                        {getProcessingStatusLabel(log)}
                       </span>
                     </td>
                     <td>

@@ -128,7 +128,7 @@ class RiskControlLogService:
 
         说明：
         - 处理中（'processing'）与已取消（'cancelled'）的记录不计入成功率统计，分子和分母都排除，
-          成功率仅统计已出结果（success/failed）的记录；处理中记录单独以 processing 字段返回。
+          成功率仅统计已出结果（success/failed）的记录；处理中记录以总数、本机数、远程数单独返回。
         - 远程口径为 call_type == 'remote'；其余（含 'local' 与 NULL）一律计入本机，
           保证 本机数 + 远程数 == 总数，三个维度各自使用自己的分母，避免分母用错。
         - 普通用户仅统计自己的账号数据，管理员统计全部数据（由 owner_id 控制）。
@@ -157,7 +157,7 @@ class RiskControlLogService:
         # 成功率口径：仅统计已出结果的记录，排除处理中（processing）与已取消（cancelled）
         is_settled = XYRiskControlLog.processing_status.notin_(["processing", "cancelled"])
 
-        # 一次查询用条件聚合得到：总数、成功数、远程总数、远程成功数、处理中数
+        # 一次查询用条件聚合得到：总数、成功数、远程总数、远程成功数、处理中数、远程处理中数
         # 成功率相关的 total/success/remote_* 均只计入已出结果（settled）记录，
         # processing 单独统计当日处理中记录数，两者互不影响。
         stmt = (
@@ -173,6 +173,9 @@ class RiskControlLogService:
                     func.sum(case((and_(is_settled, is_remote, is_success), 1), else_=0)), 0
                 ).label("remote_success"),
                 func.coalesce(func.sum(case((is_processing, 1), else_=0)), 0).label("processing"),
+                func.coalesce(
+                    func.sum(case((and_(is_processing, is_remote), 1), else_=0)), 0
+                ).label("remote_processing"),
             )
             .select_from(XYRiskControlLog)
             .where(*day_filters)
@@ -184,10 +187,12 @@ class RiskControlLogService:
         remote_total = int(row.remote_total or 0)
         remote_success = int(row.remote_success or 0)
         processing = int(row.processing or 0)
+        remote_processing = int(row.remote_processing or 0)
 
         # 本机 = 总数 - 远程，保证两类相加等于总数（NULL/local 都归本机）
         local_total = total - remote_total
         local_success = success - remote_success
+        local_processing = processing - remote_processing
 
         def _rate(s: int, t: int) -> float:
             return round(s / t * 100, 2) if t > 0 else 0.0
@@ -204,4 +209,6 @@ class RiskControlLogService:
             "remote_success": remote_success,
             "remote_rate": _rate(remote_success, remote_total),
             "processing": processing,
+            "local_processing": local_processing,
+            "remote_processing": remote_processing,
         }

@@ -77,7 +77,7 @@ def _real_mouse_enabled() -> bool:
 
 async def _solve_slider(
     account_id: str, slider_url: str, remote_config: Dict[str, Any]
-) -> Tuple[str, Optional[Dict[str, str]]]:
+) -> Tuple[str, Optional[Dict[str, str]], Optional[str]]:
     """过滑块（登录场景）：配了远程→远程（远程支持登录滑块）；否则→委托 websocket 本机真实鼠标。
 
     本机真实鼠标引擎按 URL 自动识别登录场景（加载登录轨迹 + 最大化窗口）。
@@ -87,11 +87,11 @@ async def _solve_slider(
     统一归并为 'fail'，由上层继续重试同一远程通道，不切换到本机真实鼠标。
 
     Returns:
-        (status, cookies)  status: 'ok'/'fail'/'url_expired'
+        (status, cookies, message)  status: 'ok'/'fail'/'url_expired'
     """
     # 配了远程时优先远程
     if remote_config.get("url") and remote_config.get("secret"):
-        status, cookies = await solve_remote(
+        status, cookies, message = await solve_remote(
             remote_url=remote_config["url"],
             remote_secret=remote_config["secret"],
             user_id=account_id,
@@ -102,8 +102,8 @@ async def _solve_slider(
             logger.warning(
                 f"【{account_id}】远程过滑块超时/不可用，协议模式不回退本机，按失败重试"
             )
-            return "fail", None
-        return status, cookies
+            return "fail", None, message
+        return status, cookies, message
     # 否则委托 websocket 本机真实鼠标（并发/排队统一在 websocket）
     resp = await websocket_client.solve_captcha(
         account_id=account_id, url=slider_url, call_type="local"
@@ -111,10 +111,10 @@ async def _solve_slider(
     if isinstance(resp, dict) and resp.get("success"):
         cookies = (resp.get("data") or {}).get("cookies") or {}
         if cookies:
-            return "ok", cookies
+            return "ok", cookies, None
     if isinstance(resp, dict) and (resp.get("data") or {}).get("url_expired"):
-        return "url_expired", None
-    return "fail", None
+        return "url_expired", None, resp.get("message")
+    return "fail", None, resp.get("message") if isinstance(resp, dict) else "过滑块失败"
 
 
 async def _collect_login_cookies(client: httpx.AsyncClient) -> Tuple[str, str]:
@@ -256,7 +256,7 @@ async def run_protocol_login(
                     session["message"] = (
                         f"正在处理登录滑块（第 {slider_rounds}/{_MAX_SLIDER_ROUNDS} 次）"
                     )
-                    status, cookies = await _solve_slider(
+                    status, cookies, slider_message = await _solve_slider(
                         account_id, result.slider_url, remote_config
                     )
                     if status == "ok":
@@ -282,7 +282,9 @@ async def run_protocol_login(
                         )
                         continue
                     _fail_protocol_login(
-                        session, f"过滑块{status}", account_id=account_id
+                        session,
+                        slider_message or f"过滑块{status}",
+                        account_id=account_id,
                     )
                     return
 

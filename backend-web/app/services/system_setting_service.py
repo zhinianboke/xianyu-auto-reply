@@ -65,6 +65,7 @@ DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
     # real_mouse 过滑块本地/远程排队权重（默认 1:1，多来源同时排队时按比例放行）
     "captcha.real_mouse_weight_local": ("1", "real_mouse过滑块本地排队权重"),
     "captcha.real_mouse_weight_remote": ("1", "real_mouse过滑块远程排队权重"),
+    "captcha.block_remote_calls": ("true", "是否禁止外部远程调用backend-web过滑块接口"),
     # 账号密码登录模式：auto-自动(具备协议能力走协议,否则浏览器) / protocol-强制协议 / browser-强制浏览器
     "password_login.mode": ("auto", "账号密码登录模式：auto/protocol/browser"),
 }
@@ -114,6 +115,7 @@ NO_ESCAPE_KEYS = {
     "captcha.remote_secret_key",
     # 是否传递账号Cookie：布尔字符串"true"/"false"，无需转义
     "captcha.remote_pass_cookies",
+    "captcha.block_remote_calls",
     # real_mouse 排队权重：数字字符串，无需 XSS 转义
     "captcha.real_mouse_weight_local",
     "captcha.real_mouse_weight_remote",
