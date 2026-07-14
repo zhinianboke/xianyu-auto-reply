@@ -28,6 +28,7 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
@@ -799,6 +800,21 @@ class _RealMouseSolver:
 
 
 _shared_solver: Optional[_RealMouseSolver] = None
+_real_mouse_executor: Optional[ThreadPoolExecutor] = None
+_real_mouse_executor_lock = threading.Lock()
+
+
+def _get_real_mouse_executor() -> ThreadPoolExecutor:
+    """返回真人鼠标专用单线程执行器，保证 Playwright Sync 对象始终在同一线程使用。"""
+    global _real_mouse_executor
+    if _real_mouse_executor is None:
+        with _real_mouse_executor_lock:
+            if _real_mouse_executor is None:
+                _real_mouse_executor = ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix="real-mouse",
+                )
+    return _real_mouse_executor
 
 
 def _get_shared_solver(user_id: str) -> _RealMouseSolver:
@@ -811,8 +827,8 @@ def _get_shared_solver(user_id: str) -> _RealMouseSolver:
     return _shared_solver
 
 
-def _close_shared_solver() -> None:
-    """服务进程退出时关闭真人鼠标共享浏览器。"""
+def _close_shared_solver_in_worker() -> None:
+    """在真人鼠标专用线程中关闭共享浏览器。"""
     global _shared_solver
     if _shared_solver is None:
         return
@@ -823,7 +839,52 @@ def _close_shared_solver() -> None:
     _shared_solver = None
 
 
-atexit.register(_close_shared_solver)
+def _shutdown_real_mouse_executor() -> None:
+    """服务退出时在 Playwright 所属线程关闭浏览器，再停止专用执行器。"""
+    global _real_mouse_executor
+    executor = _real_mouse_executor
+    if executor is None:
+        return
+    try:
+        executor.submit(_close_shared_solver_in_worker).result(timeout=15)
+    except Exception:
+        pass
+    try:
+        executor.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pass
+    _real_mouse_executor = None
+
+
+try:
+    # ThreadPoolExecutor 会在线程级退出阶段先于普通 atexit 关闭；这里后注册、先执行，
+    # 确保 Playwright 仍可在所属 real-mouse 线程中正常 close，避免 Node 管道 EPIPE。
+    threading._register_atexit(_shutdown_real_mouse_executor)
+except AttributeError:
+    atexit.register(_shutdown_real_mouse_executor)
+
+
+def _execute_shared_verification(
+    user_id: str,
+    url: str,
+    drags: List[List[Tuple[float, float, float]]],
+    browser_timeout: int,
+    url_provider: Optional[Callable[[], Optional[str]]],
+    scene: str,
+) -> Tuple[bool, Optional[Dict[str, str]]]:
+    """在真人鼠标专用线程内完成浏览器准备、滑动和结果收集。"""
+    solver = _get_shared_solver(user_id)
+    budget = max(browser_timeout, 40) + 20
+    watchdog = threading.Timer(budget, solver.force_kill)
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        solver.prepare_task(user_id, url)
+        return solver.solve(
+            url, drags, browser_timeout, url_provider, scene=scene
+        )
+    finally:
+        watchdog.cancel()
 
 
 def run_real_mouse_verification(
@@ -859,25 +920,19 @@ def run_real_mouse_verification(
         logger.warning(f"【{user_id}】真实鼠标引擎排队获取执行权失败")
         return False, None
     try:
-        # 看门狗：总预算内若 prepare/solve 卡死，按固定目录强杀共享 Chrome 解除阻塞，
-        # 保证本函数一定返回（否则上层风控日志会一直停留在“处理中”，且执行权被长期占用）。
-        budget = max(browser_timeout, 40) + 20
-        solver = _get_shared_solver(user_id)
-        watchdog = threading.Timer(budget, solver.force_kill)
-        watchdog.daemon = True
-        watchdog.start()
-        ok: bool = False
-        cookies: Optional[Dict[str, str]] = None
         try:
-            solver.prepare_task(user_id, url)
-            ok, cookies = solver.solve(
-                url, drags, browser_timeout, url_provider, scene=scene
+            future = _get_real_mouse_executor().submit(
+                _execute_shared_verification,
+                user_id,
+                url,
+                drags,
+                browser_timeout,
+                url_provider,
+                scene,
             )
+            return future.result()
         except Exception as e:
             logger.error(f"【{user_id}】真实鼠标引擎执行异常: {e}")
-            ok, cookies = False, None
-        finally:
-            watchdog.cancel()
-        return ok, cookies
+            return False, None
     finally:
         real_mouse_scheduler.release()
