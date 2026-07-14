@@ -2520,6 +2520,7 @@ class XianyuAsync:
                                 'failed_captcha_exception',
                                 'failed_captcha_max_retries',
                                 'skipped_cooldown',
+                                'skipped_slider_cooldown',
                             )
 
                             if not hasattr(self, '_token_fetch_failures'):
@@ -2555,9 +2556,11 @@ class XianyuAsync:
                             #   该状态属于"确定性可恢复但短期内无法自愈"（账密错误冷却 5 小时 /
                             #   上次登录间隔 300 秒未到），每 5 秒重试无意义且会刷屏日志、
                             #   占用 token API 配额。
+                            # - 滑块失败冷却（skipped_slider_cooldown）：同样拉长到 5 分钟。
+                            #   冷却期内浏览器验证被跳过，5 秒重试只会反复打 punish 接口无意义。
                             # - 其他场景（滑块、网络故障、API 业务失败）：保持 5 秒快速重试，
                             #   避免延误账号恢复。
-                            sleep_duration = 300 if refresh_status == 'skipped_cooldown' else 5
+                            sleep_duration = 300 if refresh_status in ('skipped_cooldown', 'skipped_slider_cooldown') else 5
                             await self._interruptible_sleep(sleep_duration)
                             continue
                     else:

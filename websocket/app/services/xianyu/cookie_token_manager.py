@@ -20,6 +20,7 @@ from loguru import logger
 
 from common.db.session import async_session_maker
 from common.services.captcha.concurrency import run_browser_task
+from common.services.captcha.slider_fail_cooldown import slider_fail_cooldown_manager
 from common.services.captcha.token_refetch import request_fresh_captcha_url
 from common.utils.cookie_refresh import get_account_by_identity, update_account_cookies_in_db
 from common.utils.xianyu_utils import trans_cookies, generate_sign
@@ -541,6 +542,7 @@ class CookieTokenManager:
                             logger.error(f"【{self.cookie_id}】更新风控日志失败: {update_e}")
 
                     self._refetch_token_ok = False
+                    slider_fail_cooldown_manager.clear(self.cookie_id)  # 风控已解除，清零滑块失败冷却
                     return self.cookies_str
 
                 if success and cookies:
@@ -589,6 +591,10 @@ class CookieTokenManager:
                     # 这里显式判定失败，让上层走 failed_captcha 分支（不计入禁用计数），
                     # 避免账号被误累加 _token_fetch_failures 直至 10 次自动禁用。
                     if not x5sec_cookies:
+                        _slider_cd = slider_fail_cooldown_manager.mark_fail(self.cookie_id)
+                        logger.warning(
+                            f"【{self.cookie_id}】滑块视觉通过但风控未放行，进入指数退避冷却（{_slider_cd:.0f}秒）"
+                        )
                         logger.error(
                             f"【{self.cookie_id}】滑块视觉验证通过但未获取到任何 x5 相关 cookie，"
                             f"判定为失败（浏览器返回的 cookies: {list(cookies.keys())}）"
@@ -618,6 +624,31 @@ class CookieTokenManager:
                             updated_cookies[cookie_name] = cookie_value
                             new_cookie_count += 1
 
+                    # x5sec 虽有但值全部未变：滑块视觉通过却未带来任何有效更新，服务端实际未放行
+                    # （典型表现：反复"新增0 更新0"且 token 接口仍 punish）。与上面 x5sec 为空同理，
+                    # 判失败触发指数退避冷却，避免每 ~40 秒空转一次 chromium 烧 CPU。
+                    if new_cookie_count == 0 and updated_cookie_count == 0:
+                        _slider_cd = slider_fail_cooldown_manager.mark_fail(self.cookie_id)
+                        logger.warning(
+                            f"【{self.cookie_id}】滑块视觉通过但 x5sec 值未变（风控未放行），"
+                            f"判定为无效，进入指数退避冷却（{_slider_cd:.0f}秒）"
+                        )
+                        captcha_duration = time.time() - captcha_start_time
+                        if log_id:
+                            try:
+                                from common.db.compat import db_manager
+                                db_manager.update_risk_control_log(
+                                    log_id=log_id,
+                                    processing_status='failed',
+                                    processing_result=(
+                                        f'滑块视觉通过但 x5sec 值未变（风控未放行），'
+                                        f'耗时: {captcha_duration:.2f}秒'
+                                    ),
+                                )
+                            except Exception as update_e:
+                                logger.error(f"【{self.cookie_id}】更新风控日志失败: {update_e}")
+                        return None
+
                     cookies_str = "; ".join([f"{k}={v}" for k, v in updated_cookies.items()])
 
                     # 更新数据库
@@ -645,8 +676,11 @@ class CookieTokenManager:
                         self.cookies_str = old_cookies_str
                         self.cookies = old_cookies_dict
 
+                    slider_fail_cooldown_manager.clear(self.cookie_id)  # 滑块验证成功，清零失败冷却
                     return cookies_str
                 else:
+                    _slider_cd = slider_fail_cooldown_manager.mark_fail(self.cookie_id)
+                    logger.warning(f"【{self.cookie_id}】滑块验证失败，进入指数退避冷却（{_slider_cd:.0f}秒）")
                     logger.error(f"【{self.cookie_id}】滑块验证失败")
                     
                     # 更新风控日志为失败状态
@@ -666,6 +700,8 @@ class CookieTokenManager:
 
             except ImportError as import_e:
                 logger.error(f"【{self.cookie_id}】滑块验证导入失败: {import_e}")
+                _slider_cd = slider_fail_cooldown_manager.mark_fail(self.cookie_id)
+                logger.warning(f"【{self.cookie_id}】滑块依赖缺失，进入指数退避冷却（{_slider_cd:.0f}秒）")
                 
                 # 更新风控日志为异常状态
                 if log_id:
@@ -703,6 +739,8 @@ class CookieTokenManager:
 
             except Exception as stealth_e:
                 logger.error(f"【{self.cookie_id}】滑块验证异常: {self._safe_str(stealth_e)}")
+                _slider_cd = slider_fail_cooldown_manager.mark_fail(self.cookie_id)
+                logger.warning(f"【{self.cookie_id}】滑块验证异常，进入指数退避冷却（{_slider_cd:.0f}秒）")
                 
                 # 更新风控日志为异常状态
                 captcha_duration = time.time() - captcha_start_time
@@ -957,6 +995,19 @@ class CookieTokenManager:
                         
                         try:
                             captcha_start_time = time.time()
+                            # 滑块失败冷却门控：失败后指数退避，冷却期内跳过浏览器验证，
+                            # 避免"视觉通过但风控不放行"时无脑重启 chromium 烧 CPU。
+                            # 冷却到期后此处自动放行，重新探测一次（成功即清零恢复）。
+                            if slider_fail_cooldown_manager.is_cooling(self.cookie_id):
+                                remaining = slider_fail_cooldown_manager.remaining(self.cookie_id)
+                                logger.info(
+                                    f"【{self.cookie_id}】滑块失败冷却中，跳过浏览器验证"
+                                    f"（还需{remaining:.0f}秒，冷却到期后自动重试）"
+                                )
+                                self.last_token_refresh_status = "skipped_slider_cooldown"
+                                self.current_token = None
+                                await self._delete_cached_token()
+                                return None
                             new_cookies_str = await self.handle_captcha_verification(res_json)
                             captcha_duration = time.time() - captcha_start_time
 
