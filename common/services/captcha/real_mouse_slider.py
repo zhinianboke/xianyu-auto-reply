@@ -215,6 +215,47 @@ def _choose_drag(drags: List[List[Tuple[float, float, float]]]) -> List[Tuple[fl
     return random.choices(drags, weights=weights, k=1)[0]
 
 
+def _calculate_business_distance(frame, btn, track) -> float:
+    """计算业务滑块的实际可移动距离，优先使用 frame 内的精确 DOM 尺寸。"""
+    try:
+        distance = frame.evaluate(
+            """() => {
+                const button = document.querySelector('#nc_1_n1z');
+                const track = document.querySelector('#nc_1_n1t') || document.querySelector('.nc_scale');
+                if (!button || !track) return null;
+                return track.getBoundingClientRect().width - button.getBoundingClientRect().width;
+            }"""
+        )
+        if distance and distance > 0:
+            return float(distance) + random.uniform(-1.0, 1.0)
+    except Exception:
+        pass
+
+    try:
+        button_box = btn.bounding_box()
+        track_box = track.bounding_box()
+        if button_box and track_box:
+            distance = track_box["width"] - button_box["width"]
+            if distance > 0:
+                return float(distance) + random.uniform(-1.0, 1.0)
+    except Exception:
+        pass
+    return 0.0
+
+
+def _scale_drag_to_distance(
+    drag: List[Tuple[float, float, float]],
+    distance: float,
+) -> List[Tuple[float, float, float]]:
+    """按当前滑块距离缩放 X 位移，保留真人 Y 轨迹与原始时序。"""
+    if not drag or distance <= 0 or drag[-1][0] <= 1:
+        return drag
+    factor = distance / drag[-1][0]
+    scaled = [(dx * factor, dy, dt) for dx, dy, dt in drag]
+    scaled[-1] = (distance, scaled[-1][1], scaled[-1][2])
+    return scaled
+
+
 class _RealMouseSolver:
     """可复用真实鼠标滑块求解器（固定浏览器目录、自然指纹）。"""
 
@@ -621,7 +662,7 @@ class _RealMouseSolver:
                 )
             else:
                 logger.info(
-                    f"【{self.pure_id}】业务滑块第{attempt}次选用真人轨迹: "
+                    f"【{self.pure_id}】业务滑块第{attempt}次选用真人原始轨迹: "
                     f"点数={len(selected_drag)}, "
                     f"位移={selected_drag[-1][0]:.0f}px, "
                     f"时长={sum(point[2] for point in selected_drag):.0f}ms"
@@ -689,7 +730,18 @@ class _RealMouseSolver:
             return False
         mx = box["x"] + box["width"] / 2
         my = box["y"] + box["height"] / 2
-        if scene == "login":
+        if scene == "business":
+            source_distance = drag[-1][0] if drag else 0.0
+            target_distance = _calculate_business_distance(frame, btn, track)
+            if target_distance <= 0:
+                logger.warning(f"【{self.pure_id}】真实鼠标引擎无法计算业务滑块距离")
+                return False
+            drag = _scale_drag_to_distance(drag, target_distance)
+            logger.info(
+                f"【{self.pure_id}】业务滑块轨迹距离缩放: "
+                f"{source_distance:.1f}px -> {target_distance:.1f}px, 点数={len(drag)}"
+            )
+        else:
             track_box = track.bounding_box() if track else None
             if track_box:
                 candidate_x = track_box["x"] + track_box["width"] - 1 - drag[-1][0]
