@@ -19,16 +19,17 @@
 """
 from __future__ import annotations
 
+import atexit
 import glob
 import json
 import os
 import random
-import shutil
 import subprocess
 import sys
 import threading
 import time
 from typing import Callable, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 from loguru import logger
 
@@ -53,6 +54,11 @@ except Exception as _e:  # noqa: BLE001  （任何导入异常都视为不可用
     REAL_MOUSE_AVAILABLE = False
     logger.warning(f"真实鼠标引擎不可用（pyautogui 导入失败，将回退原逻辑）: {_e}")
 
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None  # type: ignore
+
 
 # 物理光标全局唯一 → 串行执行。
 # 串行由 real_mouse_scheduler（加权公平单槽位调度器）保证：多来源同时排队时按权重放行，
@@ -62,6 +68,11 @@ except Exception as _e:  # noqa: BLE001  （任何导入异常都视为不可用
 _PUNISH = ("punish", "x5step=2", "action=captcha", "pureCaptcha", "/captcha")
 _MAX_ANCHOR_GAP_MS = 180.0
 _MAX_REPLAY_DURATION_MS = 2600.0
+# 真人鼠标模式专用固定目录：本地与远程请求共用，用于复用和精确识别 Chrome 进程。
+_REAL_MOUSE_BROWSER_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "browser_data", "real_mouse_shared")
+)
+_REAL_MOUSE_BROWSER_LOCK = os.path.join(_REAL_MOUSE_BROWSER_DIR, "browser.lock")
 
 # 仅隐藏 webdriver，绝不伪造与真实 Chrome 冲突的指纹（UA/WebGL 交给真实 Chrome）
 _STEALTH_MINIMAL = """
@@ -198,7 +209,7 @@ def _choose_drag(drags: List[List[Tuple[float, float, float]]]) -> List[Tuple[fl
 
 
 class _RealMouseSolver:
-    """单次真实鼠标滑块求解（自建浏览器、自然指纹）。"""
+    """可复用真实鼠标滑块求解器（固定浏览器目录、自然指纹）。"""
 
     def __init__(self, user_id: str):
         self.user_id = str(user_id)
@@ -206,30 +217,40 @@ class _RealMouseSolver:
         self.pw = None
         self.context = None
         self.page = None
-        # 一次性 profile 目录（每次唯一并在 close 时删除），彻底规避同账号复用导致的 PROFILE_IN_USE
-        self.user_data_dir = os.path.join(
-            os.getcwd(), "browser_data", f"realmouse_{self.pure_id}_{int(time.time() * 1000)}"
-        )
-        os.makedirs(self.user_data_dir, exist_ok=True)
+        self.browser_dir = _REAL_MOUSE_BROWSER_DIR
+        os.makedirs(self.browser_dir, exist_ok=True)
+        self._browser_lock_file = None
         self._slide_code: Optional[int] = None
         self._timed_out = False
         self._window_handle: Optional[int] = None
 
     # ---------- 浏览器 ----------
+    def update_user(self, user_id: str) -> None:
+        """更新当前任务日志标识，不改变共享浏览器实例。"""
+        self.user_id = str(user_id)
+        self.pure_id = self.user_id.split("_")[0] if "_" in self.user_id else self.user_id
+
     def init_browser(self) -> None:
-        self.pw = sync_playwright().start()
-        self.context = self.pw.chromium.launch_persistent_context(
-            self.user_data_dir,
-            channel="chrome",          # 用本机真实 Chrome（自然指纹），非自带 Chromium
-            headless=False,            # 真实鼠标必须有可见窗口
-            args=_BROWSER_ARGS,
-            no_viewport=True,          # 不强制 viewport，保留真实窗口尺寸
-            locale="zh-CN",
-            timezone_id="Asia/Shanghai",
-            ignore_https_errors=True,
-            extra_http_headers={"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"},
-            timeout=30000,
-        )
+        self._acquire_browser_lock()
+        # 当前进程没有可用上下文时，先清理固定目录对应的孤儿 Chrome。
+        self._kill_browser_processes(log_result=False)
+        try:
+            self.pw = sync_playwright().start()
+            self.context = self.pw.chromium.launch_persistent_context(
+                self.browser_dir,
+                channel="chrome",          # 用本机真实 Chrome（自然指纹），非自带 Chromium
+                headless=False,            # 真实鼠标必须有可见窗口
+                args=_BROWSER_ARGS,
+                no_viewport=True,          # 不强制 viewport，保留真实窗口尺寸
+                locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+                ignore_https_errors=True,
+                extra_http_headers={"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"},
+                timeout=30000,
+            )
+        except Exception:
+            self._release_browser_lock()
+            raise
         self.context.add_init_script(_STEALTH_MINIMAL)
         self.context.add_init_script(_CAP_JS)
 
@@ -243,8 +264,138 @@ class _RealMouseSolver:
                 pass
 
         self.context.on("response", _on_resp)
-        self.page = self.context.new_page()
+        pages = list(self.context.pages)
+        self.page = pages[0] if pages else self.context.new_page()
+        for extra_page in pages[1:]:
+            try:
+                extra_page.close()
+            except Exception:
+                pass
         self.page.bring_to_front()
+
+    def _acquire_browser_lock(self) -> None:
+        """跨进程独占固定浏览器目录，防止多个服务进程同时启动真人鼠标 Chrome。"""
+        if self._browser_lock_file is not None:
+            return
+        if sys.platform != "win32" or msvcrt is None:
+            return
+        lock_file = open(_REAL_MOUSE_BROWSER_LOCK, "a+b")
+        try:
+            lock_file.seek(0, os.SEEK_END)
+            if lock_file.tell() == 0:
+                lock_file.write(b"0")
+                lock_file.flush()
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as e:
+            lock_file.close()
+            raise RuntimeError("真人鼠标共享浏览器已被另一个服务进程占用") from e
+        self._browser_lock_file = lock_file
+
+    def _release_browser_lock(self) -> None:
+        """释放真人鼠标固定浏览器目录的跨进程锁。"""
+        lock_file = self._browser_lock_file
+        self._browser_lock_file = None
+        if lock_file is None:
+            return
+        try:
+            lock_file.seek(0)
+            if sys.platform == "win32" and msvcrt is not None:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+        try:
+            lock_file.close()
+        except Exception:
+            pass
+
+    def ensure_browser(self) -> None:
+        """确认共享 Chrome/Context/Page 可用，失效时自动完整重启。"""
+        context_ok = False
+        try:
+            if self.context is not None:
+                _ = self.context.pages
+                context_ok = True
+        except Exception:
+            context_ok = False
+        if context_ok:
+            try:
+                if self.page is None or self.page.is_closed():
+                    self.page = self.context.new_page()
+                for extra_page in list(self.context.pages):
+                    if extra_page is not self.page:
+                        extra_page.close()
+                self.page.evaluate("() => 1")
+                return
+            except Exception:
+                pass
+        self.close()
+        self.init_browser()
+
+    def prepare_task(self, user_id: str, url: str) -> None:
+        """复用浏览器前清理上一任务状态，防止本地/远程或账号之间串 Cookie。"""
+        self.update_user(user_id)
+        self._slide_code = None
+        self._timed_out = False
+        self._window_handle = None
+        last_error: Optional[Exception] = None
+        for attempt in range(2):
+            try:
+                self.ensure_browser()
+                self._prepare_clean_page(url)
+                return
+            except Exception as e:
+                last_error = e
+                if attempt == 0:
+                    logger.warning(
+                        f"【{self.pure_id}】共享浏览器状态清理失败，将重启后重试: {e}"
+                    )
+                self.close()
+        raise RuntimeError(f"共享浏览器重启后仍无法清理任务状态: {last_error}") from last_error
+
+    def _prepare_clean_page(self, url: str) -> None:
+        """在当前共享 Context 中创建唯一干净页面，并确认无历史 Cookie。"""
+        new_page = self.context.new_page()
+        for old_page in list(self.context.pages):
+            if old_page is not new_page:
+                old_page.close()
+        self.page = new_page
+        # 先关闭旧页面，避免尾部响应在首次清理后重新写入 Cookie。
+        self.context.clear_cookies()
+        remaining = self.context.cookies()
+        if remaining:
+            raise RuntimeError(f"关闭旧页面后仍残留 {len(remaining)} 个 Cookie")
+        self._clear_browser_storage(url)
+        # 存储清理后再次清 Cookie 并校验，任何残留都触发浏览器重启。
+        self.context.clear_cookies()
+        remaining = self.context.cookies()
+        if remaining:
+            raise RuntimeError(f"二次清理后仍残留 {len(remaining)} 个 Cookie")
+        if len(self.context.pages) != 1:
+            raise RuntimeError(f"共享浏览器页面数量异常: {len(self.context.pages)}")
+        self.page.bring_to_front()
+
+    def _clear_browser_storage(self, url: str) -> None:
+        """清理缓存及闲鱼相关 Origin 存储，避免固定 Context 残留上一次任务状态。"""
+        origins = {
+            "https://h5api.m.goofish.com",
+            "https://passport.goofish.com",
+            "https://www.goofish.com",
+            "https://m.goofish.com",
+        }
+        parsed = urlsplit(url or "")
+        if parsed.scheme and parsed.netloc:
+            origins.add(f"{parsed.scheme}://{parsed.netloc}")
+        try:
+            session = self.context.new_cdp_session(self.page)
+            session.send("Network.clearBrowserCache")
+            for origin in origins:
+                session.send(
+                    "Storage.clearDataForOrigin",
+                    {"origin": origin, "storageTypes": "all"},
+                )
+        except Exception as e:
+            raise RuntimeError(f"清理共享浏览器站点存储失败: {e}") from e
 
     def close(self) -> None:
         for fn in (
@@ -256,36 +407,41 @@ class _RealMouseSolver:
                 fn()
             except Exception:
                 pass
-        # 删除一次性 profile 目录
-        try:
-            shutil.rmtree(self.user_data_dir, ignore_errors=True)
-        except Exception:
-            pass
+        self.page = None
+        self.context = None
+        self.pw = None
+        self._release_browser_lock()
 
     def force_kill(self) -> None:
-        """看门狗超时回调：按本次唯一 user_data_dir 精确强杀对应 Chrome 进程。
+        """看门狗超时回调：按真人鼠标固定目录精确强杀对应 Chrome 进程。
 
-        仅匹配命令行包含本次 user_data_dir 的进程，绝不误伤用户自己的 Chrome。
+        仅匹配命令行包含真人鼠标固定目录的进程，绝不误伤用户自己的 Chrome。
         强杀后，solve()/close() 中阻塞的 Playwright 调用会立即抛错返回，
         从而保证 run_real_mouse_verification 一定返回、上层风控日志不再卡在“处理中”。
         """
         self._timed_out = True
+        self._kill_browser_processes(log_result=True)
+
+    def _kill_browser_processes(self, log_result: bool) -> None:
+        """按固定目录清理真人鼠标 Chrome 主进程和子进程。"""
         if sys.platform != "win32":
             return
         try:
-            udir = self.user_data_dir
+            browser_dir = self.browser_dir
             ps = (
                 "Get-CimInstance Win32_Process | "
-                f"Where-Object {{ $_.CommandLine -like '*{udir}*' }} | "
+                f"Where-Object {{ $_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*{browser_dir}*' }} | "
                 "ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }"
             )
             subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
                 capture_output=True, timeout=15,
             )
-            logger.warning(f"【{self.pure_id}】真实鼠标引擎超时，已强杀本次浏览器进程")
+            if log_result:
+                logger.warning(f"【{self.pure_id}】真实鼠标引擎超时，已强杀共享浏览器进程")
         except Exception as e:
-            logger.warning(f"【{self.pure_id}】真实鼠标引擎强杀浏览器失败（可忽略）: {e}")
+            if log_result:
+                logger.warning(f"【{self.pure_id}】真实鼠标引擎强杀共享浏览器失败（可忽略）: {e}")
 
     # ---------- 工具 ----------
     def _cookies(self) -> Dict[str, str]:
@@ -375,7 +531,7 @@ class _RealMouseSolver:
         scene: str = "business",
     ) -> Tuple[bool, Optional[Dict[str, str]]]:
         start = time.time()
-        self.init_browser()
+        self.ensure_browser()
         # 登录场景强制最大化（业务场景保持原有窗口行为不变）
         if scene == "login":
             self._maximize_window()
@@ -642,6 +798,34 @@ class _RealMouseSolver:
         return x5
 
 
+_shared_solver: Optional[_RealMouseSolver] = None
+
+
+def _get_shared_solver(user_id: str) -> _RealMouseSolver:
+    """获取真人鼠标进程级共享浏览器实例。"""
+    global _shared_solver
+    if _shared_solver is None:
+        _shared_solver = _RealMouseSolver(user_id)
+    else:
+        _shared_solver.update_user(user_id)
+    return _shared_solver
+
+
+def _close_shared_solver() -> None:
+    """服务进程退出时关闭真人鼠标共享浏览器。"""
+    global _shared_solver
+    if _shared_solver is None:
+        return
+    try:
+        _shared_solver.close()
+    except Exception:
+        pass
+    _shared_solver = None
+
+
+atexit.register(_close_shared_solver)
+
+
 def run_real_mouse_verification(
     user_id: str,
     url: str,
@@ -675,16 +859,17 @@ def run_real_mouse_verification(
         logger.warning(f"【{user_id}】真实鼠标引擎排队获取执行权失败")
         return False, None
     try:
-        solver = _RealMouseSolver(user_id)
-        # 看门狗：总预算内若 solve()/close() 卡死，强杀浏览器解除阻塞，
+        # 看门狗：总预算内若 prepare/solve 卡死，按固定目录强杀共享 Chrome 解除阻塞，
         # 保证本函数一定返回（否则上层风控日志会一直停留在“处理中”，且执行权被长期占用）。
         budget = max(browser_timeout, 40) + 20
+        solver = _get_shared_solver(user_id)
         watchdog = threading.Timer(budget, solver.force_kill)
         watchdog.daemon = True
         watchdog.start()
         ok: bool = False
         cookies: Optional[Dict[str, str]] = None
         try:
+            solver.prepare_task(user_id, url)
             ok, cookies = solver.solve(
                 url, drags, browser_timeout, url_provider, scene=scene
             )
@@ -692,10 +877,6 @@ def run_real_mouse_verification(
             logger.error(f"【{user_id}】真实鼠标引擎执行异常: {e}")
             ok, cookies = False, None
         finally:
-            try:
-                solver.close()
-            except Exception:
-                pass
             watchdog.cancel()
         return ok, cookies
     finally:
