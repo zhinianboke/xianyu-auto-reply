@@ -53,7 +53,7 @@ export function RiskLogs() {
   const [clearConfirm, setClearConfirm] = useState(false)
   const [clearing, setClearing] = useState(false)
 
-  // 远程过滑块配置（与个人设置一致，按用户存储于 user-settings）
+  // 远程过滑块全局配置（仅管理员可见，存储于 system_settings）
   const [remoteUrl, setRemoteUrl] = useState('')
   const [remoteSecret, setRemoteSecret] = useState('')
   const [passCookies, setPassCookies] = useState(false)
@@ -61,6 +61,8 @@ export function RiskLogs() {
   // real_mouse 过滑块本地/远程排队权重（字符串便于输入框编辑，保存时规整为非负数），默认 1
   const [localWeight, setLocalWeight] = useState('1')
   const [remoteWeight, setRemoteWeight] = useState('1')
+  const [remoteProcessingMax, setRemoteProcessingMax] = useState('20')
+  const [remoteCooldownSeconds, setRemoteCooldownSeconds] = useState('600')
   const [savingConfig, setSavingConfig] = useState(false)
   const [testing, setTesting] = useState(false)
 
@@ -129,16 +131,38 @@ export function RiskLogs() {
         setRemoteUrl(res.data.url || '')
         setRemoteSecret(res.data.secret_key || '')
         setPassCookies(!!res.data.pass_cookies)
-        setBlockRemoteCalls(!!res.data.block_remote_calls)
+        setBlockRemoteCalls(res.data.block_remote_calls ?? true)
         setLocalWeight(String(res.data.local_weight ?? 1))
         setRemoteWeight(String(res.data.remote_weight ?? 1))
+        setRemoteProcessingMax(String(res.data.remote_processing_max ?? 20))
+        setRemoteCooldownSeconds(String(res.data.remote_cooldown_seconds ?? 600))
+      } else {
+        addToast({ type: 'error', message: res.message || '加载远程过滑块配置失败' })
       }
-    } catch {
-      // 回显失败不阻断页面
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '加载远程过滑块配置失败') })
     }
   }
 
   const handleSaveRemoteConfig = async () => {
+    const parseNonnegativeInteger = (value: string, label: string) => {
+      const normalized = value.trim()
+      if (!/^\d+$/.test(normalized)) {
+        addToast({ type: 'error', message: `${label}必须是大于或等于 0 的整数` })
+        return null
+      }
+      const parsed = Number(normalized)
+      if (!Number.isSafeInteger(parsed)) {
+        addToast({ type: 'error', message: `${label}数值过大，请输入有效整数` })
+        return null
+      }
+      return parsed
+    }
+    const processingMax = parseNonnegativeInteger(remoteProcessingMax, '远程处理中最大条数')
+    if (processingMax === null) return
+    const cooldownSeconds = parseNonnegativeInteger(remoteCooldownSeconds, '远程调用冷却时间')
+    if (cooldownSeconds === null) return
+
     try {
       setSavingConfig(true)
       // 权重规整：空串/非法回退 1，负数回退 1（与后端 _sanitize_weight 口径一致）
@@ -153,6 +177,8 @@ export function RiskLogs() {
         blockRemoteCalls,
         normWeight(localWeight),
         normWeight(remoteWeight),
+        processingMax,
+        cooldownSeconds,
       )
       if (res.success) {
         addToast({ type: 'success', message: '远程过滑块配置已保存' })
@@ -244,7 +270,7 @@ export function RiskLogs() {
 
   return (
     <div className="space-y-4">
-      {/* 远程过滑块配置（仅管理员可见可操作；按用户保存/回显，存储逻辑与个人设置一致） */}
+      {/* 远程过滑块全局配置（仅管理员可见可操作） */}
       {user?.is_admin && (
       <div className="vben-card">
         <div className="vben-card-body">
@@ -341,6 +367,36 @@ export function RiskLogs() {
               <p className="font-medium text-slate-700 dark:text-slate-200">禁止远程调用本机过滑块接口</p>
               <p className="mt-0.5 text-xs text-red-600 dark:text-red-400">
                 开启后，外部系统调用 backend-web 的 /captcha/slider-solve 接口会被直接拒绝；本机内部触发的过滑块不受影响。
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-700/60">
+            <div className="flex flex-wrap items-end gap-4">
+              <div className="input-group w-52 max-w-full">
+                <label className="input-label">远程处理中最大条数</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={remoteProcessingMax}
+                  onChange={(e) => setRemoteProcessingMax(e.target.value)}
+                  className="input-ios"
+                />
+              </div>
+              <div className="input-group w-52 max-w-full">
+                <label className="input-label">远程调用冷却时间（秒）</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={remoteCooldownSeconds}
+                  onChange={(e) => setRemoteCooldownSeconds(e.target.value)}
+                  className="input-ios"
+                />
+              </div>
+              <p className="flex-1 min-w-[240px] text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                默认最多允许 20 条处理中滑块日志，统计包含本机和远程调用；达到上限后拒绝远程请求，并默认冷却 600 秒。填写 0 可关闭对应限制。
               </p>
             </div>
           </div>

@@ -150,6 +150,36 @@ class DatabaseInitializer:
             "日志保留天数（所有模块生效，修改后重启服务生效）",
         ),
         (
+            "captcha.real_mouse_weight_local",
+            "1",
+            "real_mouse过滑块本地排队权重",
+        ),
+        (
+            "captcha.real_mouse_weight_remote",
+            "1",
+            "real_mouse过滑块远程排队权重",
+        ),
+        (
+            "captcha.block_remote_calls",
+            "true",
+            "是否禁止外部远程调用backend-web过滑块接口",
+        ),
+        (
+            "captcha.remote_processing_max",
+            "20",
+            "远程调用允许的最大处理中滑块日志数，0=不限制",
+        ),
+        (
+            "captcha.remote_cooldown_seconds",
+            "600",
+            "远程调用达到处理中上限后的冷却秒数，0=不冷却",
+        ),
+        (
+            "captcha.remote_cooldown_until",
+            "0",
+            "远程过滑块调用冷却截止时间戳",
+        ),
+        (
             "show_default_login_info",
             "true",
             "登录页是否展示默认账号密码提示",
@@ -588,6 +618,7 @@ class DatabaseInitializer:
                 INDEX idx_event_type (event_type),
                 INDEX idx_rcl_account_status (account_id, processing_status),
                 INDEX idx_rcl_identifier_status_created (account_identifier, processing_status, created_at),
+                INDEX idx_rcl_status_event (processing_status, event_type),
                 INDEX idx_rcl_owner_created (owner_id, created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='风控日志表';
         """,
@@ -2161,6 +2192,25 @@ class DatabaseInitializer:
                     logger.info("✓ xy_keyword_rules: 创建 idx_kw_account_active 复合索引")
             except Exception as e:
                 logger.warning(f"✗ xy_keyword_rules idx_kw_account_active 创建失败: {e}")
+
+            # 为风控日志补建 (processing_status, event_type) 复合索引，
+            # 加速远程调用前统计全部处理中滑块日志。
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_risk_control_logs'
+                    AND INDEX_NAME = 'idx_rcl_status_event'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    await conn.execute(text(
+                        "ALTER TABLE xy_risk_control_logs "
+                        "ADD INDEX idx_rcl_status_event (processing_status, event_type)"
+                    ))
+                    logger.info("✓ xy_risk_control_logs: 创建 idx_rcl_status_event 复合索引")
+            except Exception as e:
+                logger.warning(f"✗ xy_risk_control_logs idx_rcl_status_event 创建失败: {e}")
 
             # 为 xy_catalog_items 补建 (account_id, item_id) 复合索引
             try:

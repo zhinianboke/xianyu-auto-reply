@@ -9,7 +9,10 @@ import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from common.models import XYAccount
 
 from .utils import safe_str
 
@@ -95,16 +98,13 @@ class CookieManager:
         return self._task_locks[cookie_id]
 
     async def load_from_db(self, db_session: AsyncSession):
-        """从数据库加载所有Cookie、关键字和状态
+        """从数据库加载所有账号Cookie和状态
         
         Args:
             db_session: 数据库会话
         """
         try:
             logger.info("从数据库加载Cookie配置...")
-            
-            from common.models import XYAccount, XYKeywordRule
-            from sqlalchemy import select
             
             # 加载所有账号
             result = await db_session.execute(select(XYAccount))
@@ -120,19 +120,12 @@ class CookieManager:
                 
                 # 加载自动确认设置
                 self.auto_confirm_settings[cookie_id] = account.auto_confirm if hasattr(account, 'auto_confirm') else True
-                
-                # 加载关键词
-                kw_result = await db_session.execute(
-                    select(XYKeywordRule).where(XYKeywordRule.account_pk == account.id)
-                )
-                keywords = kw_result.scalars().all()
-                self.keywords[cookie_id] = [
-                    (kw.keyword, kw.reply_content) for kw in keywords if kw.keyword and kw.reply_content
-                ]
+
+                # 保留空结构兼容现有账号管理接口，关键词由自动回复服务按需查询
+                self.keywords.setdefault(cookie_id, [])
             
             logger.info(
                 f"从数据库加载了 {len(self.cookies)} 个Cookie、"
-                f"{sum(len(kws) for kws in self.keywords.values())} 个关键字、"
                 f"{len(self.cookie_status)} 个状态记录"
             )
         except Exception as e:

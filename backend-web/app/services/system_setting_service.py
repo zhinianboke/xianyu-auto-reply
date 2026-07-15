@@ -66,6 +66,9 @@ DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
     "captcha.real_mouse_weight_local": ("1", "real_mouse过滑块本地排队权重"),
     "captcha.real_mouse_weight_remote": ("1", "real_mouse过滑块远程排队权重"),
     "captcha.block_remote_calls": ("true", "是否禁止外部远程调用backend-web过滑块接口"),
+    "captcha.remote_processing_max": ("20", "远程调用允许的最大处理中滑块日志数，0=不限制"),
+    "captcha.remote_cooldown_seconds": ("600", "远程调用达到处理中上限后的冷却秒数，0=不冷却"),
+    "captcha.remote_cooldown_until": ("0", "远程过滑块调用冷却截止时间戳"),
     # 账号密码登录模式：auto-自动(具备协议能力走协议,否则浏览器) / protocol-强制协议 / browser-强制浏览器
     "password_login.mode": ("auto", "账号密码登录模式：auto/protocol/browser"),
 }
@@ -116,6 +119,9 @@ NO_ESCAPE_KEYS = {
     # 是否传递账号Cookie：布尔字符串"true"/"false"，无需转义
     "captcha.remote_pass_cookies",
     "captcha.block_remote_calls",
+    "captcha.remote_processing_max",
+    "captcha.remote_cooldown_seconds",
+    "captcha.remote_cooldown_until",
     # real_mouse 排队权重：数字字符串，无需 XSS 转义
     "captcha.real_mouse_weight_local",
     "captcha.real_mouse_weight_remote",
@@ -175,4 +181,38 @@ class SystemSettingService:
             record = SystemSetting(key=key, value=safe_value, description=safe_description)
 
         self.session.add(record)
+        await self.session.commit()
+
+    async def set_settings(self, settings: Dict[str, tuple[str, str | None]]) -> None:
+        """在同一事务中批量保存系统设置。
+
+        Args:
+            settings: ``{设置键: (设置值, 设置说明)}`` 映射。
+
+        Returns:
+            无返回值；全部设置成功后统一提交。
+        """
+        if not settings:
+            return
+
+        stmt = select(SystemSetting).where(SystemSetting.key.in_(tuple(settings.keys())))
+        result = await self.session.execute(stmt)
+        records = {record.key: record for record in result.scalars().all()}
+
+        for key, (value, description) in settings.items():
+            safe_value = value if key in NO_ESCAPE_KEYS else escape_xss(value)
+            safe_description = escape_xss(description) if description else None
+            record = records.get(key)
+            if record:
+                record.value = safe_value
+                if description is not None:
+                    record.description = safe_description
+            else:
+                record = SystemSetting(
+                    key=key,
+                    value=safe_value,
+                    description=safe_description,
+                )
+            self.session.add(record)
+
         await self.session.commit()

@@ -22,6 +22,7 @@ class XYRiskControlLog(Base):
     __tablename__ = "xy_risk_control_logs"
     __table_args__ = (
         Index("idx_rcl_identifier_status_created", "account_identifier", "processing_status", "created_at"),
+        Index("idx_rcl_status_event", "processing_status", "event_type"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="日志ID")

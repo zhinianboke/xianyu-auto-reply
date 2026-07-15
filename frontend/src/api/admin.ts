@@ -157,6 +157,8 @@ export const getRemoteCaptchaConfig = async (): Promise<ApiResponse<{
   block_remote_calls: boolean
   local_weight: number
   remote_weight: number
+  remote_processing_max: number
+  remote_cooldown_seconds: number
 }>> => {
   return get(`${API_PREFIX}/captcha/remote-config`)
 }
@@ -170,6 +172,8 @@ export const saveRemoteCaptchaConfig = async (
   block_remote_calls: boolean,
   local_weight: number,
   remote_weight: number,
+  remote_processing_max: number,
+  remote_cooldown_seconds: number,
 ): Promise<ApiResponse> => {
   return put(`${API_PREFIX}/captcha/remote-config`, {
     url,
@@ -178,6 +182,8 @@ export const saveRemoteCaptchaConfig = async (
     block_remote_calls,
     local_weight,
     remote_weight,
+    remote_processing_max,
+    remote_cooldown_seconds,
   })
 }
 
