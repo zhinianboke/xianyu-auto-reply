@@ -73,7 +73,7 @@ class WeightedTaskRunner:
 
     async def submit(
         self,
-        weight_class: str,
+        queue_class: str,
         func: Callable[..., Any],
         *args: Any,
         **kwargs: Any,
@@ -81,7 +81,7 @@ class WeightedTaskRunner:
         """按来源权重排队并执行一个同步任务。
 
         Args:
-            weight_class: local、remote 或 remote_cookie。
+            queue_class: 调度队列类别，取 local、remote 或 remote_cookie。
             func: 原滑块编排函数。
             args: 传给原函数的位置参数。
             kwargs: 传给原函数的关键字参数。
@@ -90,7 +90,7 @@ class WeightedTaskRunner:
             原函数返回值。
         """
         # 未知来源按远程处理，避免异常参数意外获得本地权重。
-        wc = weight_class if weight_class in self._queues else "remote"
+        wc = queue_class if queue_class in self._queues else "remote"
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         queued = _QueuedTask(
