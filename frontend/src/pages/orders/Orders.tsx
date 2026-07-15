@@ -268,7 +268,6 @@ export function Orders() {
       const result = await manualDelivery(orderNo)
       if (result.success) {
         addToast({ type: 'success', message: `发货成功: ${result.data?.card_name || ''}` })
-        loadOrders()
       } else {
         addToast({ type: 'error', message: result.message || '发货失败' })
       }
@@ -277,6 +276,7 @@ export function Orders() {
       const errorMessage = axiosError.response?.data?.detail || '发货失败'
       addToast({ type: 'error', message: errorMessage })
     } finally {
+      loadOrders(currentPage, pageSize, filters)
       setDeliveringOrderId(null)
     }
   }

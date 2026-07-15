@@ -20,7 +20,9 @@ from loguru import logger
 
 from common.db.session import async_session_maker
 from common.services.captcha.concurrency import run_browser_task
+from common.services.captcha.orchestrator import is_real_mouse_enabled
 from common.services.captcha.token_refetch import request_fresh_captcha_url
+from common.services.captcha.weighted_runner import real_mouse_weighted_runner
 from common.utils.cookie_refresh import get_account_by_identity, update_account_cookies_in_db
 from common.utils.xianyu_utils import trans_cookies, generate_sign
 from common.utils.time_utils import get_beijing_now_naive, random_token_cache_expiry
@@ -207,8 +209,8 @@ class CookieTokenManager:
         """将token和device_id缓存到数据库
         
         使用 INSERT ... ON DUPLICATE KEY UPDATE 实现插入或更新
-        过期时间由环境变量 TOKEN_CACHE_TTL_MIN_HOURS / TOKEN_CACHE_TTL_MAX_HOURS 控制，
-        未配置时默认 4~7 小时随机
+        基础过期时间由环境变量 TOKEN_CACHE_TTL_MIN_HOURS / TOKEN_CACHE_TTL_MAX_HOURS 控制，
+        再追加 1~5 小时的秒级随机偏移；未配置时最终 TTL 为 6~15 小时
 
         Args:
             token: IM Token
@@ -217,7 +219,7 @@ class CookieTokenManager:
         try:
             from sqlalchemy import text
 
-            # 过期时间在配置区间内随机取值（默认 4~7 小时）
+            # 基础 TTL 默认 5~10 小时，再追加 1~5 小时秒级随机偏移
             expire_at, ttl_hours = random_token_cache_expiry()
             
             async with async_session_maker() as session:
@@ -495,21 +497,27 @@ class CookieTokenManager:
                 # 配置了则优先走远程接口；远程超时/不可用时回退本机逻辑。
                 remote_config = await self._load_remote_captcha_config()
 
-                # 在浏览器任务专用线程池中运行同步的 Playwright 代码（不能用 asyncio.to_thread，
-                # 否则会占用默认线程池、饿死 aiohttp 的 DNS 解析，导致所有 token 请求集体超时）
+                # 真实鼠标任务先按权重排队，其他模式保持使用原浏览器任务专用线程池；
+                # 两条路径都不占用 asyncio 默认线程池，避免饿死 aiohttp 的 DNS 解析。
                 # run_slider_verification_with_fallback: 远程(可选)→真人/主引擎(Playwright)→DrissionPage 兜底
                 # 返回 (是否成功, cookies, 通过引擎: remote/real_mouse/playwright/drissionpage/None)
-                success, cookies, captcha_engine = await run_browser_task(
-                    run_slider_verification_with_fallback,
-                    f"{self.cookie_id}",
-                    verification_url,
-                    True,   # enable_learning
-                    False,  # headless（主引擎）
-                    20,     # browser_timeout（主引擎）
-                    self.cookies_str,  # existing_cookies_str，供 DrissionPage 兜底注入
-                    self._request_captcha_url_sync,  # url_provider：浏览器就绪后重新取链接，规避过期
-                    remote_config,  # 远程过滑块配置 (url, secret) | None
+                slider_args = (
+                    f"{self.cookie_id}", verification_url, True, False, 20,
+                    self.cookies_str, self._request_captcha_url_sync, remote_config,
                 )
+                if remote_config is None and is_real_mouse_enabled():
+                    # 本机真实鼠标任务先进入前置本地队列，再提交给原浏览器执行器。
+                    success, cookies, captcha_engine = await real_mouse_weighted_runner.submit(
+                        "local",
+                        run_slider_verification_with_fallback,
+                        *slider_args,
+                        weight_class="local",
+                    )
+                else:
+                    success, cookies, captcha_engine = await run_browser_task(
+                        run_slider_verification_with_fallback,
+                        *slider_args,
+                    )
 
                 # 重取链接时发现 token 已可用（风控解除，无需滑块）：直接采用，跳过滑块结果处理。
                 # 合并接口可能下发的刷新 cookie，并返回 cookies_str，让上层 refresh_token

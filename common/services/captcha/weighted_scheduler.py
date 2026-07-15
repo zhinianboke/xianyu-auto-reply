@@ -1,34 +1,35 @@
 """
-加权公平串行调度器（单槽位）
+real_mouse 加权公平调度器
 
 用途：
     real_mouse（真实鼠标）过滑块引擎的物理光标全局唯一，同一时刻只能解一个滑块。
-    原先用一把普通 threading.Lock 串行化，本地（Token 刷新）与远程（过滑块接口）在锁上
-    盲抢，既不保证先来先到、也无优先级。本模块用「加权公平」替代这把锁：多来源同时排队时，
-    按各来源权重比例放行（如 本地:远程 = 3:1）；只有一方排队时该方独占（work-conserving）。
+    本文件提供线程内兜底锁及数据库权重读取；线程池前置双队列实现在
+    weighted_runner.py，本地与远程请求会先按实时权重选出唯一任务再执行。
 
 设计：
-    - 单槽位：同一时刻只有一个持有者（保持物理光标唯一语义）。
-    - 加权公平：在有等待者的来源里，选 served/weight 最小者放行（WFQ 近似）。
-    - 权重实时可调：从 xy_system_settings 读取，带 5 秒 TTL 缓存（不每次查库）。
-    - 防溢出：持续满负载下对 served 做「虚拟时间重归一化」，保序且不改变权重比例。
+    - 前置排队：权重选择发生在公共浏览器线程池之前，避免线程池 FIFO 掩盖权重。
+    - 平滑加权：仅在本地、远程同时积压时累计当轮权重，不产生历史服务欠账。
+    - 实时权重：前置队列每次选择下一个任务前重新读取数据库中的权重。
+    - 滑块隔离：本模块只决定任务执行顺序，不修改任何滑块识别、轨迹或重试逻辑。
 """
 from __future__ import annotations
 
+import math
 import threading
 import time
 from typing import Dict, Optional
 
 from loguru import logger
+from sqlalchemy import create_engine, text
 
 # 权重配置在 system_settings 中的键（与 backend-web captcha 路由保持一致）
 WEIGHT_KEY_LOCAL = "captcha.real_mouse_weight_local"
 WEIGHT_KEY_REMOTE = "captcha.real_mouse_weight_remote"
 
-# 默认权重（任一来源缺省/异常时回退，1:1 等价于公平轮转）
+# 默认权重（首次读取或某个配置缺失时使用，1:1 等价于公平轮转）
 _DEFAULT_WEIGHTS: Dict[str, float] = {"local": 1.0, "remote": 1.0}
 
-# 权重缓存有效期（秒）：管理员改配置后最多 5 秒生效
+# 线程内兜底锁的缓存有效期；前置双队列每次派发都会通过 force_refresh 绕过此缓存。
 _WEIGHTS_TTL = 5.0
 
 # served 虚拟时间超过该阈值时重归一化，防止长时间满负载下浮点无限增长
@@ -69,6 +70,7 @@ class WeightedSerialScheduler:
         # 权重缓存
         self._weights_cache: Optional[Dict[str, float]] = None
         self._weights_loaded_at: float = 0.0
+        self._weights_lock = threading.Lock()
 
         # 数据库 engine 惰性创建（读 system_settings 权重用）
         self._engine = None
@@ -90,7 +92,7 @@ class WeightedSerialScheduler:
         wc = weight_class or "local"
 
         # 进锁前预热权重缓存，避免持 condition 锁时才去查库（那会阻塞 release）
-        self._get_weights()
+        self.get_effective_weights()
 
         with self._condition:
             self._waiting[wc] = self._waiting.get(wc, 0) + 1
@@ -141,7 +143,7 @@ class WeightedSerialScheduler:
                 "busy": self._busy,
                 "waiting": dict(self._waiting),
                 "served": dict(self._served),
-                "weights": self._get_weights(),
+                "weights": self.get_effective_weights(),
             }
 
     # ---------- 内部：调度 ----------
@@ -161,7 +163,7 @@ class WeightedSerialScheduler:
         candidates = [c for c, n in self._waiting.items() if n > 0]
         if not candidates:
             return None
-        weights = self._get_weights()
+        weights = self.get_effective_weights()
 
         # 按桶归组
         buckets: Dict[str, list] = {}
@@ -187,7 +189,7 @@ class WeightedSerialScheduler:
         """
         if not self._served:
             return
-        weights = self._get_weights()
+        weights = self.get_effective_weights()
         vmin = min(
             self._served.get(c, 0.0) / max(weights.get(c, 1.0), 1e-9)
             for c in self._served
@@ -198,27 +200,40 @@ class WeightedSerialScheduler:
 
     # ---------- 内部：权重读取 ----------
 
-    def _get_weights(self) -> Dict[str, float]:
-        """读取权重（5 秒 TTL 缓存）。"""
-        now = time.time()
-        if (
-            self._weights_cache is not None
-            and (now - self._weights_loaded_at) < _WEIGHTS_TTL
-        ):
-            return self._weights_cache
-        weights = self._load_weights_from_db()
-        self._weights_cache = weights
-        self._weights_loaded_at = now
-        return weights
+    def get_effective_weights(self, force_refresh: bool = False) -> Dict[str, float]:
+        """读取当前有效权重。
 
-    def _load_weights_from_db(self) -> Dict[str, float]:
-        """从 xy_system_settings 读两个权重键，任何异常回退默认 1:1。"""
+        Args:
+            force_refresh: 是否忽略 5 秒缓存并立即查询数据库。
+
+        Returns:
+            本地、远程两个权重；读取失败时保留上一次成功值，首次失败才使用 1:1。
+        """
+        now = time.monotonic()
+        with self._weights_lock:
+            if (
+                not force_refresh
+                and self._weights_cache is not None
+                and (now - self._weights_loaded_at) < _WEIGHTS_TTL
+            ):
+                return dict(self._weights_cache)
+
+            weights = self._load_weights_from_db()
+            if weights is not None:
+                self._weights_cache = weights
+            elif self._weights_cache is None:
+                self._weights_cache = dict(_DEFAULT_WEIGHTS)
+            # 以查询完成时间作为缓存起点，避免慢查询导致刚加载完就立即过期并重复查询。
+            self._weights_loaded_at = time.monotonic()
+            return dict(self._weights_cache)
+
+    def _load_weights_from_db(self) -> Optional[Dict[str, float]]:
+        """从 xy_system_settings 读取两个权重键，失败时返回 None。"""
         weights = dict(_DEFAULT_WEIGHTS)
         try:
             engine = self._get_engine()
             if engine is None:
-                return weights
-            from sqlalchemy import text
+                return None
 
             with engine.connect() as conn:
                 # key 是 MySQL 保留字，必须加反引号
@@ -238,11 +253,11 @@ class WeightedSerialScheduler:
                     val = float(raw)
                 except (TypeError, ValueError):
                     continue
-                if val >= 0:
+                if math.isfinite(val) and val >= 0:
                     weights[cls] = val
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"读取 real_mouse 权重失败，回退默认 1:1: {e}")
-            return dict(_DEFAULT_WEIGHTS)
+            logger.warning(f"读取 real_mouse 权重失败，继续使用上次有效权重: {e}")
+            return None
         return weights
 
     def _get_engine(self):
@@ -252,28 +267,38 @@ class WeightedSerialScheduler:
         with self._engine_lock:
             if self._engine is not None:
                 return self._engine
-            db_url = self._resolve_db_url()
+            db_url, connect_timeout = self._resolve_db_config()
             if not db_url:
                 logger.warning("real_mouse 权重调度器无法获取数据库配置")
                 return None
-            from sqlalchemy import create_engine
 
-            self._engine = create_engine(db_url, echo=False, pool_pre_ping=True)
+            engine_kwargs = {
+                "echo": False,
+                "pool_pre_ping": True,
+            }
+            if db_url.startswith("mysql+pymysql"):
+                engine_kwargs["connect_args"] = {
+                    "connect_timeout": connect_timeout,
+                    "read_timeout": connect_timeout,
+                    "write_timeout": connect_timeout,
+                }
+            self._engine = create_engine(db_url, **engine_kwargs)
             return self._engine
 
     @staticmethod
-    def _resolve_db_url() -> Optional[str]:
-        """获取数据库 URL（兼容 common.core.config 与 app.core.config）。"""
+    def _resolve_db_config() -> tuple[Optional[str], int]:
+        """获取数据库 URL 与连接超时（兼容 common/core 和各服务配置）。"""
         for module_path in ("common.core.config", "app.core.config"):
             try:
                 module = __import__(module_path, fromlist=["get_settings"])
                 settings = module.get_settings()
                 db_url = getattr(settings, "database_url", None)
                 if db_url:
-                    return db_url
+                    timeout = max(int(getattr(settings, "db_connect_timeout", 10)), 1)
+                    return db_url, timeout
             except Exception:
                 continue
-        return None
+        return None, 10
 
 
 # 全局单例：real_mouse 引擎专用（本地/远程两来源共用这一把加权锁）

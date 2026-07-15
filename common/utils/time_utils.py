@@ -20,6 +20,10 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 DEFAULT_TOKEN_CACHE_TTL_MIN_HOURS = 5.0
 DEFAULT_TOKEN_CACHE_TTL_MAX_HOURS = 10.0
 
+# 在基础过期时间上追加的秒级随机偏移，进一步分散批量账号的 Token 到期时间
+TOKEN_CACHE_EXPIRY_JITTER_MIN_SECONDS = 60 * 60
+TOKEN_CACHE_EXPIRY_JITTER_MAX_SECONDS = 5 * 60 * 60
+
 
 def get_beijing_now() -> datetime:
     """获取当前北京时间。"""
@@ -52,14 +56,15 @@ def safe_isoformat(value: Optional[datetime]) -> Optional[str]:
 def random_token_cache_expiry() -> Tuple[datetime, float]:
     """生成 IM Token 缓存（``xy_token_cache`` 表）的随机过期时间。
 
-    TTL 小时数在环境变量配置的区间内随机取值：
+    先在环境变量配置的基础区间内随机取 TTL 小时数：
     ``TOKEN_CACHE_TTL_MIN_HOURS`` ~ ``TOKEN_CACHE_TTL_MAX_HOURS``，
     未配置时默认 5~10 小时；配置非法（任一值 <=0 或 min>max）时回退默认区间。
-    区间随机可避免大量账号 Token 同一时刻集中过期、触发并发刷新。
+    得到基础过期时间后，再追加 1~5 小时的秒级随机偏移。默认配置下，最终
+    TTL 为 6~15 小时；两段随机共同避免大量账号 Token 同一时刻集中过期。
 
     Returns:
-        ``(expire_at, ttl_hours)``：北京时间的过期时刻（naive datetime）
-        与本次随机出的 TTL 小时数。
+        ``(expire_at, ttl_hours)``：精确到秒的北京时间过期时刻（naive datetime）
+        与包含额外随机偏移的最终 TTL 小时数。
     """
     settings = get_settings()
     low = settings.token_cache_ttl_min_hours
@@ -68,6 +73,14 @@ def random_token_cache_expiry() -> Tuple[datetime, float]:
     if low <= 0 or high <= 0 or low > high:
         low = DEFAULT_TOKEN_CACHE_TTL_MIN_HOURS
         high = DEFAULT_TOKEN_CACHE_TTL_MAX_HOURS
-    ttl_hours = random.uniform(low, high)
-    expire_at = get_beijing_now_naive() + timedelta(hours=ttl_hours)
-    return expire_at, ttl_hours
+    base_ttl_hours = random.uniform(low, high)
+    base_expire_at = get_beijing_now_naive() + timedelta(hours=base_ttl_hours)
+
+    # 使用整秒随机值，确保额外偏移可细分到秒，同时兼容 MySQL DATETIME 秒精度。
+    jitter_seconds = random.randint(
+        TOKEN_CACHE_EXPIRY_JITTER_MIN_SECONDS,
+        TOKEN_CACHE_EXPIRY_JITTER_MAX_SECONDS,
+    )
+    expire_at = (base_expire_at + timedelta(seconds=jitter_seconds)).replace(microsecond=0)
+    total_ttl_hours = base_ttl_hours + jitter_seconds / 3600
+    return expire_at, total_ttl_hours

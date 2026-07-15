@@ -13,6 +13,10 @@ import asyncio
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from common.services.captcha.concurrency import run_browser_task
+from common.services.captcha.orchestrator import is_real_mouse_enabled
+from common.services.captcha.weighted_runner import real_mouse_weighted_runner
+
 router = APIRouter(prefix="/internal", tags=["internal"])
 
 
@@ -384,7 +388,6 @@ async def solve_captcha(request: SolveCaptchaRequest):
 
     try:
         from app.services.captcha.slider_stealth import run_slider_verification_with_fallback
-        from common.services.captcha.concurrency import run_browser_task
 
         # 若调用方传入了账号 Cookie（开启了"传递Cookie"开关）：
         #   - 把 Cookie 作为 existing_cookies_str 提供给兜底引擎注入；
@@ -415,14 +418,26 @@ async def solve_captcha(request: SolveCaptchaRequest):
             url_provider = _remote_url_provider
             logger.info(f"【过滑块接口】account_id={safe_id} 已携带 Cookie，启用链接过期自动重取")
 
-        # 远程过滑块接口：real_mouse 排队时按远程权重放行。
-        # 远程内部再分两级严格优先——没传 Cookie 的（"remote"）优先于传了 Cookie 的（"remote_cookie"）。
-        remote_weight_class = "remote_cookie" if existing_cookies_str else "remote"
-        success, cookies, engine = await run_browser_task(
-            run_slider_verification_with_fallback,
+        # 被调用接口不信任请求体中的 call_type，所有请求固定进入远程桶，避免伪装成本地权重。
+        # 远程内部保留既有子优先级：无 Cookie 优先于有 Cookie。
+        weight_class = "remote_cookie" if existing_cookies_str else "remote"
+        slider_args = (
             safe_id, url, True, False, timeout, existing_cookies_str, url_provider,
-            weight_class=remote_weight_class,
         )
+        if is_real_mouse_enabled():
+            # 被调用方请求在线程池之前参与本地/远程实时加权排队。
+            success, cookies, engine = await real_mouse_weighted_runner.submit(
+                weight_class,
+                run_slider_verification_with_fallback,
+                *slider_args,
+                weight_class=weight_class,
+            )
+        else:
+            success, cookies, engine = await run_browser_task(
+                run_slider_verification_with_fallback,
+                *slider_args,
+                weight_class=weight_class,
+            )
     except Exception as e:
         logger.error(f"【过滑块接口】account_id={safe_id} 执行异常: {e}")
         _update_log("error", f"过滑块执行异常，耗时: {_time.time() - start_ts:.2f}秒", error=str(e))

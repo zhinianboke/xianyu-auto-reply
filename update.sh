@@ -373,7 +373,7 @@ LOG_LEVEL=INFO
 # SQL 日志开关：true=打印每条执行的完整 SQL（默认，便于排查）；高并发生产环境可设为 false
 SQL_ECHO=true
 
-# IM Token 缓存（xy_token_cache 表）随机过期时间区间（小时），不配置默认 5~10 小时
+# IM Token 缓存基础 TTL 随机区间（小时）；之后追加 1~5 小时秒级随机偏移
 TOKEN_CACHE_TTL_MIN_HOURS=5
 TOKEN_CACHE_TTL_MAX_HOURS=10
 

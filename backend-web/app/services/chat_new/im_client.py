@@ -537,15 +537,15 @@ class GoofishImClient:
         """将token和device_id缓存到数据库
 
         使用 INSERT ... ON DUPLICATE KEY UPDATE 实现插入或更新
-        过期时间由环境变量 TOKEN_CACHE_TTL_MIN_HOURS / TOKEN_CACHE_TTL_MAX_HOURS 控制，
-        未配置时默认 4~7 小时随机
+        基础过期时间由环境变量 TOKEN_CACHE_TTL_MIN_HOURS / TOKEN_CACHE_TTL_MAX_HOURS 控制，
+        再追加 1~5 小时的秒级随机偏移；未配置时最终 TTL 为 6~15 小时
 
         Args:
             token_val: IM Token
             device_id_val: 设备ID
         """
         try:
-            # 过期时间在配置区间内随机取值（默认 4~7 小时）
+            # 基础 TTL 默认 5~10 小时，再追加 1~5 小时秒级随机偏移
             expire_at, ttl_hours = random_token_cache_expiry()
 
             async with async_session_maker() as session:

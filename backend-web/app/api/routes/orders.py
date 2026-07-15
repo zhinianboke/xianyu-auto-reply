@@ -510,18 +510,39 @@ async def manual_delivery(
                 buyer_id=order.buyer_id,
                 item_id=order.item_id,
             )
-            if not create_result.get('success'):
-                err_msg = create_result.get('message', '创建会话失败')
+            if not isinstance(create_result, dict) or not create_result.get('success'):
+                result_message = (
+                    create_result.get('message')
+                    if isinstance(create_result, dict)
+                    else create_result
+                )
+                err_msg = str(result_message or '未知原因')
+                fail_reason = f"创建会话失败：{err_msg}"
                 logger.error(f"自动创建会话失败: order_no={request.order_no}, 错误={err_msg}")
+                recorded = await order_service.update_order_delivery_fail_reason(
+                    request.order_no, fail_reason
+                )
+                if not recorded:
+                    logger.warning(
+                        f"自动创建会话失败原因写入订单失败: order_no={request.order_no}"
+                    )
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"订单缺少会话ID且自动创建失败: {err_msg}",
                 )
             new_chat_id = (create_result.get('data') or {}).get('chat_id')
             if not new_chat_id:
+                fail_reason = "创建会话响应缺少 chat_id"
+                recorded = await order_service.update_order_delivery_fail_reason(
+                    request.order_no, fail_reason
+                )
+                if not recorded:
+                    logger.warning(
+                        f"创建会话响应异常原因写入订单失败: order_no={request.order_no}"
+                    )
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="创建会话接口未返回有效的 chat_id",
+                    detail=fail_reason,
                 )
             # 持久化到订单表
             updated = await order_service.update_order_chat_id(request.order_no, new_chat_id)

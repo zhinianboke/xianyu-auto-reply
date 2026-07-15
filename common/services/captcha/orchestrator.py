@@ -73,6 +73,11 @@ def _real_mouse_enabled() -> bool:
     return bool(getattr(settings, "captcha_real_mouse_enabled", False))
 
 
+def is_real_mouse_enabled() -> bool:
+    """返回真实鼠标开关，供线程池前置权重入口复用。"""
+    return _real_mouse_enabled()
+
+
 def _call_remote_solve(
     remote_url: str,
     remote_secret: str,

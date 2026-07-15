@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import math
 import random
 import string
 import time
@@ -100,7 +101,7 @@ def _sanitize_weight(value, default: float = 1.0) -> float:
         v = float(value)
     except (TypeError, ValueError):
         return default
-    return v if v >= 0 else default
+    return v if math.isfinite(v) and v >= 0 else default
 
 
 async def _is_remote_slider_blocked(db: AsyncSession) -> bool:
