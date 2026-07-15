@@ -75,6 +75,7 @@ except ImportError:
 _PUNISH = ("punish", "x5step=2", "action=captcha", "pureCaptcha", "/captcha")
 _MAX_ANCHOR_GAP_MS = 180.0
 _MAX_REPLAY_DURATION_MS = 2600.0
+_PREFERRED_BUSINESS_TRAIL = "human_trail_pass_1783949589.json"
 # 真人鼠标模式专用固定目录：本地与远程请求共用，用于复用和精确识别 Chrome 进程。
 _REAL_MOUSE_BROWSER_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "browser_data", "real_mouse_shared")
@@ -137,8 +138,20 @@ def _load_drags(scene: str = "business") -> List[List[Tuple[float, float, float]
                或 "login"（登录滑块，样本 human_trail_login_*.json，长位移）
     """
     pattern = "human_trail_login_*.json" if scene == "login" else "human_trail_pass_*.json"
+    files = sorted(glob.glob(os.path.join(_trails_dir(), pattern)))
+    preferred: Optional[str] = None
+    if scene == "business":
+        preferred_path = os.path.join(_trails_dir(), _PREFERRED_BUSINESS_TRAIL)
+        if os.path.isfile(preferred_path):
+            preferred = preferred_path
+            files = [preferred] + [f for f in files if f != preferred]
+        else:
+            logger.warning(
+                f"业务优选真人轨迹不存在，回退全部业务样本: {_PREFERRED_BUSINESS_TRAIL}"
+            )
     drags: List[List[Tuple[float, float, float]]] = []
-    for f in sorted(glob.glob(os.path.join(_trails_dir(), pattern))):
+    preferred_drag: Optional[List[Tuple[float, float, float]]] = None
+    for f in files:
         try:
             if scene == "login":
                 data = json.load(open(f, encoding="utf-8"))
@@ -184,6 +197,14 @@ def _load_drags(scene: str = "business") -> List[List[Tuple[float, float, float]
             if distance < 120 or distance > 1200:
                 continue
         drags.append(rel)
+        if preferred and f == preferred:
+            preferred_drag = rel
+    if scene == "business" and preferred:
+        if preferred_drag is not None:
+            return [preferred_drag]
+        logger.warning(
+            f"业务优选真人轨迹无效，回退其他业务样本: {_PREFERRED_BUSINESS_TRAIL}"
+        )
     return drags
 
 
@@ -227,7 +248,7 @@ def _calculate_business_distance(frame, btn, track) -> float:
             }"""
         )
         if distance and distance > 0:
-            return float(distance) + random.uniform(-1.0, 1.0)
+            return float(distance)
     except Exception:
         pass
 
@@ -237,7 +258,7 @@ def _calculate_business_distance(frame, btn, track) -> float:
         if button_box and track_box:
             distance = track_box["width"] - button_box["width"]
             if distance > 0:
-                return float(distance) + random.uniform(-1.0, 1.0)
+                return float(distance)
     except Exception:
         pass
     return 0.0
