@@ -134,6 +134,12 @@ class TokenManager:
                 if new_token:
                     self.last_cookie_refresh_time = current_time
                     logger.info(f"【{self.cookie_id}】Cookie刷新任务完成,Token已更新")
+                elif getattr(self.xianyu, "last_token_refresh_status", "") == "skipped_local_slider_disabled":
+                    self.last_cookie_refresh_time = time.time()
+                    logger.warning(
+                        f"【{self.cookie_id}】本机滑块不处理已开启且Token缓存不存在，"
+                        f"等待下一个{self.cookie_refresh_interval}秒刷新周期"
+                    )
                 else:
                     logger.warning(f"【{self.cookie_id}】Cookie刷新任务失败,Token刷新未成功，5秒后立即重试")
                     # 失败后不更新 last_cookie_refresh_time，等待5秒后立即重试

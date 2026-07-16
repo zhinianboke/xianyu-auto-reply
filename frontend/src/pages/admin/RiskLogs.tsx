@@ -11,7 +11,7 @@
  */
 import { useState, useEffect } from 'react'
 import { ShieldAlert, RefreshCw, Trash2, ChevronLeft, ChevronRight, Loader2, Calendar, Info, TrendingUp } from 'lucide-react'
-import { getRiskLogs, clearRiskLogs, testRemoteSliderSolve, getRemoteCaptchaConfig, saveRemoteCaptchaConfig, getRiskTodaySuccessRate, type RiskLog, type RiskTodaySuccessRate } from '@/api/admin'
+import { getRiskLogs, clearRiskLogs, testRemoteSliderSolve, getRemoteCaptchaConfig, saveRemoteCaptchaConfig, getRiskTodaySuccessRate, getLocalSliderConfig, updateLocalSliderConfig, type RiskLog, type RiskTodaySuccessRate } from '@/api/admin'
 import { getAccountDetails } from '@/api/accounts'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
@@ -65,6 +65,9 @@ export function RiskLogs() {
   const [remoteCooldownSeconds, setRemoteCooldownSeconds] = useState('600')
   const [savingConfig, setSavingConfig] = useState(false)
   const [testing, setTesting] = useState(false)
+  const [localSliderDisabled, setLocalSliderDisabled] = useState(false)
+  const [localSliderConfigLoading, setLocalSliderConfigLoading] = useState(true)
+  const [savingLocalSliderConfig, setSavingLocalSliderConfig] = useState(false)
 
   const getCallTypeLabel = (callType?: string | null) => (callType === 'remote' ? '远程' : '本机')
 
@@ -141,6 +144,49 @@ export function RiskLogs() {
       }
     } catch (error) {
       addToast({ type: 'error', message: getApiErrorMessage(error, '加载远程过滑块配置失败') })
+    }
+  }
+
+  // 本机滑块处理开关独立加载、独立保存，点击后立即写入系统设置。
+  const loadLocalSliderConfig = async () => {
+    if (!_hasHydrated || !isAuthenticated || !token || !user?.is_admin) {
+      // 非管理员或未就绪时复位加载态，避免开关一直停留在转圈禁用状态
+      setLocalSliderConfigLoading(false)
+      return
+    }
+    try {
+      setLocalSliderConfigLoading(true)
+      const res = await getLocalSliderConfig()
+      if (res.success && res.data) {
+        setLocalSliderDisabled(Boolean(res.data.enabled))
+      } else {
+        addToast({ type: 'error', message: res.message || '加载本机滑块处理开关失败' })
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '加载本机滑块处理开关失败') })
+    } finally {
+      setLocalSliderConfigLoading(false)
+    }
+  }
+
+  const handleLocalSliderConfigChange = async () => {
+    const nextEnabled = !localSliderDisabled
+    try {
+      setSavingLocalSliderConfig(true)
+      const res = await updateLocalSliderConfig(nextEnabled)
+      if (res.success) {
+        setLocalSliderDisabled(res.data?.enabled ?? nextEnabled)
+        addToast({
+          type: 'success',
+          message: res.message || (nextEnabled ? '本机滑块不处理已开启' : '本机滑块不处理已关闭'),
+        })
+      } else {
+        addToast({ type: 'error', message: res.message || '更新本机滑块处理开关失败' })
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '更新本机滑块处理开关失败') })
+    } finally {
+      setSavingLocalSliderConfig(false)
     }
   }
 
@@ -229,6 +275,11 @@ export function RiskLogs() {
     loadRemoteConfig()
   }, [_hasHydrated, isAuthenticated, token])
 
+  // 本机滑块开关依赖管理员身份，user 水合可能晚于 token，需单独监听
+  useEffect(() => {
+    loadLocalSliderConfig()
+  }, [_hasHydrated, isAuthenticated, token, user?.is_admin])
+
   // 查询按钮点击
   const handleSearch = () => {
     loadLogs(1, pageSize)
@@ -276,6 +327,30 @@ export function RiskLogs() {
       {user?.is_admin && (
       <div className="vben-card">
         <div className="vben-card-body">
+          <div className="flex items-center justify-between gap-4 mb-4 pb-4 border-b border-slate-100 dark:border-slate-700/60">
+            <span className="text-sm font-medium text-slate-700 dark:text-slate-200">本机滑块不处理</span>
+            <button
+              type="button"
+              onClick={handleLocalSliderConfigChange}
+              disabled={localSliderConfigLoading || savingLocalSliderConfig}
+              role="switch"
+              aria-label="本机滑块不处理"
+              aria-checked={localSliderDisabled}
+              className={`relative inline-flex h-5 w-10 shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                localSliderDisabled ? 'bg-blue-500' : 'bg-gray-300 dark:bg-slate-600'
+              }`}
+            >
+              {localSliderConfigLoading || savingLocalSliderConfig ? (
+                <Loader2 className="absolute left-3.5 h-3 w-3 animate-spin text-white" />
+              ) : (
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    localSliderDisabled ? 'translate-x-5' : 'translate-x-0.5'
+                  }`}
+                />
+              )}
+            </button>
+          </div>
           {/* 配置说明提示条 */}
           <div className="flex items-start gap-2 mb-4 px-3 py-2.5 rounded-lg bg-blue-50 dark:bg-blue-500/10 border border-blue-100 dark:border-blue-500/20">
             <Info className="w-4 h-4 mt-0.5 shrink-0 text-blue-500 dark:text-blue-400" />

@@ -29,6 +29,7 @@ TASK_CODE_FETCH_PENDING_ORDERS = "fetch_pending_orders"
 TASK_CODE_FETCH_REFUND_ORDERS = "fetch_refund_orders"
 TASK_CODE_FETCH_ITEMS = "fetch_items"
 TASK_CODE_LOGIN_RENEW = "login_renew"
+TASK_CODE_TOKEN_RENEWAL = "token_renewal"
 TASK_CODE_COOKIES_REFRESH = "cookies_refresh"
 TASK_CODE_API_COOKIE_RENEW = "api_cookie_renew"
 TASK_CODE_CLOSE_NOTICE = "close_notice"
@@ -52,6 +53,7 @@ DEFAULT_CONFIGS = {
     TASK_CODE_FETCH_REFUND_ORDERS: {"interval_seconds": 120, "enabled": True},
     TASK_CODE_FETCH_ITEMS: {"interval_seconds": 1200, "enabled": True},
     TASK_CODE_LOGIN_RENEW: {"interval_seconds": 600, "enabled": False},
+    TASK_CODE_TOKEN_RENEWAL: {"interval_seconds": 20, "enabled": True},
     TASK_CODE_COOKIES_REFRESH: {"interval_seconds": 600, "enabled": False},
     TASK_CODE_API_COOKIE_RENEW: {"interval_seconds": 3600, "enabled": True},
     TASK_CODE_CLOSE_NOTICE: {"interval_seconds": 600, "enabled": False},

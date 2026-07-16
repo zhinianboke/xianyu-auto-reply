@@ -27,6 +27,7 @@ from app.services.scheduler.fetch_orders_task import (
 )
 from app.services.scheduler.fetch_items_task import fetch_items_task_service
 from app.services.scheduler.login_renew_task import login_renew_task_service
+from app.services.scheduler.token_renewal_task import token_renewal_task_service
 from app.services.scheduler.cookies_refresh_task import cookies_refresh_task_service
 from app.services.scheduler.api_cookie_renew_task import api_cookie_renew_task_service
 from app.services.scheduler.close_notice_task import close_notice_task_service
@@ -49,6 +50,7 @@ from app.services.scheduled_task_service import (
     TASK_CODE_FETCH_REFUND_ORDERS,
     TASK_CODE_FETCH_ITEMS,
     TASK_CODE_LOGIN_RENEW,
+    TASK_CODE_TOKEN_RENEWAL,
     TASK_CODE_COOKIES_REFRESH,
     TASK_CODE_API_COOKIE_RENEW,
     TASK_CODE_CLOSE_NOTICE,
@@ -80,6 +82,7 @@ class SchedulerService:
         self._fetch_refund_orders_task_handle: Optional[asyncio.Task] = None
         self._fetch_items_task_handle: Optional[asyncio.Task] = None
         self._login_renew_task_handle: Optional[asyncio.Task] = None
+        self._token_renewal_task_handle: Optional[asyncio.Task] = None
         self._cookies_refresh_task_handle: Optional[asyncio.Task] = None
         self._api_cookie_renew_task_handle: Optional[asyncio.Task] = None
         self._close_notice_task_handle: Optional[asyncio.Task] = None
@@ -100,6 +103,7 @@ class SchedulerService:
         self._fetch_refund_orders_task = fetch_refund_orders_task_service
         self._fetch_items_task = fetch_items_task_service
         self._login_renew_task = login_renew_task_service
+        self._token_renewal_task = token_renewal_task_service
         self._cookies_refresh_task = cookies_refresh_task_service
         self._api_cookie_renew_task = api_cookie_renew_task_service
         self._close_notice_task = close_notice_task_service
@@ -138,7 +142,7 @@ class SchedulerService:
     
     async def reload_all_configs(self) -> None:
         """重新加载所有任务配置"""
-        for task_code in [TASK_CODE_REDELIVERY, TASK_CODE_RATE, TASK_CODE_POLISH, TASK_CODE_DAY_SWITCH, TASK_CODE_CLEANUP_BROWSER_DATA, TASK_CODE_FETCH_ORDERS, TASK_CODE_FETCH_PENDING_ORDERS, TASK_CODE_FETCH_REFUND_ORDERS, TASK_CODE_FETCH_ITEMS, TASK_CODE_LOGIN_RENEW, TASK_CODE_COOKIES_REFRESH, TASK_CODE_API_COOKIE_RENEW, TASK_CODE_CLOSE_NOTICE, TASK_CODE_RED_FLOWER, TASK_CODE_DB_BACKUP]:
+        for task_code in [TASK_CODE_REDELIVERY, TASK_CODE_RATE, TASK_CODE_POLISH, TASK_CODE_DAY_SWITCH, TASK_CODE_CLEANUP_BROWSER_DATA, TASK_CODE_FETCH_ORDERS, TASK_CODE_FETCH_PENDING_ORDERS, TASK_CODE_FETCH_REFUND_ORDERS, TASK_CODE_FETCH_ITEMS, TASK_CODE_LOGIN_RENEW, TASK_CODE_TOKEN_RENEWAL, TASK_CODE_COOKIES_REFRESH, TASK_CODE_API_COOKIE_RENEW, TASK_CODE_CLOSE_NOTICE, TASK_CODE_RED_FLOWER, TASK_CODE_DB_BACKUP]:
             await self.reload_task_config(task_code)
         for task_code in [TASK_CODE_DELIVERY_TIMEOUT, TASK_CODE_LISTING_MONITOR, TASK_CODE_SELLER_FILL, TASK_CODE_DM_SEND, TASK_CODE_AUTO_ORDER]:
             await self.reload_task_config(task_code)
@@ -161,6 +165,7 @@ class SchedulerService:
         self._fetch_refund_orders_task_handle = asyncio.create_task(self._run_fetch_refund_orders_loop())
         self._fetch_items_task_handle = asyncio.create_task(self._run_fetch_items_loop())
         self._login_renew_task_handle = asyncio.create_task(self._run_login_renew_loop())
+        self._token_renewal_task_handle = asyncio.create_task(self._run_token_renewal_loop())
         self._cookies_refresh_task_handle = asyncio.create_task(self._run_cookies_refresh_loop())
         self._api_cookie_renew_task_handle = asyncio.create_task(self._run_api_cookie_renew_loop())
         self._close_notice_task_handle = asyncio.create_task(self._run_close_notice_loop())
@@ -210,6 +215,9 @@ class SchedulerService:
         if self._login_renew_task_handle:
             self._login_renew_task_handle.cancel()
             self._login_renew_task_handle = None
+        if self._token_renewal_task_handle:
+            self._token_renewal_task_handle.cancel()
+            self._token_renewal_task_handle = None
         if self._cookies_refresh_task_handle:
             self._cookies_refresh_task_handle.cancel()
             self._cookies_refresh_task_handle = None
@@ -254,6 +262,7 @@ class SchedulerService:
         fetch_refund_orders_config = ScheduledTaskService.get_cached_config(TASK_CODE_FETCH_REFUND_ORDERS)
         fetch_items_config = ScheduledTaskService.get_cached_config(TASK_CODE_FETCH_ITEMS)
         login_renew_config = ScheduledTaskService.get_cached_config(TASK_CODE_LOGIN_RENEW)
+        token_renewal_config = ScheduledTaskService.get_cached_config(TASK_CODE_TOKEN_RENEWAL)
         cookies_refresh_config = ScheduledTaskService.get_cached_config(TASK_CODE_COOKIES_REFRESH)
         api_cookie_renew_config = ScheduledTaskService.get_cached_config(TASK_CODE_API_COOKIE_RENEW)
         close_notice_config = ScheduledTaskService.get_cached_config(TASK_CODE_CLOSE_NOTICE)
@@ -336,6 +345,13 @@ class SchedulerService:
                     "task_running": (
                         self._login_renew_task_handle is not None 
                         and not self._login_renew_task_handle.done()
+                    ),
+                },
+                TASK_CODE_TOKEN_RENEWAL: {
+                    "config": token_renewal_config or {"interval_seconds": 20, "enabled": True},
+                    "task_running": (
+                        self._token_renewal_task_handle is not None
+                        and not self._token_renewal_task_handle.done()
                     ),
                 },
                 TASK_CODE_COOKIES_REFRESH: {
@@ -448,6 +464,9 @@ class SchedulerService:
         elif task_code == TASK_CODE_LOGIN_RENEW:
             logger.info("[定时任务调度] 手动触发登录续期任务")
             await self._login_renew_task.execute()
+        elif task_code == TASK_CODE_TOKEN_RENEWAL:
+            logger.info("[定时任务调度] 手动触发Token续期任务")
+            await self._token_renewal_task.execute()
         elif task_code == TASK_CODE_COOKIES_REFRESH:
             logger.info("[定时任务调度] 手动触发COOKIES续期任务")
             await self._cookies_refresh_task.execute()
@@ -810,6 +829,37 @@ class SchedulerService:
                 break
         
         logger.info("[定时任务调度] 登录续期任务循环结束")
+
+    async def _run_token_renewal_loop(self) -> None:
+        """Token续期任务执行循环。"""
+        logger.info("[定时任务调度] Token续期任务循环开始")
+
+        await self.reload_task_config(TASK_CODE_TOKEN_RENEWAL)
+
+        while self._running:
+            config = ScheduledTaskService.get_cached_config(TASK_CODE_TOKEN_RENEWAL)
+            if not config:
+                config = {"interval_seconds": 20, "enabled": True}
+
+            interval = config.get("interval_seconds", 20)
+            enabled = config.get("enabled", True)
+
+            if enabled:
+                try:
+                    await self._token_renewal_task.execute()
+                except asyncio.CancelledError:
+                    logger.info("[定时任务调度] Token续期任务被取消")
+                    break
+                except Exception as e:
+                    logger.error(f"[定时任务调度] Token续期任务执行异常: {e}")
+
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                logger.info("[定时任务调度] Token续期任务等待被取消")
+                break
+
+        logger.info("[定时任务调度] Token续期任务循环结束")
 
     async def _run_cookies_refresh_loop(self) -> None:
         """COOKIES续期任务执行循环"""

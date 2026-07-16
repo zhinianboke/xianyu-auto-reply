@@ -258,6 +258,20 @@ export const getRiskLogs = async (params?: {
   return { success: Boolean(result.success), data: logs, total: result.total, message: result.message }
 }
 
+export interface LocalSliderConfig {
+  enabled: boolean
+}
+
+// 读取“本机滑块不处理”开关（仅管理员）
+export const getLocalSliderConfig = async (): Promise<ApiResponse<LocalSliderConfig>> => {
+  return get(`${API_PREFIX}/risk-control-logs/local-slider-config`)
+}
+
+// 实时更新“本机滑块不处理”开关（仅管理员）
+export const updateLocalSliderConfig = async (enabled: boolean): Promise<ApiResponse<LocalSliderConfig>> => {
+  return put(`${API_PREFIX}/risk-control-logs/local-slider-config`, { enabled })
+}
+
 // 清空风控日志
 export const clearRiskLogs = async (cookieId?: string): Promise<ApiResponse> => {
   const query = cookieId ? `?cookie_id=${cookieId}` : ''
