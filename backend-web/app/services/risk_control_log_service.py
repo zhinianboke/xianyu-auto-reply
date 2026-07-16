@@ -27,15 +27,16 @@ class RiskControlLogService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def count_processing_slider_logs(self) -> int:
-        """统计数据库中全部处理中的滑块风控日志。
+    async def count_remote_processing_slider_logs(self) -> int:
+        """统计数据库中全部处理中的远程滑块风控日志。
 
         Returns:
-            本机和远程调用合计的处理中滑块日志数量。
+            远程调用的处理中滑块日志数量。
         """
         stmt = select(func.count(XYRiskControlLog.id)).where(
             XYRiskControlLog.event_type == "slider_captcha",
             XYRiskControlLog.processing_status == "processing",
+            XYRiskControlLog.call_type == "remote",
         )
         return int((await self.session.execute(stmt)).scalar_one() or 0)
 

@@ -1039,7 +1039,7 @@ def run_real_mouse_verification(
 
     Args:
         weight_class: 排队来源类别（"local"=本地Token刷新 / "remote"=远程无cookie /
-            "remote_cookie"=远程有cookie）。本地与远程按权重公平放行；远程内部无cookie 严格优先于有cookie。
+            "remote_cookie"=远程有cookie）。本地与远程按权重公平放行；远程内部默认无cookie优先，等待满70秒后按最早入队优先。
 
     Returns:
         (是否成功, x5* cookies 字典 | None)

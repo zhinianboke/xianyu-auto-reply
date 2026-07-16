@@ -87,7 +87,7 @@ class RemoteCaptchaAdmissionService:
                 f"远程过滑块调用正在冷却中，请在 {remaining_seconds} 秒后重试",
             )
 
-        processing_count = await self.risk_log_service.count_processing_slider_logs()
+        processing_count = await self.risk_log_service.count_remote_processing_slider_logs()
         if processing_count < max_processing:
             return True, None
 

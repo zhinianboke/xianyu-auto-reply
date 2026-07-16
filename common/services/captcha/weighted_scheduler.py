@@ -9,7 +9,7 @@ real_mouse 加权公平调度器
 设计：
     - 前置排队：权重选择发生在公共浏览器线程池之前，避免线程池 FIFO 掩盖权重。
     - 平滑加权：仅在本地、远程同时积压时累计当轮权重，不产生历史服务欠账。
-    - 实时权重：前置队列每次选择下一个任务前重新读取数据库中的权重。
+    - 实时权重：本地、远程同时等待时，前置队列选择下一个任务前重新读取数据库权重。
     - 滑块隔离：本模块只决定任务执行顺序，不修改任何滑块识别、轨迹或重试逻辑。
 """
 from __future__ import annotations
@@ -17,6 +17,7 @@ from __future__ import annotations
 import math
 import threading
 import time
+from collections import deque
 from typing import Dict, Optional
 
 from loguru import logger
@@ -29,7 +30,7 @@ WEIGHT_KEY_REMOTE = "captcha.real_mouse_weight_remote"
 # 默认权重（首次读取或某个配置缺失时使用，1:1 等价于公平轮转）
 _DEFAULT_WEIGHTS: Dict[str, float] = {"local": 1.0, "remote": 1.0}
 
-# 线程内兜底锁的缓存有效期；前置双队列每次派发都会通过 force_refresh 绕过此缓存。
+# 线程内兜底锁的缓存有效期；前置双队列竞争派发时通过 force_refresh 绕过此缓存。
 _WEIGHTS_TTL = 5.0
 
 # served 虚拟时间超过该阈值时重归一化，防止长时间满负载下浮点无限增长
@@ -43,8 +44,24 @@ _BUCKET = {"local": "local", "remote": "remote", "remote_cookie": "remote"}
 # 桶的 tie-break 顺序：桶虚拟时间相等时本地优先
 _BUCKET_ORDER = {"local": 0, "remote": 1}
 
-# 远程桶内部的子优先级（严格优先）：无cookie("remote") 恒先于有cookie("remote_cookie")
+# 远程桶内部默认无cookie优先；任一队首等待满70秒后切换为老化优先，防止有cookie任务饥饿。
 _SUBORDER = {"remote": 0, "remote_cookie": 1}
+_REMOTE_PRIORITY_WAIT_SECONDS = 70.0
+
+
+def _subqueue_order_key(
+    weight_class: str,
+    enqueued_at: float,
+    now: float,
+) -> tuple[float, float, int, str]:
+    """返回桶内排序键：等待满70秒者优先，否则保持无cookie优先。"""
+    suborder = _SUBORDER.get(weight_class, 0)
+    waited_seconds = max(0.0, now - enqueued_at)
+    if weight_class in ("remote", "remote_cookie") and (
+        waited_seconds >= _REMOTE_PRIORITY_WAIT_SECONDS
+    ):
+        return (0.0, enqueued_at, suborder, weight_class)
+    return (1.0, float(suborder), suborder, weight_class)
 
 
 class WeightedSerialScheduler:
@@ -64,6 +81,8 @@ class WeightedSerialScheduler:
         self._busy = False
         # 每个来源类别当前的等待者数量：{class: count}（class 含远程子类，用于桶内子优先级判定）
         self._waiting: Dict[str, int] = {}
+        # 每个来源类别的入队时间；用于远程子队列等待70秒后的老化优先。
+        self._waiting_since: Dict[str, deque[float]] = {}
         # 每个「权重桶」累计放行次数（WFQ 虚拟服务量）：{bucket: served}（远程两子类共享 remote 桶）
         self._served: Dict[str, float] = {}
 
@@ -83,7 +102,7 @@ class WeightedSerialScheduler:
 
         Args:
             weight_class: 来源类别（"local"=本地 / "remote"=远程无cookie / "remote_cookie"=远程有cookie）。
-                本地与远程按权重公平分配；远程内部无cookie 严格优先于有cookie。
+                本地与远程按权重公平分配；远程内部默认无cookie优先，等待满70秒后按最早入队优先。
             timeout: 超时秒；None 表示无限等待（与旧 with lock 语义一致）
 
         Returns:
@@ -91,13 +110,12 @@ class WeightedSerialScheduler:
         """
         wc = weight_class or "local"
 
-        # 进锁前预热权重缓存，避免持 condition 锁时才去查库（那会阻塞 release）
-        self.get_effective_weights()
-
         with self._condition:
+            enqueued_at = time.monotonic()
             self._waiting[wc] = self._waiting.get(wc, 0) + 1
+            self._waiting_since.setdefault(wc, deque()).append(enqueued_at)
             acquired = False
-            start = time.time()
+            start = time.monotonic()
             try:
                 while True:
                     # 槽位空闲且轮到本来源 → 放行
@@ -105,7 +123,7 @@ class WeightedSerialScheduler:
                         acquired = True
                         break
                     if timeout is not None:
-                        remaining = timeout - (time.time() - start)
+                        remaining = timeout - (time.monotonic() - start)
                         if remaining <= 0:
                             break
                         self._condition.wait(timeout=min(remaining, 1.0))
@@ -117,6 +135,14 @@ class WeightedSerialScheduler:
                 self._waiting[wc] = self._waiting.get(wc, 1) - 1
                 if self._waiting.get(wc, 0) <= 0:
                     self._waiting.pop(wc, None)
+                wait_times = self._waiting_since.get(wc)
+                if wait_times is not None:
+                    try:
+                        wait_times.remove(enqueued_at)
+                    except ValueError:
+                        pass
+                    if not wait_times:
+                        self._waiting_since.pop(wc, None)
 
             if acquired:
                 # 持锁期间连续完成「置 busy + 记账」，惊群下也不会重复放行
@@ -154,7 +180,7 @@ class WeightedSerialScheduler:
         两级决策：
         1. 桶级加权公平：在有等待者的桶（local / remote）里，选虚拟时间
            served[bucket]/weight[bucket] 最小者，保证 本地:远程 的总放行比例=权重比。
-        2. 桶内子优先级：远程桶里，无cookie("remote") 严格优先于有cookie("remote_cookie")。
+        2. 桶内子优先级：远程桶默认无cookie优先；队首等待满70秒后，最早入队者优先。
 
         - 唯一候选桶恒胜（即使权重为 0，也能在对方空闲时被放行，保证 work-conserving）。
         - 桶虚拟时间相等时按 _BUCKET_ORDER 确定性 tie-break（本地优先）。
@@ -163,22 +189,38 @@ class WeightedSerialScheduler:
         candidates = [c for c, n in self._waiting.items() if n > 0]
         if not candidates:
             return None
-        weights = self.get_effective_weights()
-
         # 按桶归组
         buckets: Dict[str, list] = {}
         for c in candidates:
             buckets.setdefault(_BUCKET.get(c, c), []).append(c)
 
-        # 1. 选桶：虚拟时间最小
-        def bucket_key(bucket: str):
-            vtime = self._served.get(bucket, 0.0) / max(weights.get(bucket, 1.0), 1e-9)
-            return (vtime, _BUCKET_ORDER.get(bucket, 99), bucket)
+        if len(buckets) == 1:
+            # 单桶时权重不会改变选择结果，直接放行，避免兜底层重复查询数据库。
+            best_bucket = next(iter(buckets))
+        else:
+            weights = self.get_effective_weights()
+            positive_buckets = [
+                bucket for bucket in buckets if weights.get(bucket, 1.0) > 0
+            ]
+            eligible_buckets = positive_buckets or list(buckets)
 
-        best_bucket = min(buckets, key=bucket_key)
+            # 1. 选桶：虚拟时间最小
+            def bucket_key(bucket: str):
+                vtime = self._served.get(bucket, 0.0) / max(weights.get(bucket, 1.0), 1e-9)
+                return (vtime, _BUCKET_ORDER.get(bucket, 99), bucket)
 
-        # 2. 桶内子优先级：无cookie 先于有cookie（本地桶只有一个类，min 自然返回它）
-        return min(buckets[best_bucket], key=lambda c: (_SUBORDER.get(c, 0), c))
+            best_bucket = min(eligible_buckets, key=bucket_key)
+
+        # 2. 桶内子优先级：默认无cookie优先，等待满70秒后按队首入队时间老化。
+        now = time.monotonic()
+        return min(
+            buckets[best_bucket],
+            key=lambda c: _subqueue_order_key(
+                c,
+                self._waiting_since[c][0],
+                now,
+            ),
+        )
 
     def _maybe_renormalize(self) -> None:
         """持续满负载下对 served 做虚拟时间重归一化，防浮点无限增长。
@@ -189,7 +231,14 @@ class WeightedSerialScheduler:
         """
         if not self._served:
             return
-        weights = self.get_effective_weights()
+        if max(self._served.values(), default=0.0) <= _RENORM_THRESHOLD:
+            return
+        if len(self._served) == 1:
+            only_bucket = next(iter(self._served))
+            self._served[only_bucket] = 0.0
+            return
+        # 多桶竞争时 _pick_class 已读取过权重；归一化只复用缓存，禁止维护逻辑额外查库。
+        weights = dict(self._weights_cache or _DEFAULT_WEIGHTS)
         vmin = min(
             self._served.get(c, 0.0) / max(weights.get(c, 1.0), 1e-9)
             for c in self._served

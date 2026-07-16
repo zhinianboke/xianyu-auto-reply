@@ -167,7 +167,9 @@ export function RiskLogs() {
       setSavingConfig(true)
       // 权重规整：空串/非法回退 1，负数回退 1（与后端 _sanitize_weight 口径一致）
       const normWeight = (v: string) => {
-        const n = Number(v)
+        const normalized = v.trim()
+        if (!normalized) return 1
+        const n = Number(normalized)
         return Number.isFinite(n) && n >= 0 ? n : 1
       }
       const res = await saveRemoteCaptchaConfig(

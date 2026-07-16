@@ -3,7 +3,7 @@ real_mouse 线程池前置加权任务执行器
 
 功能：
 1. 在公共浏览器线程池之前维护本地、远程两个等待队列
-2. 每次派发前读取最新权重并执行平滑加权轮询
+2. 本地、远程竞争时读取最新权重并执行平滑加权轮询
 3. 只决定任务顺序，不修改滑块识别、轨迹、浏览器或重试逻辑
 """
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import math
+import time
 from collections import deque
 from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -23,7 +24,7 @@ from common.services.captcha.weighted_scheduler import (
     _BUCKET,
     _BUCKET_ORDER,
     _DEFAULT_WEIGHTS,
-    _SUBORDER,
+    _subqueue_order_key,
     real_mouse_scheduler,
 )
 
@@ -35,6 +36,7 @@ class _QueuedTask:
     weight_class: str
     call: Callable[[], Any]
     future: asyncio.Future
+    enqueued_at: float
 
 
 class WeightedTaskRunner:
@@ -97,9 +99,11 @@ class WeightedTaskRunner:
             weight_class=wc,
             call=functools.partial(func, *args, **kwargs),
             future=future,
+            enqueued_at=0.0,
         )
 
         async with self._lock:
+            queued.enqueued_at = time.monotonic()
             self._queues[wc].append(queued)
             self._ensure_dispatcher_locked()
 
@@ -112,42 +116,65 @@ class WeightedTaskRunner:
             raise
 
     async def _dispatch_loop(self) -> None:
-        """串行选择并执行排队任务，每次选择前强制刷新数据库权重。"""
+        """串行选择并执行排队任务，只有本地、远程竞争时才读取实时权重。"""
         restart_pending = True
         try:
             while True:
+                queued = None
+                weights = dict(_DEFAULT_WEIGHTS)
+                single_bucket_fast_path = False
                 async with self._lock:
                     self._purge_cancelled_locked()
                     if not self._has_pending_locked():
                         self._reset_smooth_state()
                         return
 
-                try:
-                    loaded_weights = await asyncio.to_thread(self._weight_loader)
-                    if not isinstance(loaded_weights, dict):
-                        raise TypeError("权重读取结果不是字典")
-                    weights = {
-                        "local": self._sanitize_weight(loaded_weights.get("local", 1.0)),
-                        "remote": self._sanitize_weight(loaded_weights.get("remote", 1.0)),
+                    pending_buckets = {
+                        _BUCKET[name]
+                        for name, queue in self._queues.items()
+                        if queue
                     }
-                except Exception as exc:  # noqa: BLE001
-                    logger.error(f"刷新 real_mouse 实时权重失败，使用 1:1 调度: {exc}")
-                    weights = dict(_DEFAULT_WEIGHTS)
-
-                async with self._lock:
-                    self._purge_cancelled_locked()
-                    queued = self._pick_task_locked(weights)
+                    if len(pending_buckets) == 1:
+                        # 单来源时权重不会改变选择结果，直接放行一个任务，避免无意义的数据库查询。
+                        queued = self._pick_task_locked(_DEFAULT_WEIGHTS)
+                        single_bucket_fast_path = True
                     pending_local = len(self._queues["local"])
                     pending_remote = len(self._queues["remote"]) + len(
                         self._queues["remote_cookie"]
                     )
+
+                if queued is None:
+                    try:
+                        loaded_weights = await asyncio.to_thread(self._weight_loader)
+                        if not isinstance(loaded_weights, dict):
+                            raise TypeError("权重读取结果不是字典")
+                        weights = {
+                            "local": self._sanitize_weight(loaded_weights.get("local", 1.0)),
+                            "remote": self._sanitize_weight(loaded_weights.get("remote", 1.0)),
+                        }
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error(f"刷新 real_mouse 实时权重失败，使用 1:1 调度: {exc}")
+                        weights = dict(_DEFAULT_WEIGHTS)
+
+                    async with self._lock:
+                        self._purge_cancelled_locked()
+                        queued = self._pick_task_locked(weights)
+                        pending_local = len(self._queues["local"])
+                        pending_remote = len(self._queues["remote"]) + len(
+                            self._queues["remote_cookie"]
+                        )
                 if queued is None:
                     continue
 
+                weight_description = (
+                    "未读取（单来源直接放行）"
+                    if single_bucket_fast_path
+                    else f"{weights.get('local', 1)}:{weights.get('remote', 1)}"
+                )
                 logger.info(
                     "real_mouse 实时权重放行: "
                     f"来源={queued.weight_class}, "
-                    f"权重={weights.get('local', 1)}:{weights.get('remote', 1)}, "
+                    f"权重={weight_description}, "
                     f"剩余排队=本地{pending_local}/远程{pending_remote}"
                 )
 
@@ -222,9 +249,14 @@ class WeightedTaskRunner:
             )
             self._current[best_bucket] -= sum(effective.values())
 
+        now = time.monotonic()
         best_class = min(
             buckets[best_bucket],
-            key=lambda name: (_SUBORDER.get(name, 0), name),
+            key=lambda name: _subqueue_order_key(
+                name,
+                self._queues[name][0].enqueued_at,
+                now,
+            ),
         )
         return self._queues[best_class].popleft()
 
@@ -264,7 +296,7 @@ class WeightedTaskRunner:
 
 
 def _load_realtime_weights() -> Dict[str, float]:
-    """每次派发前强制读取数据库中的最新权重。"""
+    """本地、远程竞争派发时强制读取数据库中的最新权重。"""
     return real_mouse_scheduler.get_effective_weights(force_refresh=True)
 
 

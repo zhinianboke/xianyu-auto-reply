@@ -419,7 +419,7 @@ async def solve_captcha(request: SolveCaptchaRequest):
             logger.info(f"【过滑块接口】account_id={safe_id} 已携带 Cookie，启用链接过期自动重取")
 
         # 被调用接口不信任请求体中的 call_type，所有请求固定进入远程桶，避免伪装成本地权重。
-        # 远程内部保留既有子优先级：无 Cookie 优先于有 Cookie。
+        # 远程内部默认无 Cookie 优先；任一队首等待满70秒后按最早入队优先。
         weight_class = "remote_cookie" if existing_cookies_str else "remote"
         slider_args = (
             safe_id, url, True, False, timeout, existing_cookies_str, url_provider,
