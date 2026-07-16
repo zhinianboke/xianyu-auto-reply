@@ -75,7 +75,8 @@ except ImportError:
 _PUNISH = ("punish", "x5step=2", "action=captcha", "pureCaptcha", "/captcha")
 _MAX_ANCHOR_GAP_MS = 180.0
 _MAX_REPLAY_DURATION_MS = 2600.0
-_PREFERRED_BUSINESS_TRAIL = "human_trail_pass_1783949589.json"
+_BUSINESS_SEGMENT_GAP_MS = 500.0
+_PREFERRED_BUSINESS_TRAIL = "human_trail_pass_1784203585.json"
 # 真人鼠标模式专用固定目录：本地与远程请求共用，用于复用和精确识别 Chrome 进程。
 _REAL_MOUSE_BROWSER_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "browser_data", "real_mouse_shared")
@@ -130,6 +131,32 @@ def _detect_scene(url: str) -> str:
     return "login" if "/newlogin/login.do" in (url or "") else "business"
 
 
+def _extract_business_drag(trail: list) -> list:
+    """切分业务轨迹中的多次按下操作，返回正向位移最大的拖动段。"""
+    segments: List[list] = []
+    current: list = []
+    for event in trail:
+        if not isinstance(event, list) or len(event) < 5:
+            continue
+        event_type = event[0]
+        if event_type in ("mousemove", "pointermove") and event[4] == 1:
+            if current and event[3] - current[-1][3] > _BUSINESS_SEGMENT_GAP_MS:
+                segments.append(current)
+                current = []
+            current.append(event)
+            continue
+        if current and event_type in (
+            "mousemove", "pointermove", "mouseup", "pointerup"
+        ):
+            segments.append(current)
+            current = []
+    if current:
+        segments.append(current)
+
+    forward = [segment for segment in segments if segment[-1][1] - segment[0][1] > 5]
+    return max(forward, key=lambda segment: segment[-1][1] - segment[0][1], default=[])
+
+
 def _load_drags(scene: str = "business") -> List[List[Tuple[float, float, float]]]:
     """加载真人通过轨迹，提取「按下拖动段」为相对位移序列 [(dx, dy, dt_ms), ...]。
 
@@ -164,9 +191,12 @@ def _load_drags(scene: str = "business") -> List[List[Tuple[float, float, float]
         except Exception as e:
             logger.warning(f"加载真人轨迹失败 {f}: {e}")
             continue
-        # 登录与业务滑块共用同一套拖动段提取逻辑，仅样本文件不同。
-        moves = [e for e in trail if isinstance(e, list) and len(e) >= 5 and e[0] == "mousemove"]
-        seg = [e for e in moves if len(e) >= 5 and e[4] == 1]
+        if scene == "business":
+            seg = _extract_business_drag(trail)
+        else:
+            # 登录滑块保持原有提取方式，不改变登录专用长轨迹行为。
+            moves = [e for e in trail if isinstance(e, list) and len(e) >= 5 and e[0] == "mousemove"]
+            seg = [e for e in moves if len(e) >= 5 and e[4] == 1]
         if len(seg) < 5:
             continue
         if scene == "business":
@@ -824,8 +854,11 @@ class _RealMouseSolver:
             # 业务滑块使用已验证的 SendInput + 精密时序：同帧内短间隔点背靠背发送，
             # 让 Chrome 产生接近真人硬件鼠标的 coalesced 子事件密度。
             timer_resolution(True)
-            send_button(True)
             try:
+                send_move_abs(sx, sy)
+                time.sleep(random.uniform(0.035, 0.055))
+                send_button(True)
+                send_move_abs(sx, sy)
                 time.sleep(random.uniform(0.065, 0.085))
                 started = time.perf_counter()
                 elapsed = 0.0
