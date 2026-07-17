@@ -73,7 +73,6 @@ except ImportError:
 
 # 风控未放行的 URL 关键字
 _PUNISH = ("punish", "x5step=2", "action=captcha", "pureCaptcha", "/captcha")
-_MAX_ANCHOR_GAP_MS = 180.0
 _MAX_REPLAY_DURATION_MS = 2600.0
 _BUSINESS_SEGMENT_GAP_MS = 500.0
 _PREFERRED_BUSINESS_TRAIL = "human_trail_pass_1784203585.json"
@@ -82,6 +81,30 @@ _REAL_MOUSE_BROWSER_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "browser_data", "real_mouse_shared")
 )
 _REAL_MOUSE_BROWSER_LOCK = os.path.join(_REAL_MOUSE_BROWSER_DIR, "browser.lock")
+
+
+class _TimedDrag(list):
+    """拖动点列表，并保留采集按下段的原点与松手时间。"""
+
+    def __init__(
+        self,
+        points=(),
+        press_delay_ms: float = 0.0,
+        release_delay_ms: float = 0.0,
+        origin_x: Optional[float] = None,
+        origin_y: Optional[float] = None,
+        pressed_at: Optional[float] = None,
+        approach=(),
+        approach_to_press_ms: float = 0.0,
+    ):
+        super().__init__(points)
+        self.press_delay_ms = max(0.0, float(press_delay_ms))
+        self.release_delay_ms = max(0.0, float(release_delay_ms))
+        self.origin_x = origin_x
+        self.origin_y = origin_y
+        self.pressed_at = pressed_at
+        self.approach = list(approach)
+        self.approach_to_press_ms = max(0.0, float(approach_to_press_ms))
 
 # 仅隐藏 webdriver，绝不伪造与真实 Chrome 冲突的指纹（UA/WebGL 交给真实 Chrome）
 _STEALTH_MINIMAL = """
@@ -132,26 +155,72 @@ def _detect_scene(url: str) -> str:
 
 
 def _extract_business_drag(trail: list) -> list:
-    """切分业务轨迹中的多次按下操作，返回正向位移最大的拖动段。"""
-    segments: List[list] = []
+    """切分业务轨迹中的多次按下操作，保留完整按住时序。"""
+    segments: List[_TimedDrag] = []
     current: list = []
+    pressed_at: Optional[float] = None
+    origin_x: Optional[float] = None
+    origin_y: Optional[float] = None
+    pending_approach: list = []
+    active_approach: list = []
+
+    def finish(released_at: Optional[float] = None) -> None:
+        nonlocal current, pressed_at, origin_x, origin_y, active_approach
+        if not current:
+            return
+        first_at = float(current[0][3])
+        last_at = float(current[-1][3])
+        press_delay_ms = first_at - pressed_at if pressed_at is not None else 0.0
+        release_delay_ms = released_at - last_at if released_at is not None else 0.0
+        segments.append(
+            _TimedDrag(
+                current,
+                press_delay_ms=press_delay_ms,
+                release_delay_ms=release_delay_ms,
+                origin_x=origin_x,
+                origin_y=origin_y,
+                pressed_at=pressed_at,
+                approach=active_approach,
+            )
+        )
+        current = []
+        pressed_at = None
+        origin_x = None
+        origin_y = None
+        active_approach = []
+
     for event in trail:
         if not isinstance(event, list) or len(event) < 5:
             continue
         event_type = event[0]
+        if event_type in ("mousedown", "pointerdown") and event[4] == 1:
+            if current:
+                finish()
+            if pressed_at is None:
+                pressed_at = float(event[3])
+                origin_x = float(event[1])
+                origin_y = float(event[2])
+                active_approach = list(pending_approach)
+            continue
         if event_type in ("mousemove", "pointermove") and event[4] == 1:
             if current and event[3] - current[-1][3] > _BUSINESS_SEGMENT_GAP_MS:
-                segments.append(current)
-                current = []
+                finish()
+                pressed_at = float(event[3])
+                origin_x = float(event[1])
+                origin_y = float(event[2])
             current.append(event)
             continue
-        if current and event_type in (
-            "mousemove", "pointermove", "mouseup", "pointerup"
-        ):
-            segments.append(current)
-            current = []
+        if event_type in ("mouseup", "pointerup"):
+            finish(float(event[3]))
+            pressed_at = None
+            pending_approach = []
+            continue
+        if current and event_type in ("mousemove", "pointermove"):
+            finish(float(event[3]))
+        if event_type in ("mousemove", "pointermove") and event[4] == 0:
+            pending_approach.append(event)
     if current:
-        segments.append(current)
+        finish()
 
     forward = [segment for segment in segments if segment[-1][1] - segment[0][1] > 5]
     return max(forward, key=lambda segment: segment[-1][1] - segment[0][1], default=[])
@@ -199,24 +268,39 @@ def _load_drags(scene: str = "business") -> List[List[Tuple[float, float, float]
             seg = [e for e in moves if len(e) >= 5 and e[4] == 1]
         if len(seg) < 5:
             continue
-        if scene == "business":
-            while len(seg) > 2:
-                gap = seg[-1][3] - seg[-2][3]
-                dx = seg[-1][1] - seg[-2][1]
-                dy = seg[-1][2] - seg[-2][2]
-                if gap > 250.0 and abs(dx) <= 1.0 and abs(dy) <= 1.0:
-                    seg.pop()
-                    continue
-                break
-        x0, y0, prev = seg[0][1], seg[0][2], seg[0][3]
+        if scene == "business" and getattr(seg, "pressed_at", None) is not None:
+            x0 = seg.origin_x
+            y0 = seg.origin_y
+            prev = seg[0][3]
+        else:
+            x0, y0, prev = seg[0][1], seg[0][2], seg[0][3]
         raw_duration_ms = max(0.0, seg[-1][3] - seg[0][3])
-        if scene == "business" and raw_duration_ms > _MAX_REPLAY_DURATION_MS:
+        press_delay_ms = getattr(seg, "press_delay_ms", 0.0)
+        release_delay_ms = getattr(seg, "release_delay_ms", 0.0)
+        raw_approach = getattr(seg, "approach", []) if scene == "business" else []
+        approach: List[Tuple[float, float, float]] = []
+        if raw_approach:
+            approach_prev = raw_approach[0][3]
+            for p in raw_approach:
+                approach.append(
+                    (
+                        p[1] - x0,
+                        p[2] - y0,
+                        max(0.0, p[3] - approach_prev),
+                    )
+                )
+                approach_prev = p[3]
+        approach_to_press_ms = (
+            max(0.0, seg.pressed_at - raw_approach[-1][3])
+            if raw_approach and getattr(seg, "pressed_at", None) is not None
+            else 0.0
+        )
+        gesture_duration_ms = press_delay_ms + raw_duration_ms + release_delay_ms
+        if scene == "business" and gesture_duration_ms > _MAX_REPLAY_DURATION_MS:
             continue
         rel: List[Tuple[float, float, float]] = []
         for p in seg:
             dt = max(0.0, p[3] - prev)
-            if scene == "business":
-                dt = min(_MAX_ANCHOR_GAP_MS, dt)
             rel.append((p[1] - x0, p[2] - y0, dt))
             prev = p[3]
         if scene == "business":
@@ -226,9 +310,19 @@ def _load_drags(scene: str = "business") -> List[List[Tuple[float, float, float]
                 continue
             if distance < 120 or distance > 1200:
                 continue
-        drags.append(rel)
+        replay_drag = _TimedDrag(
+            rel,
+            press_delay_ms=press_delay_ms if scene == "business" else 0.0,
+            release_delay_ms=release_delay_ms if scene == "business" else 0.0,
+            origin_x=x0 if scene == "business" else None,
+            origin_y=y0 if scene == "business" else None,
+            pressed_at=getattr(seg, "pressed_at", None) if scene == "business" else None,
+            approach=approach,
+            approach_to_press_ms=approach_to_press_ms,
+        )
+        drags.append(replay_drag)
         if preferred and f == preferred:
-            preferred_drag = rel
+            preferred_drag = replay_drag
     if scene == "business" and preferred:
         if preferred_drag is not None:
             return [preferred_drag]
@@ -264,47 +358,6 @@ def _choose_drag(drags: List[List[Tuple[float, float, float]]]) -> List[Tuple[fl
             continue
         weights.append(1.0 + min(points, 80) / 25.0 + min(duration_ms, 1800) / 900.0)
     return random.choices(drags, weights=weights, k=1)[0]
-
-
-def _calculate_business_distance(frame, btn, track) -> float:
-    """计算业务滑块的实际可移动距离，优先使用 frame 内的精确 DOM 尺寸。"""
-    try:
-        distance = frame.evaluate(
-            """() => {
-                const button = document.querySelector('#nc_1_n1z');
-                const track = document.querySelector('#nc_1_n1t') || document.querySelector('.nc_scale');
-                if (!button || !track) return null;
-                return track.getBoundingClientRect().width - button.getBoundingClientRect().width;
-            }"""
-        )
-        if distance and distance > 0:
-            return float(distance)
-    except Exception:
-        pass
-
-    try:
-        button_box = btn.bounding_box()
-        track_box = track.bounding_box()
-        if button_box and track_box:
-            distance = track_box["width"] - button_box["width"]
-            if distance > 0:
-                return float(distance)
-    except Exception:
-        pass
-    return 0.0
-
-
-def _scale_drag_to_distance(
-    drag: List[Tuple[float, float, float]],
-    distance: float,
-) -> List[Tuple[float, float, float]]:
-    """按当前滑块距离缩放 X 位移，保留真人 Y 轨迹与原始时序。"""
-    if not drag or distance <= 0 or drag[-1][0] <= 1:
-        return drag
-    factor = distance / drag[-1][0]
-    scaled = [(dx * factor, dy, dt) for dx, dy, dt in drag]
-    scaled[-1] = (distance, scaled[-1][1], scaled[-1][2])
-    return scaled
 
 
 class _RealMouseSolver:
@@ -712,11 +765,18 @@ class _RealMouseSolver:
                     f"首点等待={selected_drag[1][2]:.0f}ms"
                 )
             else:
+                move_duration_ms = sum(point[2] for point in selected_drag)
+                press_delay_ms = getattr(selected_drag, "press_delay_ms", 0.0)
+                release_delay_ms = getattr(selected_drag, "release_delay_ms", 0.0)
+                approach = getattr(selected_drag, "approach", [])
                 logger.info(
                     f"【{self.pure_id}】业务滑块第{attempt}次选用真人原始轨迹: "
-                    f"点数={len(selected_drag)}, "
+                    f"接近点={len(approach)}, 拖动点={len(selected_drag)}, "
                     f"位移={selected_drag[-1][0]:.0f}px, "
-                    f"时长={sum(point[2] for point in selected_drag):.0f}ms"
+                    f"移动={move_duration_ms:.0f}ms, "
+                    f"按下等待={press_delay_ms:.0f}ms, "
+                    f"松手等待={release_delay_ms:.0f}ms, "
+                    f"总按住={press_delay_ms + move_duration_ms + release_delay_ms:.0f}ms"
                 )
             if not self._do_real_slide(
                 frame,
@@ -782,15 +842,9 @@ class _RealMouseSolver:
         mx = box["x"] + box["width"] / 2
         my = box["y"] + box["height"] / 2
         if scene == "business":
-            source_distance = drag[-1][0] if drag else 0.0
-            target_distance = _calculate_business_distance(frame, btn, track)
-            if target_distance <= 0:
-                logger.warning(f"【{self.pure_id}】真实鼠标引擎无法计算业务滑块距离")
-                return False
-            drag = _scale_drag_to_distance(drag, target_distance)
             logger.info(
-                f"【{self.pure_id}】业务滑块轨迹距离缩放: "
-                f"{source_distance:.1f}px -> {target_distance:.1f}px, 点数={len(drag)}"
+                f"【{self.pure_id}】业务滑块严格回放采集位移: "
+                f"末点=({drag[-1][0]:.1f},{drag[-1][1]:.1f})px, 点数={len(drag)}"
             )
         else:
             track_box = track.bounding_box() if track else None
@@ -842,40 +896,56 @@ class _RealMouseSolver:
         if not self._ensure_window_foreground(scene):
             return False
 
-        # 保持已验证的固定接近动作；登录和业务均使用稳定坐标校准。
-        ax, ay = to_screen(mx - 50, my - 40)
         sx, sy = to_screen(mx, my)
         if scene == "login":
             logger.info(f"【{self.pure_id}】登录滑块使用业务同款 pyautogui 回放: 起点=({sx},{sy})")
-        _human_mouse_to(ax, ay, 0.3)
-        _human_mouse_to(sx, sy, 0.2)
-        time.sleep(0.15)
         if scene == "business":
-            # 业务滑块使用已验证的 SendInput + 精密时序：同帧内短间隔点背靠背发送，
-            # 让 Chrome 产生接近真人硬件鼠标的 coalesced 子事件密度。
+            # 业务滑块严格按采集样本回放未按下接近段及完整按住段。
             timer_resolution(True)
             try:
-                send_move_abs(sx, sy)
-                time.sleep(random.uniform(0.035, 0.055))
+                approach = getattr(drag, "approach", [])
+                if approach:
+                    first_x, first_y, _ = approach[0]
+                    first_sx, first_sy = to_screen(mx + first_x, my + first_y)
+                    send_move_abs(first_sx, first_sy)
+                    approach_started = time.perf_counter()
+                    approach_elapsed = 0.0
+                    for dx, dy, dt in approach[1:]:
+                        approach_elapsed += dt / 1000.0
+                        if dt >= 3.0:
+                            precise_sleep(approach_started + approach_elapsed)
+                        tx, ty = to_screen(mx + dx, my + dy)
+                        send_move_abs(tx, ty)
+                    precise_sleep(
+                        approach_started
+                        + approach_elapsed
+                        + getattr(drag, "approach_to_press_ms", 0.0) / 1000.0
+                    )
+                else:
+                    send_move_abs(sx, sy)
                 send_button(True)
-                send_move_abs(sx, sy)
-                time.sleep(random.uniform(0.065, 0.085))
                 started = time.perf_counter()
+                press_delay = getattr(drag, "press_delay_ms", 0.0) / 1000.0
+                release_delay = getattr(drag, "release_delay_ms", 0.0) / 1000.0
+                precise_sleep(started + press_delay)
+                move_started = started + press_delay
                 elapsed = 0.0
-                for i, (dx, dy, dt) in enumerate(drag):
-                    if i == 0:
-                        continue
-                    tx, ty = to_screen(mx + dx, my + dy)
-                    send_move_abs(tx, ty)
+                for dx, dy, dt in drag:
                     elapsed += dt / 1000.0
                     if dt >= 3.0:
-                        precise_sleep(started + elapsed)
-                time.sleep(0.08)
+                        precise_sleep(move_started + elapsed)
+                    tx, ty = to_screen(mx + dx, my + dy)
+                    send_move_abs(tx, ty)
+                precise_sleep(move_started + elapsed + release_delay)
             finally:
                 send_button(False)
                 timer_resolution(False)
         else:
             # 登录滑块保持原有 pyautogui 轨迹、坐标抖动和逐点时序，不受业务优化影响。
+            ax, ay = to_screen(mx - 50, my - 40)
+            _human_mouse_to(ax, ay, 0.3)
+            _human_mouse_to(sx, sy, 0.2)
+            time.sleep(0.15)
             pyautogui.mouseDown()
             time.sleep(0.12)
             for i, (dx, dy, dt) in enumerate(drag):

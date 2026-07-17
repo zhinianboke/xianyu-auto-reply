@@ -87,6 +87,7 @@ class SolveCaptchaRequest(BaseModel):
     cookies: str = ""             # 可选：账号 Cookie（调用方开启"传递Cookie"开关时传入）。
                                   # 传入后链接过期时可凭此 Cookie 重取新链接继续处理。
     device_id: str = ""           # 可选：设备 ID，配合 cookies 重新请求 token 接口使用
+    risk_log_id: int | None = None # backend-web 准入锁内预先创建的风控日志 ID
 
 
 @router.post("/logs/retention")
@@ -357,22 +358,28 @@ async def solve_captcha(request: SolveCaptchaRequest):
     call_user = (request.call_user or "").strip() or None
 
     # 记录风控日志（处理中）
-    log_id = None
+    log_id = request.risk_log_id if request.risk_log_id and request.risk_log_id > 0 else None
     start_ts = _time.time()
-    try:
-        from common.db.compat import db_manager
-        log_id = db_manager.add_risk_control_log(
-            cookie_id=safe_id,
-            event_type="slider_captcha",
-            event_description=f"触发场景: 远程过滑块接口, URL: {url}",
-            processing_status="processing",
-            call_type=call_type,
-            call_user=call_user,
-        )
-    except Exception as log_e:
-        logger.error(f"【过滑块接口】记录风控日志失败: {log_e}")
+    if not log_id:
+        try:
+            from common.db.compat import db_manager
+            log_id = db_manager.add_risk_control_log(
+                cookie_id=safe_id,
+                event_type="slider_captcha",
+                event_description=f"触发场景: 远程过滑块接口, URL: {url}",
+                processing_status="processing",
+                call_type=call_type,
+                call_user=call_user,
+            )
+        except Exception as log_e:
+            logger.error(f"【过滑块接口】记录风控日志失败: {log_e}")
 
-    def _update_log(status: str, result: str, engine: str | None = None, error: str | None = None):
+    def _update_log(
+        status: str,
+        result: str,
+        engine: str | None = None,
+        error: str | None = None,
+    ) -> None:
         if not log_id:
             return
         try:
@@ -440,27 +447,60 @@ async def solve_captcha(request: SolveCaptchaRequest):
             )
     except Exception as e:
         logger.error(f"【过滑块接口】account_id={safe_id} 执行异常: {e}")
-        _update_log("error", f"过滑块执行异常，耗时: {_time.time() - start_ts:.2f}秒", error=str(e))
-        return {"success": False, "code": 500, "message": f"过滑块执行异常: {str(e)}", "data": None}
+        _update_log(
+            "error",
+            f"过滑块执行异常，耗时: {_time.time() - start_ts:.2f}秒",
+            error=str(e),
+        )
+        return {
+            "success": False,
+            "code": 500,
+            "message": f"过滑块执行异常: {str(e)}",
+            "data": None,
+            "_risk_log_id": log_id,
+        }
 
     duration = _time.time() - start_ts
     if success and cookies:
-        _update_log("success", f"远程过滑块成功，耗时: {duration:.2f}秒", engine=engine)
+        _update_log(
+            "success",
+            f"远程过滑块成功，耗时: {duration:.2f}秒",
+            engine=engine,
+        )
         return {
             "success": True, "code": 200, "message": "过滑块成功",
-            "data": {"engine": engine, "cookies": cookies, "url_expired": False},
+            "data": {
+                "engine": engine,
+                "cookies": cookies,
+                "url_expired": False,
+            },
+            "_risk_log_id": log_id,
         }
     # 验证链接已过期：明确告知调用方刷新URL后重试（区别于普通过滑块失败）
     # 注意：url_expired 不是"通过引擎"，不写入 captcha_engine 字段（避免污染引擎枚举/前端展示），
     # 过期信息体现在 processing_result 文案与返回体 data 中即可。
     if engine == "url_expired":
-        _update_log("failed", f"远程过滑块失败(验证链接已过期)，耗时: {duration:.2f}秒")
+        _update_log(
+            "failed",
+            f"远程过滑块失败(验证链接已过期)，耗时: {duration:.2f}秒",
+        )
         return {
             "success": False, "code": 200, "message": "验证链接已过期，请刷新URL后重试",
             "data": {"engine": engine, "url_expired": True},
+            "_risk_log_id": log_id,
         }
-    _update_log("failed", f"远程过滑块失败，耗时: {duration:.2f}秒", engine=engine)
-    return {"success": False, "code": 200, "message": "过滑块失败", "data": {"engine": engine, "url_expired": False}}
+    _update_log(
+        "failed",
+        f"远程过滑块失败，耗时: {duration:.2f}秒",
+        engine=engine,
+    )
+    return {
+        "success": False,
+        "code": 200,
+        "message": "过滑块失败",
+        "data": {"engine": engine, "url_expired": False},
+        "_risk_log_id": log_id,
+    }
 
 
 @router.get("/accounts/connection-stats")

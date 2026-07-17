@@ -13,16 +13,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import select, func, case, and_
+from sqlalchemy import select, func, case, and_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.risk_control_log import XYRiskControlLog
+from common.models.xy_account import XYAccount
 from common.utils.pagination import execute_paginated_with_filters
 
 
 from common.utils.time_utils import safe_isoformat, get_beijing_now_naive
 class RiskControlLogService:
-    """Read-only access to risk control logs."""
+    """Access to risk control logs."""
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -39,6 +40,62 @@ class RiskControlLogService:
             XYRiskControlLog.call_type == "remote",
         )
         return int((await self.session.execute(stmt)).scalar_one() or 0)
+
+    async def create_remote_processing_slider_log(
+        self,
+        *,
+        account_identifier: str,
+        url: str,
+        call_user: str | None,
+    ) -> int:
+        """创建远程滑块 processing 日志并立即提交。"""
+        account_row = (
+            await self.session.execute(
+                select(XYAccount.id, XYAccount.owner_id).where(
+                    XYAccount.account_id == account_identifier
+                )
+            )
+        ).first()
+
+        log = XYRiskControlLog(
+            owner_id=account_row.owner_id if account_row else None,
+            account_pk=account_row.id if account_row else None,
+            account_identifier=account_identifier,
+            event_type="slider_captcha",
+            event_description=f"触发场景: 远程过滑块接口, URL: {url}",
+            processing_status="processing",
+            call_type="remote",
+            call_user=call_user,
+        )
+        self.session.add(log)
+        await self.session.flush()
+        log_id = int(log.id)
+        await self.session.commit()
+        return log_id
+
+    async def mark_remote_slider_log_unclaimed(
+        self,
+        *,
+        log_id: int,
+        error_message: str,
+    ) -> bool:
+        """将未被 websocket 接管的预建日志从 processing 置为 cancelled。"""
+        result = await self.session.execute(
+            update(XYRiskControlLog)
+            .where(
+                XYRiskControlLog.id == log_id,
+                XYRiskControlLog.event_type == "slider_captcha",
+                XYRiskControlLog.processing_status == "processing",
+                XYRiskControlLog.call_type == "remote",
+            )
+            .values(
+                processing_status="cancelled",
+                processing_result="预建远程过滑块日志未被 websocket 接管",
+                error_message=error_message,
+            )
+        )
+        await self.session.commit()
+        return bool(result.rowcount)
 
     async def list_logs(
         self,

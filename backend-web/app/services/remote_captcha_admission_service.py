@@ -11,11 +11,13 @@ from __future__ import annotations
 import math
 import time
 
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.risk_control_log_service import RiskControlLogService
 from app.services.system_setting_service import SystemSettingService
+from common.db.redis_client import DistributedLock
 from common.models.system_setting import SystemSetting
 
 
@@ -25,6 +27,14 @@ REMOTE_COOLDOWN_UNTIL_KEY = "captcha.remote_cooldown_until"
 
 DEFAULT_REMOTE_PROCESSING_MAX = 20
 DEFAULT_REMOTE_COOLDOWN_SECONDS = 600
+
+REMOTE_ADMISSION_LOCK_NAME = "captcha_remote_processing_admission"
+REMOTE_ADMISSION_LOCK_EXPIRE_SECONDS = 60
+REMOTE_ADMISSION_LOCK_WAIT_SECONDS = 5.0
+
+
+class RemoteCaptchaAdmissionRedisUnavailable(RuntimeError):
+    """Redis 准入控制不可用，调用方应降级到原有数据库计数逻辑。"""
 
 
 def sanitize_nonnegative_int(value: object, default: int) -> int:
@@ -108,6 +118,51 @@ class RemoteCaptchaAdmissionService:
             False,
             f"处理中滑块任务已达上限（{processing_count}/{max_processing}），远程调用已拒绝",
         )
+
+    async def check_admission_with_redis_log(
+        self,
+        *,
+        account_identifier: str,
+        url: str,
+        call_user: str | None,
+    ) -> tuple[bool, str | None, int | None]:
+        """在 Redis 锁内完成准入检查并提交 processing 风控日志。
+
+        日志提交完成后才释放锁，后续请求的数据库 COUNT 能看到这条记录，
+        从而避免并发请求在 websocket 创建日志前形成空窗。Redis 异常时抛出
+        专用异常，由调用方回退到原有 ``check_admission`` 逻辑。
+        """
+        lock = DistributedLock(
+            REMOTE_ADMISSION_LOCK_NAME,
+            expire=REMOTE_ADMISSION_LOCK_EXPIRE_SECONDS,
+        )
+        try:
+            try:
+                acquired = await lock.acquire(
+                    blocking=True,
+                    timeout=REMOTE_ADMISSION_LOCK_WAIT_SECONDS,
+                )
+            except Exception as exc:
+                raise RemoteCaptchaAdmissionRedisUnavailable(str(exc)) from exc
+
+            if not acquired:
+                return False, "远程过滑块准入检查繁忙，请稍后重试", None
+
+            admission_allowed, rejection_message = await self.check_admission()
+            if not admission_allowed:
+                return False, rejection_message, None
+
+            log_id = await self.risk_log_service.create_remote_processing_slider_log(
+                account_identifier=account_identifier,
+                url=url,
+                call_user=call_user,
+            )
+            return True, None, log_id
+        finally:
+            try:
+                await lock.release()
+            except Exception as exc:
+                logger.warning(f"释放远程过滑块 Redis 准入锁失败: {exc}")
 
     async def _get_settings(self) -> dict[str, str]:
         """一次查询读取准入判断需要的设置。"""

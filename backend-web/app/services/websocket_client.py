@@ -245,7 +245,8 @@ class WebSocketServiceClient:
     async def solve_captcha(self, account_id: str, url: str, browser_timeout: int = 40,
                             call_type: str = "remote", call_user: str | None = None,
                             cookies: str = "", device_id: str = "",
-                            extended_queue_timeout: bool = False) -> dict:
+                            extended_queue_timeout: bool = False,
+                            precreated_log_id: int | None = None) -> dict:
         """调用 websocket 服务独立过滑块（模式B：仅凭 punish 链接求解）。
 
         注意：过滑块（含重试/看门狗）耗时可能达数十秒，远超共享 http_client 的 30s 超时，
@@ -261,6 +262,7 @@ class WebSocketServiceClient:
             device_id: 可选设备 ID，配合 cookies 重新请求 token 接口使用
             extended_queue_timeout: 是否为真人鼠标远程接口预留串行排队时间；默认关闭，
                 避免改变 login、聊天等现有调用的失败等待时间
+            precreated_log_id: backend-web 在 Redis 准入锁内预先创建的风控日志 ID
 
         Returns:
             websocket 返回的响应字典（success / data.engine / data.cookies）
@@ -268,6 +270,10 @@ class WebSocketServiceClient:
         import aiohttp
 
         endpoint = f"{self.base_url}/internal/captcha/solve"
+        request_not_sent_errors = (aiohttp.ClientConnectorError, aiohttp.InvalidURL)
+        connection_timeout_error = getattr(aiohttp, "ConnectionTimeoutError", None)
+        if connection_timeout_error is not None:
+            request_not_sent_errors += (connection_timeout_error,)
         total_timeout = (
             get_remote_solve_timeout(browser_timeout)
             if extended_queue_timeout
@@ -275,7 +281,7 @@ class WebSocketServiceClient:
         )
         try:
             async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=total_timeout)
+                timeout=aiohttp.ClientTimeout(total=total_timeout, connect=10)
             ) as session:
                 async with session.post(endpoint, json={
                     "account_id": account_id,
@@ -285,8 +291,16 @@ class WebSocketServiceClient:
                     "call_user": call_user,
                     "cookies": cookies or "",
                     "device_id": device_id or "",
+                    "risk_log_id": precreated_log_id,
                 }) as resp:
                     return await resp.json(content_type=None)
+        except request_not_sent_errors as e:
+            logger.error(f"无法连接过滑块服务: account_id={account_id}, 错误: {e}")
+            return {
+                "success": False,
+                "message": f"无法连接过滑块服务: {str(e)}",
+                "_request_not_sent": True,
+            }
         except asyncio.TimeoutError:
             logger.error(
                 f"过滑块服务等待超时: account_id={account_id}, "
@@ -295,10 +309,15 @@ class WebSocketServiceClient:
             return {
                 "success": False,
                 "message": f"过滑块服务等待超时（{total_timeout:.0f}秒）",
+                "_request_status_unknown": True,
             }
         except Exception as e:
             logger.error(f"过滑块失败: account_id={account_id}, 错误: {e}")
-            return {"success": False, "message": f"过滑块失败: {str(e)}"}
+            return {
+                "success": False,
+                "message": f"过滑块失败: {str(e)}",
+                "_request_status_unknown": True,
+            }
 
 
 # 全局客户端实例

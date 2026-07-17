@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import random
+import re
 import string
 import time
 from typing import Optional
@@ -24,10 +25,13 @@ from app.services.remote_captcha_admission_service import (
     REMOTE_COOLDOWN_SECONDS_KEY,
     REMOTE_PROCESSING_MAX_KEY,
     RemoteCaptchaAdmissionService,
+    RemoteCaptchaAdmissionRedisUnavailable,
     sanitize_nonnegative_int,
 )
+from app.services.risk_control_log_service import RiskControlLogService
 from app.services.system_setting_service import SystemSettingService
 from app.services.websocket_client import websocket_client
+from common.db.session import async_session_maker
 from common.models.system_setting import SystemSetting
 from common.models.user import User
 from common.schemas.common import ApiResponse
@@ -533,17 +537,38 @@ async def slider_solve(
     if not url:
         return ApiResponse(success=False, message="punish 链接不能为空")
 
+    raw_account_id = (request.account_id or "external").strip()
+    safe_account_id = re.sub(r"[^A-Za-z0-9_-]", "", raw_account_id)[:64] or "external"
+    timeout = max(20, min(int(request.browser_timeout or 40), 120))
+    precreated_log_id = None
     try:
-        admission_allowed, rejection_message = await RemoteCaptchaAdmissionService(db).check_admission()
+        async with async_session_maker() as admission_db:
+            admission_service = RemoteCaptchaAdmissionService(admission_db)
+            try:
+                (
+                    admission_allowed,
+                    rejection_message,
+                    precreated_log_id,
+                ) = await admission_service.check_admission_with_redis_log(
+                    account_identifier=safe_account_id,
+                    url=url,
+                    call_user=user.username,
+                )
+            except RemoteCaptchaAdmissionRedisUnavailable as exc:
+                logger.warning(
+                    f"Redis远程过滑块准入不可用，降级为原有数据库计数逻辑: {exc}"
+                )
+                admission_allowed, rejection_message = await (
+                    RemoteCaptchaAdmissionService(db).check_admission()
+                )
     except Exception as exc:
         logger.error(f"检查远程过滑块调用容量失败: {exc}")
         return ApiResponse(success=False, message="检查远程过滑块调用容量失败，请稍后重试")
     if not admission_allowed:
         return ApiResponse(success=False, message=rejection_message or "远程过滑块调用已拒绝")
 
-    timeout = max(20, min(int(request.browser_timeout or 40), 120))
     result_data = await websocket_client.solve_captcha(
-        account_id=(request.account_id or "external"),
+        account_id=safe_account_id,
         url=url,
         browser_timeout=timeout,
         call_type="remote",
@@ -551,7 +576,38 @@ async def slider_solve(
         cookies=(request.cookies or "").strip(),
         device_id=(request.device_id or "").strip(),
         extended_queue_timeout=True,
+        precreated_log_id=precreated_log_id,
     )
+
+    request_not_sent = bool(
+        isinstance(result_data, dict) and result_data.pop("_request_not_sent", False)
+    )
+    request_status_unknown = bool(
+        isinstance(result_data, dict)
+        and result_data.pop("_request_status_unknown", False)
+    )
+    acknowledged_log_id = (
+        result_data.pop("_risk_log_id", None) if isinstance(result_data, dict) else None
+    )
+    log_not_acknowledged = (
+        precreated_log_id is not None
+        and not request_not_sent
+        and not request_status_unknown
+        and acknowledged_log_id != precreated_log_id
+    )
+    if precreated_log_id and (request_not_sent or log_not_acknowledged):
+        if request_not_sent:
+            cleanup_message = result_data.get("message") or "websocket 服务连接失败"
+        else:
+            cleanup_message = "websocket 服务未确认预建风控日志，可能仍在运行旧版本"
+        try:
+            async with async_session_maker() as log_db:
+                await RiskControlLogService(log_db).mark_remote_slider_log_unclaimed(
+                    log_id=precreated_log_id,
+                    error_message=cleanup_message,
+                )
+        except Exception as exc:
+            logger.error(f"释放未被 websocket 接管的远程过滑块风控日志失败: {exc}")
 
     if isinstance(result_data, dict) and result_data.get("success"):
         return ApiResponse(success=True, message="过滑块成功", data=result_data.get("data"))
