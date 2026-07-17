@@ -288,28 +288,37 @@ async def delete_user(
 @router.delete("/risk-control-logs", response_model=ApiResponse)
 async def clear_risk_logs(
     cookie_id: str | None = None,
+    processing_status: str | None = Query(default=None, description="可选：仅清空指定处理状态的日志，如 processing"),
     _: User = Depends(deps.get_current_admin_user),
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> ApiResponse:
     """批量清空风控日志
-    
+
     Args:
         cookie_id: 可选，指定账号ID则只清空该账号的日志，否则清空所有
+        processing_status: 可选，指定处理状态（success/failed/processing/cancelled）则只清空该状态的日志
     """
     from sqlalchemy import delete
-    
+
+    # 状态白名单校验，防止误传导致清空范围不符合预期
+    valid_statuses = {"success", "failed", "processing", "cancelled"}
+    if processing_status and processing_status not in valid_statuses:
+        return ApiResponse(success=False, message=f"无效的处理状态: {processing_status}")
+
     try:
         stmt = delete(XYRiskControlLog)
         if cookie_id:
             stmt = stmt.where(XYRiskControlLog.account_identifier == cookie_id)
-        
+        if processing_status:
+            stmt = stmt.where(XYRiskControlLog.processing_status == processing_status)
+
         result = await session.execute(stmt)
         await session.commit()
-        
+
         deleted_count = result.rowcount
-        if cookie_id:
-            return ApiResponse(success=True, message=f"已清空账号 {cookie_id} 的 {deleted_count} 条风控日志")
-        return ApiResponse(success=True, message=f"已清空 {deleted_count} 条风控日志")
+        status_label = {"processing": "处理中", "success": "成功", "failed": "失败", "cancelled": "已取消"}.get(processing_status or "", "")
+        scope = f"账号 {cookie_id} 的" if cookie_id else ""
+        return ApiResponse(success=True, message=f"已清空{scope} {deleted_count} 条{status_label}风控日志")
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"清空风控日志失败: {str(e)}")

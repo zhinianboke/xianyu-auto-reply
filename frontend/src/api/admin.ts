@@ -278,6 +278,11 @@ export const clearRiskLogs = async (cookieId?: string): Promise<ApiResponse> => 
   return del(`${ADMIN_PREFIX}/risk-control-logs${query}`)
 }
 
+// 清空处理中的风控日志（仅删除 processing_status=processing 的记录）
+export const clearProcessingRiskLogs = async (): Promise<ApiResponse> => {
+  return del(`${ADMIN_PREFIX}/risk-control-logs?processing_status=processing`)
+}
+
 // 当日风控成功率（含总体 / 本机 / 远程三个维度）
 export interface RiskTodaySuccessRate {
   date: string

@@ -11,7 +11,7 @@
  */
 import { useState, useEffect } from 'react'
 import { ShieldAlert, RefreshCw, Trash2, ChevronLeft, ChevronRight, Loader2, Calendar, Info, TrendingUp } from 'lucide-react'
-import { getRiskLogs, clearRiskLogs, testRemoteSliderSolve, getRemoteCaptchaConfig, saveRemoteCaptchaConfig, getRiskTodaySuccessRate, getLocalSliderConfig, updateLocalSliderConfig, type RiskLog, type RiskTodaySuccessRate } from '@/api/admin'
+import { getRiskLogs, clearRiskLogs, clearProcessingRiskLogs, testRemoteSliderSolve, getRemoteCaptchaConfig, saveRemoteCaptchaConfig, getRiskTodaySuccessRate, getLocalSliderConfig, updateLocalSliderConfig, type RiskLog, type RiskTodaySuccessRate } from '@/api/admin'
 import { getAccountDetails } from '@/api/accounts'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
@@ -52,6 +52,10 @@ export function RiskLogs() {
   // 清空确认弹窗状态
   const [clearConfirm, setClearConfirm] = useState(false)
   const [clearing, setClearing] = useState(false)
+
+  // 清空处理中日志确认弹窗状态
+  const [clearProcessingConfirm, setClearProcessingConfirm] = useState(false)
+  const [clearingProcessing, setClearingProcessing] = useState(false)
 
   // 远程过滑块全局配置（仅管理员可见，存储于 system_settings）
   const [remoteUrl, setRemoteUrl] = useState('')
@@ -312,6 +316,26 @@ export function RiskLogs() {
     }
   }
 
+  // 清空所有处理中的风控日志（含卡死未收尾的记录，释放远程处理中容量限制）
+  const handleClearProcessing = async () => {
+    setClearingProcessing(true)
+    try {
+      const res = await clearProcessingRiskLogs()
+      if (res.success) {
+        addToast({ type: 'success', message: res.message || '处理中日志已清空' })
+        setClearProcessingConfirm(false)
+        loadLogs(1, pageSize)
+        loadTodayRate()
+      } else {
+        addToast({ type: 'error', message: res.message || '清空处理中日志失败' })
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '清空处理中日志失败') })
+    } finally {
+      setClearingProcessing(false)
+    }
+  }
+
   // 分页计算
   const totalPages = Math.ceil(total / pageSize)
   const startIndex = (currentPage - 1) * pageSize + 1
@@ -473,7 +497,7 @@ export function RiskLogs() {
                 />
               </div>
               <p className="flex-1 min-w-[240px] text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                默认最多允许 20 条处理中滑块日志，统计包含本机和远程调用；达到上限后拒绝远程请求，并默认冷却 600 秒。填写 0 可关闭对应限制。
+                默认最多允许 20 条处理中滑块日志，仅统计远程调用产生的处理中记录（不含本机）；达到上限后拒绝远程请求，并默认冷却 600 秒。填写 0 可关闭对应限制。
               </p>
             </div>
           </div>
@@ -521,10 +545,16 @@ export function RiskLogs() {
         </div>
         <div className="flex gap-3">
           {user?.is_admin ? (
-            <button onClick={() => setClearConfirm(true)} className="btn-ios-danger ">
-              <Trash2 className="w-4 h-4" />
-              清空日志
-            </button>
+            <>
+              <button onClick={() => setClearProcessingConfirm(true)} className="btn-ios-secondary ">
+                <Trash2 className="w-4 h-4" />
+                清空处理中日志
+              </button>
+              <button onClick={() => setClearConfirm(true)} className="btn-ios-danger ">
+                <Trash2 className="w-4 h-4" />
+                清空日志
+              </button>
+            </>
           ) : null}
           <button onClick={() => { loadLogs(); loadTodayRate() }} disabled={loading} className="btn-ios-secondary ">
             {loading ? (
@@ -851,6 +881,21 @@ export function RiskLogs() {
           loading={clearing}
           onConfirm={handleClear}
           onCancel={() => setClearConfirm(false)}
+        />
+      ) : null}
+
+      {/* 清空处理中日志确认弹窗 */}
+      {user?.is_admin ? (
+        <ConfirmModal
+          isOpen={clearProcessingConfirm}
+          title="清空处理中日志确认"
+          message="确定要清空所有处理中状态的风控日志吗？将删除数据库中全部处理中记录（含卡死未收尾的），此操作不可恢复！"
+          confirmText="清空"
+          cancelText="取消"
+          type="danger"
+          loading={clearingProcessing}
+          onConfirm={handleClearProcessing}
+          onCancel={() => setClearProcessingConfirm(false)}
         />
       ) : null}
     </div>
