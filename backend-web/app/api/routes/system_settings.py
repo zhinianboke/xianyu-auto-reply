@@ -27,6 +27,8 @@ router = APIRouter(tags=["system_settings"])
 
 # 日志保留天数的设置键，与前端保持一致
 LOG_RETENTION_KEY = "log.retention_days"
+PASSWORD_LOGIN_MODE_KEY = "password_login.mode"
+PASSWORD_LOGIN_MODES = {"auto", "protocol", "browser"}
 
 NON_ADMIN_ALLOWED_KEYS = {
     "disclaimer.title",
@@ -204,18 +206,27 @@ async def update_system_setting(
     if key in SENSITIVE_KEYS:
         return ApiResponse(success=False, message="该设置需要使用专用接口修改")
 
+    setting_value = payload.value
+    if key == PASSWORD_LOGIN_MODE_KEY:
+        setting_value = str(payload.value or "").strip().lower()
+        if setting_value not in PASSWORD_LOGIN_MODES:
+            return ApiResponse(
+                success=False,
+                message="账号密码登录方式无效，请选择自动选择、协议登录或浏览器登录",
+            )
+
     retention_days: int | None = None
     if key == LOG_RETENTION_KEY:
-        retention_days, error_message = _parse_log_retention_days(payload.value)
+        retention_days, error_message = _parse_log_retention_days(setting_value)
         if error_message:
             return ApiResponse(success=False, message=error_message)
 
     # 代理设置跨键校验（开启代理必须已配置 URL；代理启用中不允许清空 URL）
-    proxy_error = await _validate_proxy_setting(key, payload.value, service)
+    proxy_error = await _validate_proxy_setting(key, setting_value, service)
     if proxy_error:
         return ApiResponse(success=False, message=proxy_error)
 
-    await service.set_setting(key, payload.value, payload.description)
+    await service.set_setting(key, setting_value, payload.description)
 
     if retention_days is None:
         return ApiResponse(success=True, message="系统设置已更新")

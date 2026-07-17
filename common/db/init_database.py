@@ -150,6 +150,11 @@ class DatabaseInitializer:
             "日志保留天数（所有模块生效，修改后重启服务生效）",
         ),
         (
+            "password_login.mode",
+            "auto",
+            "账号密码登录模式：auto/protocol/browser",
+        ),
+        (
             "captcha.real_mouse_weight_local",
             "1",
             "real_mouse过滑块本地排队权重",
