@@ -6,8 +6,9 @@
  * 2. 支持按账号筛选
  * 3. 支持按时间范围筛选
  * 4. 支持按处理状态筛选
- * 5. 支持分页
- * 6. 支持清空日志
+ * 5. 支持按调用类型、调用用户筛选
+ * 6. 支持分页
+ * 7. 支持清空日志
  */
 import { useState, useEffect } from 'react'
 import { ShieldAlert, RefreshCw, Trash2, ChevronLeft, ChevronRight, Loader2, Calendar, Info, TrendingUp } from 'lucide-react'
@@ -40,6 +41,9 @@ export function RiskLogs() {
 
   // 调用类型筛选（''-全部 / local-本机 / remote-远程）
   const [selectedCallType, setSelectedCallType] = useState('')
+
+  // 调用用户筛选（模糊匹配，仅远程调用记录该字段）
+  const [callUserKeyword, setCallUserKeyword] = useState('')
 
   // 分页状态
   const [currentPage, setCurrentPage] = useState(1)
@@ -95,6 +99,7 @@ export function RiskLogs() {
         end_date: endDate || undefined,
         processing_status: selectedStatus || undefined,
         call_type: selectedCallType || undefined,
+        call_user: callUserKeyword.trim() || undefined,
       })
       if (result.success) {
         setLogs(result.data || [])
@@ -614,6 +619,17 @@ export function RiskLogs() {
                 <option value="local">本机</option>
                 <option value="remote">远程</option>
               </select>
+            </div>
+            <div className="input-group">
+              <label className="input-label">调用用户</label>
+              <input
+                type="text"
+                value={callUserKeyword}
+                onChange={(e) => setCallUserKeyword(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleSearch() }}
+                placeholder="模糊匹配，仅远程调用"
+                className="input-ios"
+              />
             </div>
             <div className="input-group min-w-[200px]">
               <label className="input-label">筛选账号</label>

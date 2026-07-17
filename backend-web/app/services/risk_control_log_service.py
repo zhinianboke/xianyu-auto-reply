@@ -106,12 +106,13 @@ class RiskControlLogService:
         end_date: Optional[str] = None,
         processing_status: Optional[str] = None,
         call_type: Optional[str] = None,
+        call_user: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[list[dict], int]:
         """
         查询风控日志列表
-        
+
         Args:
             owner_id: 所有者ID筛选
             account_identifier: 账号ID筛选
@@ -119,6 +120,7 @@ class RiskControlLogService:
             end_date: 结束日期（格式：YYYY-MM-DD）
             processing_status: 处理状态筛选（success/failed/processing）
             call_type: 调用类型筛选（local-本机/remote-远程）
+            call_user: 调用用户筛选（模糊匹配，仅远程调用记录该字段）
             limit: 每页数量
             offset: 偏移量
             
@@ -158,6 +160,13 @@ class RiskControlLogService:
         # 调用类型筛选（local-本机/remote-远程）
         if call_type:
             filters.append(XYRiskControlLog.call_type == call_type)
+
+        # 调用用户筛选（模糊匹配，autoescape 转义 %/_ 通配符；
+        # 仅远程调用记录该字段，本机记录为 NULL 自然不命中）
+        if call_user and call_user.strip():
+            filters.append(
+                XYRiskControlLog.call_user.contains(call_user.strip(), autoescape=True)
+            )
 
         logs, total = await execute_paginated_with_filters(
             self.session,

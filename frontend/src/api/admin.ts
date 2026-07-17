@@ -205,7 +205,7 @@ export interface RiskLog {
 }
 
 // 获取风控日志
-export const getRiskLogs = async (params?: { 
+export const getRiskLogs = async (params?: {
   page?: number
   pageSize?: number
   cookie_id?: string
@@ -213,6 +213,7 @@ export const getRiskLogs = async (params?: {
   end_date?: string
   processing_status?: string
   call_type?: string
+  call_user?: string
 }): Promise<{ success: boolean; data?: RiskLog[]; total?: number; message?: string }> => {
   const query = new URLSearchParams()
   const page = params?.page || 1
@@ -225,6 +226,7 @@ export const getRiskLogs = async (params?: {
   if (params?.end_date) query.set('end_date', params.end_date)
   if (params?.processing_status) query.set('processing_status', params.processing_status)
   if (params?.call_type) query.set('call_type', params.call_type)
+  if (params?.call_user) query.set('call_user', params.call_user)
   const result = await get<{ success: boolean; message?: string; data?: Array<{
     id: number
     cookie_id: string
