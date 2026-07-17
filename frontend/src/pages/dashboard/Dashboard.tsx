@@ -405,7 +405,8 @@ export function Dashboard() {
                           transition={{ duration: 0.2 }}
                           className="overflow-hidden"
                         >
-                          <p className="p-3 text-sm text-slate-600 dark:text-slate-400 border-t border-slate-200 dark:border-slate-700">
+                          {/* whitespace-pre-wrap：保留广告管理里录入的换行（与弹窗公告一致）；break-words：长链接不撑破容器 */}
+                          <p className="p-3 text-sm text-slate-600 dark:text-slate-400 border-t border-slate-200 dark:border-slate-700 whitespace-pre-wrap break-words">
                             {ad.content}
                           </p>
                         </motion.div>
