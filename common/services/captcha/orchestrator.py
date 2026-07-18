@@ -16,6 +16,7 @@ from loguru import logger
 
 from common.services.captcha.slider_stealth import run_slider_verification, CAPTCHA_NOT_REQUIRED, URL_EXPIRED
 from common.services.captcha.remote_timeout import get_remote_solve_timeout
+from common.services.captcha.slider_mode import is_real_mouse_slider_mode
 from common.services.captcha.drissionpage_slider import (
     run_drissionpage_verification,
     DRISSIONPAGE_AVAILABLE,
@@ -57,20 +58,8 @@ def _load_fallback_config() -> Tuple[bool, bool, int]:
 
 
 def _real_mouse_enabled() -> bool:
-    """读取「真实鼠标模式」开关（默认 False；Docker/无头默认关闭）。"""
-    settings = None
-    try:
-        from app.core.config import get_settings
-        settings = get_settings()
-    except Exception:
-        try:
-            from common.core.config import get_settings
-            settings = get_settings()
-        except Exception:
-            settings = None
-    if settings is None:
-        return False
-    return bool(getattr(settings, "captcha_real_mouse_enabled", False))
+    """读取系统设置中的真实鼠标滑动方式。"""
+    return is_real_mouse_slider_mode()
 
 
 def is_real_mouse_enabled() -> bool:
@@ -156,6 +145,7 @@ def run_slider_verification_with_fallback(
     url_provider: Optional[Callable[[], Optional[str]]] = None,
     remote_config: Optional[dict] = None,
     weight_class: str = "local",
+    slider_mode: Optional[str] = None,
 ) -> Tuple[bool, Optional[Dict[str, str]], Optional[str]]:
     """主引擎 + DrissionPage 兜底的滑块验证编排。
 
@@ -172,6 +162,7 @@ def run_slider_verification_with_fallback(
             供其在链接过期时重取新链接继续处理。
         weight_class: 排队来源类别（"local"=本地Token刷新 / "remote"=远程过滑块接口），
             仅 real_mouse 引擎排队时按权重放行使用；默认 "local"。
+        slider_mode: 本次任务在入队前读取的滑动方式快照；未传时读取当前进程缓存。
 
     Returns:
         (是否成功, cookies 字典 | None, 通过引擎 | None)
@@ -231,12 +222,12 @@ def run_slider_verification_with_fallback(
                 return False, None, f"remote:{reason}"
             # status == 'fallback' → 落到下面的本机逻辑
 
-    # 0. 真实鼠标模式（可选，环境变量 CAPTCHA_REAL_MOUSE=true 开启）：
+    # 0. 真实鼠标模式（在系统设置中选择）：
     #    用物理光标回放真人轨迹，成功率高但会占用桌面鼠标，仅限有桌面的 Windows。
     #    一旦开启且引擎可用：真实鼠标即为唯一引擎——成功返回成功；失败也【直接返回失败、不回退】
     #    原 CDP/DrissionPage 逻辑（避免低效且会被风控识破的 CDP 滑动；下次重试仍走真实鼠标）。
     #    仅当“开启了但引擎不可用”（非 Windows / 未装 pyautogui，属误配置）时，才回退原逻辑兜底。
-    if _real_mouse_enabled():
+    if is_real_mouse_slider_mode(slider_mode):
         real_mouse_available = False
         run_real_mouse_verification = None
         try:
@@ -273,7 +264,7 @@ def run_slider_verification_with_fallback(
             return False, None, None
         else:
             logger.error(
-                f"【{user_id}】CAPTCHA_REAL_MOUSE 已开启但引擎不可用"
+                f"【{user_id}】已选择真实鼠标滑动但引擎不可用"
                 f"（需 Windows 桌面 + pyautogui），本次回退原有滑块逻辑"
             )
 

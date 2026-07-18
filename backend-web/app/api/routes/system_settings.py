@@ -28,7 +28,9 @@ router = APIRouter(tags=["system_settings"])
 # 日志保留天数的设置键，与前端保持一致
 LOG_RETENTION_KEY = "log.retention_days"
 PASSWORD_LOGIN_MODE_KEY = "password_login.mode"
-PASSWORD_LOGIN_MODES = {"auto", "protocol", "browser"}
+PASSWORD_LOGIN_MODES = {"protocol", "browser"}
+CAPTCHA_SLIDER_MODE_KEY = "captcha.slider_mode"
+CAPTCHA_SLIDER_MODES = {"browser", "real_mouse"}
 
 NON_ADMIN_ALLOWED_KEYS = {
     "disclaimer.title",
@@ -209,10 +211,19 @@ async def update_system_setting(
     setting_value = payload.value
     if key == PASSWORD_LOGIN_MODE_KEY:
         setting_value = str(payload.value or "").strip().lower()
+        if setting_value == "auto":
+            setting_value = "browser"
         if setting_value not in PASSWORD_LOGIN_MODES:
             return ApiResponse(
                 success=False,
-                message="账号密码登录方式无效，请选择自动选择、协议登录或浏览器登录",
+                message="账号密码登录方式无效，请选择协议登录或浏览器登录",
+            )
+    if key == CAPTCHA_SLIDER_MODE_KEY:
+        setting_value = str(payload.value or "").strip().lower()
+        if setting_value not in CAPTCHA_SLIDER_MODES:
+            return ApiResponse(
+                success=False,
+                message="滑块滑动方式无效，请选择浏览器自动滑动或真实鼠标滑动",
             )
 
     retention_days: int | None = None

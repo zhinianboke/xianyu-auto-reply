@@ -151,8 +151,8 @@ class DatabaseInitializer:
         ),
         (
             "password_login.mode",
-            "auto",
-            "账号密码登录模式：auto/protocol/browser",
+            "browser",
+            "账号密码登录模式：protocol/browser",
         ),
         (
             "captcha.real_mouse_weight_local",
@@ -173,6 +173,11 @@ class DatabaseInitializer:
             "captcha.local_slider_disabled",
             "false",
             "本机滑块是否停止处理并仅使用Token缓存",
+        ),
+        (
+            "captcha.slider_mode",
+            "browser",
+            "滑块滑动方式：browser/real_mouse",
         ),
         (
             "captcha.remote_processing_max",

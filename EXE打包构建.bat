@@ -107,6 +107,8 @@ python -m nuitka ^
     --include-package=email ^
     --include-package=playwright ^
     --include-package-data=playwright ^
+    --include-package=patchright ^
+    --include-package-data=patchright ^
     --include-package=uvicorn ^
     --include-package=fastapi ^
     --include-package=sqlalchemy ^
@@ -220,6 +222,11 @@ echo [INFO] Installing Chromium into package dir...
 python -m playwright install chromium
 if errorlevel 1 (
     echo [ERROR] Failed to bundle Chromium browser.
+    goto :end
+)
+python -m patchright install chromium
+if errorlevel 1 (
+    echo [ERROR] Failed to bundle Patchright Chromium browser.
     goto :end
 )
 

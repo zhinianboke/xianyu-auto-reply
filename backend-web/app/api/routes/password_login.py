@@ -9,8 +9,7 @@
 模式选择（password_login.mode）：
 - browser：强制浏览器（代理 websocket，现状不变）
 - protocol：强制协议（不做运行期回退）
-- auto（默认）：具备协议能力（真实鼠标 或 远程且支持登录滑块）走协议，否则浏览器；
-  协议运行期滑块未通过时继续重试协议滑块，不回退浏览器登录
+- 历史 auto、缺失值或非法值：按 browser 处理，不再读取环境变量决定登录方式
 """
 from __future__ import annotations
 
@@ -48,42 +47,24 @@ class PasswordLoginRequest(BaseModel):
 # ==================== 模式判定 ====================
 
 async def _decide_mode(db: AsyncSession) -> bool:
-    """决定走协议还是浏览器。
+    """严格按系统设置决定走协议还是浏览器。
 
     Returns:
         是否使用协议登录
     """
     rows = (await db.execute(
         select(SystemSetting).where(
-            SystemSetting.key.in_([
-                "password_login.mode",
-                "captcha.remote_service_url",
-                "captcha.remote_secret_key",
-            ])
+            SystemSetting.key == "password_login.mode"
         )
     )).scalars().all()
     m = {r.key: (r.value or "").strip() for r in rows}
 
-    mode = (m.get("password_login.mode") or "auto").lower()
-    if mode == "browser":
-        return False
+    mode = (m.get("password_login.mode") or "browser").lower()
     if mode == "protocol":
-        # 强制协议：不做运行期回退（与"强制"语义一致）
         return True
-
-    # auto：能力探测——本机真实鼠标可用 或 配了远程过滑块
-    real_mouse = _real_mouse_enabled()
-    remote_ok = bool(
-        m.get("captcha.remote_service_url") and m.get("captcha.remote_secret_key")
-    )
-    return real_mouse or remote_ok
-
-
-def _real_mouse_enabled() -> bool:
-    try:
-        return bool(getattr(get_settings(), "captcha_real_mouse_enabled", False))
-    except Exception:
-        return False
+    if mode != "browser":
+        logger.warning(f"账号密码登录方式 {mode or '空'} 无效，按浏览器登录处理")
+    return False
 
 
 # ==================== 路由 ====================

@@ -801,18 +801,36 @@ class GoofishImClient:
             logger.error(f"【{self.account_id}】过滑块失败: {msg}")
             return False
 
-        new_cookies = (resp.get("data") or {}).get("cookies") or {}
-        if not new_cookies:
+        response_data = resp.get("data")
+        if not isinstance(response_data, dict):
+            response_data = {}
+        raw_cookies = response_data.get("cookies")
+        new_cookies = raw_cookies if isinstance(raw_cookies, dict) else {}
+        token_already_available = bool(response_data.get("token_already_available"))
+        if not new_cookies and not token_already_available:
             logger.error(f"【{self.account_id}】过滑块返回成功但未获取到Cookie，判定为失败")
             return False
 
-        # 合并过滑块返回的Cookie（主要为 x5sec 等风控字段）并写回内存与数据库
-        self.cookies.update(new_cookies)
-        self.cookies_str = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
-        await update_account_cookies_in_db(self.account_id, self.cookies_str)
-        logger.info(
-            f"【{self.account_id}】过滑块成功，已合并 {len(new_cookies)} 个Cookie并更新数据库"
-        )
+        if new_cookies:
+            # 合并过滑块返回的Cookie（主要为 x5sec 等风控字段）并写回内存与数据库
+            merged_cookies = {**self.cookies, **new_cookies}
+            merged_cookies_str = "; ".join(
+                f"{key}={value}" for key, value in merged_cookies.items()
+            )
+            saved = await update_account_cookies_in_db(
+                self.account_id,
+                merged_cookies_str,
+            )
+            if not saved:
+                logger.error(f"【{self.account_id}】过滑块Cookie合并写回数据库失败")
+                return False
+            self.cookies = merged_cookies
+            self.cookies_str = merged_cookies_str
+            logger.info(
+                f"【{self.account_id}】过滑块成功，已合并 {len(new_cookies)} 个Cookie并更新数据库"
+            )
+        if token_already_available:
+            logger.info(f"【{self.account_id}】重取验证链接时Token已可用，准备重试Token接口")
         return True
 
     async def _register(self):

@@ -23,8 +23,12 @@ from common.models.system_setting import SystemSetting
 from common.models.token_cache import TokenCache
 from common.services.im_token_api import extract_im_access_token, request_im_token
 from common.services.captcha.concurrency import run_browser_task
-from common.services.captcha.orchestrator import is_real_mouse_enabled
+from common.services.captcha.slider_mode import (
+    SLIDER_MODE_REAL_MOUSE,
+    refresh_slider_mode_from_database,
+)
 from common.services.captcha.token_refetch import request_fresh_captcha_url
+from common.services.captcha.token_response import get_token_captcha_reason
 from common.services.captcha.weighted_runner import real_mouse_weighted_runner
 from common.utils.cookie_refresh import get_account_by_identity, update_account_cookies_in_db
 from common.utils.xianyu_utils import trans_cookies
@@ -397,46 +401,10 @@ class CookieTokenManager:
     def need_captcha_verification(self, res_json: dict) -> bool:
         """检查响应是否需要滑块验证"""
         try:
-            if not isinstance(res_json, dict):
-                return False
-
-            # 记录res_json内容到日志
-            res_json_str = json.dumps(res_json, ensure_ascii=False, separators=(',', ':'))
-            logger.debug(f"【{self.cookie_id}】检查滑块验证响应: {res_json_str[:500]}")
-
-            # 检查返回的错误信息
-            ret_value = res_json.get('ret', [])
-            if not ret_value:
-                return False
-
-            # 检查是否包含需要验证的关键词
-            captcha_keywords = [
-                'FAIL_SYS_USER_VALIDATE',  # 用户验证失败
-                'RGV587_ERROR',            # 风控错误
-                '哎哟喂,被挤爆啦',          # 被挤爆了
-                '哎哟喂，被挤爆啦',         # 被挤爆了（中文逗号）
-                '挤爆了',                  # 挤爆了
-                '请稍后重试',              # 请稍后重试
-                'punish?x5secdata',        # 惩罚页面
-                'captcha',                 # 验证码
-            ]
-
-            error_msg = str(ret_value[0]) if ret_value else ''
-
-            # 检查错误信息是否包含需要验证的关键词
-            for keyword in captcha_keywords:
-                if keyword in error_msg:
-                    logger.info(f"【{self.cookie_id}】检测到需要滑块验证的关键词: {keyword}")
-                    return True
-
-            # 检查data字段中是否包含验证URL
-            data = res_json.get('data', {})
-            if isinstance(data, dict) and 'url' in data:
-                url = data.get('url', '')
-                if 'punish' in url or 'captcha' in url or 'validate' in url:
-                    logger.info(f"【{self.cookie_id}】检测到验证URL: {url}")
-                    return True
-
+            reason = get_token_captcha_reason(res_json)
+            if reason:
+                logger.info(f"【{self.cookie_id}】检测到需要滑块验证: {reason}")
+                return True
             return False
 
         except Exception as e:
@@ -598,18 +566,24 @@ class CookieTokenManager:
                     f"{self.cookie_id}", verification_url, True, False, 20,
                     self.cookies_str, self._request_captcha_url_sync, remote_config,
                 )
-                if remote_config is None and is_real_mouse_enabled():
+                selected_slider_mode = await refresh_slider_mode_from_database()
+                if (
+                    remote_config is None
+                    and selected_slider_mode == SLIDER_MODE_REAL_MOUSE
+                ):
                     # 本机真实鼠标任务先进入前置本地队列，再提交给原浏览器执行器。
                     success, cookies, captcha_engine = await real_mouse_weighted_runner.submit(
                         "local",
                         run_slider_verification_with_fallback,
                         *slider_args,
                         weight_class="local",
+                        slider_mode=selected_slider_mode,
                     )
                 else:
                     success, cookies, captcha_engine = await run_browser_task(
                         run_slider_verification_with_fallback,
                         *slider_args,
+                        slider_mode=selected_slider_mode,
                     )
 
                 # 重取链接时发现 token 已可用（风控解除，无需滑块）：直接采用，跳过滑块结果处理。

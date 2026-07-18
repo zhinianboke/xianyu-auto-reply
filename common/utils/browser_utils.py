@@ -13,6 +13,8 @@ Playwright 浏览器工具模块
 """
 from __future__ import annotations
 
+import importlib
+import json
 import os
 import sys
 from pathlib import Path
@@ -133,9 +135,32 @@ def ensure_playwright_browser_path() -> Optional[Path]:
     return browser_dir
 
 
-def get_chromium_executable_path() -> Optional[str]:
+def _get_chromium_revision(browser_package: str) -> str | None:
+    """读取浏览器自动化包要求的 Chromium revision。"""
+    try:
+        package = importlib.import_module(browser_package)
+        package_dir = Path(package.__file__).parent
+        browsers_file = package_dir / "driver" / "package" / "browsers.json"
+        browsers = json.loads(browsers_file.read_text(encoding="utf-8"))["browsers"]
+        for browser in browsers:
+            if browser.get("name") == "chromium":
+                return str(browser.get("revision") or "").strip() or None
+    except Exception as exc:
+        logger.warning(f"读取 {browser_package} Chromium revision 失败: {exc}")
+    return None
+
+
+def get_chromium_executable_path(
+    browser_package: str = "playwright",
+    *,
+    strict_revision: bool = False,
+) -> Optional[str]:
     """
-    定位 Chromium 可执行文件路径
+    定位指定自动化包对应的 Chromium 可执行文件路径
+
+    Args:
+        browser_package: ``playwright`` 或 ``patchright``，用于匹配各自要求的 revision。
+        strict_revision: 是否只接受该包要求的精确 revision。
 
     Returns:
         Chromium 可执行文件的完整路径，未找到则返回 None
@@ -147,6 +172,20 @@ def get_chromium_executable_path() -> Optional[str]:
                 d for d in browser_dir.iterdir()
                 if d.is_dir() and "chromium" in d.name.lower()
             ]
+            revision = _get_chromium_revision(browser_package)
+            if strict_revision and not revision:
+                return None
+            if revision:
+                preferred_name = f"chromium-{revision}".lower()
+                preferred_dirs = [
+                    directory
+                    for directory in chromium_dirs
+                    if directory.name.lower() == preferred_name
+                ]
+                if preferred_dirs:
+                    chromium_dirs = preferred_dirs
+                elif strict_revision:
+                    return None
             for cdir in chromium_dirs:
                 candidates = [
                     cdir / "chrome-win64" / "chrome.exe",

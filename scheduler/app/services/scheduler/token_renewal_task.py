@@ -5,8 +5,9 @@ IM Token 续期定时任务。
 1. 查询启用账号中两个到期日均失效且当日无处理中风控日志的 Token 缓存
 2. 使用缓存表已有 Device ID 请求最新 Token
 3. 接口下发的 Set-Cookie（如新 _m_h5_tk）合并写回账号，令牌过期时重试一次
-4. 仅更新 Token 和续期到期日，不修改原到期日
-5. 支持调度循环和管理界面手动执行
+4. 命中“挤爆了”等风控响应时调用 WebSocket 滑块，合并新 Cookie 后重试获取 Token
+5. 仅更新 Token 和续期到期日，不修改原到期日
+6. 支持调度循环和管理界面手动执行
 """
 from __future__ import annotations
 
@@ -24,10 +25,16 @@ from common.db.session import async_session_maker
 from common.models.risk_control_log import XYRiskControlLog
 from common.models.token_cache import TokenCache
 from common.models.xy_account import XYAccount
+from common.services.account_cookie_service import merge_account_cookie_fields
+from common.services.captcha.token_response import (
+    extract_token_captcha_url,
+    is_token_captcha_required,
+)
+from common.services.captcha.websocket_solver import solve_captcha_via_websocket
 from common.services.im_token_api import extract_im_access_token, request_im_token
-from common.utils.cookie_refresh import update_account_cookies_in_db
 from common.utils.time_utils import get_beijing_now_naive, random_token_cache_expiry
-from common.utils.xianyu_utils import trans_cookies
+
+from app.core.config import get_settings
 
 
 TOKEN_RENEWAL_MAX_CONCURRENCY = 5
@@ -38,6 +45,7 @@ class TokenRenewalCandidate:
     """一次 Token 续期请求所需的数据库快照。"""
 
     cache_id: int
+    account_row_id: int
     user_id: str
     account_id: str
     cookies_str: str
@@ -100,6 +108,7 @@ class TokenRenewalTask:
                         TokenCache.id.label("cache_id"),
                         TokenCache.user_id,
                         TokenCache.device_id,
+                        XYAccount.id.label("account_row_id"),
                         XYAccount.account_id,
                         XYAccount.cookie.label("cookies_str"),
                     )
@@ -130,6 +139,7 @@ class TokenRenewalTask:
                 row.user_id,
                 TokenRenewalCandidate(
                     cache_id=row.cache_id,
+                    account_row_id=row.account_row_id,
                     user_id=row.user_id,
                     account_id=row.account_id,
                     cookies_str=row.cookies_str,
@@ -152,12 +162,22 @@ class TokenRenewalTask:
         ret_str = json.dumps(response_json.get("ret", []) or [], ensure_ascii=False)
         return "FAIL_SYS_TOKEN_EXOIRED" in ret_str or "FAIL_SYS_TOKEN_EXPIRED" in ret_str
 
+    @staticmethod
+    def _is_captcha_required_response(response_json: Any) -> bool:
+        """判断 Token 响应是否触发风控滑块。"""
+        return is_token_captcha_required(response_json)
+
+    @staticmethod
+    def _captcha_url(response_json: Any) -> str:
+        """提取 Token 响应中的滑块验证链接。"""
+        return extract_token_captcha_url(response_json)
+
     async def _merge_response_cookies(
         self,
         candidate: TokenRenewalCandidate,
         cookies_str: str,
         response_cookies: dict[str, str],
-    ) -> str:
+    ) -> str | None:
         """将接口下发的 Set-Cookie 合并进账号 Cookie 并写回数据库。
 
         Args:
@@ -165,25 +185,101 @@ class TokenRenewalTask:
             cookies_str: 本次请求使用的 Cookie 字符串。
             response_cookies: 接口响应下发的 Cookie 键值对。
         Returns:
-            合并后的 Cookie 字符串；未下发新 Cookie 时原样返回。
+            合并后的 Cookie 字符串；未下发新 Cookie 时原样返回；写入失败返回 ``None``。
         """
         if not response_cookies:
             return cookies_str
 
-        cookies = trans_cookies(cookies_str)
-        cookies.update(response_cookies)
-        merged_cookies_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
-        try:
-            saved = await update_account_cookies_in_db(candidate.account_id, merged_cookies_str)
-            if saved:
-                logger.info(f"【{self.task_name}】【{candidate.account_id}】已合并接口下发Cookie并写回数据库")
-            else:
-                logger.warning(f"【{self.task_name}】【{candidate.account_id}】接口下发Cookie写回数据库失败")
-        except Exception as exc:
-            logger.warning(
-                f"【{self.task_name}】【{candidate.account_id}】接口下发Cookie写回异常: "
-                f"{type(exc).__name__}: {exc}"
+        merged_cookies_str = await merge_account_cookie_fields(
+            candidate.account_row_id,
+            candidate.account_id,
+            response_cookies,
+        )
+        if merged_cookies_str:
+            logger.info(
+                f"【{self.task_name}】【{candidate.account_id}】已合并接口下发Cookie并写回数据库"
             )
+        else:
+            logger.error(
+                f"【{self.task_name}】【{candidate.account_id}】接口下发Cookie合并写回失败，"
+                "停止本次Token续期"
+            )
+        return merged_cookies_str
+
+    async def _solve_captcha_and_merge_cookies(
+        self,
+        candidate: TokenRenewalCandidate,
+        cookies_str: str,
+        response_json: Any,
+    ) -> str | None:
+        """调用 WebSocket 过滑块，并将成功返回的 Cookie 增量合并入库。"""
+        verification_url = self._captcha_url(response_json)
+        if not verification_url:
+            logger.error(
+                f"【{self.task_name}】【{candidate.account_id}】Token触发风控但未返回滑块链接"
+            )
+            return None
+
+        settings = get_settings()
+        result = await solve_captcha_via_websocket(
+            settings.websocket_service_url,
+            account_id=candidate.account_id,
+            url=verification_url,
+            cookies=cookies_str,
+            device_id=candidate.device_id,
+        )
+        if not result.get("success"):
+            logger.error(
+                f"【{self.task_name}】【{candidate.account_id}】滑块处理失败: "
+                f"{result.get('message') or '未知错误'}"
+            )
+            return None
+
+        result_data = result.get("data")
+        new_cookies = result_data.get("cookies") if isinstance(result_data, dict) else None
+        token_already_available = bool(
+            isinstance(result_data, dict) and result_data.get("token_already_available")
+        )
+        if token_already_available:
+            if isinstance(new_cookies, dict) and new_cookies:
+                merged_cookies_str = await merge_account_cookie_fields(
+                    candidate.account_row_id,
+                    candidate.account_id,
+                    new_cookies,
+                )
+                if not merged_cookies_str:
+                    logger.error(
+                        f"【{self.task_name}】【{candidate.account_id}】风控解除后的Cookie合并写回失败"
+                    )
+                    return None
+            else:
+                merged_cookies_str = cookies_str
+            logger.info(
+                f"【{self.task_name}】【{candidate.account_id}】重取验证链接时Token已可用，"
+                "准备直接重试Token接口"
+            )
+            return merged_cookies_str
+
+        if not isinstance(new_cookies, dict) or not new_cookies:
+            logger.error(
+                f"【{self.task_name}】【{candidate.account_id}】滑块成功但未返回新Cookie"
+            )
+            return None
+
+        merged_cookies_str = await merge_account_cookie_fields(
+            candidate.account_row_id,
+            candidate.account_id,
+            new_cookies,
+        )
+        if not merged_cookies_str:
+            logger.error(
+                f"【{self.task_name}】【{candidate.account_id}】滑块Cookie合并写回失败"
+            )
+            return None
+        logger.info(
+            f"【{self.task_name}】【{candidate.account_id}】滑块成功，已合并 "
+            f"{len(new_cookies)} 个Cookie，准备使用新Cookie重试Token"
+        )
         return merged_cookies_str
 
     async def _renew_candidate(self, candidate: TokenRenewalCandidate) -> bool:
@@ -195,7 +291,9 @@ class TokenRenewalTask:
         async with self._semaphore:
             cookies_str = candidate.cookies_str
             result = None
-            for attempt in range(2):
+            token_expired_retries = 0
+            captcha_retries = 0
+            while True:
                 try:
                     result = await request_im_token(cookies_str, candidate.device_id)
                 except asyncio.TimeoutError:
@@ -215,11 +313,42 @@ class TokenRenewalTask:
                     return False
 
                 # 无论成功失败，接口下发的 Cookie（如新 _m_h5_tk）都要合并写回
-                cookies_str = await self._merge_response_cookies(
+                merged_response_cookies = await self._merge_response_cookies(
                     candidate, cookies_str, result.response_cookies
                 )
+                if merged_response_cookies is None:
+                    return False
+                cookies_str = merged_response_cookies
 
-                if attempt == 0 and self._is_token_expired_response(result.response_json):
+                # 与 WebSocket refresh_token 保持一致：成功 Token 优先，其次滑块，
+                # 最后才处理单纯的 _m_h5_tk 令牌过期。
+                if extract_im_access_token(result.response_json):
+                    break
+
+                if self._is_captcha_required_response(result.response_json):
+                    if captcha_retries >= 1:
+                        logger.error(
+                            f"【{self.task_name}】【{candidate.account_id}】滑块重试已达上限"
+                        )
+                        break
+                    captcha_retries += 1
+                    merged_cookies_str = await self._solve_captcha_and_merge_cookies(
+                        candidate,
+                        cookies_str,
+                        result.response_json,
+                    )
+                    if not merged_cookies_str:
+                        return False
+                    cookies_str = merged_cookies_str
+                    continue
+
+                if self._is_token_expired_response(result.response_json):
+                    if token_expired_retries >= 1:
+                        logger.error(
+                            f"【{self.task_name}】【{candidate.account_id}】令牌过期重试已达上限"
+                        )
+                        break
+                    token_expired_retries += 1
                     logger.warning(
                         f"【{self.task_name}】【{candidate.account_id}】检测到令牌过期，"
                         "使用新Cookie重试一次"

@@ -1,5 +1,5 @@
 """
-真实鼠标滑块求解引擎（可选，开关：环境变量 CAPTCHA_REAL_MOUSE=true）
+真实鼠标滑块求解引擎（可选，通过系统设置选择）
 
 为什么需要它：
 - 闲鱼/阿里 baxia 风控能区分「CDP 注入的鼠标事件」与「真实硬件鼠标事件」。
@@ -794,7 +794,7 @@ class _RealMouseSolver:
                 if scene == "login" and cookies:
                     logger.info(f"【{self.pure_id}】登录滑块第{attempt}次回放通过")
                 # 仅当真正拿到 x5sec 才算成功；否则按失败返回
-                # （是否回退原引擎由编排层根据 CAPTCHA_REAL_MOUSE 决定，本引擎只负责返回结果）
+                # （是否回退原引擎由编排层根据系统设置决定，本引擎只负责返回结果）
                 return (True, cookies) if cookies else (False, None)
 
             # 本次未过：业务远程调用优先重新获取新鲜 URL，避免在已被风控拒绝的旧页面上
