@@ -287,6 +287,17 @@
     -webkit-overflow-scrolling: touch;
   }
 
+  /* 固定高度表格滚动容器：纵向、横向滚动均限制在表格内部 */
+  .table-scroll {
+    @apply flex-1 min-h-0 w-full overflow-auto relative;
+    max-height: 100%;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table-scroll .table-ios thead {
+    @apply sticky top-0 z-[1];
+  }
+
   .table-ios {
     @apply w-full text-sm;
   }

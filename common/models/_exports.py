@@ -28,6 +28,7 @@ from common.models.scheduled_redelivery_log import ScheduledRedeliveryLog
 from common.models.scheduled_rate_log import ScheduledRateLog
 from common.models.scheduled_polish_log import ScheduledPolishLog
 from common.models.scheduled_login_renew_log import ScheduledLoginRenewLog
+from common.models.scheduled_token_renewal_log import ScheduledTokenRenewalLog
 from common.models.scheduled_cookies_refresh_log import ScheduledCookiesRefreshLog
 from common.models.scheduled_api_cookie_renew_log import ScheduledApiCookieRenewLog
 from common.models.scheduled_close_notice_log import ScheduledCloseNoticeLog
@@ -94,6 +95,7 @@ __all__ = [
     "ScheduledRateLog",
     "ScheduledPolishLog",
     "ScheduledLoginRenewLog",
+    "ScheduledTokenRenewalLog",
     "ScheduledCookiesRefreshLog",
     "ScheduledApiCookieRenewLog",
     "ScheduledCloseNoticeLog",

@@ -58,6 +58,7 @@ const routeTitles: Record<string, string> = {
   '/admin/rate-batches': '补评价日志',
   '/admin/polish-batches': '擦亮日志',
   '/admin/login-renew-batches': '登录续期日志',
+  '/admin/token-renewal-batches': 'Token续期日志',
   '/admin/cookies-refresh-batches': 'COOKIES刷新日志',
   '/admin/close-notice-batches': '消息通知关闭日志',
   '/admin/db-backup-logs': '数据库备份日志',

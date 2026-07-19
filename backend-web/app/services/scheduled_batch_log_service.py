@@ -18,6 +18,7 @@ from common.models.scheduled_polish_log import ScheduledPolishLog
 from common.models.scheduled_rate_log import ScheduledRateLog
 from common.models.scheduled_redelivery_log import ScheduledRedeliveryLog
 from common.models.scheduled_red_flower_log import ScheduledRedFlowerLog
+from common.models.scheduled_token_renewal_log import ScheduledTokenRenewalLog
 
 
 from common.utils.time_utils import safe_isoformat
@@ -174,6 +175,7 @@ class ScheduledBatchLogService:
         total_key: str,
         detail_key: str,
         detail_column: Any,
+        extra_columns: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """统一查询批次详情，只提取页面实际需要的字段。"""
         summary_stmt = select(
@@ -188,7 +190,8 @@ class ScheduledBatchLogService:
         if not summary or not summary.total_count:
             return None
 
-        logs_stmt = select(
+        extra_columns = extra_columns or {}
+        selected_columns = [
             model.id.label("id"),
             model.batch_id.label("batch_id"),
             model.account_id.label("account_id"),
@@ -196,24 +199,34 @@ class ScheduledBatchLogService:
             model.status.label("status"),
             model.error_message.label("error_message"),
             model.created_at.label("created_at"),
-        ).where(model.batch_id == batch_id).order_by(model.created_at.asc())
+        ]
+        selected_columns.extend(
+            column.label(key) for key, column in extra_columns.items()
+        )
+        logs_stmt = (
+            select(*selected_columns)
+            .where(model.batch_id == batch_id)
+            .order_by(model.created_at.asc())
+        )
 
         logs_result = await self.session.execute(logs_stmt)
         logs_rows = logs_result.all()
 
         logs: list[dict[str, Any]] = []
         for row in logs_rows:
-            logs.append(
-                {
-                    "id": row.id,
-                    "batch_id": row.batch_id,
-                    "account_id": row.account_id,
-                    detail_key: getattr(row, detail_key),
-                    "status": row.status,
-                    "error_message": row.error_message,
-                    "created_at": safe_isoformat(row.created_at),
-                }
-            )
+            log_data = {
+                "id": row.id,
+                "batch_id": row.batch_id,
+                "account_id": row.account_id,
+                detail_key: getattr(row, detail_key),
+                "status": row.status,
+                "error_message": row.error_message,
+                "created_at": safe_isoformat(row.created_at),
+            }
+            for key in extra_columns:
+                value = getattr(row, key)
+                log_data[key] = safe_isoformat(value) if isinstance(value, datetime) else value
+            logs.append(log_data)
 
         return {
             "batch_id": batch_id,
@@ -250,6 +263,40 @@ class ScheduledBatchLogService:
             total_key="total_orders",
             detail_key="order_no",
             detail_column=ScheduledRedeliveryLog.order_no,
+        )
+
+    async def list_token_renewal_batches(
+        self,
+        *,
+        start_date: str | None,
+        end_date: str | None,
+        page: int,
+        page_size: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """分页查询 Token 续期批次列表。"""
+        return await self._list_batches(
+            model=ScheduledTokenRenewalLog,
+            start_date=start_date,
+            end_date=end_date,
+            page=page,
+            page_size=page_size,
+            total_key="total_accounts",
+        )
+
+    async def get_token_renewal_batch_detail(
+        self,
+        batch_id: str,
+    ) -> dict[str, Any] | None:
+        """查询 Token 续期批次详情。"""
+        return await self._get_batch_detail(
+            model=ScheduledTokenRenewalLog,
+            batch_id=batch_id,
+            total_key="total_accounts",
+            detail_key="token_user_id",
+            detail_column=ScheduledTokenRenewalLog.token_user_id,
+            extra_columns={
+                "renew_expire_at": ScheduledTokenRenewalLog.renew_expire_at,
+            },
         )
 
     async def list_rate_batches(

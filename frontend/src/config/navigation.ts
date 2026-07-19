@@ -154,6 +154,7 @@ export const adminNavItems: NavEntry[] = [
       { key: 'admin-rate-batches', icon: Star, label: '补评价日志', path: '/admin/rate-batches', adminOnly: true },
       { key: 'admin-polish-batches', icon: Star, label: '擦亮日志', path: '/admin/polish-batches', adminOnly: true },
       { key: 'admin-login-renew-batches', icon: Key, label: '登录续期日志', path: '/admin/login-renew-batches', adminOnly: true },
+      { key: 'admin-token-renewal-batches', icon: Key, label: 'Token续期日志', path: '/admin/token-renewal-batches', adminOnly: true },
       { key: 'admin-cookies-refresh-batches', icon: Key, label: 'COOKIES刷新日志', path: '/admin/cookies-refresh-batches', adminOnly: true },
       { key: 'admin-api-cookie-renew-batches', icon: Key, label: '接口续期Cookies日志', path: '/admin/api-cookie-renew-batches', adminOnly: true },
       { key: 'admin-close-notice-batches', icon: BellOff, label: '消息通知关闭日志', path: '/admin/close-notice-batches', adminOnly: true },

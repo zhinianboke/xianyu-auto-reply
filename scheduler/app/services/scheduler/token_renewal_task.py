@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import aiohttp
@@ -23,6 +24,7 @@ from sqlalchemy import exists, or_, select, update
 
 from common.db.session import async_session_maker
 from common.models.risk_control_log import XYRiskControlLog
+from common.models.scheduled_token_renewal_log import ScheduledTokenRenewalLog
 from common.models.token_cache import TokenCache
 from common.models.xy_account import XYAccount
 from common.services.account_cookie_service import merge_account_cookie_fields
@@ -39,7 +41,6 @@ from app.core.config import get_settings
 
 TOKEN_RENEWAL_MAX_CONCURRENCY = 5
 
-
 @dataclass(frozen=True, slots=True)
 class TokenRenewalCandidate:
     """一次 Token 续期请求所需的数据库快照。"""
@@ -50,6 +51,16 @@ class TokenRenewalCandidate:
     account_id: str
     cookies_str: str
     device_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class TokenRenewalResult:
+    """单个账号的 Token 续期结果。"""
+
+    candidate: TokenRenewalCandidate
+    success: bool
+    message: str
+    renew_expire_at: datetime | None = None
 
 
 class TokenRenewalTask:
@@ -76,16 +87,72 @@ class TokenRenewalTask:
             if not candidates:
                 return 0
 
-            results = await asyncio.gather(
+            batch_id = str(uuid.uuid4())
+            raw_results = await asyncio.gather(
                 *(self._renew_candidate(candidate) for candidate in candidates),
-                return_exceptions=False,
+                return_exceptions=True,
             )
-            renewed_count = sum(1 for renewed in results if renewed)
+            results: list[TokenRenewalResult] = []
+            for candidate, result in zip(candidates, raw_results):
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+                if isinstance(result, BaseException):
+                    message = f"未预期异常：{type(result).__name__}: {result}"
+                    logger.error(
+                        f"【{self.task_name}】【{candidate.account_id}】{message}"
+                    )
+                    results.append(self._failed_result(candidate, message))
+                else:
+                    results.append(result)
+
+            await self._save_results(batch_id, results)
+            renewed_count = sum(1 for result in results if result.success)
             logger.info(
-                f"【{self.task_name}】执行完成: 候选={len(candidates)}, "
+                f"【{self.task_name}】执行完成: 批次={batch_id}, 候选={len(candidates)}, "
                 f"成功={renewed_count}, 失败或已被其他流程更新={len(candidates) - renewed_count}"
             )
             return renewed_count
+
+    @staticmethod
+    def _failed_result(
+        candidate: TokenRenewalCandidate,
+        message: str,
+    ) -> TokenRenewalResult:
+        """构造失败结果，统一限制入库说明长度。"""
+        return TokenRenewalResult(
+            candidate=candidate,
+            success=False,
+            message=message[:500],
+        )
+
+    async def _save_results(
+        self,
+        batch_id: str,
+        results: list[TokenRenewalResult],
+    ) -> None:
+        """将一轮 Token 续期结果按批次写入数据库。"""
+        async with async_session_maker() as session:
+            try:
+                session.add_all(
+                    [
+                        ScheduledTokenRenewalLog(
+                            batch_id=batch_id,
+                            account_id=result.candidate.account_id,
+                            token_user_id=result.candidate.user_id,
+                            status="success" if result.success else "failed",
+                            renew_expire_at=result.renew_expire_at,
+                            error_message=result.message[:500],
+                        )
+                        for result in results
+                    ]
+                )
+                await session.commit()
+            except Exception as exc:
+                await session.rollback()
+                logger.error(
+                    f"【{self.task_name}】批次日志写入失败: batch_id={batch_id}, "
+                    f"error={type(exc).__name__}: {exc}"
+                )
 
     async def _load_candidates(self) -> list[TokenRenewalCandidate]:
         """查询可续期且当日没有处理中风控日志的启用账号。"""
@@ -282,7 +349,10 @@ class TokenRenewalTask:
         )
         return merged_cookies_str
 
-    async def _renew_candidate(self, candidate: TokenRenewalCandidate) -> bool:
+    async def _renew_candidate(
+        self,
+        candidate: TokenRenewalCandidate,
+    ) -> TokenRenewalResult:
         """请求并条件写入单个账号的续期 Token。
 
         接口可能先返回令牌过期并下发新 _m_h5_tk（Set-Cookie），此时合并
@@ -293,31 +363,34 @@ class TokenRenewalTask:
             result = None
             token_expired_retries = 0
             captcha_retries = 0
+            failure_message: str | None = None
             while True:
                 try:
                     result = await request_im_token(cookies_str, candidate.device_id)
                 except asyncio.TimeoutError:
                     logger.error(f"【{self.task_name}】【{candidate.account_id}】请求超时")
-                    return False
+                    return self._failed_result(candidate, "Token接口请求超时")
                 except aiohttp.ClientError as exc:
+                    message = f"Token接口网络错误：{type(exc).__name__}: {exc}"
                     logger.error(
                         f"【{self.task_name}】【{candidate.account_id}】网络错误: "
                         f"{type(exc).__name__}: {exc}"
                     )
-                    return False
+                    return self._failed_result(candidate, message)
                 except Exception as exc:
+                    message = f"Token接口请求异常：{type(exc).__name__}: {exc}"
                     logger.error(
                         f"【{self.task_name}】【{candidate.account_id}】请求异常: "
                         f"{type(exc).__name__}: {exc}"
                     )
-                    return False
+                    return self._failed_result(candidate, message)
 
                 # 无论成功失败，接口下发的 Cookie（如新 _m_h5_tk）都要合并写回
                 merged_response_cookies = await self._merge_response_cookies(
                     candidate, cookies_str, result.response_cookies
                 )
                 if merged_response_cookies is None:
-                    return False
+                    return self._failed_result(candidate, "接口下发Cookie合并写回失败")
                 cookies_str = merged_response_cookies
 
                 # 与 WebSocket refresh_token 保持一致：成功 Token 优先，其次滑块，
@@ -327,6 +400,7 @@ class TokenRenewalTask:
 
                 if self._is_captcha_required_response(result.response_json):
                     if captcha_retries >= 1:
+                        failure_message = "滑块验证重试已达上限"
                         logger.error(
                             f"【{self.task_name}】【{candidate.account_id}】滑块重试已达上限"
                         )
@@ -338,12 +412,13 @@ class TokenRenewalTask:
                         result.response_json,
                     )
                     if not merged_cookies_str:
-                        return False
+                        return self._failed_result(candidate, "滑块验证或Cookie合并写回失败")
                     cookies_str = merged_cookies_str
                     continue
 
                 if self._is_token_expired_response(result.response_json):
                     if token_expired_retries >= 1:
+                        failure_message = "令牌过期重试已达上限"
                         logger.error(
                             f"【{self.task_name}】【{candidate.account_id}】令牌过期重试已达上限"
                         )
@@ -364,7 +439,14 @@ class TokenRenewalTask:
                     f"【{self.task_name}】【{candidate.account_id}】续期未成功: "
                     f"status={result.status_code}, response={response_text}"
                 )
-                return False
+                if not failure_message:
+                    response_ret = result.response_json.get("ret") if isinstance(result.response_json, dict) else None
+                    ret_text = json.dumps(response_ret, ensure_ascii=False)[:300]
+                    failure_message = (
+                        f"Token接口返回失败（HTTP {result.status_code}）"
+                        f"：{ret_text or '未返回错误说明'}"
+                    )
+                return self._failed_result(candidate, failure_message)
 
             renew_expire_at, ttl_hours = random_token_cache_expiry()
             checked_at = get_beijing_now_naive()
@@ -390,20 +472,28 @@ class TokenRenewalTask:
                             f"【{self.task_name}】【{candidate.account_id}】缓存已被其他流程更新，"
                             "放弃写入本次结果"
                         )
-                        return False
+                        return self._failed_result(
+                            candidate,
+                            "Token缓存已被其他流程更新，本次未写入",
+                        )
                     await session.commit()
             except Exception as exc:
+                message = f"Token缓存写入失败：{type(exc).__name__}: {exc}"
                 logger.error(
                     f"【{self.task_name}】【{candidate.account_id}】写入失败: "
                     f"{type(exc).__name__}: {exc}"
                 )
-                return False
+                return self._failed_result(candidate, message)
 
             logger.info(
                 f"【{self.task_name}】【{candidate.account_id}】续期成功: "
                 f"续期到期日={renew_expire_at:%Y-%m-%d %H:%M:%S}, TTL={ttl_hours:.1f}小时"
             )
-            return True
-
+            return TokenRenewalResult(
+                candidate=candidate,
+                success=True,
+                message=f"续期成功，TTL={ttl_hours:.1f}小时",
+                renew_expire_at=renew_expire_at,
+            )
 
 token_renewal_task_service = TokenRenewalTask()
