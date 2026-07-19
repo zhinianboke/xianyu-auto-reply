@@ -19,6 +19,7 @@ dependencies = [
     "passlib[bcrypt]>=1.7.4",
     "bcrypt>=4.0.0",
     "playwright",
+    "patchright>=1.61.0",
     "loguru>=0.7.2",
     "httpx>=0.25.0",
     "redis>=5.0.0",

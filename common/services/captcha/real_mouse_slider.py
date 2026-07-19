@@ -1,5 +1,5 @@
 """
-真实鼠标滑块求解引擎（可选，开关：环境变量 CAPTCHA_REAL_MOUSE=true）
+真实鼠标滑块求解引擎（可选，通过系统设置选择）
 
 为什么需要它：
 - 闲鱼/阿里 baxia 风控能区分「CDP 注入的鼠标事件」与「真实硬件鼠标事件」。
@@ -36,6 +36,11 @@ from loguru import logger
 
 from common.services.captcha.slider_stealth import URL_EXPIRED, CAPTCHA_NOT_REQUIRED
 from common.services.captcha.weighted_scheduler import real_mouse_scheduler
+from common.services.captcha.real_mouse_coordinates import (
+    build_geometry_mapper,
+    calibrate_slider_center,
+    compute_slider_distance,
+)
 from common.services.captcha.windows_foreground import (
     activate_page_window,
     activate_window,
@@ -358,6 +363,28 @@ def _choose_drag(drags: List[List[Tuple[float, float, float]]]) -> List[Tuple[fl
             continue
         weights.append(1.0 + min(points, 80) / 25.0 + min(duration_ms, 1800) / 900.0)
     return random.choices(drags, weights=weights, k=1)[0]
+
+
+def _scale_drag_to_distance(
+    drag: List[Tuple[float, float, float]],
+    distance: float,
+) -> List[Tuple[float, float, float]]:
+    """按当前滑轨距离缩放 X 位移，并保留真人轨迹的时序与接近阶段。"""
+    if not drag or distance <= 0 or drag[-1][0] <= 1:
+        return drag
+    factor = distance / drag[-1][0]
+    points = [(dx * factor, dy, dt) for dx, dy, dt in drag]
+    points[-1] = (distance, points[-1][1], points[-1][2])
+    return _TimedDrag(
+        points,
+        press_delay_ms=getattr(drag, "press_delay_ms", 0.0),
+        release_delay_ms=getattr(drag, "release_delay_ms", 0.0),
+        origin_x=getattr(drag, "origin_x", None),
+        origin_y=getattr(drag, "origin_y", None),
+        pressed_at=getattr(drag, "pressed_at", None),
+        approach=getattr(drag, "approach", []),
+        approach_to_press_ms=getattr(drag, "approach_to_press_ms", 0.0),
+    )
 
 
 class _RealMouseSolver:
@@ -794,7 +821,7 @@ class _RealMouseSolver:
                 if scene == "login" and cookies:
                     logger.info(f"【{self.pure_id}】登录滑块第{attempt}次回放通过")
                 # 仅当真正拿到 x5sec 才算成功；否则按失败返回
-                # （是否回退原引擎由编排层根据 CAPTCHA_REAL_MOUSE 决定，本引擎只负责返回结果）
+                # （是否回退原引擎由编排层根据系统设置决定，本引擎只负责返回结果）
                 return (True, cookies) if cookies else (False, None)
 
             # 本次未过：业务远程调用优先重新获取新鲜 URL，避免在已被风控拒绝的旧页面上
@@ -841,10 +868,18 @@ class _RealMouseSolver:
             return False
         mx = box["x"] + box["width"] / 2
         my = box["y"] + box["height"] / 2
+        replay_drag = drag
         if scene == "business":
+            distance = compute_slider_distance(frame, btn, track)
+            if distance <= 0:
+                logger.error(f"【{self.pure_id}】业务滑块无法计算当前滑轨距离")
+                return False
+            replay_drag = _scale_drag_to_distance(drag, distance)
             logger.info(
-                f"【{self.pure_id}】业务滑块严格回放采集位移: "
-                f"末点=({drag[-1][0]:.1f},{drag[-1][1]:.1f})px, 点数={len(drag)}"
+                f"【{self.pure_id}】业务滑块按当前滑轨缩放真人轨迹: "
+                f"原始={drag[-1][0]:.1f}px, 目标={distance:.1f}px, "
+                f"末点=({replay_drag[-1][0]:.1f},{replay_drag[-1][1]:.1f})px, "
+                f"点数={len(replay_drag)}"
             )
         else:
             track_box = track.bounding_box() if track else None
@@ -852,24 +887,29 @@ class _RealMouseSolver:
                 candidate_x = track_box["x"] + track_box["width"] - 1 - drag[-1][0]
                 if box["x"] <= candidate_x <= box["x"] + box["width"]:
                     mx = candidate_x
-        dpr = self.page.evaluate("() => window.devicePixelRatio") or 1.0
-
         if scene == "business":
-            # 业务滑块避免用 page.mouse.move 注入一次 CDP 合成移动事件；通过真实窗口几何关系
-            # 完成 CSS 视口坐标到物理屏幕坐标的映射，与测试目录验证通过的 raw 模式一致。
-            geometry = self.page.evaluate(
-                "() => ({sx: window.screenX, sy: window.screenY, ow: window.outerWidth, "
-                "oh: window.outerHeight, iw: window.innerWidth, ih: window.innerHeight})"
+            mapper, geometry = build_geometry_mapper(self.page)
+            calibrated, calibration = calibrate_slider_center(
+                self.page,
+                frame,
+                btn,
+                mapper,
             )
-            border_x = max(0.0, (geometry["ow"] - geometry["iw"]) / 2.0)
-            top_chrome = max(0.0, (geometry["oh"] - geometry["ih"]) - border_x)
-            off_x = geometry["sx"] + border_x
-            off_y = geometry["sy"] + top_chrome
-
-            def to_screen(vx: float, vy: float) -> Tuple[int, int]:
-                return int(round((off_x + vx) * dpr)), int(round((off_y + vy) * dpr))
+            logger.info(
+                f"【{self.pure_id}】业务滑块自适应坐标校准: "
+                f"dpi={calibration.get('dpi_awareness')}, "
+                f"dpr={calibration.get('dpr', geometry.get('devicePixelRatio'))}, "
+                f"预测={calibration.get('predicted_screen')}, "
+                f"修正={calibration.get('correction_physical')}, "
+                f"验证误差={calibration.get('verified_error_css')}"
+            )
+            if not calibrated:
+                logger.error(f"【{self.pure_id}】业务滑块自适应坐标校准失败: {calibration}")
+                return False
+            to_screen = mapper.to_screen
         else:
             # 登录滑块保持原 CDP 校准逻辑，不改变 login 的滑动行为。
+            dpr = self.page.evaluate("() => window.devicePixelRatio") or 1.0
             try:
                 frame.evaluate("() => { window.__cal = []; }")
             except Exception:
@@ -900,10 +940,10 @@ class _RealMouseSolver:
         if scene == "login":
             logger.info(f"【{self.pure_id}】登录滑块使用业务同款 pyautogui 回放: 起点=({sx},{sy})")
         if scene == "business":
-            # 业务滑块严格按采集样本回放未按下接近段及完整按住段。
+            # 业务滑块保留采集样本的未按下接近段及完整按住时序。
             timer_resolution(True)
             try:
-                approach = getattr(drag, "approach", [])
+                approach = getattr(replay_drag, "approach", [])
                 if approach:
                     first_x, first_y, _ = approach[0]
                     first_sx, first_sy = to_screen(mx + first_x, my + first_y)
@@ -919,18 +959,18 @@ class _RealMouseSolver:
                     precise_sleep(
                         approach_started
                         + approach_elapsed
-                        + getattr(drag, "approach_to_press_ms", 0.0) / 1000.0
+                        + getattr(replay_drag, "approach_to_press_ms", 0.0) / 1000.0
                     )
                 else:
                     send_move_abs(sx, sy)
                 send_button(True)
                 started = time.perf_counter()
-                press_delay = getattr(drag, "press_delay_ms", 0.0) / 1000.0
-                release_delay = getattr(drag, "release_delay_ms", 0.0) / 1000.0
+                press_delay = getattr(replay_drag, "press_delay_ms", 0.0) / 1000.0
+                release_delay = getattr(replay_drag, "release_delay_ms", 0.0) / 1000.0
                 precise_sleep(started + press_delay)
                 move_started = started + press_delay
                 elapsed = 0.0
-                for dx, dy, dt in drag:
+                for dx, dy, dt in replay_drag:
                     elapsed += dt / 1000.0
                     if dt >= 3.0:
                         precise_sleep(move_started + elapsed)

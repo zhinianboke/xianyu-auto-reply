@@ -380,9 +380,9 @@ export function BatchLogDetail<
         <h2 className="vben-card-title">{logTitle}</h2>
         {renderStatusFilter()}
       </div>
-      <div className="flex-1 overflow-auto relative">
+      <div className="table-scroll">
         <table className="table-ios">
-          <thead className="sticky top-0 bg-white dark:bg-slate-800 z-[1]">
+          <thead>
             <tr>
               {columns.map((col, idx) => (
                 <th key={idx} className={col.className}>

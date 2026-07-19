@@ -231,7 +231,8 @@ export interface ThemeFontSettings {
 }
 
 export type ThemeSettings = ThemeAppearanceSettings & ThemeFontSettings
-export type PasswordLoginMode = 'auto' | 'protocol' | 'browser'
+export type PasswordLoginMode = 'protocol' | 'browser'
+export type SliderMode = 'browser' | 'real_mouse'
 
 export interface SystemSettings {
   ai_model?: string
@@ -281,6 +282,7 @@ export interface SystemSettings {
   'account.face_verify_timeout_disable'?: boolean
   // 账号密码登录方式
   'password_login.mode'?: PasswordLoginMode
+  'captcha.slider_mode'?: SliderMode
   // 代理设置
   'proxy.api_url'?: string
   'proxy.enabled'?: boolean

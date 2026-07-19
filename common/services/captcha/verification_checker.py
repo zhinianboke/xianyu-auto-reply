@@ -174,7 +174,9 @@ class VerificationChecker:
                         logger.warning(f"【{self.pure_user_id}】🎨 刮刮乐模式：滑动{scratch_ratio*100:.1f}%距离 ({final_distance:.2f}px)")
                         return final_distance
 
-                    return precise_distance + random.uniform(-2.0, 2.0)
+                    # 普通 NC 滑块必须精确到达轨道终点。历史上的 ±2px 随机偏移会让
+                    # 视觉状态变化，但服务端仍可能按距离不足/越界拒绝。
+                    return precise_distance
             except Exception as e:
                 logger.info(f"【{self.pure_user_id}】JavaScript精确计算失败，使用后备方案: {e}")
 
@@ -185,9 +187,6 @@ class VerificationChecker:
                 scratch_ratio = random.uniform(0.25, 0.35)
                 slide_distance = slide_distance * scratch_ratio
                 logger.warning(f"【{self.pure_user_id}】🎨 刮刮乐模式：滑动{scratch_ratio*100:.1f}%距离 ({slide_distance:.2f}px)")
-            else:
-                slide_distance += random.uniform(-0.5, 0.5)
-
             logger.info(f"【{self.pure_user_id}】计算滑动距离: {slide_distance:.2f}px")
             return slide_distance
 

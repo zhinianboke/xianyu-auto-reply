@@ -13,6 +13,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -26,6 +27,11 @@ from common.services.captcha.trajectory import TrajectoryGenerator
 from common.services.captcha.slider_elements import SliderElementFinder
 from common.services.captcha.verification_checker import VerificationChecker
 from common.services.captcha.history_manager import HistoryManager
+from common.services.captcha.playwright_touch import (
+    SLIDER_USER_AGENT,
+    configure_slider_user_agent,
+    dispatch_touch_drag,
+)
 from common.utils.browser_utils import ensure_playwright_browser_path, get_chromium_executable_path, is_frozen
 
 try:
@@ -38,6 +44,13 @@ except ImportError:
     BrowserContext = Any
     ElementHandle = Any
     logger.warning("Playwright 未安装")
+
+try:
+    from patchright.sync_api import sync_playwright as patchright_sync_playwright
+    PATCHRIGHT_AVAILABLE = True
+except ImportError:
+    patchright_sync_playwright = None
+    PATCHRIGHT_AVAILABLE = False
 
 
 # url_provider 回调可返回的特殊哨兵值：表示"重新请求时 token 已可用、风控已解除，
@@ -105,6 +118,16 @@ class PlaywrightSliderService:
         "--allow-pre-commit-input"
     ]
 
+    # Token 滑块专用参数：参考真人模式保留 Chromium 原生能力，避免大量禁用项形成
+    # 明显的自动化环境指纹。密码登录仍沿用上面的历史参数，不受本次调整影响。
+    SLIDER_BROWSER_ARGS = [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+
     def __init__(
         self,
         user_id: str = "default",
@@ -136,6 +159,9 @@ class PlaywrightSliderService:
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
+        self._slide_response_code: Optional[int] = None
+        self._cdp_touch_enabled = False
+        self._slider_profile_tempdir: Optional[tempfile.TemporaryDirectory] = None
 
         # 持久化用户数据目录（参照旧框架）
         self.user_data_dir = os.path.join(os.getcwd(), 'browser_data', f'user_{self.pure_user_id}')
@@ -194,7 +220,11 @@ class PlaywrightSliderService:
         """定位 Chromium 可执行文件路径。"""
         if not is_frozen():
             return None
-        return get_chromium_executable_path()
+        browser_package = "patchright" if self._cdp_touch_enabled else "playwright"
+        return get_chromium_executable_path(
+            browser_package,
+            strict_revision=self._cdp_touch_enabled,
+        )
 
     def _clean_singleton_lock_files(self) -> None:
         """清理 user_data_dir 中残留的 Chrome Singleton 锁文件。
@@ -260,13 +290,50 @@ class PlaywrightSliderService:
             # 不要创建新的事件循环，让 Playwright 使用默认的
             # 创建新事件循环会导致线程切换问题
             
-            self.playwright = sync_playwright().start()
-            logger.info(f"【{self.pure_user_id}】Playwright启动成功")
+            patchright_browser_available = False
+            if add_stealth_script and PATCHRIGHT_AVAILABLE:
+                patchright_browser_available = bool(
+                    get_chromium_executable_path(
+                        "patchright",
+                        strict_revision=True,
+                    )
+                )
+            if add_stealth_script and PATCHRIGHT_AVAILABLE and patchright_browser_available:
+                self.playwright = patchright_sync_playwright().start()
+                self._cdp_touch_enabled = True
+                logger.info(f"【{self.pure_user_id}】Patchright Playwright启动成功")
+            else:
+                self.playwright = sync_playwright().start()
+                if add_stealth_script:
+                    logger.warning(
+                        f"【{self.pure_user_id}】Patchright 或其 Chromium 未安装，"
+                        "滑块回退普通 Playwright"
+                    )
+                logger.info(f"【{self.pure_user_id}】Playwright启动成功")
 
             browser_features = get_random_browser_features()
 
+            if add_stealth_script and self._slider_profile_tempdir is None:
+                slider_sessions_dir = os.path.join(
+                    os.getcwd(), 'browser_data', 'slider_sessions'
+                )
+                os.makedirs(slider_sessions_dir, exist_ok=True)
+                self._slider_profile_tempdir = tempfile.TemporaryDirectory(
+                    prefix=f"{self.pure_user_id}_",
+                    dir=slider_sessions_dir,
+                )
+                self.user_data_dir = self._slider_profile_tempdir.name
+                logger.info(
+                    f"【{self.pure_user_id}】滑块使用会话级临时浏览器目录: "
+                    f"{self.user_data_dir}"
+                )
+
             # 构建启动参数
-            args = self.BROWSER_ARGS.copy()
+            args = (
+                self.SLIDER_BROWSER_ARGS.copy()
+                if add_stealth_script
+                else self.BROWSER_ARGS.copy()
+            )
             args.append(f"--window-size={browser_features['window_size']}")
             args.append(f"--lang={browser_features['lang']}")
             args.append(f"--accept-lang={browser_features['accept_lang']}")
@@ -278,8 +345,6 @@ class PlaywrightSliderService:
             launch_kwargs = {
                 'headless': self.headless,
                 'args': args,
-                'viewport': {'width': 1980, 'height': 1024},
-                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
                 'locale': 'zh-CN',
                 'accept_downloads': True,
                 'ignore_https_errors': True,
@@ -287,10 +352,44 @@ class PlaywrightSliderService:
                     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
                 }
             }
+            if add_stealth_script:
+                # 有头模式使用真实窗口尺寸，避免 viewport、outerWidth 与 screen 指纹冲突；
+                # 无头环境没有真实桌面，继续给出稳定视口保证页面布局可计算。
+                if self.headless:
+                    launch_kwargs['viewport'] = {'width': 1920, 'height': 1080}
+                else:
+                    launch_kwargs['no_viewport'] = True
+                launch_kwargs['timezone_id'] = 'Asia/Shanghai'
+                if not self._cdp_touch_enabled:
+                    launch_kwargs['ignore_default_args'] = ['--enable-automation']
+                launch_kwargs['user_agent'] = SLIDER_USER_AGENT
+                launch_kwargs['has_touch'] = self._cdp_touch_enabled
+                launch_kwargs['is_mobile'] = False
+                if self.headless:
+                    launch_kwargs['screen'] = {'width': 1920, 'height': 1080}
+            else:
+                # 密码登录保持原有视口与 UA，避免扩大本次变更范围。
+                launch_kwargs['viewport'] = {'width': 1980, 'height': 1024}
+                launch_kwargs['user_agent'] = (
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/138.0.0.0 Safari/537.36'
+                )
             executable_path = self._find_browser_executable()
             if executable_path:
                 launch_kwargs['executable_path'] = executable_path
                 logger.info(f"【{self.pure_user_id}】使用 Chromium 可执行文件: {executable_path}")
+            prefer_system_chrome = (
+                add_stealth_script
+                and sys.platform == 'win32'
+                and not executable_path
+                and not self._cdp_touch_enabled
+            )
+            if prefer_system_chrome:
+                # Windows 滑块优先使用系统 Chrome；无头时仍不会创建可见窗口。
+                # Linux 容器和打包内置 Chromium 继续走原执行文件。
+                launch_kwargs['channel'] = 'chrome'
+                logger.info(f"【{self.pure_user_id}】Playwright 滑块优先使用系统 Chrome")
 
             # 启动前清理可能残留的 Singleton 锁文件（已持有账号锁，清理是安全的）
             self._clean_singleton_lock_files()
@@ -320,6 +419,12 @@ class PlaywrightSliderService:
                     )
                     # 仅在还有重试机会时才清理并继续
                     if attempt < launch_attempts:
+                        if prefer_system_chrome and launch_kwargs.get('channel') == 'chrome':
+                            launch_kwargs.pop('channel', None)
+                            logger.warning(
+                                f"【{self.pure_user_id}】系统 Chrome 启动失败，"
+                                "回退 Playwright 内置 Chromium"
+                            )
                         logger.info(
                             f"【{self.pure_user_id}】尝试清理残留锁文件后重试启动..."
                         )
@@ -338,7 +443,10 @@ class PlaywrightSliderService:
 
             # 创建新页面
             logger.info(f"【{self.pure_user_id}】创建新页面...")
-            self.page = self.context.new_page()
+            if add_stealth_script and self.context.pages:
+                self.page = self.context.pages[0]
+            else:
+                self.page = self.context.new_page()
 
             if not self.page:
                 raise Exception("页面创建失败")
@@ -346,8 +454,39 @@ class PlaywrightSliderService:
 
             # 添加增强反检测脚本（密码登录时不需要，参照旧框架）
             if add_stealth_script:
-                logger.info(f"【{self.pure_user_id}】添加反检测脚本...")
-                self.page.add_init_script(get_stealth_script(browser_features))
+                if self._cdp_touch_enabled:
+                    logger.info(
+                        f"【{self.pure_user_id}】Patchright 已处理自动化标记，"
+                        "跳过额外 navigator 覆盖"
+                    )
+                else:
+                    logger.info(f"【{self.pure_user_id}】添加反检测脚本...")
+                    self.page.add_init_script(get_stealth_script(browser_features))
+                try:
+                    configure_slider_user_agent(self.context, self.page)
+                except Exception as user_agent_error:
+                    logger.warning(
+                        f"【{self.pure_user_id}】配置滑块 UA Client Hints 失败，继续运行: "
+                        f"{user_agent_error}"
+                    )
+
+                def capture_slide_response(response: Any) -> None:
+                    """记录 Baxia 滑块接口返回码，供轨迹迭代诊断。"""
+                    try:
+                        if "/slide" not in response.url:
+                            return
+                        result = response.json().get("result") or {}
+                        code = result.get("code")
+                        if code is not None:
+                            self._slide_response_code = int(code)
+                            logger.info(
+                                f"【{self.pure_user_id}】Baxia 滑块响应码: "
+                                f"{self._slide_response_code}"
+                            )
+                    except Exception:
+                        return
+
+                self.page.on("response", capture_slide_response)
             logger.info(f"【{self.pure_user_id}】浏览器初始化完成")
 
             # 初始化元素查找器和验证检查器
@@ -615,11 +754,12 @@ class PlaywrightSliderService:
                 if timed_out:
                     return None
 
-                # 快速滚动（模拟人类行为）
-                self.page.mouse.move(640, 360)
-                time.sleep(random.uniform(0.02, 0.05))
-                self.page.mouse.wheel(0, random.randint(200, 500))
-                time.sleep(random.uniform(0.02, 0.05))
+                # CDP 触摸模式不注入额外鼠标/滚轮事件，避免把两种输入源混在同一挑战中。
+                if not self._cdp_touch_enabled:
+                    self.page.mouse.move(640, 360)
+                    time.sleep(random.uniform(0.02, 0.05))
+                    self.page.mouse.wheel(0, random.randint(200, 500))
+                    time.sleep(random.uniform(0.02, 0.05))
                 if timed_out:
                     return None
 
@@ -904,14 +1044,20 @@ class PlaywrightSliderService:
                         strategy_stats.record_attempt(attempt, current_strategy, success=False)
                         continue
 
-                    # 检查验证结果
-                    # 二次确认（等 x5sec 落盘）的等待上限按"距浏览器超时的剩余预算"动态给定，
-                    # 预留 3 秒安全边际给后续取 cookie，避免二次确认等太久被超时守护强杀。
-                    elapsed = time.time() - browser_start_time
-                    confirm_budget = max(1.0, browser_timeout - elapsed - 3.0)
-                    success = self.verification_checker.check_verification_success_fast(
-                        slider_button, max_confirm_wait=confirm_budget
-                    )
+                    # code=300 是 Baxia 明确拒绝，无需再等待视觉状态；其他情况继续
+                    # 严格确认 x5sec/跳转，避免把按钮暂时消失误判为成功。
+                    if self._slide_response_code == 300:
+                        success = False
+                        logger.warning(
+                            f"【{self.pure_user_id}】Baxia 已拒绝当前轨迹，立即进入重试"
+                        )
+                    else:
+                        # 等 x5sec 落盘的上限按剩余总预算动态给定，预留取 cookie 时间。
+                        elapsed = time.time() - browser_start_time
+                        confirm_budget = max(1.0, browser_timeout - elapsed - 3.0)
+                        success = self.verification_checker.check_verification_success_fast(
+                            slider_button, max_confirm_wait=confirm_budget
+                        )
 
                     if success:
                         logger.info(f"【{self.pure_user_id}】✅ 滑块验证成功（第{attempt}次）")
@@ -944,6 +1090,8 @@ class PlaywrightSliderService:
                         failure_records.append(failure_info)
 
                         if attempt < max_retries:
+                            if self._slide_response_code == 300:
+                                self._click_slider_refresh()
                             time.sleep(random.uniform(1, 2))
                             continue
 
@@ -995,7 +1143,22 @@ class PlaywrightSliderService:
 
             start_x = button_box["x"] + button_box["width"] / 2
             start_y = button_box["y"] + button_box["height"] / 2
-            logger.debug(f"【{self.pure_user_id}】滑块位置: ({start_x}, {start_y})")
+            logger.info(f"【{self.pure_user_id}】滑块位置: ({start_x}, {start_y})")
+
+            if self._cdp_touch_enabled:
+                # 触摸拖动必须禁止页面滚动，否则浏览器会在中途取消 pointer 流；
+                # 事件完全由 CDP 派发，不触碰系统鼠标，也不抢占桌面焦点。
+                slider_button.evaluate(
+                    "element => { element.style.touchAction = 'none'; }"
+                )
+                self._slide_response_code = None
+                dispatch_touch_drag(self.page, start_x, start_y, trajectory)
+                logger.info(
+                    f"【{self.pure_user_id}】已通过 CDP 触摸轨迹完成滑动："
+                    f"{len(trajectory)}点，末点=({trajectory[-1][0]:.1f},"
+                    f"{trajectory[-1][1]:.1f})"
+                )
+                return True
 
             # 第一阶段：移动到滑块附近
             try:
@@ -1017,44 +1180,47 @@ class PlaywrightSliderService:
             except Exception as e:
                 logger.warning(f"【{self.pure_user_id}】移动到滑块失败: {e}，继续尝试")
 
-            # 第二阶段：悬停在滑块上
+            # 第二阶段：按下鼠标。前面的连续接近轨迹已经自然触发 hover，避免再调用
+            # ElementHandle.hover 生成一段额外的 Playwright 默认轨迹。
             try:
-                slider_button.hover(timeout=2000)
-                time.sleep(random.uniform(0.1, 0.3))
-            except Exception as e:
-                logger.warning(f"【{self.pure_user_id}】悬停滑块失败: {e}")
-
-            # 第三阶段：按下鼠标
-            try:
-                self.page.mouse.move(start_x, start_y)
                 time.sleep(random.uniform(0.05, 0.15))
                 self.page.mouse.down()
-                time.sleep(random.uniform(0.05, 0.15))
+                self._slide_response_code = None
+                time.sleep(random.uniform(0.05, 0.09))
             except Exception as e:
                 logger.error(f"【{self.pure_user_id}】按下鼠标失败: {e}")
                 return False
 
-            # 第四阶段：执行滑动轨迹
+            # 第三阶段：执行滑动轨迹
             try:
                 start_time = time.time()
                 current_x = start_x
                 current_y = start_y
 
-                for i, (x, y, delay) in enumerate(trajectory):
+                # Python 逐点调用 page.mouse.move 会为每个点产生一次跨进程往返，实测
+                # 30 个点会把约 0.5 秒的目标轨迹拉长到 3 秒以上。这里把轨迹压成
+                # 每个真人样本分位锚点单独派发，不再使用 Playwright 的线性补点，
+                # 完整保留先加速、越过框体、末端减速的原始速度形态。
+                max_segments = len(trajectory)
+                segment_size = max(1, (len(trajectory) + max_segments - 1) // max_segments)
+                segment_starts = range(0, len(trajectory), segment_size)
+
+                for segment_start in segment_starts:
+                    segment = trajectory[segment_start:segment_start + segment_size]
+                    x, y, _ = segment[-1]
                     current_x = start_x + x
                     current_y = start_y + y
 
                     self.page.mouse.move(
                         current_x,
                         current_y,
-                        steps=random.randint(1, 3)
+                        steps=len(segment)
                     )
 
-                    actual_delay = delay * random.uniform(0.9, 1.1)
-                    time.sleep(actual_delay)
+                    time.sleep(sum(point[2] for point in segment))
 
                     # 记录最终位置
-                    if i == len(trajectory) - 1:
+                    if segment_start + len(segment) >= len(trajectory):
                         try:
                             current_style = slider_button.get_attribute("style")
                             if current_style and "left:" in current_style:
@@ -1075,27 +1241,16 @@ class PlaywrightSliderService:
                     time.sleep(pause_duration)
 
                 # 释放鼠标
-                time.sleep(random.uniform(0.02, 0.05))
+                # 真人模式优选样本在越过框体后仍按住约 249ms，再松开鼠标。
+                time.sleep(random.uniform(0.20, 0.30))
                 self.page.mouse.up()
-                time.sleep(random.uniform(0.01, 0.03))
+                time.sleep(random.uniform(0.03, 0.08))
 
-                # 触发click事件
-                try:
-                    slider_button.evaluate(f"""
-                        (slider) => {{
-                            const event = new MouseEvent('click', {{
-                                bubbles: true,
-                                cancelable: true,
-                                view: window,
-                                clientX: {current_x},
-                                clientY: {current_y},
-                                button: 0
-                            }});
-                            slider.dispatchEvent(event);
-                        }}
-                    """)
-                except Exception as e:
-                    logger.debug(f"【{self.pure_user_id}】触发click事件失败（可忽略）: {e}")
+                if self._slide_response_code is not None:
+                    logger.info(
+                        f"【{self.pure_user_id}】本次轨迹 Baxia 返回码: "
+                        f"{self._slide_response_code}"
+                    )
 
                 elapsed_time = time.time() - start_time
                 logger.info(f"【{self.pure_user_id}】滑动完成: 耗时={elapsed_time:.2f}秒, 最终位置=({current_x:.1f}, {current_y:.1f})")
@@ -1352,7 +1507,15 @@ class PlaywrightSliderService:
             if "cannot switch to a different thread" not in str(e):
                 logger.warning(f"【{pure_id}】停止Playwright时出错: {e}")
 
-        # 注意：不清理user_data_dir，保持浏览器数据持久化
+        # 密码登录保留持久化 user_data_dir；Token 滑块只清理本次创建的临时 profile。
+        if self._slider_profile_tempdir is not None:
+            try:
+                self._slider_profile_tempdir.cleanup()
+                logger.info(f"【{pure_id}】滑块临时浏览器目录已清理")
+            except Exception as e:
+                logger.warning(f"【{pure_id}】清理滑块临时浏览器目录失败: {e}")
+            finally:
+                self._slider_profile_tempdir = None
 
     def close(self):
         """关闭服务"""
@@ -1456,4 +1619,3 @@ def run_slider_verification(
                 slider.close()
             except Exception as close_e:
                 logger.warning(f"【{user_id}】滑块验证清理资源时出错: {close_e}")
-

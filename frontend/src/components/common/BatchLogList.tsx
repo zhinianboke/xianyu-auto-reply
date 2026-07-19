@@ -11,7 +11,7 @@ import { useNavigate } from 'react-router-dom'
 import { Calendar, CheckCircle, ChevronLeft, ChevronRight, Clock, RefreshCw, Trash2, XCircle, type LucideIcon } from 'lucide-react'
 import { PageLoading } from '@/components/common/Loading'
 import { useUIStore } from '@/store/uiStore'
-import { formatDateTime } from '@/utils/date'
+import { formatDateTime, getBeijingDateInputValue } from '@/utils/date'
 
 export interface BatchListQuery {
   start_date?: string
@@ -61,10 +61,6 @@ export interface BatchLogListProps<T extends BatchLogBase> {
 }
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
-
-function getTodayString() {
-  return new Date().toISOString().split('T')[0]
-}
 
 export function renderPlainCount(value: number) {
   return <span className="font-medium">{value}</span>
@@ -127,8 +123,8 @@ export function BatchLogList<T extends BatchLogBase>({
     total: 0,
     totalPages: 0,
   })
-  const [startDate, setStartDate] = useState(getTodayString())
-  const [endDate, setEndDate] = useState(getTodayString())
+  const [startDate, setStartDate] = useState(getBeijingDateInputValue())
+  const [endDate, setEndDate] = useState(getBeijingDateInputValue())
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [clearing, setClearing] = useState(false)
 
@@ -237,14 +233,14 @@ export function BatchLogList<T extends BatchLogBase>({
           <h2 className="vben-card-title">执行记录</h2>
           <span className="badge-primary">{pagination.total} 条记录</span>
         </div>
-        <div className="flex-1 overflow-auto relative">
+        <div className="table-scroll">
           {loading ? (
             <div className="flex justify-center py-8">
               <RefreshCw className="w-6 h-6 animate-spin text-blue-500" />
             </div>
           ) : (
             <table className="table-ios">
-              <thead className="sticky top-0 bg-white dark:bg-slate-800 z-[1]">
+              <thead>
                 <tr>
                   <th>执行时间</th>
                   {columns.map((column) => (

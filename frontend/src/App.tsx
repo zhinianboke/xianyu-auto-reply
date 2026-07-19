@@ -89,6 +89,8 @@ const PolishBatches = React.lazy(() => import('@/pages/polishLogs/PolishBatches'
 const PolishBatchDetailPage = React.lazy(() => import('@/pages/polishLogs/PolishBatchDetail').then(m => ({ default: m.PolishBatchDetailPage })))
 const LoginRenewBatches = React.lazy(() => import('@/pages/loginRenewLogs/LoginRenewBatches').then(m => ({ default: m.LoginRenewBatches })))
 const LoginRenewBatchDetailPage = React.lazy(() => import('@/pages/loginRenewLogs/LoginRenewBatchDetail').then(m => ({ default: m.LoginRenewBatchDetailPage })))
+const TokenRenewalBatches = React.lazy(() => import('@/pages/tokenRenewalLogs/TokenRenewalBatches').then(m => ({ default: m.TokenRenewalBatches })))
+const TokenRenewalBatchDetailPage = React.lazy(() => import('@/pages/tokenRenewalLogs/TokenRenewalBatchDetail').then(m => ({ default: m.TokenRenewalBatchDetailPage })))
 const CookiesRefreshBatches = React.lazy(() => import('@/pages/cookiesRefreshLogs/CookiesRefreshBatches').then(m => ({ default: m.CookiesRefreshBatches })))
 const CookiesRefreshBatchDetailPage = React.lazy(() => import('@/pages/cookiesRefreshLogs/CookiesRefreshBatchDetail').then(m => ({ default: m.CookiesRefreshBatchDetailPage })))
 const ApiCookieRenewBatches = React.lazy(() => import('@/pages/apiCookieRenewLogs/ApiCookieRenewBatches').then(m => ({ default: m.ApiCookieRenewBatches })))
@@ -399,6 +401,8 @@ function App() {
             <Route path="admin/polish-batches/:batchId" element={<PolishBatchDetailPage />} />
             <Route path="admin/login-renew-batches" element={<LoginRenewBatches />} />
             <Route path="admin/login-renew-batches/:batchId" element={<LoginRenewBatchDetailPage />} />
+            <Route path="admin/token-renewal-batches" element={<TokenRenewalBatches />} />
+            <Route path="admin/token-renewal-batches/:batchId" element={<TokenRenewalBatchDetailPage />} />
             <Route path="admin/cookies-refresh-batches" element={<CookiesRefreshBatches />} />
             <Route path="admin/cookies-refresh-batches/:batchId" element={<CookiesRefreshBatchDetailPage />} />
             <Route path="admin/api-cookie-renew-batches" element={<ApiCookieRenewBatches />} />

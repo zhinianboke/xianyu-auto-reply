@@ -14,7 +14,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from common.services.captcha.concurrency import run_browser_task
-from common.services.captcha.orchestrator import is_real_mouse_enabled
+from common.services.captcha.slider_mode import (
+    SLIDER_MODE_REAL_MOUSE,
+    refresh_slider_mode_from_database,
+)
 from common.services.captcha.weighted_runner import real_mouse_weighted_runner
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -404,6 +407,7 @@ async def solve_captcha(request: SolveCaptchaRequest):
         existing_cookies_str = (request.cookies or "").strip()
         device_id = (request.device_id or "").strip()
         url_provider = None
+        refetched_token_result: dict[str, object] = {}
         if existing_cookies_str:
             from common.services.captcha.token_refetch import request_fresh_captcha_url
             from app.services.captcha.slider_stealth import CAPTCHA_NOT_REQUIRED
@@ -417,6 +421,8 @@ async def solve_captcha(request: SolveCaptchaRequest):
             def _remote_url_provider():
                 """凭传入的 Cookie 重新请求 token 接口，拿到新鲜验证链接（远程端链接过期兜底）。"""
                 res = request_fresh_captcha_url(safe_id, _cookies_dict, existing_cookies_str, device_id)
+                refetched_token_result.clear()
+                refetched_token_result.update(res)
                 if res.get("token_ok"):
                     # 风控已解除、无需滑块：返回哨兵，让上层提前结束滑块流程
                     return CAPTCHA_NOT_REQUIRED
@@ -431,19 +437,22 @@ async def solve_captcha(request: SolveCaptchaRequest):
         slider_args = (
             safe_id, url, True, False, timeout, existing_cookies_str, url_provider,
         )
-        if is_real_mouse_enabled():
+        selected_slider_mode = await refresh_slider_mode_from_database()
+        if selected_slider_mode == SLIDER_MODE_REAL_MOUSE:
             # 被调用方请求在线程池之前参与本地/远程实时加权排队。
             success, cookies, engine = await real_mouse_weighted_runner.submit(
                 weight_class,
                 run_slider_verification_with_fallback,
                 *slider_args,
                 weight_class=weight_class,
+                slider_mode=selected_slider_mode,
             )
         else:
             success, cookies, engine = await run_browser_task(
                 run_slider_verification_with_fallback,
                 *slider_args,
                 weight_class=weight_class,
+                slider_mode=selected_slider_mode,
             )
     except Exception as e:
         logger.error(f"【过滑块接口】account_id={safe_id} 执行异常: {e}")
@@ -461,6 +470,27 @@ async def solve_captcha(request: SolveCaptchaRequest):
         }
 
     duration = _time.time() - start_ts
+    if success and not cookies and refetched_token_result.get("token_ok"):
+        refreshed_cookies = refetched_token_result.get("new_cookies")
+        if not isinstance(refreshed_cookies, dict):
+            refreshed_cookies = {}
+        _update_log(
+            "success",
+            f"重取验证链接时Token已可用，无需滑块，耗时: {duration:.2f}秒",
+            engine=engine,
+        )
+        return {
+            "success": True,
+            "code": 200,
+            "message": "Token已可用，无需滑块",
+            "data": {
+                "engine": engine,
+                "cookies": refreshed_cookies,
+                "token_already_available": True,
+                "url_expired": False,
+            },
+            "_risk_log_id": log_id,
+        }
     if success and cookies:
         _update_log(
             "success",

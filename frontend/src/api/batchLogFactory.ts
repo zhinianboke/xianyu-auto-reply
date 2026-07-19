@@ -74,6 +74,21 @@ export interface BatchLogApiWithClear<TBatch, TDetail> extends BatchLogApi<TBatc
   clearLogs: () => Promise<{ success: boolean; message?: string }>
 }
 
+interface UnifiedApiResponse<TData> {
+  success: boolean
+  code: number
+  message: string
+  data: TData | null
+}
+
+interface UnifiedBatchPage<TBatch> {
+  items: TBatch[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+}
+
 /**
  * 构造批次列表查询字符串。
  *
@@ -117,4 +132,44 @@ export function createBatchLogApi<TBatch, TDetail>(
     del<{ success: boolean; message?: string }>(clearLogsUrl)
 
   return { getBatches, getBatchDetail, clearLogs }
+}
+
+/**
+ * 构造使用项目统一响应体、且不提供清理入口的批次日志 API。
+ */
+export function createUnifiedBatchLogApi<TBatch, TDetail>(
+  batchesPath: string,
+): BatchLogApi<TBatch, TDetail> {
+  const batchesUrl = `${ADMIN_PREFIX}/${batchesPath}`
+
+  const getBatches = async (params?: BatchListQuery): Promise<BatchListResponse<TBatch>> => {
+    const response = await get<UnifiedApiResponse<UnifiedBatchPage<TBatch>>>(
+      `${batchesUrl}${buildBatchesQuery(params)}`,
+    )
+    if (!response.success || !response.data) {
+      return {
+        success: false,
+        message: response.message,
+        data: [],
+        total: 0,
+        page: params?.page ?? 1,
+        page_size: params?.page_size ?? 20,
+        total_pages: 0,
+      }
+    }
+    return {
+      success: true,
+      message: response.message,
+      data: response.data.items,
+      total: response.data.total,
+      page: response.data.page,
+      page_size: response.data.page_size,
+      total_pages: response.data.total_pages,
+    }
+  }
+
+  const getBatchDetail = (batchId: string) =>
+    get<BatchDetailResponse<TDetail>>(`${batchesUrl}/${batchId}`)
+
+  return { getBatches, getBatchDetail }
 }

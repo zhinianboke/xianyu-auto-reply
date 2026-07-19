@@ -293,6 +293,7 @@ python -m venv .venv
 # Linux/macOS: source .venv/bin/activate
 pip install -e .
 python -m playwright install chromium
+python -m patchright install chromium
 python main.py
 ```
 
@@ -304,6 +305,7 @@ python -m venv .venv
 # Linux/macOS: source .venv/bin/activate
 pip install -e .
 python -m playwright install chromium
+python -m patchright install chromium
 python main.py
 ```
 
@@ -418,7 +420,9 @@ npm run dev
 
 ### 登录或发布时报浏览器缺失？
 
-在对应 Python 环境执行：`python -m playwright install chromium`。Docker 环境依赖各服务 Dockerfile 内已安装的浏览器。
+Backend-Web 和 WebSocket 需要在对应 Python 环境依次执行：
+`python -m playwright install chromium`、`python -m patchright install chromium`。
+Docker 环境依赖各服务 Dockerfile 内已安装的浏览器。
 
 ### Docker 部署端口冲突？
 

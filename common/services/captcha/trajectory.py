@@ -1,14 +1,14 @@
 ﻿"""
 滑块轨迹生成器
 
-基于物理加速度模型生成"人类化三阶段"的滑动轨迹，用于驱动 Playwright
-模拟鼠标移动通过 NoCaptcha (NC) 滑块。
+基于真人通过样本的时序分布生成滑动轨迹，用于驱动 Playwright 模拟鼠标
+移动通过 NoCaptcha (NC) 滑块。
 
 核心设计：
-- 不超调：精确停在目标距离，避免 NC 风控因超调升级为 x5step=2 二阶段验证
-- 三阶段速度曲线：加速 → 匀速 → 减速，符合人类肌肉记忆
-- 步间延迟 10~20ms：避免极快轨迹被识别为机器人
-- Y 轴轻抖：±1px，模拟手部小幅抖动
+- 普通滑块越过轨道终点：参考真人模式优选样本的光标位移
+- 20 个时间分位控制点：复刻真人模式优选样本的速度进度
+- 目标内部时长 380~550ms：保持自然拖动，不追求快速完成
+- 连续 Y 轴弧线：避免逐点独立随机抖动形成锯齿
 """
 from __future__ import annotations
 
@@ -31,30 +31,24 @@ class TrajectoryGenerator:
         self.user_id = user_id
         self.pure_user_id = self._extract_pure_user_id(user_id)
 
-        # 人类化轨迹参数 —— 基于实测数据优化
-        #
-        # 关键发现：
-        # 1. 成功轨迹内部时间 avg=16.3ms (7.5-28ms)，
-        #    失败轨迹 avg=9.2ms (1.0-20.8ms)，极快轨迹(<5ms)几乎必败。
-        # 2. 7步轨迹失败率极高，6步轨迹成功率更高。
-        # 3. total_duration_range 下限为0时，random.uniform(0, 0.015) 有时
-        #    生成接近0的值，导致步间延迟 ~0.0001s，像机器人。
-        #
-        # CDP RTT ~80-150ms/步，6步 ≈ 480-900ms，加上内部 sleep ≈ 500-920ms
+        # 参数来自 human_trails 中真人通过样本的有效拖动段。Playwright 仍通过
+        # CDP 派发事件，但轨迹密度、总时长和速度变化不再与真人样本明显冲突。
         self.trajectory_params = {
-            # 总步数 5~6；7步失败率过高，排除
-            "total_steps_range": [5, 6],
-            # 内部 sleep 10~20ms，确保不像机器人
-            "total_duration_range": [0.010, 0.020],
-            # 阶段比例：加速 35% / 匀速 35% / 减速 30%
-            "accel_ratio": 0.35,
-            "const_ratio": 0.35,
-            "decel_ratio": 0.30,
-            # Y 轴抖动范围（px）：缩小到 ±1.0，减少抖动
-            "jitter_y_range": [-1.0, 1.0],
-            # 匀速阶段偶发微停顿概率：降低到 3%
-            "micro_pause_prob": 0.03,
-            "micro_pause_factor_range": [1.1, 1.3],
+            # 真人模式业务优选样本按时间八等分后的 X 进度与 Y 偏移。
+            "preferred_x_progress": [
+                0.0258, 0.0698, 0.1344, 0.1757, 0.2326,
+                0.2584, 0.3101, 0.3643, 0.4160, 0.4910,
+                0.5504, 0.6486, 0.7623, 0.8372, 0.9302,
+                0.9767, 0.9871, 0.9897, 0.9948, 1.0,
+            ],
+            "preferred_y_offsets": [
+                2.0, 3.0, 5.0, 5.0, 7.0,
+                8.0, 10.0, 11.0, 12.0, 14.0,
+                16.0, 19.0, 19.0, 19.0, 15.0,
+                13.0, 13.0, 13.0, 13.0, 13.0,
+            ],
+            "duration_range": [0.40, 0.48],
+            "overshoot_ratio_range": [0.45, 0.55],
         }
 
         # 保存最近一次轨迹的元数据，供失败分析使用
@@ -91,94 +85,74 @@ class TrajectoryGenerator:
             return t
 
     def generate_physics_trajectory(self, distance: float) -> List[Tuple[float, float, float]]:
-        """生成人类化滑动轨迹（不超调、三阶段缓动）
+        """生成参考真人通过样本的 Playwright 滑动轨迹。
 
         关键设计：
-        - 不超调：精确停在 distance，避免 NC 风控因超调升级为 x5step=2 二阶段验证
-        - 三阶段速度曲线：加速 35% / 匀速 35% / 减速 30%
-        - 步间延迟 10~20ms：低于此区间像机器人，高于此区间像故意慢动作
-        - Y 轴轻抖：±1px，模拟手部小幅抖动
-        - 匀速阶段偶发微停顿：约 3% 概率延迟翻 1.1~1.3 倍
+        - 普通滑块的光标越过轨道终点 45%~55%，滑块本体由页面限制在终点
+        - 使用 20 个时间分位控制点，复刻真人模式优选样本的速度进度
+        - 总时长随距离变化，并限制在 380~550ms
+        - 速度先升后降，末端自然收速并精确落点
+        - Y 轴使用连续弧线，只叠加很小的相关扰动
 
         Args:
             distance: 目标滑动距离（像素）
 
         Returns:
             轨迹点列表 [(x_offset, y_offset, delay_seconds), ...]；
-            最后一个点的 x_offset 恰好等于 distance。
+            普通滑块最后一点会越过 distance；小距离刮刮乐恰好等于 distance。
         """
         params = self.trajectory_params
-        steps_min, steps_max = params["total_steps_range"]
-        dur_min, dur_max = params["total_duration_range"]
-        accel_ratio = params["accel_ratio"]
-        const_ratio = params["const_ratio"]
-        decel_ratio = params["decel_ratio"]
-        jitter_min, jitter_max = params["jitter_y_range"]
-        micro_pause_prob = params["micro_pause_prob"]
-        pause_factor_min, pause_factor_max = params["micro_pause_factor_range"]
+        duration_min, duration_max = params["duration_range"]
+        total_duration = random.uniform(duration_min, duration_max)
+        # 真人模式业务优选样本在 258px 有效轨道上实际移动约 387px，光标
+        # 会在滑块本体到达终点后继续越过框体。小距离通常是刮刮乐，不越界。
+        cursor_distance = distance
+        if distance >= 180.0:
+            overshoot_min, overshoot_max = params["overshoot_ratio_range"]
+            cursor_distance += distance * random.uniform(overshoot_min, overshoot_max)
 
-        total_steps = random.randint(steps_min, steps_max)
-        total_duration = random.uniform(dur_min, dur_max)
-        # 平均单步延迟
-        avg_delay = total_duration / total_steps
+        # 严格复刻真人模式优选样本的时间分位形态，并只加轻微扰动避免轨迹完全固定。
+        progress_points = params["preferred_x_progress"]
+        total_steps = len(progress_points)
+        x_points: List[float] = []
+        previous_progress = 0.0
+        for index, base_progress in enumerate(progress_points):
+            if index == total_steps - 1:
+                progress = 1.0
+            else:
+                # 为后续控制点预留最小前进空间，避免末端多个点被固定上限
+                # 压成相同 X 坐标，形成只纵向抖动的停滞段。
+                min_progress_step = 0.002
+                remaining_points = total_steps - index - 1
+                max_progress = 1.0 - remaining_points * min_progress_step
+                progress = max(
+                    previous_progress + min_progress_step,
+                    base_progress + random.uniform(-0.008, 0.008),
+                )
+                progress = min(progress, max_progress)
+            previous_progress = progress
+            x_points.append(cursor_distance * progress)
 
-        # 三阶段步数：先确保每段至少 2 步，加入随机波动
-        accel_ratio_var = accel_ratio + random.uniform(-0.05, 0.05)
-        decel_ratio_var = decel_ratio + random.uniform(-0.05, 0.05)
-        accel_steps = max(2, int(round(total_steps * accel_ratio_var)))
-        decel_steps = max(2, int(round(total_steps * decel_ratio_var)))
-        const_steps = max(2, total_steps - accel_steps - decel_steps)
-        # 实际总步数（可能因 max(2,…) 微调）
-        total_steps = accel_steps + const_steps + decel_steps
+        y_scale = random.uniform(0.88, 1.12)
+        y_points = [
+            base_y * y_scale + random.uniform(-0.35, 0.35)
+            for base_y in params["preferred_y_offsets"]
+        ]
+        delay_weights = [random.uniform(0.9, 1.1) for _ in range(total_steps)]
+        delay_weight_total = sum(delay_weights)
+        delays = [total_duration * weight / delay_weight_total for weight in delay_weights]
 
-        # 三阶段距离分配：加入随机波动
-        accel_pct = 0.30 + random.uniform(-0.05, 0.05)
-        const_pct = 0.55 + random.uniform(-0.05, 0.05)
-        accel_dist = distance * accel_pct
-        const_dist = distance * const_pct
-        decel_dist = distance - accel_dist - const_dist
+        trajectory = list(zip(x_points, y_points, delays))
 
-        trajectory: List[Tuple[float, float, float]] = []
-
-        # 阶段 1：加速 —— 二次曲线 t^2，起步轻、越来越快
-        for i in range(1, accel_steps + 1):
-            t = i / accel_steps
-            x = accel_dist * (t * t)
-            y = random.uniform(jitter_min, jitter_max)
-            # 起步段单步延迟略高（人类反应时间），逐步降低
-            delay = avg_delay * random.uniform(1.0, 1.3)
-            trajectory.append((x, y, delay))
-
-        # 阶段 2：匀速 —— 线性 + 偶发微停顿
-        const_base_x = accel_dist
-        for i in range(1, const_steps + 1):
-            t = i / const_steps
-            x = const_base_x + const_dist * t
-            y = random.uniform(jitter_min, jitter_max) * 0.6
-            delay = avg_delay * random.uniform(0.85, 1.15)
-            if random.random() < micro_pause_prob:
-                delay *= random.uniform(pause_factor_min, pause_factor_max)
-            trajectory.append((x, y, delay))
-
-        # 阶段 3：减速 —— 反二次曲线 1-(1-t)^2，越来越慢、精确停在 distance
-        decel_base_x = accel_dist + const_dist
-        for i in range(1, decel_steps + 1):
-            t = i / decel_steps
-            x = decel_base_x + decel_dist * (1 - (1 - t) ** 2)
-            y = random.uniform(jitter_min, jitter_max) * 0.4
-            # 减速段单步延迟最长，模拟"接近目标时放慢"
-            delay = avg_delay * random.uniform(1.1, 1.5)
-            trajectory.append((x, y, delay))
-
-        # 强制最后一步精确落在 distance，避免浮点累积误差
+        # 强制最后一步精确落在光标目标，避免浮点累积误差。
         if trajectory:
             last_x, last_y, last_d = trajectory[-1]
-            trajectory[-1] = (distance, last_y, last_d)
+            trajectory[-1] = (cursor_distance, last_y, last_d)
 
         logger.info(
-            f"【{self.pure_user_id}】🧍 人类化轨迹：{total_steps}步 "
-            f"(加速{accel_steps}/匀速{const_steps}/减速{decel_steps})、"
-            f"总时长≈{total_duration * 1000:.0f}ms、距离{distance:.1f}px（无超调）"
+            f"【{self.pure_user_id}】真人样本化 Playwright 轨迹：{total_steps}点、"
+            f"总时长≈{sum(delays) * 1000:.0f}ms、轨道{distance:.1f}px、"
+            f"光标位移{cursor_distance:.1f}px"
         )
         return trajectory
 
@@ -196,6 +170,7 @@ class TrajectoryGenerator:
 
             self.current_trajectory_data = {
                 "distance": distance,
+                "cursor_distance": trajectory[-1][0],
                 "model": "human_three_phase",
                 "total_steps": len(trajectory),
                 "trajectory_points": trajectory.copy(),

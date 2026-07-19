@@ -17,6 +17,7 @@ Windows 真实鼠标输入注入（SendInput）+ 高精度定时器
 from __future__ import annotations
 
 import ctypes
+import sys
 import time
 from ctypes import wintypes
 
@@ -54,10 +55,38 @@ _SM_XVIRTUALSCREEN = 76
 _SM_YVIRTUALSCREEN = 77
 _SM_CXVIRTUALSCREEN = 78
 _SM_CYVIRTUALSCREEN = 79
+_DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
+
+
+def enable_per_monitor_dpi_awareness() -> str:
+    """尽早启用 Per-Monitor-V2 DPI Awareness，并返回诊断状态。"""
+    if sys.platform != "win32":
+        return "not_windows"
+    user32 = ctypes.windll.user32
+    try:
+        setter = user32.SetProcessDpiAwarenessContext
+        setter.argtypes = [ctypes.c_void_p]
+        setter.restype = wintypes.BOOL
+        ctypes.set_last_error(0)
+        if setter(_DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2):
+            return "per_monitor_v2_enabled"
+        error_code = ctypes.get_last_error()
+        if error_code == 5:
+            return "dpi_awareness_already_set"
+        return f"per_monitor_v2_failed_error_{error_code}"
+    except AttributeError:
+        try:
+            result = ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            return "per_monitor_enabled" if result == 0 else f"per_monitor_failed_{result}"
+        except Exception as exc:
+            return f"dpi_awareness_unavailable_{type(exc).__name__}"
+
+
+DPI_AWARENESS_STATUS = enable_per_monitor_dpi_awareness()
 
 
 def virtual_screen() -> tuple:
-    """返回虚拟桌面 (left, top, width, height)（物理像素，覆盖多屏）。"""
+    """实时返回虚拟桌面 (left, top, width, height) 的物理像素范围。"""
     g = ctypes.windll.user32.GetSystemMetrics
     return (
         g(_SM_XVIRTUALSCREEN),
@@ -67,18 +96,16 @@ def virtual_screen() -> tuple:
     )
 
 
-_VX, _VY, _VCX, _VCY = virtual_screen()
-
-
 def send_move_abs(x: int, y: int) -> None:
     """通过 SendInput 以绝对屏幕物理像素坐标移动光标（真实输入事件，可被 Chrome 合并成 coalesced）。
 
     Args:
         x, y: 目标点的屏幕物理像素坐标
     """
-    # 归一化到 0..65535 的虚拟桌面绝对坐标（多屏安全）
-    nx = int((x - _VX) * 65535 / max(1, _VCX - 1))
-    ny = int((y - _VY) * 65535 / max(1, _VCY - 1))
+    # 每次实时读取虚拟桌面，避免启动后切换显示器或 RDP 导致缓存坐标失效。
+    left, top, width, height = virtual_screen()
+    nx = int((x - left) * 65535 / max(1, width - 1))
+    ny = int((y - top) * 65535 / max(1, height - 1))
     mi = _MOUSEINPUT(nx, ny, 0,
                      _MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE | _MOUSEEVENTF_VIRTUALDESK, 0, 0)
     inp = _INPUT(_INPUT_MOUSE)

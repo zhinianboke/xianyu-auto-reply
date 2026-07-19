@@ -3,7 +3,7 @@
 
 功能：
 1. 纯 API 调 login.do，对响应做四分支编排（滑块 / 直接成功 / 触发人脸 / 失败）
-2. 滑块委托：配了远程→远程直连；否则→委托 websocket 本机真实鼠标（并发统一在 websocket）
+2. 滑块委托：配了远程→远程直连；否则→委托 WebSocket 使用其配置的滑块引擎
 3. 人脸：复用 common 人脸链路，渲染二维码供前台展示，扫码后自动收 Cookie
 4. 成功后按 account_id 入库、起 WebSocket；滑块未通过时保持协议链路重试
 
@@ -67,20 +67,13 @@ async def _read_remote_config() -> Dict[str, Any]:
     }
 
 
-def _real_mouse_enabled() -> bool:
-    """读取「真实鼠标」开关（与 orchestrator 一致）。"""
-    try:
-        return bool(getattr(get_settings(), "captcha_real_mouse_enabled", False))
-    except Exception:
-        return False
-
-
 async def _solve_slider(
     account_id: str, slider_url: str, remote_config: Dict[str, Any]
 ) -> Tuple[str, Optional[Dict[str, str]], Optional[str]]:
-    """过滑块（登录场景）：配了远程→远程（远程支持登录滑块）；否则→委托 websocket 本机真实鼠标。
+    """过滑块（登录场景）：配了远程则远程处理，否则委托 WebSocket 滑块引擎。
 
-    本机真实鼠标引擎按 URL 自动识别登录场景（加载登录轨迹 + 最大化窗口）。
+    WebSocket 服务自行根据系统设置决定使用真实鼠标或其它滑块引擎，
+    backend-web 不参与引擎选择。
 
     协议模式一旦选定过滑块通道（远程 / 本机），满足协议后【不允许跨通道回退】：
     远程超时/不可用（solve_remote 返回 'fallback'，其本意是"回退本机"）在协议语境下
@@ -104,7 +97,7 @@ async def _solve_slider(
             )
             return "fail", None, message
         return status, cookies, message
-    # 否则委托 websocket 本机真实鼠标（并发/排队统一在 websocket）
+    # 否则委托 WebSocket 滑块引擎（并发、排队和引擎选择统一在 WebSocket）
     resp = await websocket_client.solve_captcha(
         account_id=account_id, url=slider_url, call_type="local"
     )

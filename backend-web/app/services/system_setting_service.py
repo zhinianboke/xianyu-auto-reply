@@ -70,8 +70,9 @@ DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
     "captcha.remote_processing_max": ("20", "远程调用允许的最大处理中滑块日志数，0=不限制"),
     "captcha.remote_cooldown_seconds": ("600", "远程调用达到处理中上限后的冷却秒数，0=不冷却"),
     "captcha.remote_cooldown_until": ("0", "远程过滑块调用冷却截止时间戳"),
-    # 账号密码登录模式：auto-自动(具备协议能力走协议,否则浏览器) / protocol-强制协议 / browser-强制浏览器
-    "password_login.mode": ("auto", "账号密码登录模式：auto/protocol/browser"),
+    "captcha.slider_mode": ("browser", "滑块滑动方式：browser/real_mouse"),
+    # 账号密码登录模式：protocol-协议登录 / browser-浏览器登录
+    "password_login.mode": ("browser", "账号密码登录模式：protocol/browser"),
 }
 
 # 不需要XSS转义的键（布尔值、数字等）
@@ -124,6 +125,7 @@ NO_ESCAPE_KEYS = {
     "captcha.remote_processing_max",
     "captcha.remote_cooldown_seconds",
     "captcha.remote_cooldown_until",
+    "captcha.slider_mode",
     # real_mouse 排队权重：数字字符串，无需 XSS 转义
     "captcha.real_mouse_weight_local",
     "captcha.real_mouse_weight_remote",
@@ -164,6 +166,16 @@ class SystemSettingService:
             if not include_sensitive and entry.key in SENSITIVE_KEYS:
                 continue
             settings[entry.key] = entry.value
+        password_login_mode = str(settings.get("password_login.mode") or "").strip().lower()
+        settings["password_login.mode"] = (
+            password_login_mode
+            if password_login_mode in {"protocol", "browser"}
+            else "browser"
+        )
+        slider_mode = str(settings.get("captcha.slider_mode") or "").strip().lower()
+        settings["captcha.slider_mode"] = (
+            slider_mode if slider_mode in {"browser", "real_mouse"} else "browser"
+        )
         return settings
 
     async def set_setting(self, key: str, value: str, description: str | None = None) -> None:

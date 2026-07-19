@@ -9,12 +9,12 @@ import { put } from '@/utils/request'
 import type { ApiResponse, PasswordLoginMode } from '@/types'
 
 const PASSWORD_LOGIN_MODE_URL = '/api/v1/system-settings/password_login.mode'
-const PASSWORD_LOGIN_MODES: PasswordLoginMode[] = ['auto', 'protocol', 'browser']
+const PASSWORD_LOGIN_MODES: PasswordLoginMode[] = ['protocol', 'browser']
 
 export const normalizePasswordLoginMode = (value: unknown): PasswordLoginMode => {
   return PASSWORD_LOGIN_MODES.includes(value as PasswordLoginMode)
     ? value as PasswordLoginMode
-    : 'auto'
+    : 'browser'
 }
 
 export const updatePasswordLoginMode = (

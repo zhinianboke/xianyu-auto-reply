@@ -2,7 +2,7 @@
  * 基础设置中的账号密码登录方式切换项。
  *
  * 功能：
- * 1. 展示自动选择、协议登录、浏览器登录三种方式
+ * 1. 展示协议登录、浏览器登录两种方式
  * 2. 用户切换后立即持久化，并反馈实时生效结果
  */
 import { useState } from 'react'
@@ -22,7 +22,6 @@ interface PasswordLoginModeSettingProps {
 }
 
 const MODE_LABELS: Record<PasswordLoginMode, string> = {
-  auto: '自动选择',
   protocol: '协议登录',
   browser: '浏览器登录',
 }
@@ -68,7 +67,7 @@ export function PasswordLoginModeSetting({
       <div className="min-w-0">
         <p className="font-medium text-slate-900 dark:text-slate-100">账号密码登录方式</p>
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          自动选择会优先使用可用的协议登录能力，否则使用浏览器登录
+          账号密码登录将严格按照所选方式执行，切换后立即生效
         </p>
       </div>
       <div className="relative shrink-0">
@@ -79,7 +78,6 @@ export function PasswordLoginModeSetting({
           onChange={(event) => void handleChange(event.target.value as PasswordLoginMode)}
           className="input-ios w-36 pr-9 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          <option value="auto">自动选择</option>
           <option value="protocol">协议登录</option>
           <option value="browser">浏览器登录</option>
         </select>
