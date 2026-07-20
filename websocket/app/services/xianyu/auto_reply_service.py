@@ -93,6 +93,13 @@ class AutoReplyService:
         '我已付款，等待你发货',
         '[记得及时发货]',
     ]
+
+    AUTO_SELF_MESSAGES_TO_SKIP = [
+        '已求买家送我闲鱼小红花',
+        '可以送我闲鱼小红花吗',
+        '卖家人不错？送Ta闲鱼小红花',
+        '你人真不错，送你闲鱼小红花',
+    ]
     
     def __init__(self, cookie_id: str, xianyu_instance):
         """
@@ -120,10 +127,80 @@ class AutoReplyService:
         self._processed_messages_max_size = 10000
         self._message_expire_time: Optional[int] = None  # 从数据库加载
         self._message_expire_time_loaded = False
+        # 记录本服务刚发出的自动回复，识别闲鱼随后推回来的“自身消息”。
+        # 否则自动回复会被误判为人工发送，并触发会话暂停。
+        self._pending_auto_sent_messages: Dict[str, List[float]] = {}
+        self._pending_auto_sent_ttl: float = 60.0
+        self._pending_auto_sent_max_size: int = 10000
         self._reply_trace_var: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
             f"auto_reply_trace_{cookie_id}",
             default=None,
         )
+
+    @staticmethod
+    def _normalize_sent_message_text(message: str) -> str:
+        """规范化发送与回流文本，避免换行格式差异导致匹配失败。"""
+        return str(message or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+    def _build_auto_sent_message_key(self, chat_id: str, message: str) -> str:
+        normalized_chat_id = str(chat_id or "").strip()
+        normalized_message = self._normalize_sent_message_text(message)
+        return f"{normalized_chat_id}\0{normalized_message}"
+
+    def _cleanup_pending_auto_sent_messages(self, now: Optional[float] = None) -> None:
+        """清理已过期的自动发送登记，避免长期运行时占用内存。"""
+        current_time = now if now is not None else time.time()
+        expire_before = current_time - self._pending_auto_sent_ttl
+
+        for key, timestamps in list(self._pending_auto_sent_messages.items()):
+            valid_timestamps = [timestamp for timestamp in timestamps if timestamp >= expire_before]
+            if valid_timestamps:
+                self._pending_auto_sent_messages[key] = valid_timestamps
+            else:
+                self._pending_auto_sent_messages.pop(key, None)
+
+    def _register_auto_sent_message(self, chat_id: str, message: str) -> None:
+        """在发送前登记自动回复，确保极快回流时也能正确识别。"""
+        key = self._build_auto_sent_message_key(chat_id, message)
+        now = time.time()
+
+        if len(self._pending_auto_sent_messages) >= self._pending_auto_sent_max_size:
+            self._cleanup_pending_auto_sent_messages(now)
+
+        self._pending_auto_sent_messages.setdefault(key, []).append(now)
+
+    def _discard_auto_sent_message(self, chat_id: str, message: str) -> None:
+        """发送失败时撤销一条尚未消费的自动发送登记。"""
+        key = self._build_auto_sent_message_key(chat_id, message)
+        timestamps = self._pending_auto_sent_messages.get(key)
+        if not timestamps:
+            return
+
+        timestamps.pop()
+        if not timestamps:
+            self._pending_auto_sent_messages.pop(key, None)
+
+    def _consume_auto_sent_message(self, chat_id: str, message: str) -> bool:
+        """消费匹配的自动回复回流；未匹配则视为真正的人工自身消息。"""
+        now = time.time()
+        self._cleanup_pending_auto_sent_messages(now)
+
+        key = self._build_auto_sent_message_key(chat_id, message)
+        timestamps = self._pending_auto_sent_messages.get(key)
+        if not timestamps:
+            return False
+
+        timestamps.pop(0)
+        if not timestamps:
+            self._pending_auto_sent_messages.pop(key, None)
+        return True
+
+    def _is_auto_self_message_to_skip(self, message: str) -> bool:
+        """识别平台/系统自动发出的卖家侧消息，避免误判为人工接管。"""
+        normalized_message = self._normalize_sent_message_text(message)
+        if not normalized_message:
+            return False
+        return any(keyword in normalized_message for keyword in self.AUTO_SELF_MESSAGES_TO_SKIP)
     
     async def _get_account(self, session: AsyncSession) -> Optional[XYAccount]:
         """获取账号信息(带缓存)"""
@@ -523,6 +600,19 @@ class AutoReplyService:
                 return True
         
         return False
+
+    def find_matched_filter_keyword(self, message: str, filter_keywords: List[str]) -> Optional[str]:
+        """返回命中的过滤关键词，未命中则返回 None。"""
+        if not filter_keywords or not message:
+            return None
+
+        message_lower = message.lower()
+        for keyword in filter_keywords:
+            normalized_keyword = (keyword or "").strip()
+            if normalized_keyword and normalized_keyword.lower() in message_lower:
+                return normalized_keyword
+
+        return None
     
     def should_skip_notify(self, message: str, filter_keywords: List[str]) -> bool:
         """检查消息是否应该跳过消息通知
@@ -580,6 +670,26 @@ class AutoReplyService:
             myid = getattr(self.xianyu_instance, 'myid', self.cookie_id)
             self._merge_log_context(log_payload, myid=myid)
             if send_user_id == myid:
+                if self._consume_auto_sent_message(chat_id, send_message):
+                    logger.info(
+                        f"【{self.cookie_id}】识别到自动回复回流，不暂停会话: "
+                        f"chat_id={chat_id}, message={send_message[:50]}"
+                    )
+                    log_payload["process_status"] = "skipped"
+                    log_payload["decision_reason"] = "auto_reply_echo"
+                    self._merge_log_context(log_payload, auto_reply_echo=True)
+                    return
+
+                if self._is_auto_self_message_to_skip(send_message):
+                    logger.info(
+                        f"【{self.cookie_id}】识别到系统自动发出的卖家侧消息，不暂停会话: "
+                        f"chat_id={chat_id}, message={send_message[:50]}"
+                    )
+                    log_payload["process_status"] = "skipped"
+                    log_payload["decision_reason"] = "auto_self_message"
+                    self._merge_log_context(log_payload, auto_self_message=True)
+                    return
+
                 # 手动发出消息，暂停该会话的自动回复
                 log_payload["process_status"] = "skipped"
                 log_payload["decision_reason"] = "self_message"
@@ -793,15 +903,17 @@ class AutoReplyService:
                 if not failed_results:
                     log_payload["process_status"] = "success"
                     log_payload["decision_reason"] = "reply_sent"
-                    # 消息已发出 WebSocket，但是否被服务端接收需异步等待响应确认，
-                    # 先置为 unknown，由后台任务在拿到响应后回写 success/failed
-                    log_payload["send_status"] = "unknown"
                     # 收集本次发出消息的 (future, mid)，供异步检测发送结果
-                    log_payload["_pending_send_waiters"] = [
+                    pending_send_waiters = [
                         (result.get("send_future"), result.get("mid"))
                         for result in send_results
                         if result.get("send_future") is not None
                     ]
+                    log_payload["_pending_send_waiters"] = pending_send_waiters
+                    # 旧 WebSocket 路径有 send_future 时先置 unknown 等回写；
+                    # chat-new 路径成功时已拿到 message_id 确认，没有 send_future，直接记 success，
+                    # 避免后续超时任务把实际成功的消息标成 timeout。
+                    log_payload["send_status"] = "unknown" if pending_send_waiters else "success"
                 else:
                     log_payload["process_status"] = "failed"
                     log_payload["decision_reason"] = "send_failed"
@@ -930,12 +1042,15 @@ class AutoReplyService:
             logger.info(f"【{self.cookie_id}】检测到分隔符，拆分为 {len(messages)} 条消息")
              
             for i, msg in enumerate(messages):
+                self._register_auto_sent_message(chat_id, msg)
                 result = await self.xianyu_instance.send_msg(
                     websocket=websocket,
                     chat_id=chat_id,
                     send_user_id=send_user_id,
                     content=msg,
                 )
+                if not result or not result.get("success", False):
+                    self._discard_auto_sent_message(chat_id, msg)
                 send_results.append(result or self._build_empty_send_result("text", msg))
                 logger.info(f"【{self.cookie_id}】发送文本回复 {i+1}/{len(messages)}: {msg[:50]}...")
                  
@@ -944,12 +1059,15 @@ class AutoReplyService:
                     await asyncio.sleep(0.5)
         else:
             # 单条消息直接发送
+            self._register_auto_sent_message(chat_id, text)
             result = await self.xianyu_instance.send_msg(
                 websocket=websocket,
                 chat_id=chat_id,
                 send_user_id=send_user_id,
                 content=text,
             )
+            if not result or not result.get("success", False):
+                self._discard_auto_sent_message(chat_id, text)
             send_results.append(result or self._build_empty_send_result("text", text))
             logger.info(f"【{self.cookie_id}】发送文本回复: {text[:50]}...")
 
@@ -1105,6 +1223,8 @@ class AutoReplyService:
                     session, send_user_name, send_user_id, send_message, item_id, chat_id
                 )
                 if ai_reply:
+                    if ai_reply == "EMPTY_REPLY":
+                        return None
                     return ai_reply
                 
                 default_reply = await self.get_default_reply(
@@ -1872,6 +1992,25 @@ class AutoReplyService:
             )
             
             if reply:
+                blocked_keywords = await self.get_filter_keywords('skip_ai_reply_output')
+                matched_blocked_keyword = self.find_matched_filter_keyword(reply, blocked_keywords)
+                if matched_blocked_keyword:
+                    logger.warning(
+                        f"【{self.cookie_id}】AI回复命中输出黑名单 '{matched_blocked_keyword}'，"
+                        f"跳过发送: {reply[:80]}..."
+                    )
+                    if reply_trace is not None:
+                        reply_trace["process_status"] = "skipped"
+                        reply_trace["decision_reason"] = "ai_output_filter"
+                        reply_trace["reply_strategy"] = "ai"
+                        reply_trace["matched_rule_type"] = "ai_output_filter"
+                        reply_trace["reply_mode"] = "text"
+                        reply_trace["reply_text"] = reply
+                        reply_trace["reply_segments"] = self._build_text_reply_segments(reply)
+                        reply_trace.setdefault("context_snapshot", {})["ai_output_filter_keywords"] = blocked_keywords
+                        reply_trace.setdefault("context_snapshot", {})["ai_output_filter_matched_keyword"] = matched_blocked_keyword
+                    return "EMPTY_REPLY"
+
                 logger.info(f"【{self.cookie_id}】AI回复生成成功: {reply[:50]}...")
                 if reply_trace is not None:
                     reply_trace["reply_strategy"] = "ai"
