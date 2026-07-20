@@ -1252,7 +1252,8 @@ class DatabaseInitializer:
                 original_price DECIMAL(12,2) DEFAULT NULL COMMENT '原价（划线价）',
                 category VARCHAR(100) DEFAULT NULL COMMENT '商品分类',
                 images JSON DEFAULT NULL COMMENT '图片URL列表（最多9张）',
-                delivery_method VARCHAR(20) DEFAULT 'express' COMMENT '发货方式：express-快递, pickup-自提',
+                delivery_method VARCHAR(20) DEFAULT 'free_shipping' COMMENT '发货方式：free_shipping-包邮, distance_billing-按距离计费, fixed_fee-一口价, no_shipping-无需邮寄',
+                support_pickup TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否支持自提：1是 0否',
                 postage DECIMAL(8,2) DEFAULT 0 COMMENT '邮费，0表示包邮',
                 address VARCHAR(200) DEFAULT NULL COMMENT '宝贝所在地',
                 brand VARCHAR(100) DEFAULT NULL COMMENT '品牌',
@@ -1264,6 +1265,39 @@ class DatabaseInitializer:
                 INDEX idx_created_at (created_at),
                 INDEX idx_pm_user_created (user_id, created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品素材库表';
+        """,
+
+        # 37.1 AI铺货配置表
+        "xy_ai_listing_configs": """
+            CREATE TABLE IF NOT EXISTS xy_ai_listing_configs (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                user_id BIGINT NOT NULL COMMENT '所属用户ID',
+                name VARCHAR(100) NOT NULL COMMENT '配置名称',
+                prompt TEXT NOT NULL COMMENT '商品生成提示词',
+                reference_text TEXT DEFAULT NULL COMMENT '参考文案',
+                price_mode VARCHAR(20) DEFAULT 'fixed' COMMENT '价格模式：fixed/range',
+                fixed_price DECIMAL(12,2) DEFAULT NULL COMMENT '固定价格',
+                price_min DECIMAL(12,2) DEFAULT NULL COMMENT '最低价格',
+                price_max DECIMAL(12,2) DEFAULT NULL COMMENT '最高价格',
+                text_api_url VARCHAR(500) NOT NULL COMMENT '文案AI接口地址',
+                text_api_key TEXT NOT NULL COMMENT '文案AI Key',
+                text_model VARCHAR(120) NOT NULL COMMENT '文案AI模型',
+                image_mode VARCHAR(20) DEFAULT 'random' COMMENT '图片模式：ai/random',
+                image_api_url VARCHAR(500) DEFAULT NULL COMMENT '图片AI接口地址',
+                image_api_key TEXT DEFAULT NULL COMMENT '图片AI Key',
+                image_model VARCHAR(120) DEFAULT NULL COMMENT '图片AI模型',
+                image_prompt TEXT DEFAULT NULL COMMENT '图片生成提示词',
+                image_polish_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否启用图片提示词AI润色',
+                image_polish_sequential TINYINT(1) NOT NULL DEFAULT 0 COMMENT '多图是否保持关联',
+                random_images JSON DEFAULT NULL COMMENT '随机图库',
+                random_image_count INT DEFAULT 1 COMMENT '随机选图数量',
+                material_defaults JSON DEFAULT NULL COMMENT '素材默认字段',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX idx_user_id (user_id),
+                INDEX idx_created_at (created_at),
+                INDEX idx_ai_listing_user_created (user_id, created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI铺货配置表';
         """,
 
         # 38.1 定时求小红花执行日志表
@@ -1725,6 +1759,10 @@ class DatabaseInitializer:
             ("proxy_url", "VARCHAR(255) DEFAULT NULL COMMENT '代理API地址（GET返回IP:PORT列表，取一个作HTTP代理；空=不使用代理）'", "collect_pages"),
             ("direct_order", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '采集后是否直接下单（开启则新采集商品立即用下单账号下单后再入库）'", "order_batch_size"),
         ],
+        "xy_ai_listing_configs": [
+            ("image_polish_enabled", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否启用图片提示词AI润色'", "image_prompt"),
+            ("image_polish_sequential", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '多图是否保持关联'", "image_polish_enabled"),
+        ],
         "xy_listing_monitor_logs": [
             ("used_account_ids", "JSON DEFAULT NULL COMMENT '本次执行实际使用过的账号ID列表（可能多个）'", "account_id"),
             ("trigger_type", "VARCHAR(10) NOT NULL DEFAULT 'auto' COMMENT '触发方式：auto-定时自动，manual-手动'", "keyword"),
@@ -1879,6 +1917,9 @@ class DatabaseInitializer:
             ("resolved_address_id", "BIGINT DEFAULT NULL COMMENT '本次发布命中的地址池ID'", "error_message"),
             ("resolved_address_text", "VARCHAR(200) DEFAULT NULL COMMENT '本次发布实际使用的地址搜索词'", "resolved_address_id"),
             ("address_source", "VARCHAR(20) DEFAULT NULL COMMENT '地址来源：material/account_pool/global_pool'", "resolved_address_text"),
+        ],
+        "xy_product_materials": [
+            ("support_pickup", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否支持自提：1是 0否'", "delivery_method"),
         ],
         "xy_account_login_logs": [
             ("updated_cookie_names", "VARCHAR(500) DEFAULT NULL COMMENT '接口续期更新的Cookie字段名（逗号分隔）'", "error_message"),

@@ -12,12 +12,30 @@ import React, { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { Send, FolderOpen, Loader2, CheckCircle, XCircle, ExternalLink, Upload, Trash2, X } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
-import { publishSingle, getMaterials, uploadProductImages, type ProductMaterial } from '@/api/productPublish'
+import {
+  publishSingle,
+  getPublishLog,
+  getPublishLogs,
+  getMaterials,
+  uploadProductImages,
+  type PublishLog,
+  type ProductDeliveryMethod,
+  type ProductMaterial,
+} from '@/api/productPublish'
 import { getAccountDetails } from '@/api/accounts'
 import { PageLoading } from '@/components/common/Loading'
 
 const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '其他']
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
+const SINGLE_PUBLISH_TRACKER_KEY = 'product_publish_single_active'
+const SINGLE_PUBLISH_POLL_INTERVAL = 2000
+
+interface SinglePublishTracker {
+  account_id: string
+  title: string
+  started_at: string
+  log_id?: number
+}
 
 interface PublishForm {
   account_id: string
@@ -27,7 +45,8 @@ interface PublishForm {
   original_price: string
   category: string
   address: string
-  delivery_method: 'express' | 'pickup'
+  delivery_method: ProductDeliveryMethod
+  support_pickup: boolean
   postage: string
   brand: string
   condition: string
@@ -85,6 +104,7 @@ function MaterialPickerModal({ onSelect, onClose }: { onSelect: (m: ProductMater
 export function ProductPublish() {
   const { addToast } = useUIStore()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [accounts, setAccounts] = useState<any[]>([])
   const [loadingAccounts, setLoadingAccounts] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -103,7 +123,7 @@ export function ProductPublish() {
   const [imagePreviews, setImagePreviews] = useState<string[]>([])
   const [form, setForm] = useState<PublishForm>({
     account_id: '', title: '', description: '', price: '', original_price: '',
-    category: '', address: '', delivery_method: 'express', postage: '0', brand: '', condition: '全新',
+    category: '', address: '', delivery_method: 'free_shipping', support_pickup: false, postage: '0', brand: '', condition: '全新',
   })
 
   useEffect(() => {
@@ -111,6 +131,115 @@ export function ProductPublish() {
       .then(list => { setAccounts(list); if (list.length > 0) setForm(f => ({ ...f, account_id: list[0].id })) })
       .catch(() => {})
       .finally(() => setLoadingAccounts(false))
+  }, [])
+
+  const clearSinglePublishPolling = () => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current)
+      pollingRef.current = null
+    }
+  }
+
+  const saveSinglePublishTracker = (tracker: SinglePublishTracker) => {
+    sessionStorage.setItem(SINGLE_PUBLISH_TRACKER_KEY, JSON.stringify(tracker))
+  }
+
+  const getSinglePublishTracker = (): SinglePublishTracker | null => {
+    try {
+      const raw = sessionStorage.getItem(SINGLE_PUBLISH_TRACKER_KEY)
+      return raw ? JSON.parse(raw) as SinglePublishTracker : null
+    } catch {
+      sessionStorage.removeItem(SINGLE_PUBLISH_TRACKER_KEY)
+      return null
+    }
+  }
+
+  const clearSinglePublishTracker = () => {
+    sessionStorage.removeItem(SINGLE_PUBLISH_TRACKER_KEY)
+  }
+
+  const buildResultFromLog = (log: PublishLog) => ({
+    success: log.status === 'success',
+    message: log.status === 'success'
+      ? '商品发布成功'
+      : log.error_message || '商品发布失败',
+    item_url: log.item_url || undefined,
+    sync_status: undefined,
+    sync_message: undefined,
+    sync_total_count: 0,
+    sync_saved_count: 0,
+  })
+
+  const findTrackedPublishLog = async (tracker: SinglePublishTracker): Promise<PublishLog | null> => {
+    if (tracker.log_id) {
+      const res = await getPublishLog(tracker.log_id)
+      return res.success && res.data ? res.data : null
+    }
+
+    const res = await getPublishLogs(1, 20, tracker.account_id)
+    if (!res.success) return null
+    const startedAt = new Date(tracker.started_at).getTime()
+    const matched = res.data.list.find(log =>
+      !log.batch_id &&
+      log.account_id === tracker.account_id &&
+      log.title === tracker.title &&
+      new Date(log.created_at).getTime() >= startedAt - 60 * 1000
+    )
+    if (!matched) return null
+
+    const nextTracker = { ...tracker, log_id: matched.id }
+    saveSinglePublishTracker(nextTracker)
+    return matched
+  }
+
+  const syncSinglePublishStatus = async () => {
+    const tracker = getSinglePublishTracker()
+    if (!tracker) {
+      clearSinglePublishPolling()
+      return
+    }
+
+    try {
+      const log = await findTrackedPublishLog(tracker)
+      if (!log) {
+        if (Date.now() - new Date(tracker.started_at).getTime() > 10 * 60 * 1000) {
+          clearSinglePublishTracker()
+          clearSinglePublishPolling()
+          setSubmitting(false)
+        } else {
+          setSubmitting(true)
+        }
+        return
+      }
+
+      if (log.status === 'publishing' || log.status === 'pending') {
+        setSubmitting(true)
+        return
+      }
+
+      setSubmitting(false)
+      setResult(buildResultFromLog(log))
+      clearSinglePublishTracker()
+      clearSinglePublishPolling()
+    } catch {
+      setSubmitting(true)
+    }
+  }
+
+  const startSinglePublishPolling = () => {
+    clearSinglePublishPolling()
+    void syncSinglePublishStatus()
+    pollingRef.current = setInterval(() => {
+      void syncSinglePublishStatus()
+    }, SINGLE_PUBLISH_POLL_INTERVAL)
+  }
+
+  useEffect(() => {
+    if (getSinglePublishTracker()) {
+      setSubmitting(true)
+      startSinglePublishPolling()
+    }
+    return () => clearSinglePublishPolling()
   }, [])
 
   /** 处理图片上传 */
@@ -144,11 +273,19 @@ export function ProductPublish() {
 
   /** 从素材库导入 */
   const applyMaterial = (m: ProductMaterial) => {
+    const rawDeliveryMethod = m.delivery_method as string | undefined
+    const deliveryMethod: ProductDeliveryMethod =
+      rawDeliveryMethod === 'distance_billing' || rawDeliveryMethod === 'fixed_fee' || rawDeliveryMethod === 'no_shipping'
+        ? rawDeliveryMethod
+        : rawDeliveryMethod === 'virtual'
+          ? 'no_shipping'
+          : 'free_shipping'
     setForm(f => ({
       ...f, title: m.title, description: m.description, price: String(m.price),
       original_price: m.original_price ? String(m.original_price) : '',
       category: m.category || '', address: m.address || '',
-      delivery_method: (m.delivery_method as 'express' | 'pickup') || 'express',
+      delivery_method: deliveryMethod,
+      support_pickup: m.support_pickup ?? false,
       postage: String(m.postage ?? 0), brand: m.brand || '', condition: m.condition || '全新',
     }))
     const urls = m.images || []
@@ -158,6 +295,14 @@ export function ProductPublish() {
     addToast({ type: 'success', message: '已从素材库导入' })
   }
 
+  const updateDeliveryMethod = (deliveryMethod: ProductDeliveryMethod) => {
+    setForm(f => ({
+      ...f,
+      delivery_method: deliveryMethod,
+      postage: deliveryMethod === 'fixed_fee' ? f.postage : '0',
+    }))
+  }
+
   /** 发布商品 */
   const handlePublish = async () => {
     if (!form.account_id) { addToast({ type: 'warning', message: '请选择发布账号' }); return }
@@ -165,15 +310,24 @@ export function ProductPublish() {
     if (!form.description.trim()) { addToast({ type: 'warning', message: '请填写商品描述' }); return }
     if (!form.price || parseFloat(form.price) <= 0) { addToast({ type: 'warning', message: '请填写有效价格' }); return }
     if (imagePaths.length === 0) { addToast({ type: 'warning', message: '请至少上传一张商品图片' }); return }
+    const tracker: SinglePublishTracker = {
+      account_id: form.account_id,
+      title: form.title.trim(),
+      started_at: new Date().toISOString(),
+    }
+    saveSinglePublishTracker(tracker)
     setSubmitting(true)
     setResult(null)
+    startSinglePublishPolling()
     try {
       const res = await publishSingle({
         account_id: form.account_id, title: form.title, description: form.description,
         price: parseFloat(form.price),
         original_price: form.original_price ? parseFloat(form.original_price) : undefined,
         category: form.category || undefined, images: imagePaths, address: form.address || undefined,
-        delivery_method: form.delivery_method, postage: parseFloat(form.postage) || 0,
+        delivery_method: form.delivery_method,
+        support_pickup: form.support_pickup,
+        postage: form.delivery_method === 'fixed_fee' ? parseFloat(form.postage) || 0 : 0,
         brand: form.brand || undefined, condition: form.condition,
       })
       const message = res.message || (res.success ? '商品发布成功' : '发布失败')
@@ -193,11 +347,16 @@ export function ProductPublish() {
         })
       }
       else addToast({ type: 'error', message })
+      clearSinglePublishTracker()
+      clearSinglePublishPolling()
     } catch {
-      addToast({ type: 'error', message: '发布请求失败，请重试' })
-      setResult({ success: false, message: '网络错误，请重试' })
+      addToast({ type: 'warning', message: '发布请求连接中断，正在继续同步发布状态' })
+      setResult(null)
+      setSubmitting(true)
     } finally {
-      setSubmitting(false)
+      if (!getSinglePublishTracker()) {
+        setSubmitting(false)
+      }
     }
   }
 
@@ -295,21 +454,36 @@ export function ProductPublish() {
                 ))}
               </div>
             </div>
-            {/* 发货 + 邮费 */}
+            {/* 发货方式 */}
             <div className="grid grid-cols-2 gap-4">
-              <div className="input-group">
+              <div className="input-group col-span-2">
                 <label className="input-label">发货方式</label>
-                <select className="input-ios" value={form.delivery_method}
-                  onChange={e => setForm(f => ({ ...f, delivery_method: e.target.value as 'express' | 'pickup' }))}>
-                  <option value="express">快递发货</option>
-                  <option value="pickup">自提</option>
-                </select>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <select className="input-ios w-full sm:w-[320px]" value={form.delivery_method}
+                    onChange={e => updateDeliveryMethod(e.target.value as ProductDeliveryMethod)}>
+                    <option value="free_shipping">包邮</option>
+                    <option value="distance_billing">按距离计费</option>
+                    <option value="fixed_fee">一口价</option>
+                    <option value="no_shipping">无需邮寄</option>
+                  </select>
+                  <label className="switch-ios flex-shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={form.support_pickup}
+                      onChange={e => setForm(f => ({ ...f, support_pickup: e.target.checked }))}
+                    />
+                    <span className="switch-slider"></span>
+                  </label>
+                  <span className="text-sm text-slate-600 dark:text-slate-300 flex-shrink-0">支持自提</span>
+                </div>
               </div>
-              <div className="input-group">
-                <label className="input-label">邮费（元，0=包邮）</label>
-                <input type="number" className="input-ios" placeholder="0" min="0" step="0.01"
-                  value={form.postage} onChange={e => setForm(f => ({ ...f, postage: e.target.value }))} />
-              </div>
+              {form.delivery_method === 'fixed_fee' && (
+                <div className="input-group">
+                  <label className="input-label">运费（元）</label>
+                  <input type="number" className="input-ios w-full sm:w-[320px]" placeholder="0" min="0" step="0.01"
+                    value={form.postage} onChange={e => setForm(f => ({ ...f, postage: e.target.value }))} />
+                </div>
+              )}
             </div>
             {/* 所在地 */}
             <div className="input-group">
@@ -368,7 +542,7 @@ export function ProductPublish() {
                   : <><Send className="w-4 h-4" />立即发布</>}
               </button>
               {submitting && (
-                <p className="text-xs text-slate-400 text-center">Playwright 发布中，请勿关闭页面</p>
+                <p className="text-xs text-slate-400 text-center">Playwright 发布中，可切换页面，返回后会继续同步状态</p>
               )}
             </div>
           </div>

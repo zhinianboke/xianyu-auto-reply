@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
 import uuid
@@ -18,9 +19,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_user, get_db_session
+from app.services.ai_listing_service import (
+    AiListingConfigService,
+    AiListingGenerationService,
+    ai_listing_config_to_dict,
+)
+from app.services.ai_listing_task_status_service import AiListingTaskStatusService
 from app.services.product_publish_service import ProductMaterialService
 from app.services.publish_batch_status_service import PublishBatchStatusService
-from app.services.publish_execution_service import PublishExecutorService, PublishLogService
+from app.services.publish_execution_service import PublishExecutorService, PublishLogService, _log_to_dict
 from common.models.user import User, UserRole
 from common.schemas.common import ApiResponse
 from common.utils.local_image_upload import ImageUploadError, save_uploaded_image
@@ -39,11 +46,12 @@ class MaterialCreateRequest(BaseModel):
     """创建素材请求"""
     title: str = Field(..., min_length=1, max_length=200, description="商品标题")
     description: str = Field(..., min_length=1, description="商品描述")
-    price: float = Field(..., gt=0, description="售价")
-    original_price: Optional[float] = Field(None, description="原价（划线价）")
+    price: float = Field(..., ge=0.01, multiple_of=0.01, description="售价")
+    original_price: Optional[float] = Field(None, ge=0.01, multiple_of=0.01, description="原价（划线价）")
     category: Optional[str] = Field(None, max_length=100, description="商品分类")
     images: List[str] = Field(default=[], description="图片URL列表（最多9张）")
-    delivery_method: str = Field("express", description="发货方式：express/pickup")
+    delivery_method: str = Field("free_shipping", description="发货方式：free_shipping/distance_billing/fixed_fee/no_shipping")
+    support_pickup: bool = Field(False, description="是否支持自提")
     postage: float = Field(0, ge=0, description="邮费，0表示包邮")
     address: Optional[str] = Field(None, max_length=200, description="宝贝所在地")
     brand: Optional[str] = Field(None, max_length=100, description="品牌")
@@ -55,11 +63,12 @@ class MaterialUpdateRequest(BaseModel):
     """更新素材请求（所有字段均可选）"""
     title: Optional[str] = Field(None, max_length=200)
     description: Optional[str] = None
-    price: Optional[float] = Field(None, gt=0)
-    original_price: Optional[float] = None
+    price: Optional[float] = Field(None, ge=0.01, multiple_of=0.01)
+    original_price: Optional[float] = Field(None, ge=0.01, multiple_of=0.01)
     category: Optional[str] = None
     images: Optional[List[str]] = None
     delivery_method: Optional[str] = None
+    support_pickup: Optional[bool] = None
     postage: Optional[float] = Field(None, ge=0)
     address: Optional[str] = None
     brand: Optional[str] = None
@@ -77,7 +86,8 @@ class PublishSingleRequest(BaseModel):
     category: Optional[str] = Field(None, description="商品分类")
     images: List[str] = Field(..., min_length=1, description="图片本地路径列表（至少1张）")
     address: Optional[str] = None
-    delivery_method: str = Field("express", description="发货方式：express/pickup")
+    delivery_method: str = Field("free_shipping", description="发货方式：free_shipping/distance_billing/fixed_fee/no_shipping")
+    support_pickup: bool = Field(False, description="是否支持自提")
     postage: float = Field(0, ge=0, description="邮费，0表示包邮")
     brand: Optional[str] = Field(None, description="品牌")
     condition: str = Field("全新", description="成色")
@@ -87,6 +97,36 @@ class BatchPublishRequest(BaseModel):
     """批量发布请求"""
     account_ids: List[str] = Field(..., min_length=1, description="账号ID列表")
     material_ids: List[int] = Field(..., min_length=1, description="素材ID列表")
+
+
+class AiListingConfigRequest(BaseModel):
+    """AI铺货配置请求"""
+    name: str = Field(..., min_length=1, max_length=100, description="配置名称")
+    prompt: str = Field(..., min_length=1, description="商品生成提示词")
+    reference_text: Optional[str] = Field(None, description="参考文案")
+    price_mode: str = Field("fixed", description="价格模式：fixed/range")
+    fixed_price: Optional[float] = Field(None, ge=0.01, multiple_of=0.01, description="固定价格")
+    price_min: Optional[float] = Field(None, ge=0.01, multiple_of=0.01, description="最低价格")
+    price_max: Optional[float] = Field(None, ge=0.01, multiple_of=0.01, description="最高价格")
+    text_api_url: str = Field(..., min_length=1, max_length=500, description="文案AI接口地址")
+    text_api_key: str = Field(..., min_length=1, description="文案AI Key")
+    text_model: str = Field(..., min_length=1, max_length=120, description="文案AI模型")
+    image_mode: str = Field("random", description="图片模式：ai/random")
+    image_api_url: Optional[str] = Field(None, max_length=500, description="图片AI接口地址")
+    image_api_key: Optional[str] = Field(None, description="图片AI Key")
+    image_model: Optional[str] = Field(None, max_length=120, description="图片AI模型")
+    image_prompt: Optional[str] = Field(None, description="图片生成提示词")
+    image_polish_enabled: bool = Field(False, description="是否启用图片提示词AI润色")
+    image_polish_sequential: bool = Field(False, description="多图是否保持关联")
+    random_images: List[str] = Field(default=[], description="随机图库")
+    random_image_count: int = Field(1, ge=1, le=9, description="随机选图数量")
+    material_defaults: Dict[str, Any] = Field(default={}, description="素材默认字段")
+
+
+class AiListingGenerateRequest(BaseModel):
+    """AI铺货生成请求"""
+    count: int = Field(..., ge=1, le=200, description="创建素材数量")
+    concurrency: int = Field(1, ge=1, le=10, description="并发创建数量")
 
 
 # ==================== 素材库接口 ====================
@@ -200,6 +240,129 @@ async def delete_material(
     if not deleted:
         return ApiResponse(success=False, message="素材不存在或无权删除")
     return ApiResponse(success=True, message="素材删除成功")
+
+
+# ==================== AI铺货接口 ====================
+
+@router.get("/ai-listing/configs", response_model=ApiResponse)
+async def list_ai_listing_configs(
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """查询AI铺货配置列表"""
+    svc = AiListingConfigService(session)
+    data = await svc.list_configs(current_user.id)
+    return ApiResponse(success=True, message="查询成功", data=data)
+
+
+@router.post("/ai-listing/configs", response_model=ApiResponse)
+async def create_ai_listing_config(
+    req: AiListingConfigRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """创建AI铺货配置"""
+    validation_error = _validate_ai_listing_config(req)
+    if validation_error:
+        return ApiResponse(success=False, message=validation_error)
+    svc = AiListingConfigService(session)
+    config = await svc.create(current_user.id, req.model_dump())
+    return ApiResponse(success=True, message="配置创建成功", data=ai_listing_config_to_dict(config))
+
+
+@router.put("/ai-listing/configs/{config_id}", response_model=ApiResponse)
+async def update_ai_listing_config(
+    config_id: int,
+    req: AiListingConfigRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """更新AI铺货配置"""
+    validation_error = _validate_ai_listing_config(req)
+    if validation_error:
+        return ApiResponse(success=False, message=validation_error)
+    svc = AiListingConfigService(session)
+    config = await svc.update(config_id, current_user.id, req.model_dump())
+    if not config:
+        return ApiResponse(success=False, message="配置不存在或无权修改")
+    return ApiResponse(success=True, message="配置更新成功", data=ai_listing_config_to_dict(config))
+
+
+@router.delete("/ai-listing/configs/{config_id}", response_model=ApiResponse)
+async def delete_ai_listing_config(
+    config_id: int,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """删除AI铺货配置"""
+    svc = AiListingConfigService(session)
+    deleted = await svc.delete(config_id, current_user.id)
+    if not deleted:
+        return ApiResponse(success=False, message="配置不存在或无权删除")
+    return ApiResponse(success=True, message="配置删除成功")
+
+
+@router.post("/ai-listing/configs/{config_id}/generate", response_model=ApiResponse)
+async def start_ai_listing_generation(
+    config_id: int,
+    req: AiListingGenerateRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """启动AI铺货后台任务"""
+    svc = AiListingConfigService(session)
+    config = await svc.get(config_id, current_user.id)
+    if not config:
+        return ApiResponse(success=False, message="配置不存在或无权访问")
+    current_tasks = await AiListingTaskStatusService.list_user_tasks(current_user.id)
+    running_tasks = [item for item in current_tasks if not item.get("finished")]
+    if len(running_tasks) >= 5:
+        return ApiResponse(success=False, message="最多只能同时执行5个AI铺货任务，请等待已有任务完成后再继续")
+    task_id = str(uuid.uuid4())
+    await AiListingTaskStatusService.init_task(
+        task_id,
+        user_id=current_user.id,
+        config_id=config_id,
+        total=req.count,
+        config_name=config.name,
+    )
+    asyncio.create_task(
+        _run_ai_listing_background(
+            user_id=current_user.id,
+            config_id=config_id,
+            task_id=task_id,
+            count=req.count,
+            concurrency=req.concurrency,
+        )
+    )
+    return ApiResponse(
+        success=True,
+        message=f"AI铺货任务已提交，共 {req.count} 条素材",
+        data={"task_id": task_id, "total": req.count},
+    )
+
+
+@router.get("/ai-listing/tasks/{task_id}/status", response_model=ApiResponse)
+async def get_ai_listing_task_status(
+    task_id: str,
+    current_user: User = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    """查询AI铺货任务进度"""
+    snapshot = await AiListingTaskStatusService.get_task_snapshot(task_id)
+    if not snapshot:
+        return ApiResponse(success=False, message="AI铺货任务不存在或状态已失效")
+    if snapshot.get("user_id") != current_user.id:
+        return ApiResponse(success=False, message="AI铺货任务不存在或无权访问")
+    return ApiResponse(success=True, message="查询成功", data=snapshot)
+
+
+@router.get("/ai-listing/tasks", response_model=ApiResponse)
+async def list_ai_listing_tasks(
+    current_user: User = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    """查询当前用户的AI铺货任务列表"""
+    tasks = await AiListingTaskStatusService.list_user_tasks(current_user.id)
+    return ApiResponse(success=True, message="查询成功", data=tasks)
 
 
 # ==================== 发布接口 ====================
@@ -440,6 +603,28 @@ async def list_publish_logs(
     return ApiResponse(success=True, message="查询成功", data=data)
 
 
+@router.get("/logs/{log_id}", response_model=ApiResponse)
+async def get_publish_log(
+    log_id: int,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """查询单条发布日志（管理员可查看任意日志）"""
+    svc = PublishLogService(session)
+    query_user_id = None if _is_admin(current_user) else current_user.id
+    log = await svc.get_log(log_id, query_user_id)
+    if not log:
+        return ApiResponse(success=False, message="发布日志不存在或无权访问")
+
+    data = _log_to_dict(log)
+    if _is_admin(current_user):
+        from sqlalchemy import select
+        stmt = select(User.username).where(User.id == log.user_id)
+        username = (await session.execute(stmt)).scalar_one_or_none()
+        data["username"] = username or "未知用户"
+    return ApiResponse(success=True, message="查询成功", data=data)
+
+
 @router.delete("/logs/clear", response_model=ApiResponse)
 async def clear_publish_logs(
     current_user: User = Depends(get_current_active_user),
@@ -520,6 +705,62 @@ async def upload_product_images(
 
 
 # ==================== 后台任务函数 ====================
+
+def _validate_ai_listing_config(req: AiListingConfigRequest) -> str | None:
+    """校验AI铺货配置"""
+    if req.price_mode not in {"fixed", "range"}:
+        return "价格模式不正确"
+    if req.price_mode == "fixed":
+        if not req.fixed_price or req.fixed_price < 0.01:
+            return "固定价格最小为0.01"
+    else:
+        if not req.price_min or not req.price_max or req.price_min < 0.01 or req.price_max < 0.01:
+            return "价格范围最小为0.01"
+        if req.price_max < req.price_min:
+            return "最高价格不能小于最低价格"
+    if req.image_mode not in {"ai", "random"}:
+        return "图片模式不正确"
+    if req.image_mode == "random":
+        if not req.random_images:
+            return "随机选图模式请先上传图库图片"
+        if req.random_image_count > len(req.random_images):
+            return "随机选图数量不能大于图库图片数量"
+    else:
+        if not req.image_api_url or not req.image_api_key or not req.image_model:
+            return "AI生成图片模式请填写图片AI地址、Key和模型"
+        if not (req.image_prompt or "").strip():
+            return "AI生成图片模式请填写图片提示词"
+        if req.random_image_count > 1 and not req.image_polish_enabled:
+            return "AI多图生成必须开启图片提示词AI润色"
+        if req.image_polish_sequential and not req.image_polish_enabled:
+            return "多图保持关联需要先开启图片提示词AI润色"
+    return None
+
+
+async def _run_ai_listing_background(
+    user_id: int,
+    config_id: int,
+    task_id: str,
+    count: int,
+    concurrency: int,
+) -> None:
+    """后台异步执行AI铺货任务"""
+    import traceback
+
+    svc = AiListingGenerationService()
+    try:
+        await svc.run_generation_task(
+            user_id=user_id,
+            config_id=config_id,
+            task_id=task_id,
+            count=count,
+            concurrency=concurrency,
+        )
+    except Exception as e:
+        from loguru import logger
+        logger.error(f"AI铺货后台任务异常: {e}\n{traceback.format_exc()}")
+        await AiListingTaskStatusService.finish(task_id, "failed", f"AI铺货任务异常：{e}")
+
 
 async def _run_batch_publish_background(
     user_id: int,
