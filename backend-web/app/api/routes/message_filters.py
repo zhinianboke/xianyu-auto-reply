@@ -23,14 +23,14 @@ from common.utils.auth_scope import resolve_owner_scope
 from app.services.account_service import AccountService
 
 router = APIRouter(tags=["message-filters"])
-VALID_FILTER_TYPES = {"skip_reply", "skip_notify"}
+VALID_FILTER_TYPES = {"skip_reply", "skip_notify", "skip_ai_reply_output"}
 
 
 class MessageFilterCreate(BaseModel):
     """创建消息过滤规则请求"""
     account_id: str
     keyword: str
-    filter_types: List[str]  # 支持多选: ['skip_reply', 'skip_notify']
+    filter_types: List[str]  # 支持多选: ['skip_reply', 'skip_notify', 'skip_ai_reply_output']
 
 
 class MessageFilterBatchCreate(BaseModel):
@@ -340,7 +340,7 @@ async def update_message_filter(
         params["keyword"] = filter_data.keyword.strip()
     
     if filter_data.filter_type is not None:
-        if filter_data.filter_type not in ["skip_reply", "skip_notify"]:
+        if filter_data.filter_type not in VALID_FILTER_TYPES:
             raise HTTPException(status_code=400, detail="无效的过滤类型")
         updates.append("filter_type = :filter_type")
         params["filter_type"] = filter_data.filter_type

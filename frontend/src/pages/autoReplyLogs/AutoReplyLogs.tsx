@@ -44,6 +44,7 @@ const DECISION_REASON_LABELS: Record<string, string> = {
   item_not_belong: '商品不属于当前账号',
   duplicate_message: '重复消息',
   skip_reply_filter: '命中过滤规则',
+  ai_output_filter: 'AI回复命中黑名单',
   reply_sent: '已发送回复',
   send_failed: '发送失败',
   no_rule_matched: '未匹配回复规则',

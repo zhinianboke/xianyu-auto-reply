@@ -53,6 +53,8 @@ DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
     "theme.font_family": ("system", "系统主题字体预设"),
     "log.retention_days": ("7", "日志保留天数（所有模块生效，修改后实时刷新各服务日志策略）"),
     "account.face_verify_timeout_disable": ("true", "人脸验证超时是否自动禁用账号"),
+    "delivery.manual_redelivery_cooldown_seconds": ("0", "卖家手动补发成功后的冷却秒数"),
+    "delivery.manual_redelivery_lock_seconds": ("0", "卖家手动补发成功后的延迟锁秒数"),
     # 代理设置：用于配置网络请求的代理 API URL 和启用开关
     # api_url 默认空字符串表示未配置；enabled 默认 false 表示不启用
     "proxy.api_url": ("", "代理 API 的 URL（可能较长，用于配置外部代理服务）"),
@@ -112,6 +114,8 @@ NO_ESCAPE_KEYS = {
     # 用户到期/续期设置：均为数字字符串，无需 XSS 转义
     "user.renew_month_price",
     "user.register_default_days",
+    "delivery.manual_redelivery_cooldown_seconds",
+    "delivery.manual_redelivery_lock_seconds",
     # 代理设置：URL 含 :、/、?、&、= 等字符不能被 XSS 转义；布尔字符串"true"/"false"也无需转义
     "proxy.api_url",
     "proxy.enabled",

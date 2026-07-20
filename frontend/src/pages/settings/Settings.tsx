@@ -696,6 +696,44 @@ export function Settings() {
                   current ? { ...current, 'captcha.slider_mode': mode } : current
                 ))}
               />
+              <div className="flex items-center justify-between py-3 border-t border-slate-100 dark:border-slate-700">
+                <div>
+                  <p className="font-medium text-slate-900 dark:text-slate-100">手动补发冷却时间</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">卖家发送“订单号+补发”后的冷却秒数，0 表示可立即再次补发</p>
+                </div>
+                <input
+                  type="number"
+                  min={0}
+                  max={3600}
+                  value={settings?.['delivery.manual_redelivery_cooldown_seconds'] || '0'}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    if (val === '' || /^\d+$/.test(val)) {
+                      setSettings(s => s ? { ...s, 'delivery.manual_redelivery_cooldown_seconds': val } : null)
+                    }
+                  }}
+                  className="input-ios w-24 text-center"
+                />
+              </div>
+              <div className="flex items-center justify-between py-3 border-t border-slate-100 dark:border-slate-700">
+                <div>
+                  <p className="font-medium text-slate-900 dark:text-slate-100">手动补发延迟锁</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">补发完成后继续锁定订单的秒数，0 表示发送完成即释放</p>
+                </div>
+                <input
+                  type="number"
+                  min={0}
+                  max={3600}
+                  value={settings?.['delivery.manual_redelivery_lock_seconds'] || '0'}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    if (val === '' || /^\d+$/.test(val)) {
+                      setSettings(s => s ? { ...s, 'delivery.manual_redelivery_lock_seconds': val } : null)
+                    }
+                  }}
+                  className="input-ios w-24 text-center"
+                />
+              </div>
             </div>
           </div>
           {/* SMTP邮件配置 */}

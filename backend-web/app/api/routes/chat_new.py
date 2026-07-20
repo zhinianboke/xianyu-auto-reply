@@ -398,6 +398,43 @@ class SendMessageRequest(BaseModel):
     text: str
 
 
+@router.post("/internal/send-message/{account_id}")
+async def internal_send_message(
+    account_id: str,
+    req: SendMessageRequest,
+):
+    """通过 chat-new 的主 IM 连接发送自动化消息。"""
+    try:
+        if not req.text.strip():
+            return ApiResponse(success=False, message="消息内容不能为空")
+
+        manager = get_im_session_manager()
+        client = manager.clients.get(account_id)
+        if not client or not client.is_connected:
+            client = await manager.get_or_connect(account_id)
+
+        send_result = await client.send_text_message(
+            cid=req.cid,
+            to_user_id=req.toUserId,
+            text=req.text,
+        )
+        logger.info(
+            f"【{account_id}】自动化消息经 chat-new 发送成功: "
+            f"cid={req.cid}, to={req.toUserId}, text={req.text[:50]}"
+        )
+        return ApiResponse(
+            success=True,
+            message="发送成功",
+            data={"messageId": send_result.get("messageId", "")},
+        )
+    except Exception as e:
+        logger.warning(
+            f"【{account_id}】自动化消息经 chat-new 发送失败: "
+            f"cid={req.cid}, to={req.toUserId}, error={e}"
+        )
+        return ApiResponse(success=False, message=f"发送失败：{e}")
+
+
 class RecallMessageRequest(BaseModel):
     messageId: str
     messageTime: int

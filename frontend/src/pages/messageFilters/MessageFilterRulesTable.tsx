@@ -40,6 +40,12 @@ export function MessageFilterRulesTable({
   onPageChange,
   onPageSizeChange,
 }: MessageFilterRulesTableProps) {
+  const getFilterTypeClassName = (filterType: string) => {
+    if (filterType === 'skip_reply') return 'badge-primary'
+    if (filterType === 'skip_notify') return 'badge-warning'
+    return 'badge-danger'
+  }
+
   return (
     <div
       className="vben-card flex flex-col"
@@ -120,7 +126,7 @@ export function MessageFilterRulesTable({
                     </code>
                   </td>
                   <td>
-                    <span className={filter.filter_type === 'skip_reply' ? 'badge-primary' : 'badge-warning'}>
+                    <span className={getFilterTypeClassName(filter.filter_type)}>
                       {getFilterTypeLabel(filter.filter_type)}
                     </span>
                   </td>

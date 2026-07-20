@@ -283,6 +283,8 @@ export interface SystemSettings {
   // 账号密码登录方式
   'password_login.mode'?: PasswordLoginMode
   'captcha.slider_mode'?: SliderMode
+  'delivery.manual_redelivery_cooldown_seconds'?: string
+  'delivery.manual_redelivery_lock_seconds'?: string
   // 代理设置
   'proxy.api_url'?: string
   'proxy.enabled'?: boolean
@@ -311,7 +313,7 @@ export interface DashboardStats {
 }
 
 // 消息过滤规则类型
-export type MessageFilterType = 'skip_reply' | 'skip_notify'
+export type MessageFilterType = 'skip_reply' | 'skip_notify' | 'skip_ai_reply_output'
 
 export interface MessageFilter {
   id: number

@@ -762,7 +762,36 @@ class XianyuAsync:
                                         if order_info:
                                             order_item_id = order_info.get('item_id', '') or item_id
                                             order_buyer_id = order_info.get('buyer_id', '')
-                                            order_chat_id = order_info.get('chat_id', '') or parsed_message.get('chat_id', '')
+                                            stored_chat_id = order_info.get('chat_id', '') or ''
+                                            current_chat_id = parsed_message.get('chat_id', '') or ''
+                                            order_chat_id = stored_chat_id or current_chat_id
+
+                                            # 会话创建失败时 scheduler 会写入 FAILED_* 占位值。
+                                            # 卖家在真实买家会话里发送“补发+订单号”时，当前消息已经携带
+                                            # 可用的 chat_id，应优先用它修复订单，避免继续向占位会话发送。
+                                            if stored_chat_id.startswith("FAILED_") and current_chat_id:
+                                                order_chat_id = current_chat_id
+                                                try:
+                                                    from common.services.order_service import OrderService
+                                                    from common.db.session import async_session_maker
+
+                                                    async with async_session_maker() as db_session:
+                                                        order_service = OrderService(db_session)
+                                                        await order_service.update_order_chat_id(
+                                                            order_no, current_chat_id
+                                                        )
+                                                    order_info['chat_id'] = current_chat_id
+                                                    logger.info(
+                                                        f"【{self.cookie_id}】重发货触发: "
+                                                        f"订单 {order_no} 已用当前会话修复占位chat_id: "
+                                                        f"{stored_chat_id} -> {current_chat_id}"
+                                                    )
+                                                except Exception as chat_fix_e:
+                                                    logger.warning(
+                                                        f"【{self.cookie_id}】重发货触发: "
+                                                        f"订单 {order_no} 回写真实会话ID失败，"
+                                                        f"本次仍使用当前会话: {chat_fix_e}"
+                                                    )
                                             
                                             if hasattr(self, 'auto_delivery_handler') and self.auto_delivery_handler:
                                                 # 关键防护：在调 pre_check 之前先做 item 归属检查
@@ -774,11 +803,19 @@ class XianyuAsync:
                                                     try:
                                                         item_info = db_manager.get_item_info(self.cookie_id, order_item_id)
                                                         if not item_info:
-                                                            logger.warning(
-                                                                f"【{self.cookie_id}】重发货触发：商品 {order_item_id} 不属于当前账号，"
-                                                                f"跳过 pre_check / freeshipping / 自动发货"
-                                                            )
-                                                            return
+                                                            order_account_ok = str(order_info.get('account_id') or '') == str(self.cookie_id)
+                                                            order_item_ok = str(order_info.get('item_id') or '') == str(order_item_id)
+                                                            if order_account_ok and order_item_ok:
+                                                                logger.warning(
+                                                                    f"[{self.cookie_id}] redelivery item {order_item_id} "
+                                                                    f"missing catalog cache, allowed by order ownership"
+                                                                )
+                                                            else:
+                                                                logger.warning(
+                                                                    f"【{self.cookie_id}】重发货触发：商品 {order_item_id} 不属于当前账号，"
+                                                                    f"跳过 pre_check / freeshipping / 自动发货"
+                                                                )
+                                                                return
                                                     except Exception as e:
                                                         logger.error(
                                                             f"【{self.cookie_id}】重发货触发：检查商品归属失败，跳过: {e}"
@@ -846,6 +883,7 @@ class XianyuAsync:
                                                     msg_time=msg_time,
                                                     override_order_id=order_no,
                                                     pre_check_result=pre_check,
+                                                    allow_shipped_redelivery=True,
                                                 )
                                             else:
                                                 logger.warning(f"【{self.cookie_id}】auto_delivery_handler未初始化，跳过重发货")
@@ -1046,10 +1084,16 @@ class XianyuAsync:
             return False
         return self._lock_hold_info[lock_key].get('locked', False)
     
-    async def _delayed_lock_release(self, lock_key: str, delay_minutes: int = 10):
+    async def _delayed_lock_release(
+        self,
+        lock_key: str,
+        delay_minutes: float = 10,
+        delay_seconds: float | None = None,
+    ):
         """延迟释放锁"""
         try:
-            await asyncio.sleep(delay_minutes * 60)
+            wait_seconds = delay_seconds if delay_seconds is not None else delay_minutes * 60
+            await asyncio.sleep(max(float(wait_seconds), 0))
             if lock_key in self._lock_hold_info:
                 self._lock_hold_info[lock_key]['locked'] = False
                 self._lock_hold_info[lock_key]['release_time'] = time.time()
@@ -1790,81 +1834,55 @@ class XianyuAsync:
             return None
     
     async def send_msg(self, websocket, chat_id: str, send_user_id: str, content: str):
-        """发送文本消息（参照旧框架实现）
+        """发送文本消息。
 
-        消息通过 WebSocket 发出后立即返回成功（不阻塞自动回复）。
-        同时注册 mid 等待队列，返回结果中携带 mid，供上层在写入日志后
-        异步等待服务端响应、回写发送状态（识别 CSI_FORBID 安全拦截等失败）。
+        经 chat-new 主 IM 连接发送并等待 messageId 确认。
+        旧 websocket 连接上的本地 send 仅表示写出成功，平台可能未真正接收。
         """
         try:
-            import base64
-            from common.utils.xianyu_utils import generate_mid, generate_uuid
+            from app.core.config import get_settings
 
-            # 构建消息内容（参照旧框架）
-            msg_content = {
-                "contentType": 1,
-                "text": {"text": content}
+            settings = get_settings()
+            backend_url = settings.backend_web_service_url.rstrip("/")
+            send_url = (
+                f"{backend_url}/api/v1/chat-new/internal/send-message/"
+                f"{self.cookie_id}"
+            )
+            payload = {
+                "cid": str(chat_id),
+                "toUserId": str(send_user_id),
+                "text": content,
             }
-            content_json = json.dumps(msg_content, ensure_ascii=False)
-            content_base64 = base64.b64encode(content_json.encode("utf-8")).decode("utf-8")
+            timeout = aiohttp.ClientTimeout(total=20)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(send_url, json=payload) as response:
+                    response_text = await response.text()
+                    if response.status != 200:
+                        raise RuntimeError(
+                            f"chat-new HTTP {response.status}: {response_text[:300]}"
+                        )
+                    try:
+                        response_data = json.loads(response_text)
+                    except json.JSONDecodeError as exc:
+                        raise RuntimeError(
+                            f"chat-new 返回非 JSON 响应: {response_text[:300]}"
+                        ) from exc
+                    if not response_data.get("success"):
+                        raise RuntimeError(
+                            response_data.get("message") or "chat-new 发送失败"
+                        )
 
-            mid = generate_mid()
-            msg = {
-                "lwp": "/r/MessageSend/sendByReceiverScope",
-                "headers": {"mid": mid},
-                "body": [
-                    {
-                        "uuid": generate_uuid(),
-                        "cid": f"{chat_id}@goofish",
-                        "conversationType": 1,
-                        "content": {
-                            "contentType": 101,
-                            "custom": {"type": 1, "data": content_base64}
-                        },
-                        "redPointPolicy": 0,
-                        "extension": {"extJson": "{}"},
-                        "ctx": {"appVersion": "1.0", "platform": "web"},
-                        "mtags": {},
-                        "msgReadStatusSetting": 1
-                    },
-                    {
-                        "actualReceivers": [
-                            f"{send_user_id}@goofish",
-                            f"{self.myid}@goofish"
-                        ]
-                    }
-                ]
-            }
-            
-            # 打印发送参数用于调试
-            logger.info(f"【{self.cookie_id}】发送文本消息: chat_id={chat_id}, to={send_user_id}, myid={self.myid}")
-            
-            # 打印完整的WebSocket消息用于调试
-            msg_str = json.dumps(msg)
-            logger.info(f"【{self.cookie_id}】WebSocket发送数据长度: {len(msg_str)} 字节")
-
-            # 注册 mid 等待队列（供上层写日志后异步检测发送结果），注册失败不影响发送
-            registered_mid = None
-            send_future = None
-            try:
-                loop = asyncio.get_running_loop()
-                send_future = loop.create_future()
-                self._pending_mid_futures[mid] = send_future
-                registered_mid = mid
-            except Exception as reg_e:
-                logger.warning(f"【{self.cookie_id}】注册发送结果检测失败（不影响发送）: {self._safe_str(reg_e)}")
-
-            await websocket.send(msg_str)
-            logger.info(f"【{self.cookie_id}】发送消息成功: {content[:50]}...")
+            message_id = (response_data.get("data") or {}).get("messageId", "")
+            logger.info(
+                f"【{self.cookie_id}】消息经 chat-new 确认发送成功: "
+                f"chat_id={chat_id}, to={send_user_id}, message_id={message_id}"
+            )
             return {
                 "success": True,
                 "mode": "text",
                 "content": content,
-                "mid": registered_mid,
-                # 直接携带 Future 引用：即使服务端响应在上层 await 之前到达
-                # （_dispatch_mid_response 已 set_result 并从字典移除），
-                # 持有引用仍能拿到结果，避免漏判拦截
-                "send_future": send_future,
+                "message_id": message_id,
+                "confirmed": True,
             }
         except Exception as e:
             logger.error(f"【{self.cookie_id}】发送消息失败: {e}")

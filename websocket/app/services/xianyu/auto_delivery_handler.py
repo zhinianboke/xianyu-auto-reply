@@ -15,6 +15,7 @@ import os
 import time
 import hashlib
 import aiohttp
+from decimal import Decimal, InvalidOperation
 from loguru import logger
 
 from app.services.xianyu.delivery_utils import (
@@ -414,16 +415,22 @@ class AutoDeliveryHandler:
                 errors = [r.get("error_message", "发送失败") for r in send_results if not r.get("success")]
                 error_message = "；".join(errors[:3]) if errors else "部分消息发送失败"
 
-            # 发送状态：发送层（WebSocket 发送）失败直接判定 failed；
-            # 全部发出成功则先置 unknown，由后台任务等服务端响应后回写 success/failed
-            send_status = "failed" if any_send_failed else "unknown"
-            send_fail_reason = error_message if any_send_failed else None
             # 收集本次发出文本消息的 (future, mid)，供异步检测是否被安全拦截
             pending_send_waiters = [
                 (r.get("send_future"), r.get("mid"))
                 for r in send_results
                 if r.get("send_future") is not None
             ]
+            # 发送状态：
+            # - 发送层失败：failed
+            # - 旧 WebSocket 路径有 send_future：先 unknown，后台等服务端响应后回写
+            # - chat-new 路径已在 send_msg 内拿到 message_id 确认，且没有旧 send_future：直接 success
+            send_status = (
+                "failed"
+                if any_send_failed
+                else ("unknown" if pending_send_waiters else "success")
+            )
+            send_fail_reason = error_message if any_send_failed else None
 
             log_payload = {
                 "sender_user_id": sender_user_id,
@@ -591,8 +598,17 @@ class AutoDeliveryHandler:
     def is_lock_held(self, lock_key: str) -> bool:
         return self.parent.is_lock_held(lock_key)
     
-    async def _delayed_lock_release(self, lock_key: str, delay_minutes: int = 10):
-        return await self.parent._delayed_lock_release(lock_key, delay_minutes)
+    async def _delayed_lock_release(
+        self,
+        lock_key: str,
+        delay_minutes: float = 10,
+        delay_seconds: float | None = None,
+    ):
+        return await self.parent._delayed_lock_release(
+            lock_key,
+            delay_minutes=delay_minutes,
+            delay_seconds=delay_seconds,
+        )
     
     async def fetch_order_detail_info(self, order_id: str, item_id: str = None, buyer_id: str = None):
         """获取订单详情信息，并同步更新到数据库
@@ -921,16 +937,42 @@ class AutoDeliveryHandler:
         self.last_delivery_time[order_id] = current_time
         logger.info(f"【{self.cookie_id}】订单 {order_id} 已标记为发货（冷却期已设置）")
 
+    @staticmethod
+    def _get_non_negative_system_int(key: str, default: int) -> int:
+        try:
+            from common.db.compat import db_manager
+
+            raw_value = db_manager.get_system_setting(key, str(default))
+            return max(int(str(raw_value).strip()), 0)
+        except (TypeError, ValueError):
+            return default
+        except Exception as exc:
+            logger.warning(f"读取系统设置 {key} 失败，使用默认值 {default}: {exc}")
+            return default
+
+    def _manual_redelivery_cooldown_seconds(self) -> int:
+        return self._get_non_negative_system_int(
+            "delivery.manual_redelivery_cooldown_seconds", 0
+        )
+
+    def _manual_redelivery_lock_seconds(self) -> int:
+        return self._get_non_negative_system_int(
+            "delivery.manual_redelivery_lock_seconds", 0
+        )
+
 
     # ==================== 统一发货处理 ====================
 
     async def _handle_auto_delivery(self, websocket, message: dict, send_user_name: str, send_user_id: str,
                                    item_id: str, chat_id: str, msg_time: str, override_order_id: str = None,
-                                   pre_check_result: dict | None = None):
+                                   pre_check_result: dict | None = None,
+                                   allow_shipped_redelivery: bool = False):
         """统一处理自动发货逻辑
 
         Args:
             override_order_id: 如果指定，直接使用此订单ID，跳过从raw_message提取
+            allow_shipped_redelivery: 是否允许已发货订单继续发送卡券内容。
+                仅用于卖家手动输入重发货关键字的补发场景；普通自动发货仍跳过已发货订单。
             pre_check_result: 可选的预先 pre_delivery_check_and_close 结果。
                 调用方（如 _handle_card_message / 重发货关键字）若需要在调用免拼接口
                 之前先做禁止发货检查，可以预先调用 pre_delivery_check_and_close 拿到
@@ -945,8 +987,21 @@ class AutoDeliveryHandler:
                     from common.db.compat import db_manager
                     item_info = db_manager.get_item_info(self.cookie_id, item_id)
                     if not item_info:
-                        logger.warning(f'[{msg_time}] 【{self.cookie_id}】❌ 商品 {item_id} 不属于当前账号，跳过自动发货')
-                        return
+                        order_account_ok = False
+                        order_item_ok = False
+                        if allow_shipped_redelivery and override_order_id:
+                            existing_order = db_manager.get_order_by_id(override_order_id)
+                            if existing_order:
+                                order_account_ok = str(existing_order.get('account_id') or '') == str(self.cookie_id)
+                                order_item_ok = str(existing_order.get('item_id') or '') == str(item_id)
+                        if order_account_ok and order_item_ok:
+                            logger.warning(
+                                f'[{msg_time}] [{self.cookie_id}] item {item_id} missing catalog cache, '
+                                f'allowed by redelivery order ownership'
+                            )
+                        else:
+                            logger.warning(f'[{msg_time}] 【{self.cookie_id}】❌ 商品 {item_id} 不属于当前账号，跳过自动发货')
+                            return
                     logger.warning(f'[{msg_time}] 【{self.cookie_id}】✅ 商品 {item_id} 归属验证通过')
                 except Exception as e:
                     logger.error(f'[{msg_time}] 【{self.cookie_id}】检查商品归属失败: {self._safe_str(e)}，跳过自动发货')
@@ -1019,14 +1074,34 @@ class AutoDeliveryHandler:
 
             # 使用订单ID作为锁的键
             lock_key = order_id
+            manual_lock_seconds = (
+                self._manual_redelivery_lock_seconds()
+                if allow_shipped_redelivery
+                else None
+            )
+            manual_cooldown_seconds = (
+                self._manual_redelivery_cooldown_seconds()
+                if allow_shipped_redelivery
+                else None
+            )
 
             # 第一重检查：延迟锁状态（在获取锁之前检查，避免不必要的等待）
-            if self.is_lock_held(lock_key):
+            if self.is_lock_held(lock_key) and not (
+                allow_shipped_redelivery and manual_lock_seconds == 0
+            ):
                 logger.info(f'[{msg_time}] 【{self.cookie_id}】🔒【提前检查】订单 {lock_key} 延迟锁仍在持有状态，跳过发货')
                 return
 
             # 第二重检查：基于时间的冷却机制
-            if not self.can_auto_delivery(order_id):
+            if allow_shipped_redelivery:
+                last_delivery = self.last_delivery_time.get(order_id, 0)
+                if time.time() - last_delivery < manual_cooldown_seconds:
+                    logger.info(
+                        f'[{msg_time}] 【{self.cookie_id}】订单 {order_id} '
+                        f'手动补发冷却中（{manual_cooldown_seconds}秒），跳过'
+                    )
+                    return
+            elif not self.can_auto_delivery(order_id):
                 logger.info(f'[{msg_time}] 【{self.cookie_id}】订单 {order_id} 在冷却期内，跳过发货')
                 return
 
@@ -1057,18 +1132,34 @@ class AutoDeliveryHandler:
                         from common.db.compat import db_manager
                         existing_order = db_manager.get_order_by_id(order_id)
                         if existing_order and existing_order.get('status') == 'shipped':
-                            logger.info(f'[{msg_time}] 【{self.cookie_id}】获取锁后检查发现订单 {order_id} 已发货，跳过处理')
-                            return
+                            if allow_shipped_redelivery:
+                                logger.info(
+                                    f'[{msg_time}] 【{self.cookie_id}】订单 {order_id} 已发货，'
+                                    f'但本次为重发货触发，继续补发卡券'
+                                )
+                            else:
+                                logger.info(f'[{msg_time}] 【{self.cookie_id}】获取锁后检查发现订单 {order_id} 已发货，跳过处理')
+                                return
                     except Exception as e:
                         logger.warning(f'[{msg_time}] 【{self.cookie_id}】获取锁后检查订单状态异常: {self._safe_str(e)}')
 
                 # 第三重检查：获取锁后再次检查延迟锁状态（双重检查，防止在等待锁期间状态发生变化）
-                if self.is_lock_held(lock_key):
+                if self.is_lock_held(lock_key) and not (
+                    allow_shipped_redelivery and manual_lock_seconds == 0
+                ):
                     logger.info(f'[{msg_time}] 【{self.cookie_id}】订单 {lock_key} 在获取锁后检查发现延迟锁仍持有，跳过发货')
                     return
 
                 # 第四重检查：获取锁后再次检查冷却状态
-                if not self.can_auto_delivery(order_id):
+                if allow_shipped_redelivery:
+                    last_delivery = self.last_delivery_time.get(order_id, 0)
+                    if time.time() - last_delivery < manual_cooldown_seconds:
+                        logger.info(
+                            f'[{msg_time}] 【{self.cookie_id}】订单 {order_id} '
+                            f'获取锁后仍处于手动补发冷却（{manual_cooldown_seconds}秒），跳过'
+                        )
+                        return
+                elif not self.can_auto_delivery(order_id):
                     logger.info(f'[{msg_time}] 【{self.cookie_id}】订单 {order_id} 在获取锁后检查发现仍在冷却期，跳过发货')
                     return
 
@@ -1147,6 +1238,7 @@ class AutoDeliveryHandler:
                             delivery_content = await self._auto_delivery(
                                 item_id, item_title, order_id, send_user_id, chat_id, send_user_name,
                                 skip_confirm=skip_confirm_for_card_only,
+                                allow_shipped_redelivery=allow_shipped_redelivery,
                             )
                             if delivery_content:
                                 delivery_contents.append(delivery_content)
@@ -1181,7 +1273,7 @@ class AutoDeliveryHandler:
                                 # 第一次调用返回None，可能是订单已发货，检查订单状态
                                 from common.db.compat import db_manager
                                 existing_order = db_manager.get_order_by_id(order_id)
-                                if existing_order and existing_order.get('status') == 'shipped':
+                                if existing_order and existing_order.get('status') == 'shipped' and not allow_shipped_redelivery:
                                     logger.info(f"【{self.cookie_id}】订单 {order_id} 已发货，跳过发送卡券")
                                     order_already_shipped = True
                                     break
@@ -1199,17 +1291,26 @@ class AutoDeliveryHandler:
                         # 标记已发货（防重复）- 基于订单ID
                         self.mark_delivery_sent(order_id)
 
-                        # 标记锁为持有状态，并启动延迟释放任务
+                        hold_seconds = (
+                            manual_lock_seconds
+                            if allow_shipped_redelivery
+                            else 10 * 60
+                        )
+                        # 标记锁为持有状态，并按配置启动延迟释放任务
                         self._lock_hold_info[lock_key] = {
-                            'locked': True,
+                            'locked': hold_seconds > 0,
                             'lock_time': time.time(),
-                            'release_time': None,
+                            'release_time': None if hold_seconds > 0 else time.time(),
                             'task': None
                         }
 
-                        # 启动延迟释放锁的异步任务（10分钟后释放）
-                        delay_task = asyncio.create_task(self._delayed_lock_release(lock_key, delay_minutes=10))
-                        self._lock_hold_info[lock_key]['task'] = delay_task
+                        if hold_seconds > 0:
+                            delay_task = asyncio.create_task(
+                                self._delayed_lock_release(
+                                    lock_key, delay_seconds=hold_seconds
+                                )
+                            )
+                            self._lock_hold_info[lock_key]['task'] = delay_task
 
                         # 发送所有获取到的发货内容，跟踪发送结果
                         any_send_failed = False
@@ -1742,13 +1843,15 @@ class AutoDeliveryHandler:
         cleaned = name.strip().strip('[]【】')
         return cleaned in self._SYSTEM_PLACEHOLDER_NAMES
 
-    async def _auto_delivery(self, item_id: str, item_title: str = None, order_id: str = None, send_user_id: str = None, chat_id: str = None, send_user_name: str = None, skip_confirm: bool = False):
+    async def _auto_delivery(self, item_id: str, item_title: str = None, order_id: str = None, send_user_id: str = None, chat_id: str = None, send_user_name: str = None, skip_confirm: bool = False, allow_shipped_redelivery: bool = False):
         """自动发货功能 - 根据商品ID获取卡券，执行延时，确认发货，发送内容
 
         Args:
             skip_confirm: 跳过确认发货接口（auto_confirm）。用于"禁止发货 + 关闭订单后只发卡券"
                 场景——订单已经被卖家主动关闭，此时不能再调用确认发货接口，但仍需要把卡券内容
                 发送给买家作为"补偿"。该参数为 True 时，"发货成功再发卡券"开关会被忽略。
+            allow_shipped_redelivery: 已发货订单补发模式。为 True 时，即使确认发货接口返回已发货，
+                也继续生成并发送卡券内容。
         """
         try:
             from common.db.compat import db_manager
@@ -1936,32 +2039,35 @@ class AutoDeliveryHandler:
                             # 检查是否是"已发货成功"的响应
                             success_msg = confirm_result.get('message', '')
                             if 'ORDER_ALREADY_DELIVERY' in success_msg or '已发货成功' in success_msg:
-                                logger.info(f"【{self.cookie_id}】订单 {order_id} 已发货过，只更新数据库状态，不再发送卡券")
+                                if allow_shipped_redelivery:
+                                    logger.info(f"【{self.cookie_id}】订单 {order_id} 已发货过，本次为重发货触发，继续发送卡券")
+                                else:
+                                    logger.info(f"【{self.cookie_id}】订单 {order_id} 已发货过，只更新数据库状态，不再发送卡券")
                                 
-                                # 更新订单状态为已发货
-                                try:
-                                    from common.services.order_service import OrderService
-                                    from common.db.session import async_session_maker
-                                    async with async_session_maker() as db_session:
-                                        order_service = OrderService(db_session)
-                                        # 确认发货成功但不发送卡券，记录发货方式为"自动发货"，内容为空
-                                        await order_service.update_order_delivery_info(
-                                            order_no=order_id,
-                                            status="shipped",
-                                            delivery_method="auto",
-                                            delivery_content="订单已确认发货（闲鱼平台已发货）",
-                                            buyer_fish_nick=local_buyer_fish_nick,
-                                        )
-                                    logger.info(f"【{self.cookie_id}】订单 {order_id} 状态已更新为已发货")
-                                except Exception as e:
-                                    logger.error(f"【{self.cookie_id}】更新订单状态失败: {self._safe_str(e)}")
+                                    # 更新订单状态为已发货
+                                    try:
+                                        from common.services.order_service import OrderService
+                                        from common.db.session import async_session_maker
+                                        async with async_session_maker() as db_session:
+                                            order_service = OrderService(db_session)
+                                            # 确认发货成功但不发送卡券，记录发货方式为"自动发货"，内容为空
+                                            await order_service.update_order_delivery_info(
+                                                order_no=order_id,
+                                                status="shipped",
+                                                delivery_method="auto",
+                                                delivery_content="订单已确认发货（闲鱼平台已发货）",
+                                                buyer_fish_nick=local_buyer_fish_nick,
+                                            )
+                                        logger.info(f"【{self.cookie_id}】订单 {order_id} 状态已更新为已发货")
+                                    except Exception as e:
+                                        logger.error(f"【{self.cookie_id}】更新订单状态失败: {self._safe_str(e)}")
                                 
-                                # 标记已发货，防止重复处理
-                                self.mark_delivery_sent(order_id)
+                                    # 标记已发货，防止重复处理
+                                    self.mark_delivery_sent(order_id)
                                 
-                                # 直接返回None，不再发送卡券内容
-                                self._last_delivery_fail_reason = f"订单 {order_id} 已发货过，不再发送卡券"
-                                return None
+                                    # 直接返回None，不再发送卡券内容
+                                    self._last_delivery_fail_reason = f"订单 {order_id} 已发货过，不再发送卡券"
+                                    return None
                             
                             logger.info(f"🎉 自动确认发货成功！订单ID: {order_id}")
                         else:
@@ -2771,9 +2877,42 @@ class AutoDeliveryHandler:
 
             # 从订单信息中提取参数
             if order_info:
+                fresh_order_detail = None
+                try:
+                    fresh_order_detail = await self.fetch_order_detail_info(order_id, item_id, buyer_id)
+                except Exception as e:
+                    logger.warning(f"刷新订单详情用于API参数失败: {self._safe_str(e)}")
+
+                if fresh_order_detail:
+                    detail_amount = fresh_order_detail.get('amount')
+                    detail_quantity = fresh_order_detail.get('quantity')
+                    if detail_amount:
+                        order_info['amount'] = detail_amount
+                    if detail_quantity:
+                        order_info['quantity'] = detail_quantity
+                    logger.info(
+                        f"API参数使用订单详情口径: order_id={order_id}, "
+                        f"amount={order_info.get('amount')}, quantity={order_info.get('quantity')}"
+                    )
+
+                order_total_amount = str(order_info.get('amount', '') or '')
+                order_quantity = str(order_info.get('quantity', '') or '')
+                order_unit_price = ''
+                try:
+                    amount_decimal = Decimal(order_total_amount)
+                    quantity_decimal = Decimal(order_quantity)
+                    if quantity_decimal > 0:
+                        order_unit_price = str(
+                            (amount_decimal / quantity_decimal).quantize(Decimal('0.000001')).normalize()
+                        )
+                except (InvalidOperation, ValueError, TypeError):
+                    order_unit_price = ''
+
                 param_mapping.update({
-                    'order_amount': str(order_info.get('amount', '')),
-                    'order_quantity': str(order_info.get('quantity', '')),
+                    'order_amount': order_total_amount,
+                    'order_total_amount': order_total_amount,
+                    'order_unit_price': order_unit_price,
+                    'order_quantity': order_quantity,
                 })
 
             # 从商品信息中提取参数

@@ -476,13 +476,14 @@ class RedeliveryTask:
             if need_api_fetch:
                 logger.info(f"[定时补发货] 订单 {order_no} {', '.join(fetch_reasons)}，尝试从API重新获取...")
                 try:
-                    from common.services.order_service import OrderStatusChecker
+                    from common.services.order_service import OrderDetailService, OrderStatusChecker
                     from decimal import Decimal
                     checker = OrderStatusChecker(cookie_string, account_id=order.account_id if hasattr(order, 'account_id') else None)
                     raw_detail = await checker._fetch_raw_order_detail(order_no)
                     if raw_detail:
                         # 使用完整的解析方法提取金额和规格
-                        parsed = checker._parse_order_detail_response(order_no, raw_detail)
+                        detail_parser = OrderDetailService(order.account_id, checker.cookies_str)
+                        parsed = detail_parser._parse_order_detail_response(order_no, raw_detail)
                         if parsed:
                             updated_fields = []
                             # 更新金额
@@ -533,8 +534,9 @@ class RedeliveryTask:
                 return False, "订单缺少商品ID", cookie_string
             if not order.buyer_id:
                 return False, "订单缺少买家ID", cookie_string
-            # 订单缺少会话ID时，先调用 WebSocket 服务自动创建会话并回写，再继续发货
-            if not order.chat_id:
+            # 订单缺少会话ID或持有失败占位ID时，先尝试复用历史真实会话，
+            # 必要时再调用 WebSocket 服务创建会话并回写。
+            if not order.chat_id or order.chat_id.startswith("FAILED_"):
                 chat_ok, chat_error = await self._ensure_chat_id(session, order)
                 if not chat_ok:
                     return False, chat_error or "订单缺少会话ID", cookie_string
@@ -718,6 +720,44 @@ class RedeliveryTask:
             (是否成功, 错误信息)
         """
         try:
+            # 同一账号、买家、商品的会话通常会复用。订单列表接口有时不返回 chat_id，
+            # 而主动创建会话又可能被闲鱼以 code=400 拒绝；此时优先复用历史订单中的
+            # 真实会话ID，比创建新会话更可靠。
+            history_stmt = (
+                select(XYOrder.chat_id)
+                .where(
+                    XYOrder.order_no != order.order_no,
+                    XYOrder.account_id == order.account_id,
+                    XYOrder.buyer_id == order.buyer_id,
+                    XYOrder.item_id == order.item_id,
+                    XYOrder.chat_id.is_not(None),
+                    ~XYOrder.chat_id.like("FAILED_%"),
+                )
+                .order_by(XYOrder.updated_at.desc())
+                .limit(1)
+            )
+            history_chat_id = (await session.execute(history_stmt)).scalar_one_or_none()
+            if history_chat_id:
+                from common.services.order_service import OrderService
+
+                order_svc = OrderService(session)
+                updated = await order_svc.update_order_chat_id(
+                    order.order_no, history_chat_id
+                )
+                if updated:
+                    old_chat_id = order.chat_id
+                    order.chat_id = history_chat_id
+                    logger.info(
+                        f"[定时补发货] 订单 {order.order_no} 复用历史真实会话ID: "
+                        f"{old_chat_id or '空'} -> {history_chat_id}"
+                    )
+                    return True, None
+
+            # FAILED_* 表示此前已经尝试创建但被平台拒绝。没有历史会话可复用时
+            # 保持失败状态，避免每轮定时任务都请求一次创建会话。
+            if order.chat_id and order.chat_id.startswith("FAILED_"):
+                return False, "会话创建失败（占位ID），且未找到可复用的历史会话"
+
             settings = get_settings()
             http_client = get_http_client()
             
