@@ -9,6 +9,7 @@ WebSocket服务内部API路由
 from __future__ import annotations
 
 import asyncio
+import json
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -36,6 +37,34 @@ class SendMessageRequest(BaseModel):
     # 是否等待服务端发送结果（识别 CSI_FORBID 等安全拦截）。默认 False 保持既有调用方零影响。
     wait_result: bool = False
     wait_timeout: float = 10.0
+
+
+class IngestMessageRequest(BaseModel):
+    """Decrypted IM push message from backend chat-new."""
+    message_data: dict
+    source: str | None = None
+
+
+class _IngestWebSocketProxy:
+    """Drop local ACK frames while forwarding real outgoing IM frames."""
+
+    def __init__(self, real_ws):
+        self.real_ws = real_ws
+
+    async def send(self, data):
+        try:
+            payload = json.loads(data) if isinstance(data, str) else data
+        except Exception:
+            payload = None
+
+        if (
+            isinstance(payload, dict)
+            and payload.get("code") == 200
+            and "lwp" not in payload
+        ):
+            return
+
+        await self.real_ws.send(data)
 
 
 class DeliverOrderRequest(BaseModel):
@@ -688,6 +717,55 @@ async def send_message(account_id: str, request: SendMessageRequest):
         }
 
 
+@router.post("/accounts/{account_id}/ingest-message")
+async def ingest_message(account_id: str, request: IngestMessageRequest):
+    """Ingest a decrypted IM push and reuse automation handlers."""
+    try:
+        from app.services.xianyu.cookie_manager import get_manager
+        from loguru import logger
+
+        manager = get_manager()
+        instance = manager.instances.get(account_id)
+        if not instance:
+            return {
+                "success": False,
+                "code": 404,
+                "message": f"account {account_id} is not running",
+                "data": None,
+            }
+
+        real_ws = getattr(instance, "ws", None)
+        if not real_ws:
+            return {
+                "success": False,
+                "code": 400,
+                "message": f"account {account_id} websocket is not connected",
+                "data": None,
+            }
+
+        proxy_ws = _IngestWebSocketProxy(real_ws)
+        instance._create_tracked_task(
+            instance._handle_message_with_semaphore(request.message_data, proxy_ws)
+        )
+
+        logger.info(
+            f"[{account_id}] ingested external IM push: source={request.source or 'unknown'}"
+        )
+        return {
+            "success": True,
+            "code": 200,
+            "message": "message ingested",
+            "data": {"account_id": account_id, "source": request.source},
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "code": 500,
+            "message": f"ingest message failed: {str(e)}",
+            "data": None,
+        }
+
+
 @router.post("/orders/confirm-no-logistics")
 async def confirm_no_logistics(request: ConfirmNoLogisticsRequest):
     """无物流发货：在闲鱼确认发货但不发送任何卡券内容"""
@@ -1308,10 +1386,10 @@ async def deliver_order(request: DeliverOrderRequest):
         raw_contents: list[str] = []
         final_contents: list[str] = []
         failed_indices: list[int] = []
+        send_results: list[dict] = []
         early_break_reason: str | None = None  # 库存不足 / api 失败导致提前结束的原因
         # 收集每条文本消息的发送结果（含 send_future / mid），循环结束后统一等待闲鱼服务端回执，
         # 识别异步风控拦截（CSI_FORBID 等）。图片消息无回执 future，不参与拦截判定。
-        send_results: list = []
 
         for i in range(quantity):
             # ---- 1. 获取本张卡密的原始内容 ----
@@ -1376,19 +1454,29 @@ async def deliver_order(request: DeliverOrderRequest):
 
             # ---- 2. 立刻发送本张内容（成功/失败都记录到 final_contents） ----
             send_ok = False
+            send_result_count_before = len(send_results)
             try:
                 if card.type == 'image':
                     logger.info(
                         f"【内部API】发送图片消息 第 {idx}/{quantity}: {content}"
                         if quantity > 1 else f"【内部API】发送图片消息: {content}"
                     )
-                    await xianyu_live.send_image_msg(
+                    image_result = await xianyu_live.send_image_msg(
                         ws,
                         request.chat_id,
                         request.buyer_id,
                         content,
                         request.card_id
                     )
+                    if isinstance(image_result, dict):
+                        send_results.append(image_result)
+                    if not isinstance(image_result, dict) or not image_result.get("success"):
+                        image_error = (
+                            image_result.get("error_message")
+                            if isinstance(image_result, dict)
+                            else None
+                        ) or "图片发送失败"
+                        raise RuntimeError(image_error)
                     final_contents.append(f"[图片]{content}")
                     send_ok = True
                 else:
@@ -1401,13 +1489,22 @@ async def deliver_order(request: DeliverOrderRequest):
                         f"【内部API】发送文本消息 第 {idx}/{quantity}: {rendered[:50]}..."
                         if quantity > 1 else f"【内部API】发送文本消息: {rendered[:50]}..."
                     )
-                    await xianyu_live.auto_delivery_handler._send_text_with_separator(
+                    text_send_results: list[dict] = []
+                    text_ok = await xianyu_live.auto_delivery_handler._send_text_with_separator(
                         ws,
                         request.chat_id,
                         request.buyer_id,
                         rendered,
-                        send_results=send_results
+                        send_results=text_send_results,
                     )
+                    send_results.extend(text_send_results)
+                    if not text_ok:
+                        text_errors = [
+                            str(result.get("error_message") or "发送失败")
+                            for result in text_send_results
+                            if isinstance(result, dict) and not result.get("success")
+                        ]
+                        raise RuntimeError("；".join(text_errors[:3]) or "文本发送失败")
                     final_contents.append(rendered)
                     send_ok = True
             except Exception as send_err:
@@ -1415,6 +1512,14 @@ async def deliver_order(request: DeliverOrderRequest):
                 # 都能在订单 delivery_content 中追溯，避免数据丢失。商家可从这里手动复制转发。
                 failed_indices.append(idx)
                 logger.error(f"【内部API】第 {idx}/{quantity} 张卡券发送异常: {send_err}")
+                if len(send_results) == send_result_count_before:
+                    send_results.append({
+                        "success": False,
+                        "mode": "image" if card.type == "image" else "text",
+                        "image_url": content if card.type == "image" else None,
+                        "content": content if card.type != "image" else None,
+                        "error_message": str(send_err),
+                    })
                 if card.type == 'image':
                     final_contents.append(f"[图片-发送失败-请手动转发]{content}")
                 else:

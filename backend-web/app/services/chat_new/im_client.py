@@ -212,12 +212,14 @@ class GoofishImClient:
 
     @property
     def is_connected(self) -> bool:
-        """是否已连接并注册（含底层 ws 真实状态双重检查，避免标志位与实际连接不同步）"""
+        """是否已连接并注册（含底层连接真实状态检查，避免标志位与实际连接不同步）"""
         return (
             self._connected
             and self._registered
             and self._ws is not None
             and not self._ws.closed
+            and self._session is not None
+            and not self._session.closed
         )
 
     # ==================== 业务接口 ====================
@@ -898,6 +900,8 @@ class GoofishImClient:
     async def _send_raw(self, msg: dict):
         """直接发送消息（不等待响应）"""
         if not self._ws or self._ws.closed:
+            self._connected = False
+            self._registered = False
             raise Exception("WebSocket未连接")
         await self._ws.send_json(msg)
 
@@ -916,6 +920,8 @@ class GoofishImClient:
             响应消息字典
         """
         if not self._ws or self._ws.closed:
+            self._connected = False
+            self._registered = False
             raise Exception("WebSocket未连接")
 
         loop = asyncio.get_event_loop()
@@ -1056,6 +1062,16 @@ class GoofishImClient:
                 decrypted = self._push_parser.decrypt_push_data(sync_data["data"])
                 if decrypted is None:
                     continue
+                try:
+                    from .automation_bridge import forward_message_to_automation
+
+                    asyncio.create_task(
+                        forward_message_to_automation(self.account_id, decrypted)
+                    )
+                except Exception as bridge_e:
+                    logger.warning(
+                        f"[{self.account_id}] forward push to automation failed: {bridge_e}"
+                    )
                 parsed = self._push_parser.parse(decrypted)
                 if parsed is None:
                     continue
@@ -1084,6 +1100,8 @@ class GoofishImClient:
                     logger.warning(
                         f"【{self.account_id}】心跳发送失败: {e}"
                     )
+                    self._connected = False
+                    self._registered = False
                     break
         except asyncio.CancelledError:
             pass
