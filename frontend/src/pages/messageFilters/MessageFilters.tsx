@@ -27,6 +27,7 @@ import type { MessageFilter, Account, MessageFilterType } from '@/types'
 const FILTER_TYPE_OPTIONS: Array<{ value: MessageFilterType; label: string }> = [
   { value: 'skip_reply', label: '跳过自动回复' },
   { value: 'skip_notify', label: '跳过消息通知' },
+  { value: 'skip_ai_reply_output', label: 'AI回复黑名单' },
 ]
 
 export function MessageFilters() {
@@ -286,7 +287,7 @@ export function MessageFilters() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="page-title">消息过滤</h1>
-          <p className="page-description">管理消息过滤规则，支持跳过自动回复和消息通知</p>
+          <p className="page-description">管理消息过滤规则，支持跳过自动回复、消息通知和AI回复黑名单</p>
         </div>
         <div className="flex flex-wrap gap-3">
           <button type="button" onClick={openAddModal} className="btn-ios-primary">

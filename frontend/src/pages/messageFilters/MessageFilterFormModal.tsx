@@ -259,6 +259,7 @@ export function MessageFilterFormModal({
                 <ul className="list-disc list-inside mt-1 space-y-1">
                   <li><strong>跳过自动回复</strong>：匹配到关键词时，不触发自动回复（关键词回复、默认回复、AI回复都不会触发）</li>
                   <li><strong>跳过消息通知</strong>：匹配到关键词时，不发送消息通知到配置的通知渠道</li>
+                  <li><strong>AI回复黑名单</strong>：AI生成的回复包含关键词时，直接拦截不发送给买家</li>
                 </ul>
               </div>
             </div>
