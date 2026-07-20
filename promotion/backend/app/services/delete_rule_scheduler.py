@@ -152,6 +152,14 @@ async def _execute_single_rule(
                 f"删除规则[{rule.id}] 删除商品[{item_id}]失败: {result['message']}"
             )
             # Session过期等严重错误，标记冷却并触发后台密码登录
+            if result.get("session_expired") and result.get(
+                "session_recovery_triggered"
+            ):
+                logger.warning(
+                    f"删除规则[{rule.id}] 检测到Session过期，删除服务已触发后台密码登录，"
+                    "停止本轮删除"
+                )
+                break
             if _is_session_expired_error(result["message"]):
                 from common.utils.cookie_refresh import (
                     mark_account_session_expired,

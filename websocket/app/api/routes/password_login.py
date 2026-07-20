@@ -21,6 +21,10 @@ from typing import Any, Callable, Dict, Optional
 from fastapi import APIRouter
 from loguru import logger
 from pydantic import BaseModel
+from sqlalchemy import update
+
+from common.models.token_cache import TokenCache
+from common.utils.time_utils import get_beijing_now_naive
 
 router = APIRouter(prefix="/password-login", tags=["密码登录"])
 
@@ -389,14 +393,22 @@ def _save_login_result(
                         is_new_account = True
                         logger.info(f"【{account_id}】新账号Cookie和账号密码已保存")
                     
-                    # 密码登录成功，清除该账号的Token缓存（新Cookie需要重新获取Token）
+                    # 密码登录成功，标记该账号Token缓存失效（新Cookie需要重新获取Token）
                     if unb:
-                        from sqlalchemy import text
+                        invalidated_at = get_beijing_now_naive()
                         await session.execute(
-                            text("DELETE FROM xy_token_cache WHERE user_id = :user_id"),
-                            {"user_id": unb}
+                            update(TokenCache)
+                            .where(TokenCache.user_id == unb)
+                            .values(
+                                expire_at=invalidated_at,
+                                renew_expire_at=invalidated_at,
+                                updated_at=invalidated_at,
+                            )
                         )
-                        logger.info(f"【{account_id}】密码登录成功，已清除Token缓存: user_id={unb}")
+                        logger.info(
+                            f"【{account_id}】密码登录成功，已标记Token缓存失效: "
+                            f"user_id={unb}"
+                        )
                     
                     await session.commit()
                     

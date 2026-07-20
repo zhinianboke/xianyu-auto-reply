@@ -110,6 +110,7 @@ class XianyuAsync:
         self.token_retry_interval = TOKEN_RETRY_INTERVAL
         self.current_token = None
         self.last_token_refresh_time = 0  # 最后Token刷新时间
+        self._using_expired_startup_token = False
         
         # 代理配置
         self.proxy_config = self._default_proxy_config()
@@ -2422,6 +2423,30 @@ class XianyuAsync:
                     logger.error(f"【{self.cookie_id}】{task_name}任务取消异常: {e}")
             
             logger.info(f"【{self.cookie_id}】所有后台任务已处理完成")
+
+    def _reject_expired_startup_token_after_short_disconnect(
+        self,
+        connected_duration: float,
+    ) -> bool:
+        """识别启动过期 Token 的短连接拒绝，并禁止当前进程再次复用。
+
+        Args:
+            connected_duration: 本次 WebSocket 建连后的持续秒数。
+        Returns:
+            确认为启动过期 Token 被快速拒绝时返回 True。
+        """
+        if not getattr(self, "_using_expired_startup_token", False):
+            return False
+        if connected_duration >= 15:
+            return False
+
+        logger.warning(
+            f"【{self.cookie_id}】启动过期Token连接仅维持{connected_duration:.1f}秒，"
+            "按Token不可用处理，下一轮将严格刷新Token"
+        )
+        self.current_token = None
+        self._using_expired_startup_token = False
+        return True
     
     async def main(self):
         """主程序入口"""
@@ -2521,6 +2546,9 @@ class XianyuAsync:
                                 'failed_captcha_max_retries',
                                 'skipped_cooldown',
                                 'skipped_local_slider_disabled',
+                                'skipped_risk_control_processing',
+                                'skipped_risk_control_check_failed',
+                                'skipped_startup_cache_lookup_failed',
                             )
 
                             if not hasattr(self, '_token_fetch_failures'):
@@ -2561,7 +2589,12 @@ class XianyuAsync:
                             #   避免延误账号恢复。
                             if refresh_status == 'skipped_cooldown':
                                 sleep_duration = 300
-                            elif refresh_status == 'skipped_local_slider_disabled':
+                            elif refresh_status in (
+                                'skipped_local_slider_disabled',
+                                'skipped_risk_control_processing',
+                                'skipped_risk_control_check_failed',
+                                'skipped_startup_cache_lookup_failed',
+                            ):
                                 sleep_duration = self.token_manager.cookie_refresh_interval
                             else:
                                 sleep_duration = 5
@@ -2667,6 +2700,19 @@ class XianyuAsync:
                                 except Exception as e:
                                     logger.error(f"【{self.cookie_id}】处理消息出错: {e}")
                                     continue
+
+                            # 正常关闭码会让 async for 无异常结束，同样需要识别启动
+                            # 过期 Token 的短连接，避免下一轮继续复用已被拒绝的 Token。
+                            connected_duration = time.time() - self._connection_start_time
+                            if self._reject_expired_startup_token_after_short_disconnect(
+                                connected_duration
+                            ):
+                                self.connection_manager.set_connection_state(
+                                    ConnectionState.RECONNECTING,
+                                    "启动过期Token连接被快速关闭",
+                                )
+                                await self._interruptible_sleep(self.token_retry_interval)
+                                continue
                         
                         finally:
                             # 清理WebSocket引用
@@ -2704,6 +2750,16 @@ class XianyuAsync:
                         self.connection_manager.ws = None
                     
                     if is_network_type_error and was_connected:
+                        if self._reject_expired_startup_token_after_short_disconnect(
+                            connected_duration
+                        ):
+                            self.connection_manager.set_connection_state(
+                                ConnectionState.RECONNECTING,
+                                "启动过期Token连接被快速断开",
+                            )
+                            await self._interruptible_sleep(self.token_retry_interval)
+                            continue
+
                         # 纯网络错误：连接已经正常工作过，只是网络断开
                         self.connection_manager.network_failures += 1
                         logger.warning(f"【{self.cookie_id}】网络连接断开(第{self.connection_manager.network_failures}次，已连接{connected_duration:.1f}秒): {error_type}")

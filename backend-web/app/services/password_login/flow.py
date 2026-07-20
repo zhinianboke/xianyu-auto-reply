@@ -23,6 +23,7 @@ from app.services.account_service import AccountService
 from app.services.websocket_client import websocket_client
 from common.db.session import async_session_maker
 from common.services.captcha.remote_solver import solve_remote
+from common.services.token_renewal_cache_service import mark_token_cache_expired
 from common.services.xianyu_login.face_verification import (
     FaceVerificationError,
     run_face_verification_flow,
@@ -142,14 +143,14 @@ async def _save_and_start(
             unb=unb or None,
             show_browser=show_browser,
         )
-        # 清该账号 token 缓存（可重建派生缓存，新 Cookie 需重新取 token）
+        # 标记该账号 Token 缓存失效（保留记录，新 Cookie 需重新取 Token）
         if unb:
-            from sqlalchemy import text
-
-            await session.execute(
-                text("DELETE FROM xy_token_cache WHERE user_id = :uid"), {"uid": unb}
+            invalidation = await mark_token_cache_expired(
+                token_user_id=unb,
+                invalidate_valid_cache=True,
             )
-            await session.commit()
+            if not invalidation.success:
+                logger.warning(f"【{account_id}】{invalidation.message}")
 
     # 起/重启 WebSocket（与扫码登录同一套 /internal/accounts 接口）
     try:

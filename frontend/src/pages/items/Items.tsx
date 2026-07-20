@@ -1,6 +1,6 @@
 ﻿import { useEffect, useState, useRef } from 'react'
 import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink } from 'lucide-react'
-import { batchDeleteItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
+import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
 import { getAccountDetails } from '@/api/accounts'
 import { batchClearItemRelations } from '@/api/cards'
 import { ItemCardRelationModal } from './ItemCardRelationModal'
@@ -100,7 +100,10 @@ export function Items() {
   const [deleteItemConfirm, setDeleteItemConfirm] = useState<{ open: boolean; item: Item | null }>({ open: false, item: null })
   const [batchDeleteItemConfirm, setBatchDeleteItemConfirm] = useState(false)
   const [batchOfflineConfirm, setBatchOfflineConfirm] = useState(false)
+  const [batchXianyuDeleteConfirm, setBatchXianyuDeleteConfirm] = useState(false)
   const [offlining, setOfflining] = useState(false)
+  const [deletingFromXianyu, setDeletingFromXianyu] = useState(false)
+  const deletingFromXianyuRef = useRef(false)
   const [deleteDefaultReplyConfirm, setDeleteDefaultReplyConfirm] = useState(false)
   const [batchDeleteDefaultReplyConfirm, setBatchDeleteDefaultReplyConfirm] = useState(false)
   const [deleteAiPromptConfirm, setDeleteAiPromptConfirm] = useState(false)
@@ -127,7 +130,12 @@ export function Items() {
         keyword: trimmedKeyword || null,
       })
       if (result.success) {
-        setItems(result.data || [])
+        const nextItems = result.data || []
+        const visibleIds = new Set(nextItems.map((item) => item.id))
+        setItems(nextItems)
+        setSelectedIds((previous) => new Set(
+          Array.from(previous).filter((id) => visibleIds.has(id)),
+        ))
         setPagination({
           page: result.page,
           pageSize: result.page_size,
@@ -401,6 +409,95 @@ export function Items() {
       addToast({ type: 'error', message: '批量下架失败' })
     } finally {
       setOfflining(false)
+    }
+  }
+
+  // ==================== 批量删除闲鱼平台商品 ====================
+
+  const selectedXianyuItems = items.filter((item) => selectedIds.has(item.id))
+
+  const openBatchXianyuDelete = () => {
+    if (deletingFromXianyuRef.current) return
+    if (selectedIds.size === 0) {
+      addToast({ type: 'warning', message: '请先选择要删除的闲鱼商品' })
+      return
+    }
+    if (!selectedAccount) {
+      addToast({ type: 'warning', message: '请先在顶部「筛选账号」选择具体账号' })
+      return
+    }
+    if (selectedXianyuItems.length !== selectedIds.size) {
+      addToast({ type: 'warning', message: '部分选中商品不在当前列表，请重新勾选' })
+      return
+    }
+    if (selectedXianyuItems.some((item) => item.cookie_id !== selectedAccount)) {
+      addToast({ type: 'warning', message: '选中商品包含其他账号，请重新勾选' })
+      return
+    }
+    setBatchXianyuDeleteConfirm(true)
+  }
+
+  const handleBatchXianyuDelete = async () => {
+    if (deletingFromXianyuRef.current) return
+    const itemIds = selectedXianyuItems.map((item) => item.item_id)
+    if (!selectedAccount || itemIds.length === 0) {
+      addToast({ type: 'warning', message: '未找到可删除的闲鱼商品' })
+      setBatchXianyuDeleteConfirm(false)
+      return
+    }
+
+    deletingFromXianyuRef.current = true
+    setDeletingFromXianyu(true)
+    try {
+      const result = await batchDeleteXianyuItems(selectedAccount, itemIds)
+      const data = result.data as
+        | {
+            results?: {
+              item_id: string
+              success: boolean
+              message?: string
+              cookie_saved?: boolean
+              cookie_message?: string
+            }[]
+            fail_count?: number
+          }
+        | undefined
+      const failedResults = (data?.results || []).filter((entry) => !entry.success)
+      const cookieFailures = (data?.results || []).filter(
+        (entry) => entry.cookie_saved === false,
+      )
+      if (result.success) {
+        if (failedResults.length > 0 || cookieFailures.length > 0) {
+          const preview = failedResults
+            .slice(0, 3)
+            .map((entry) => `${entry.item_id}：${entry.message || '删除失败'}`)
+            .join('；')
+          const suffix = failedResults.length > 3 ? `；另有 ${failedResults.length - 3} 个失败` : ''
+          const cookieWarning = cookieFailures.length > 0
+            ? `；Cookie写回失败 ${cookieFailures.length} 个：${cookieFailures[0].cookie_message || '具体原因未知'}`
+            : ''
+          addToast({
+            type: 'warning',
+            message: `${result.message || '删除完成'}${preview ? `；${preview}${suffix}` : ''}${cookieWarning}`,
+          })
+        } else {
+          addToast({ type: 'success', message: result.message || '闲鱼商品删除成功' })
+        }
+        setSelectedIds(new Set())
+      } else {
+        const firstFailure = failedResults[0]
+        addToast({
+          type: 'error',
+          message: firstFailure?.message || result.message || '删除闲鱼商品失败',
+        })
+      }
+      setBatchXianyuDeleteConfirm(false)
+    } catch {
+      setBatchXianyuDeleteConfirm(false)
+      addToast({ type: 'error', message: '删除闲鱼商品失败' })
+    } finally {
+      deletingFromXianyuRef.current = false
+      setDeletingFromXianyu(false)
     }
   }
 
@@ -1025,58 +1122,66 @@ export function Items() {
           <h1 className="page-title">商品管理</h1>
           <p className="page-description">管理各账号的商品信息</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-1.5">
           {selectedIds.size > 0 && (
             <>
-              <button onClick={() => setBatchDeleteItemConfirm(true)} className="btn-ios-danger">
-                <Trash2 className="w-4 h-4" />
+              <button onClick={() => setBatchDeleteItemConfirm(true)} className="btn-ios-danger btn-sm whitespace-nowrap">
+                <Trash2 className="w-3.5 h-3.5" />
                 删除选中 ({selectedIds.size})
               </button>
-              <button onClick={openBatchOffline} className="btn-ios-secondary">
-                <PackageX className="w-4 h-4" />
+              <button
+                onClick={openBatchXianyuDelete}
+                disabled={deletingFromXianyu}
+                className="btn-ios-danger btn-sm whitespace-nowrap"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                删除闲鱼商品 ({selectedIds.size})
+              </button>
+              <button onClick={openBatchOffline} className="btn-ios-secondary btn-sm whitespace-nowrap">
+                <PackageX className="w-3.5 h-3.5" />
                 下架选中 ({selectedIds.size})
               </button>
-              <button onClick={() => setBatchDeleteDefaultReplyConfirm(true)} className="btn-ios-secondary">
-                <Trash2 className="w-4 h-4" />
+              <button onClick={() => setBatchDeleteDefaultReplyConfirm(true)} className="btn-ios-secondary btn-sm whitespace-nowrap">
+                <Trash2 className="w-3.5 h-3.5" />
                 删除默认回复
               </button>
-              <button onClick={() => setBatchDeleteAiPromptConfirm(true)} className="btn-ios-secondary">
-                <Trash2 className="w-4 h-4" />
+              <button onClick={() => setBatchDeleteAiPromptConfirm(true)} className="btn-ios-secondary btn-sm whitespace-nowrap">
+                <Trash2 className="w-3.5 h-3.5" />
                 删除AI提示词
               </button>
-              <button onClick={() => setBatchClearCardRelationsConfirm(true)} className="btn-ios-secondary">
-                <Unlink className="w-4 h-4" />
+              <button onClick={() => setBatchClearCardRelationsConfirm(true)} className="btn-ios-secondary btn-sm whitespace-nowrap">
+                <Unlink className="w-3.5 h-3.5" />
                 清空关联卡券
               </button>
             </>
           )}
           <button
             onClick={openBatchDefaultReplyModal}
-            className="btn-ios-primary"
+            className="btn-ios-primary btn-sm whitespace-nowrap"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-3.5 h-3.5" />
             新增默认回复
           </button>
           <button
             onClick={openBatchAiPromptModal}
-            className="btn-ios-primary"
+            className="btn-ios-primary btn-sm whitespace-nowrap"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-3.5 h-3.5" />
             新增AI提示词
           </button>
           <button
             onClick={handleFetchAllItems}
             disabled={fetchingType !== null}
-            className="btn-ios-primary"
+            className="btn-ios-primary btn-sm whitespace-nowrap"
           >
             {fetchingType === 'all' ? (
               <>
-                <Loader2 className="w-4 h-4 animate-spin" />
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 获取全部中...
               </>
             ) : (
               <>
-                <Download className="w-4 h-4" />
+                <Download className="w-3.5 h-3.5" />
                 获取所有账号商品
               </>
             )}
@@ -1084,22 +1189,22 @@ export function Items() {
           <button
             onClick={handleFetchItems}
             disabled={fetchingType !== null}
-            className="btn-ios-primary"
+            className="btn-ios-primary btn-sm whitespace-nowrap"
           >
             {fetchingType === 'single' ? (
               <>
-                <Loader2 className="w-4 h-4 animate-spin" />
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 获取中...
               </>
             ) : (
               <>
-                <Download className="w-4 h-4" />
+                <Download className="w-3.5 h-3.5" />
                 获取商品
               </>
             )}
           </button>
-          <button onClick={() => loadItems()} className="btn-ios-secondary">
-            <RefreshCw className="w-4 h-4" />
+          <button onClick={() => loadItems()} className="btn-ios-secondary btn-sm whitespace-nowrap">
+            <RefreshCw className="w-3.5 h-3.5" />
             刷新
           </button>
         </div>
@@ -2382,6 +2487,23 @@ export function Items() {
         loading={offlining}
         onConfirm={handleBatchOffline}
         onCancel={() => setBatchOfflineConfirm(false)}
+      />
+
+      {/* 批量删除闲鱼平台商品确认弹窗 */}
+      <ConfirmModal
+        isOpen={batchXianyuDeleteConfirm}
+        title="删除闲鱼商品确认"
+        message={`确定要用账号「${selectedAccount}」删除选中的 ${selectedXianyuItems.length} 个闲鱼平台商品吗？平台删除后无法恢复，本地商品记录和配置会保留。`}
+        confirmText="删除闲鱼商品"
+        cancelText="取消"
+        type="danger"
+        loading={deletingFromXianyu}
+        onConfirm={handleBatchXianyuDelete}
+        onCancel={() => {
+          if (!deletingFromXianyuRef.current) {
+            setBatchXianyuDeleteConfirm(false)
+          }
+        }}
       />
 
 

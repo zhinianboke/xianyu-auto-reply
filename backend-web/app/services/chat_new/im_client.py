@@ -27,7 +27,11 @@ from common.utils.cookie_refresh import (
     merge_cookies,
     update_account_cookies_in_db,
 )
-from common.utils.time_utils import get_beijing_now_naive, random_token_cache_expiry
+from common.services.token_renewal_cache_service import (
+    mark_token_cache_expired,
+    upsert_token_cache,
+)
+from common.utils.time_utils import get_beijing_now_naive
 from common.utils.xianyu_utils import (
     generate_device_id,
     generate_mid,
@@ -64,20 +68,29 @@ CAPTCHA_MAX_RETRY = 1
 class GoofishImClient:
     """闲鱼IM WebSocket客户端，用于获取会话列表和聊天记录"""
 
-    def __init__(self, account_id: str, cookies_str: str):
+    def __init__(
+        self,
+        account_id: str,
+        cookies_str: str,
+        *,
+        account_row_id: int | None = None,
+    ):
         """
         初始化IM客户端
 
         Args:
             account_id: 账号ID（数据库account_id）
             cookies_str: Cookie字符串
+            account_row_id: 账号数据库行 ID，供滑块成功后精准写回 Cookie
         """
         self.account_id = account_id
+        self.account_row_id = account_row_id
         self.cookies_str = cookies_str
         self.cookies: Dict[str, str] = trans_cookies(cookies_str)
         self.myid: str = self.cookies.get("unb", "")
         self.device_id: str = generate_device_id(self.myid)
         self.token: str = ""
+        self._captcha_token_cache_saved = False
 
         # WebSocket相关
         self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
@@ -523,7 +536,7 @@ class GoofishImClient:
                             f"【{self.account_id}】Token缓存已过期: "
                             f"user_id={self.myid}, 过期时间={expire_at}"
                         )
-                        await self._delete_cached_token()
+                        await self._mark_cached_token_expired()
                 else:
                     logger.info(
                         f"【{self.account_id}】Token缓存未命中: "
@@ -544,56 +557,32 @@ class GoofishImClient:
             token_val: IM Token
             device_id_val: 设备ID
         """
-        try:
-            # 基础 TTL 默认 5~10 小时，再追加 1~5 小时秒级随机偏移
-            expire_at, ttl_hours = random_token_cache_expiry()
+        cache_write = await upsert_token_cache(
+            token_user_id=self._cache_user_id,
+            token=token_val,
+            device_id=device_id_val,
+        )
+        if not cache_write.success:
+            logger.warning(f"【{self.account_id}】{cache_write.message}")
+            return
+        logger.info(
+            f"【{self.account_id}】Token已缓存到数据库 "
+            f"(过期时间={cache_write.expire_at:%Y-%m-%d %H:%M:%S}, "
+            f"TTL={cache_write.ttl_hours:.1f}小时)"
+        )
 
-            async with async_session_maker() as session:
-                await session.execute(
-                    text("""
-                        INSERT INTO xy_token_cache
-                            (user_id, token, device_id, expire_at, created_at, updated_at)
-                        VALUES
-                            (:user_id, :token, :device_id, :expire_at, NOW(), NOW())
-                        ON DUPLICATE KEY UPDATE
-                            token = VALUES(token),
-                            device_id = VALUES(device_id),
-                            expire_at = VALUES(expire_at),
-                            updated_at = NOW()
-                    """),
-                    {
-                        "user_id": self._cache_user_id,
-                        "token": token_val,
-                        "device_id": device_id_val,
-                        "expire_at": expire_at,
-                    },
-                )
-                await session.commit()
-                logger.info(
-                    f"【{self.account_id}】Token已缓存到数据库 "
-                    f"(过期时间={expire_at.strftime('%Y-%m-%d %H:%M:%S')}, "
-                    f"TTL={ttl_hours:.1f}小时)"
-                )
-        except Exception as e:
-            logger.warning(f"【{self.account_id}】缓存Token到数据库失败: {e}")
-
-    async def _delete_cached_token(self):
-        """删除数据库中缓存的token"""
-        try:
-            async with async_session_maker() as session:
-                await session.execute(
-                    text(
-                        "DELETE FROM xy_token_cache WHERE user_id = :user_id"
-                    ),
-                    {"user_id": self._cache_user_id},
-                )
-                await session.commit()
-                logger.info(
-                    f"【{self.account_id}】已清除Token缓存: "
-                    f"cache_key={self._cache_user_id}"
-                )
-        except Exception as e:
-            logger.warning(f"【{self.account_id}】清除Token缓存失败: {e}")
+    async def _mark_cached_token_expired(self):
+        """标记已失效的聊天 Token 缓存，保留历史数据并避免覆盖并发更新。"""
+        invalidation = await mark_token_cache_expired(
+            token_user_id=self._cache_user_id,
+        )
+        if invalidation.success:
+            logger.info(
+                f"【{self.account_id}】{invalidation.message}: "
+                f"cache_key={self._cache_user_id}"
+            )
+        else:
+            logger.warning(f"【{self.account_id}】{invalidation.message}")
 
     # ==================== 内部方法 ====================
 
@@ -612,8 +601,11 @@ class GoofishImClient:
         # 2. 缓存未命中，调API获取
         token = await self._fetch_im_token_from_api()
         if token:
-            # 存入数据库缓存
-            await self._set_cached_token(token, self.device_id)
+            if self._captcha_token_cache_saved:
+                # 滑块服务端已写入同一聊天缓存，避免重复刷新到期时间。
+                self._captcha_token_cache_saved = False
+            else:
+                await self._set_cached_token(token, self.device_id)
         return token
 
     async def _fetch_im_token_from_api(
@@ -722,8 +714,21 @@ class GoofishImClient:
                     f"【{self.account_id}】过滑块成功，准备用新Cookie重试获取Token"
                     f"（第{_captcha_retry + 1}次）"
                 )
-                # 清除可能已失效的Token缓存，确保后续走最新Cookie
-                await self._delete_cached_token()
+                if self._captcha_token_cache_saved:
+                    cached = await self._get_cached_token()
+                    if cached:
+                        self.device_id = cached["device_id"]
+                        logger.info(
+                            f"【{self.account_id}】使用WebSocket端已写入的聊天Token缓存"
+                        )
+                        return cached["token"]
+                    logger.warning(
+                        f"【{self.account_id}】WebSocket端报告Token缓存写入成功，"
+                        "但本地未读取到有效缓存，继续重试Token接口"
+                    )
+                    self._captcha_token_cache_saved = False
+                # 仅确认旧缓存已失效；条件更新不会覆盖其他流程刚写入的新 Token。
+                await self._mark_cached_token_expired()
                 return await self._fetch_im_token_from_api(
                     _retry=_retry, _captcha_retry=_captcha_retry + 1
                 )
@@ -787,6 +792,7 @@ class GoofishImClient:
         logger.info(
             f"【{self.account_id}】检测到风控，委托WebSocket过滑块: {verification_url[:80]}..."
         )
+        self._captcha_token_cache_saved = False
         # 携带当前Cookie与设备ID：验证链接过期时 WebSocket 端可凭此重取新鲜链接
         resp = await websocket_client.solve_captcha(
             account_id=self.account_id,
@@ -794,6 +800,10 @@ class GoofishImClient:
             call_type="local",
             cookies=self.cookies_str,
             device_id=self.device_id,
+            account_row_id=self.account_row_id,
+            token_user_id=self._cache_user_id,
+            persist_token_cache=True,
+            token_cache_write_mode="upsert",
         )
 
         if not (isinstance(resp, dict) and resp.get("success")):
@@ -807,6 +817,8 @@ class GoofishImClient:
         raw_cookies = response_data.get("cookies")
         new_cookies = raw_cookies if isinstance(raw_cookies, dict) else {}
         token_already_available = bool(response_data.get("token_already_available"))
+        cookie_saved_by_websocket = bool(response_data.get("cookie_saved"))
+        self._captcha_token_cache_saved = bool(response_data.get("token_cache_saved"))
         if not new_cookies and not token_already_available:
             logger.error(f"【{self.account_id}】过滑块返回成功但未获取到Cookie，判定为失败")
             return False
@@ -817,17 +829,19 @@ class GoofishImClient:
             merged_cookies_str = "; ".join(
                 f"{key}={value}" for key, value in merged_cookies.items()
             )
-            saved = await update_account_cookies_in_db(
-                self.account_id,
-                merged_cookies_str,
-            )
-            if not saved:
-                logger.error(f"【{self.account_id}】过滑块Cookie合并写回数据库失败")
-                return False
+            if not cookie_saved_by_websocket:
+                saved = await update_account_cookies_in_db(
+                    self.account_id,
+                    merged_cookies_str,
+                )
+                if not saved:
+                    logger.error(f"【{self.account_id}】过滑块Cookie合并写回数据库失败")
+                    return False
             self.cookies = merged_cookies
             self.cookies_str = merged_cookies_str
             logger.info(
-                f"【{self.account_id}】过滑块成功，已合并 {len(new_cookies)} 个Cookie并更新数据库"
+                f"【{self.account_id}】过滑块成功，已合并 {len(new_cookies)} 个Cookie，"
+                f"数据库写入方={'WebSocket端' if cookie_saved_by_websocket else '聊天端'}"
             )
         if token_already_available:
             logger.info(f"【{self.account_id}】重取验证链接时Token已可用，准备重试Token接口")

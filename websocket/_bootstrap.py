@@ -24,9 +24,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from app.core.config import get_settings
+from common.services.captcha.slider_mode import refresh_slider_mode_from_database
+from common.services.risk_control_log_cleanup_service import (
+    fail_processing_risk_control_logs_on_restart,
+)
 from common.utils.logging_utils import setup_logging
 from common.utils.network_utils import resolve_listen_host
-from common.services.captcha.slider_mode import refresh_slider_mode_from_database
 
 faulthandler.enable()
 
@@ -73,6 +76,15 @@ async def lifespan(app: FastAPI):
     if not await check_database_connection():
         logger.error("数据库连接失败，服务退出")
         sys.exit(1)
+
+    cleanup_result = await fail_processing_risk_control_logs_on_restart()
+    if not cleanup_result.success:
+        logger.error(cleanup_result.message)
+        raise RuntimeError(cleanup_result.message)
+    if cleanup_result.updated_count:
+        logger.warning(cleanup_result.message)
+    else:
+        logger.info(cleanup_result.message)
 
     await refresh_slider_mode_from_database()
     

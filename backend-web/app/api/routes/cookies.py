@@ -43,6 +43,7 @@ from common.schemas.account import (
 )
 from common.schemas.common import ApiResponse
 from common.services.ai_provider_service import read_ai_enabled
+from common.services.token_renewal_cache_service import mark_token_cache_expired
 from common.utils.auth_scope import resolve_owner_scope
 from common.utils.xianyu_utils import close_account_notice
 from app.services.account_service import AccountService
@@ -630,13 +631,20 @@ async def clear_token_cache_batch(
             continue
 
         try:
-            # 1. 清除Token缓存（websocket侧user_id=unb，chat侧user_id=chat_unb）
-            await session.execute(
-                text("DELETE FROM xy_token_cache WHERE user_id IN (:uid1, :uid2)"),
-                {"uid1": unb, "uid2": f"chat_{unb}"},
+            # 1. 标记Token缓存失效（WebSocket侧 user_id=unb，聊天侧 user_id=chat_unb）
+            invalidation_messages: list[str] = []
+            for token_user_id in (unb, f"chat_{unb}"):
+                invalidation = await mark_token_cache_expired(
+                    token_user_id=token_user_id,
+                    invalidate_valid_cache=True,
+                )
+                if not invalidation.success:
+                    raise RuntimeError(invalidation.message)
+                invalidation_messages.append(invalidation.message)
+            _logger.info(
+                f"[Token缓存失效] 账号 {account_id} 的Token缓存已标记失效 "
+                f"(unb={unb}, 结果={'；'.join(invalidation_messages)})"
             )
-            await session.commit()
-            _logger.info(f"[清除Token缓存] 账号 {account_id} 的Token缓存已清除 (unb={unb})")
 
             # 2. 禁用账号
             disable_ok, disable_err = await _update_account_status_and_task(account, False, account_service)
