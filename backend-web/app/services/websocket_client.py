@@ -119,8 +119,7 @@ class WebSocketServiceClient:
         try:
             response = await self.http_client.post(url, json={
                 "chat_id": chat_id,
-                "content": content,
-                "message_type": message_type
+                "message": content,
             })
             return response
         except Exception as e:

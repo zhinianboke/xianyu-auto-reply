@@ -420,6 +420,8 @@ class SliderHandler:
                 return await self.handle_scratch_captcha_manual(page, max_retries=3, wait_for_completion=True)
             else:
                 # 普通滑块使用PlaywrightSliderService处理
+                slider_service = None
+                
                 try:
                     from app.services.captcha import PlaywrightSliderService
                     slider_service = PlaywrightSliderService(
@@ -445,6 +447,13 @@ class SliderHandler:
                 except ImportError:
                     logger.warning("PlaywrightSliderService不可用，尝试自动处理")
                     return await self.handle_scratch_captcha_auto(page, max_retries)
+                finally:
+                    if slider_service is not None:
+                        try:
+                            slider_service.close()
+                        except Exception as close_e:
+                            logger.warning(f"关闭slider_service时出错: {close_e}")
+
 
         except Exception as e:
             logger.error(f"❌ 滑块检测过程异常: {str(e)}")
