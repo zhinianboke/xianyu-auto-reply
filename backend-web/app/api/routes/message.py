@@ -155,6 +155,7 @@ async def send_message(request: SendMessageRequest):
         )
 
 
+
 @router.post("/send-by-nickname", response_model=SendMessageByNicknameResponse)
 async def send_message_by_nickname(
     request: SendMessageByNicknameRequest,
@@ -247,4 +248,25 @@ async def send_message_by_nickname(
                 f"通过昵称发送消息成功: nickname={cleaned_nickname}, "
                 f"account_id={matched_account_id}, chat_id={matched_chat_id}"
             )
+            return SendMessageByNicknameResponse(
+                success=True,
+                message="消息发送成功",
+                matched_chat_id=matched_chat_id,
+                matched_account_id=matched_account_id,
             )
+        else:
+            error_msg = result.get("message", "发送失败")
+            logger.error(f"通过昵称发送消息失败: {error_msg}")
+            return SendMessageByNicknameResponse(
+                success=False,
+                message=error_msg,
+                matched_chat_id=matched_chat_id,
+                matched_account_id=matched_account_id,
+            )
+
+    except Exception as e:
+        logger.error(f"通过昵称发送消息异常: {e}")
+        return SendMessageByNicknameResponse(
+            success=False,
+            message=f"发送消息失败: {str(e)}",
+        )
