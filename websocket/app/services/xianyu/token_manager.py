@@ -134,10 +134,24 @@ class TokenManager:
                 if new_token:
                     self.last_cookie_refresh_time = current_time
                     logger.info(f"【{self.cookie_id}】Cookie刷新任务完成,Token已更新")
-                elif getattr(self.xianyu, "last_token_refresh_status", "") == "skipped_local_slider_disabled":
+                elif getattr(self.xianyu, "last_token_refresh_status", "") in (
+                    "skipped_local_slider_disabled",
+                    "skipped_risk_control_processing",
+                    "skipped_risk_control_check_failed",
+                    "skipped_startup_cache_lookup_failed",
+                ):
                     self.last_cookie_refresh_time = time.time()
+                    refresh_status = self.xianyu.last_token_refresh_status
+                    if refresh_status == "skipped_local_slider_disabled":
+                        reason = "本机滑块不处理已开启且Token缓存不存在"
+                    elif refresh_status == "skipped_risk_control_processing":
+                        reason = "同账号已有处理中的风控任务"
+                    elif refresh_status == "skipped_startup_cache_lookup_failed":
+                        reason = "启动阶段读取Token缓存失败"
+                    else:
+                        reason = "处理中风控日志检查失败"
                     logger.warning(
-                        f"【{self.cookie_id}】本机滑块不处理已开启且Token缓存不存在，"
+                        f"【{self.cookie_id}】{reason}，"
                         f"等待下一个{self.cookie_refresh_interval}秒刷新周期"
                     )
                 else:

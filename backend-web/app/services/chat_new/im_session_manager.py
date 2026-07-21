@@ -13,7 +13,11 @@ import json
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from loguru import logger
+from sqlalchemy import select
 from starlette.websockets import WebSocket
+
+from common.db.session import async_session_maker
+from common.models import XYAccount
 
 from .im_client import GoofishImClient
 
@@ -61,13 +65,18 @@ class ImSessionManager:
                 await client.disconnect()
                 del self.clients[account_id]
 
-            # 从数据库获取Cookie
-            cookies_str = await self._get_account_cookie(account_id)
-            if not cookies_str:
+            # 从数据库获取账号行 ID 和 Cookie，供滑块成功后精准持久化。
+            account_context = await self._get_account_context(account_id)
+            if not account_context:
                 raise ValueError(f"账号Cookie为空: {account_id}")
+            account_row_id, cookies_str = account_context
 
             # 创建并连接
-            client = GoofishImClient(account_id, cookies_str)
+            client = GoofishImClient(
+                account_id,
+                cookies_str,
+                account_row_id=account_row_id,
+            )
             success = await client.connect()
             if not success:
                 raise Exception(f"IM连接失败: {account_id}")
@@ -181,21 +190,17 @@ class ImSessionManager:
         if account_id in self._ws_clients and self._ws_clients[account_id]:
             self._ensure_push_callback(account_id, client)
 
-    async def _get_account_cookie(self, account_id: str) -> str:
+    async def _get_account_context(self, account_id: str) -> tuple[int, str] | None:
         """
-        从数据库获取账号Cookie
+        从数据库获取账号行 ID 和 Cookie。
 
         Args:
             account_id: 账号ID
 
         Returns:
-            Cookie字符串，不存在则返回空字符串
+            ``(账号行ID, Cookie字符串)``，账号不存在或 Cookie 为空时返回 ``None``。
         """
         try:
-            from sqlalchemy import select
-            from common.db.session import async_session_maker
-            from common.models import XYAccount
-
             async with async_session_maker() as db:
                 result = await db.execute(
                     select(XYAccount).where(
@@ -208,19 +213,19 @@ class ImSessionManager:
                     logger.error(
                         f"【{account_id}】数据库中未找到账号"
                     )
-                    return ""
+                    return None
 
                 if not account.cookie:
                     logger.error(
                         f"【{account_id}】账号Cookie为空"
                     )
-                    return ""
+                    return None
 
-                return account.cookie
+                return int(account.id), account.cookie
 
         except Exception as e:
             logger.error(f"【{account_id}】获取账号Cookie失败: {e}")
-            return ""
+            return None
 
 
 def get_im_session_manager() -> ImSessionManager:

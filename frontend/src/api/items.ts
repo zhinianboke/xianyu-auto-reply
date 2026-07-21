@@ -121,6 +121,11 @@ export const batchOfflineItems = (cookieId: string, itemIds: string[]): Promise<
   return post(`${ITEM_PREFIX}/batch-offline`, { cookie_id: cookieId, item_ids: itemIds })
 }
 
+// 批量删除闲鱼平台商品（本地商品记录保留）
+export const batchDeleteXianyuItems = (cookieId: string, itemIds: string[]): Promise<ApiResponse> => {
+  return post(`${ITEM_PREFIX}/batch-delete-xianyu`, { cookie_id: cookieId, item_ids: itemIds })
+}
+
 // 从账号获取商品（分页）
 export const fetchItemsFromAccount = (cookieId: string, page?: number): Promise<ApiResponse> => {
   return post(`${ITEM_PREFIX}/get-by-page`, { cookie_id: cookieId, page: page || 1 })

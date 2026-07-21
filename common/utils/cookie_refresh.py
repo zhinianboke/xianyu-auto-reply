@@ -161,6 +161,7 @@ def is_token_expired_error(ret_list: list) -> bool:
     ret_str = str(ret_list)
     return (
         'FAIL_SYS_TOKEN_EXOIRED' in ret_str
+        or 'FAIL_SYS_TOKEN_EXPIRED' in ret_str
         or 'FAIL_SYS_TOKEN_EMPTY' in ret_str
         or '令牌过期' in ret_str
         or '令牌为空' in ret_str

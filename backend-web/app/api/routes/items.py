@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Awaitable, Callable, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -18,6 +18,7 @@ from common.schemas.item import (
     ItemPageFetchRequest,
 )
 from common.services.item_offline_service import batch_offline_items_from_xianyu
+from common.services.item_delete_service import batch_delete_items_from_xianyu
 from app.services.account_service import AccountService
 from app.services.item_service import ItemService
 from app.services.selectable_item_service import SelectableItemService
@@ -872,6 +873,139 @@ async def batch_offline_items(
     # 部分/全部成功
     message = f"已下架 {suc_count} 个商品" + (f"，{fail_count} 个失败" if fail_count else "")
     return ApiResponse(success=True, message=message, data=data)
+
+
+@items_router.post("/batch-delete-xianyu", response_model=ApiResponse)
+async def batch_delete_xianyu_items(
+    request: Request,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+    item_service: ItemService = Depends(deps.get_item_service),
+) -> ApiResponse:
+    """使用指定账号 Cookie 批量删除闲鱼平台商品。
+
+    本接口只删除闲鱼平台商品，不物理删除本地商品及关联数据。
+    """
+    owner_id, _ = resolve_owner_scope(current_user)
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        logger.warning(
+            f"批量删除闲鱼商品请求体解析失败: {type(exc).__name__}: {exc}"
+        )
+        return ApiResponse(success=False, message="请求体不是有效的JSON格式")
+    if not isinstance(payload, dict):
+        return ApiResponse(success=False, message="请求参数必须是JSON对象")
+
+    raw_item_ids = payload.get("item_ids")
+    if not isinstance(raw_item_ids, list):
+        return ApiResponse(success=False, message="商品ID列表格式错误")
+    invalid_item_id_index = next(
+        (
+            index
+            for index, raw_item_id in enumerate(raw_item_ids)
+            if not isinstance(raw_item_id, str)
+        ),
+        None,
+    )
+    if invalid_item_id_index is not None:
+        return ApiResponse(
+            success=False,
+            message=f"第 {invalid_item_id_index + 1} 个商品ID格式错误",
+        )
+
+    cleaned_item_ids = list(
+        dict.fromkeys(
+            item_id
+            for raw_item_id in raw_item_ids
+            if (item_id := str(raw_item_id or "").strip())
+        )
+    )
+    if not cleaned_item_ids:
+        return ApiResponse(success=False, message="请选择要删除的闲鱼商品")
+    if len(cleaned_item_ids) > 100:
+        return ApiResponse(success=False, message="单次最多删除 100 个闲鱼商品")
+
+    raw_cookie_id = payload.get("cookie_id")
+    if raw_cookie_id is not None and not isinstance(raw_cookie_id, str):
+        return ApiResponse(success=False, message="闲鱼账号ID格式错误")
+    cookie_id = str(raw_cookie_id or "").strip()
+    if not cookie_id:
+        return ApiResponse(success=False, message="请选择用于删除商品的闲鱼账号")
+
+    try:
+        account = await account_service.get_account_for_user(owner_id, cookie_id)
+    except Exception as exc:
+        logger.error(
+            f"批量删除闲鱼商品查询账号失败: cookie_id={cookie_id}, "
+            f"error={type(exc).__name__}: {exc}"
+        )
+        return ApiResponse(
+            success=False,
+            message=f"查询闲鱼账号失败，请检查数据库连接（{type(exc).__name__}）",
+        )
+    if not account:
+        return ApiResponse(success=False, message="账号不存在或无权操作")
+    if not account.cookie:
+        return ApiResponse(
+            success=False,
+            message="该账号未登录（Cookie为空），无法删除闲鱼商品",
+        )
+
+    try:
+        existing_item_ids = await item_service.get_existing_item_ids_for_account(
+            account,
+            cleaned_item_ids,
+        )
+    except Exception as exc:
+        logger.error(
+            f"批量删除闲鱼商品校验归属失败: account_id={account.account_id}, "
+            f"item_count={len(cleaned_item_ids)}, error={type(exc).__name__}: {exc}"
+        )
+        return ApiResponse(
+            success=False,
+            message=f"校验商品归属失败，请检查数据库连接（{type(exc).__name__}）",
+        )
+    invalid_item_ids = [
+        item_id for item_id in cleaned_item_ids if item_id not in existing_item_ids
+    ]
+    if invalid_item_ids:
+        preview = "、".join(invalid_item_ids[:5])
+        suffix = f" 等 {len(invalid_item_ids)} 个" if len(invalid_item_ids) > 5 else ""
+        return ApiResponse(
+            success=False,
+            message=f"以下商品不属于所选账号或本地记录不存在：{preview}{suffix}",
+        )
+
+    result = await batch_delete_items_from_xianyu(
+        account_id=account.account_id,
+        account_row_id=int(account.id),
+        owner_id=int(account.owner_id),
+        cookies_str=account.cookie,
+        item_ids=cleaned_item_ids,
+    )
+    success_count = int(result.get("success_count", 0) or 0)
+    fail_count = int(result.get("fail_count", 0) or 0)
+    data = {
+        "results": result.get("results", []),
+        "success_count": success_count,
+        "fail_count": fail_count,
+    }
+    logger.info(
+        f"批量删除闲鱼商品: 账号={account.account_id}, 请求={len(cleaned_item_ids)}, "
+        f"成功={success_count}, 失败={fail_count}"
+    )
+    if success_count == 0:
+        return ApiResponse(
+            success=False,
+            message=result.get("message") or "删除闲鱼商品失败",
+            data=data,
+        )
+    return ApiResponse(
+        success=True,
+        message=result.get("message") or f"已删除 {success_count} 个闲鱼商品",
+        data=data,
+    )
 
 
 @items_router.post("/get-by-page")

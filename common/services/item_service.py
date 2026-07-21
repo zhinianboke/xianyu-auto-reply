@@ -75,6 +75,21 @@ class ItemService:
         existing_rows = (await self.session.execute(stmt)).scalars().all()
         return {row.item_id: row for row in existing_rows}
 
+    async def get_existing_item_ids_for_account(
+        self,
+        account: XYAccount,
+        item_ids: list[str],
+    ) -> set[str]:
+        """返回指定账号本地商品库中实际存在的商品 ID 集合。
+
+        Args:
+            account: 已完成用户权限校验的账号对象。
+            item_ids: 待校验的商品 ID 列表。
+        Returns:
+            同时属于该账号且存在于本地商品库的商品 ID 集合。
+        """
+        return set((await self._get_existing_item_map(account, item_ids)).keys())
+
     async def list_items(self, owner_id: int | None, account_id: str | None = None) -> list[dict]:
         """获取商品列表
         

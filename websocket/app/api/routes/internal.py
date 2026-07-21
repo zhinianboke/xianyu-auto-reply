@@ -13,12 +13,24 @@ import asyncio
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from common.services.account_cookie_service import merge_account_cookie_fields
 from common.services.captcha.concurrency import run_browser_task
 from common.services.captcha.slider_mode import (
     SLIDER_MODE_REAL_MOUSE,
     refresh_slider_mode_from_database,
 )
 from common.services.captcha.weighted_runner import real_mouse_weighted_runner
+from common.services.im_token_api import extract_im_access_token, request_im_token
+from common.services.risk_control_log_query_service import (
+    check_account_processing_risk_control_log,
+    get_account_risk_control_lock,
+)
+from common.services.token_renewal_cache_service import (
+    mark_token_cache_expired,
+    upsert_token_cache,
+    write_renewed_token_cache,
+)
+from common.utils.xianyu_utils import trans_cookies
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -81,8 +93,9 @@ class LogRetentionRequest(BaseModel):
 
 
 class SolveCaptchaRequest(BaseModel):
-    """过滑块请求（模式B：仅凭 punish 链接求解，不依赖账号/数据库）"""
+    """过滑块请求；可选携带续期上下文用于成功后持久化。"""
     account_id: str = ""          # 外部标识，仅用于日志与浏览器实例隔离
+    account_row_id: int | None = None # xy_accounts.id，传入后成功时精准写回 Cookie
     url: str                      # punish 验证链接（punish?x5secdata=...）
     browser_timeout: int = 40     # 单次浏览器超时（秒）
     call_type: str = "remote"     # 调用类型：local-本机 / remote-远程
@@ -91,6 +104,10 @@ class SolveCaptchaRequest(BaseModel):
                                   # 传入后链接过期时可凭此 Cookie 重取新链接继续处理。
     device_id: str = ""           # 可选：设备 ID，配合 cookies 重新请求 token 接口使用
     risk_log_id: int | None = None # backend-web 准入锁内预先创建的风控日志 ID
+    token_cache_id: int | None = None # xy_token_cache.id，传入后可写入续期 Token
+    token_user_id: str = ""       # Token 缓存用户 ID
+    persist_token_cache: bool = False # 是否由 WebSocket 端完成 Token 缓存写入
+    token_cache_write_mode: str = "renewal" # renewal-条件续期 / upsert-基础缓存新增或更新
 
 
 @router.post("/logs/retention")
@@ -294,15 +311,16 @@ async def restart_account(account_id: str, request: StartAccountRequest = None):
                     logger.warning(f"解析Cookie获取unb失败: {parse_e}")
                     unb = ""
 
-            # 3) 用正确的 unb 作为 user_id 删除 Token 缓存
+            # 3) 用正确的 unb 作为 user_id 标记 Token 缓存失效
             if unb:
-                async with async_session_maker() as session:
-                    await session.execute(
-                        text("DELETE FROM xy_token_cache WHERE user_id = :user_id"),
-                        {"user_id": unb},
-                    )
-                    await session.commit()
-                    logger.info(f"账号重启前已清除Token缓存: account_id={account_id}, user_id={unb}")
+                invalidation = await mark_token_cache_expired(
+                    token_user_id=unb,
+                    invalidate_valid_cache=True,
+                )
+                logger.info(
+                    f"账号重启前{invalidation.message}: "
+                    f"account_id={account_id}, user_id={unb}"
+                )
             else:
                 logger.warning(f"未能解析出unb，跳过Token缓存清除: account_id={account_id}")
         except Exception as cache_e:
@@ -339,10 +357,11 @@ async def restart_account(account_id: str, request: StartAccountRequest = None):
 
 @router.post("/captcha/solve")
 async def solve_captcha(request: SolveCaptchaRequest):
-    """过滑块（独立/无状态）：仅凭传入的 punish 链接求解滑块。
+    """凭 punish 链接求解滑块，并按可选上下文持久化结果。
 
-    模式B：不依赖账号是否运行、不查数据库、不注入/回填 cookies。
-    成功返回解出的 x5* cookies，失败直接返回 success=false（供外部系统使用）。
+    默认模式不依赖账号是否运行，也不写账号或 Token 缓存；携带账号行 ID
+    与 Token 缓存上下文时，成功后会写回 Cookie 并更新对应缓存。
+    成功返回解出的 Cookie，失败直接返回 success=false（供外部系统使用）。
     远程调用会记录风控日志（call_type=remote，call_user=调用用户）。
     """
     import re
@@ -359,15 +378,21 @@ async def solve_captcha(request: SolveCaptchaRequest):
     timeout = max(20, min(int(request.browser_timeout or 40), 120))
     call_type = (request.call_type or "remote").strip() or "remote"
     call_user = (request.call_user or "").strip() or None
+    existing_cookies_str = (request.cookies or "").strip()
+    device_id = (request.device_id or "").strip()
+    refetched_token_result: dict[str, object] = {}
 
     # 记录风控日志（处理中）
     log_id = request.risk_log_id if request.risk_log_id and request.risk_log_id > 0 else None
     start_ts = _time.time()
-    if not log_id:
+
+    def _create_processing_log() -> int | None:
         try:
             from common.db.compat import db_manager
-            log_id = db_manager.add_risk_control_log(
-                cookie_id=safe_id,
+            return db_manager.add_risk_control_log(
+                # safe_id 仅用于日志展示和浏览器目录隔离；数据库查询必须使用
+                # 原始账号标识，否则特殊字符账号会出现“写入与查询不一致”。
+                cookie_id=raw_id,
                 event_type="slider_captcha",
                 event_description=f"触发场景: 远程过滑块接口, URL: {url}",
                 processing_status="processing",
@@ -376,6 +401,35 @@ async def solve_captcha(request: SolveCaptchaRequest):
             )
         except Exception as log_e:
             logger.error(f"【过滑块接口】记录风控日志失败: {log_e}")
+            return None
+
+    if request.persist_token_cache and not log_id:
+        async with get_account_risk_control_lock(raw_id):
+            processing_check = await check_account_processing_risk_control_log(raw_id)
+            if processing_check.has_processing:
+                logger.warning(
+                    f"【过滑块接口】account_id={safe_id} {processing_check.message}，"
+                    "本次不重复处理"
+                )
+                return {
+                    "success": False,
+                    "code": 200,
+                    "message": f"{processing_check.message}，本次不重复处理",
+                    "data": {
+                        "processing_conflict": True,
+                        "processing_check_success": processing_check.success,
+                    },
+                }
+            log_id = _create_processing_log()
+        if not log_id:
+            return {
+                "success": False,
+                "code": 200,
+                "message": "创建风控处理日志失败，本次未启动滑块任务",
+                "data": None,
+            }
+    if not log_id:
+        log_id = _create_processing_log()
 
     def _update_log(
         status: str,
@@ -396,6 +450,170 @@ async def solve_captcha(request: SolveCaptchaRequest):
         except Exception as ue:
             logger.error(f"【过滑块接口】更新风控日志失败: {ue}")
 
+    def _merged_cookie_string(cookie_updates: dict[str, object] | None) -> str:
+        try:
+            merged = trans_cookies(existing_cookies_str)
+        except Exception:
+            merged = {}
+        for name, value in (cookie_updates or {}).items():
+            clean_name = str(name).strip()
+            if clean_name:
+                merged[clean_name] = "" if value is None else str(value)
+        return "; ".join(f"{name}={value}" for name, value in merged.items())
+
+    async def _persist_cookie_updates(
+        cookie_updates: dict[str, object] | None,
+        source: str,
+    ) -> tuple[str, bool, str]:
+        if not cookie_updates:
+            return existing_cookies_str, True, "未返回新Cookie，无需写回"
+        merged_cookies_str = _merged_cookie_string(cookie_updates)
+        if not request.account_row_id or request.account_row_id <= 0:
+            return merged_cookies_str, False, "未携带账号行ID，未写回Cookie"
+        saved_cookies_str = await merge_account_cookie_fields(
+            int(request.account_row_id),
+            raw_id,
+            cookie_updates,
+        )
+        if saved_cookies_str:
+            msg = f"{source}返回Cookie已写回数据库"
+            logger.info(f"【过滑块接口】account_id={safe_id} {msg}")
+            return saved_cookies_str, True, msg
+        msg = f"{source}返回Cookie合并写回失败"
+        logger.error(f"【过滑块接口】account_id={safe_id} {msg}")
+        return merged_cookies_str, False, msg
+
+    async def _persist_token_cache(
+        token: object,
+        merged_cookies_str: str,
+        cookie_saved: bool,
+    ) -> dict:
+        if not request.persist_token_cache:
+            return {}
+        if not cookie_saved:
+            return {"token_cache_saved": False, "token_cache_message": "Cookie未写回，跳过Token缓存写入"}
+        token_user_id = (request.token_user_id or "").strip()
+        write_mode = (request.token_cache_write_mode or "renewal").strip().lower()
+        if not (token_user_id and device_id):
+            return {"token_cache_saved": False, "token_cache_message": "缺少Token缓存写入上下文"}
+        if write_mode == "renewal" and not request.token_cache_id:
+            return {"token_cache_saved": False, "token_cache_message": "缺少续期Token缓存行ID"}
+        if write_mode not in {"renewal", "upsert"}:
+            return {
+                "token_cache_saved": False,
+                "token_cache_message": f"不支持的Token缓存写入模式：{write_mode}",
+            }
+
+        new_token = str(token or "").strip()
+        token_response_cookies: dict[str, object] = {}
+        token_response_cookie_saved = True
+
+        def _token_cache_failure(message: str) -> dict:
+            data = {
+                "token_cache_saved": False,
+                "token_cache_message": message,
+                "token_response_cookie_saved": token_response_cookie_saved,
+            }
+            if token_response_cookies:
+                data["token_response_cookies"] = dict(token_response_cookies)
+            return data
+
+        if not new_token:
+            try:
+                token_request_cookies = merged_cookies_str
+                last_token_response: object = None
+                for token_attempt in range(2):
+                    token_result = await request_im_token(token_request_cookies, device_id)
+                    last_token_response = token_result.response_json
+                    if token_result.response_cookies:
+                        response_cookies = dict(token_result.response_cookies)
+                        token_response_cookies.update(response_cookies)
+                        (
+                            token_request_cookies,
+                            response_cookie_saved,
+                            response_cookie_message,
+                        ) = await _persist_cookie_updates(
+                            response_cookies,
+                            "滑块后Token接口",
+                        )
+                        if not response_cookie_saved:
+                            token_response_cookie_saved = False
+                            return _token_cache_failure(response_cookie_message)
+
+                    new_token = extract_im_access_token(token_result.response_json) or ""
+                    if new_token:
+                        break
+                    if token_attempt == 0 and token_result.response_cookies:
+                        logger.info(
+                            f"【过滑块接口】account_id={safe_id} Token接口下发新Cookie，"
+                            "合并后重试一次"
+                        )
+                        continue
+
+                    response_detail = str(
+                        token_result.response_json.get("ret")
+                        if isinstance(token_result.response_json, dict)
+                        else last_token_response
+                    )[:300]
+                    return _token_cache_failure(
+                        (
+                            "滑块后重试Token接口仍未返回accessToken"
+                            f"：{response_detail or '未返回错误说明'}"
+                        )
+                    )
+                if not new_token:
+                    return _token_cache_failure(
+                        "滑块后重试Token接口仍未返回accessToken"
+                    )
+            except Exception as exc:
+                return _token_cache_failure(
+                    f"滑块后重试Token接口异常：{type(exc).__name__}: {exc}"
+                )
+
+        if write_mode == "upsert":
+            cache_write = await upsert_token_cache(
+                token_user_id=token_user_id,
+                device_id=device_id,
+                token=new_token,
+            )
+            data = {
+                "token_cache_saved": cache_write.success,
+                "token_cache_message": cache_write.message,
+                "token_response_cookie_saved": token_response_cookie_saved,
+            }
+            if cache_write.expire_at:
+                data["expire_at"] = cache_write.expire_at.isoformat()
+            if token_response_cookies:
+                data["token_response_cookies"] = token_response_cookies
+            return data
+
+        cache_write = await write_renewed_token_cache(
+            cache_id=int(request.token_cache_id),
+            token_user_id=token_user_id,
+            device_id=device_id,
+            token=new_token,
+        )
+        data = {
+            "token_cache_saved": cache_write.success,
+            "token_cache_message": cache_write.message,
+            "token_response_cookie_saved": token_response_cookie_saved,
+        }
+        if cache_write.renew_expire_at:
+            data["renew_expire_at"] = cache_write.renew_expire_at.isoformat()
+        if token_response_cookies:
+            data["token_response_cookies"] = token_response_cookies
+        return data
+
+    def _log_token_cache_result(result_data: dict) -> None:
+        """记录异步持久化结果，调用方超时后仍可定位具体原因。"""
+        if not request.persist_token_cache:
+            return
+        message = str(result_data.get("token_cache_message") or "Token缓存写入结果未知")
+        if result_data.get("token_cache_saved"):
+            logger.info(f"【过滑块接口】account_id={safe_id} {message}")
+        else:
+            logger.error(f"【过滑块接口】account_id={safe_id} {message}")
+
     try:
         from app.services.captcha.slider_stealth import run_slider_verification_with_fallback
 
@@ -404,10 +622,7 @@ async def solve_captcha(request: SolveCaptchaRequest):
         #   - 构造 url_provider，遇到"抱歉，页面访问出现了问题"（链接过期）时凭 Cookie 重取新链接，
         #     与本机处理滑块的逻辑保持一致。
         # 未传 Cookie 时保持原模式B：链接过期或失败直接判失败（cookies="" / url_provider=None）。
-        existing_cookies_str = (request.cookies or "").strip()
-        device_id = (request.device_id or "").strip()
         url_provider = None
-        refetched_token_result: dict[str, object] = {}
         if existing_cookies_str:
             from common.services.captcha.token_refetch import request_fresh_captcha_url
             from app.services.captcha.slider_stealth import CAPTCHA_NOT_REQUIRED
@@ -474,6 +689,24 @@ async def solve_captcha(request: SolveCaptchaRequest):
         refreshed_cookies = refetched_token_result.get("new_cookies")
         if not isinstance(refreshed_cookies, dict):
             refreshed_cookies = {}
+        merged_cookies_str, cookie_saved, cookie_message = await _persist_cookie_updates(
+            refreshed_cookies,
+            "重取Token",
+        )
+        token_cache_data = await _persist_token_cache(
+            refetched_token_result.get("new_token"),
+            merged_cookies_str,
+            cookie_saved,
+        )
+        _log_token_cache_result(token_cache_data)
+        token_response_cookies = token_cache_data.pop("token_response_cookies", {})
+        token_response_cookie_saved = bool(
+            token_cache_data.pop("token_response_cookie_saved", True)
+        )
+        cookie_saved = cookie_saved and token_response_cookie_saved
+        if not token_response_cookie_saved:
+            cookie_message = f"{cookie_message}；滑块后Token接口Cookie合并写回失败"
+        returned_cookies = {**refreshed_cookies, **token_response_cookies}
         _update_log(
             "success",
             f"重取验证链接时Token已可用，无需滑块，耗时: {duration:.2f}秒",
@@ -485,13 +718,34 @@ async def solve_captcha(request: SolveCaptchaRequest):
             "message": "Token已可用，无需滑块",
             "data": {
                 "engine": engine,
-                "cookies": refreshed_cookies,
+                "cookies": returned_cookies,
                 "token_already_available": True,
                 "url_expired": False,
+                "cookie_saved": cookie_saved,
+                "cookie_message": cookie_message,
+                **token_cache_data,
             },
             "_risk_log_id": log_id,
         }
     if success and cookies:
+        merged_cookies_str, cookie_saved, cookie_message = await _persist_cookie_updates(
+            cookies,
+            "过滑块",
+        )
+        token_cache_data = await _persist_token_cache(
+            None,
+            merged_cookies_str,
+            cookie_saved,
+        )
+        _log_token_cache_result(token_cache_data)
+        token_response_cookies = token_cache_data.pop("token_response_cookies", {})
+        token_response_cookie_saved = bool(
+            token_cache_data.pop("token_response_cookie_saved", True)
+        )
+        cookie_saved = cookie_saved and token_response_cookie_saved
+        if not token_response_cookie_saved:
+            cookie_message = f"{cookie_message}；滑块后Token接口Cookie合并写回失败"
+        returned_cookies = {**cookies, **token_response_cookies}
         _update_log(
             "success",
             f"远程过滑块成功，耗时: {duration:.2f}秒",
@@ -501,8 +755,11 @@ async def solve_captcha(request: SolveCaptchaRequest):
             "success": True, "code": 200, "message": "过滑块成功",
             "data": {
                 "engine": engine,
-                "cookies": cookies,
+                "cookies": returned_cookies,
                 "url_expired": False,
+                "cookie_saved": cookie_saved,
+                "cookie_message": cookie_message,
+                **token_cache_data,
             },
             "_risk_log_id": log_id,
         }
@@ -2086,13 +2343,13 @@ async def _standalone_password_login(account_id: str, trigger_reason: str) -> di
                     from sqlalchemy import text
                     unb = result.get('unb', '')
                     if unb:
-                        async with async_session_maker() as session:
-                            await session.execute(
-                                text("DELETE FROM xy_token_cache WHERE user_id = :user_id"),
-                                {"user_id": unb}
-                            )
-                            await session.commit()
-                            logger.info(f"【内部API】已清除Token缓存: user_id={unb}")
+                        invalidation = await mark_token_cache_expired(
+                            token_user_id=unb,
+                            invalidate_valid_cache=True,
+                        )
+                        logger.info(
+                            f"【内部API】{invalidation.message}: user_id={unb}"
+                        )
                 except Exception as cache_e:
                     logger.warning(f"【内部API】清除Token缓存失败: {cache_e}")
                 
