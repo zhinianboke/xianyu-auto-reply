@@ -1040,16 +1040,9 @@ class CookieTokenManager:
                 return existing_token
             self.restarted_in_browser_refresh = False
 
-            # 检查滑块验证重试次数
-            if captcha_retry_count >= self.max_captcha_verification_count:
-                logger.error(f"【{self.cookie_id}】滑块验证重试次数已达上限 ({self.max_captcha_verification_count})，停止重试")
-                await self.send_token_refresh_notification(
-                    f"滑块验证重试次数已达上限，请手动处理",
-                    "captcha_max_retries_exceeded"
-                )
-                notification_sent = True
-                self.last_token_refresh_status = "failed_captcha_max_retries"
-                return None
+            # 滑块重试上限的检查已移动到下方"拉取 token 后仍要求滑块"分支（need_captcha_verification）。
+            # 原来放在这里（拉 token 之前）有 bug：滑块刚验证成功、cookie 已更新后递归重试进来，
+            # 会在真正用新 cookie 拉 token 之前就撞上限被中止，把本可成功的那次刷新丢掉。
 
             # 检查消息接收冷却时间
             current_time = time.time()
@@ -1111,6 +1104,18 @@ class CookieTokenManager:
 
             # 检查是否需要滑块验证
             if self.need_captcha_verification(res_json):
+                # 滑块重试上限在此判断：只有"用最新 cookie 拉 token 后仍被要求滑块"才算一次真正的重试失败。
+                # 这样滑块成功后的那次重试能先走到上面的 token 拉取并成功返回，不会被上限提前拦掉。
+                if captcha_retry_count >= self.max_captcha_verification_count:
+                    logger.error(f"【{self.cookie_id}】滑块验证重试次数已达上限 ({self.max_captcha_verification_count})，停止重试")
+                    await self.send_token_refresh_notification(
+                        f"滑块验证重试次数已达上限，请手动处理",
+                        "captcha_max_retries_exceeded"
+                    )
+                    notification_sent = True
+                    self.last_token_refresh_status = "failed_captcha_max_retries"
+                    return None
+
                 logger.warning(f"【{self.cookie_id}】检测到需要滑块验证，开始处理...")
 
                 try:
