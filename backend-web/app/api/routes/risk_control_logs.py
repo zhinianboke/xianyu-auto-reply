@@ -107,7 +107,7 @@ async def update_local_slider_config(
         await setting_service.set_setting(
             LOCAL_SLIDER_DISABLED_KEY,
             "true" if payload.enabled else "false",
-            "本机滑块是否停止处理并仅使用Token缓存",
+            "本机是否停止处理滑块；缓存缺失时仍请求Token接口",
         )
         return {
             "success": True,

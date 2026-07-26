@@ -70,7 +70,10 @@ DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
     "captcha.real_mouse_weight_local": ("1", "real_mouse过滑块本地排队权重"),
     "captcha.real_mouse_weight_remote": ("1", "real_mouse过滑块远程排队权重"),
     "captcha.block_remote_calls": ("true", "是否禁止外部远程调用backend-web过滑块接口"),
-    "captcha.local_slider_disabled": ("false", "本机滑块是否停止处理并仅使用Token缓存"),
+    "captcha.local_slider_disabled": (
+        "false",
+        "本机是否停止处理滑块；缓存缺失时仍请求Token接口",
+    ),
     "captcha.remote_processing_max": ("20", "远程调用允许的最大处理中滑块日志数，0=不限制"),
     "captcha.remote_cooldown_seconds": ("600", "远程调用达到处理中上限后的冷却秒数，0=不冷却"),
     "captcha.remote_cooldown_until": ("0", "远程过滑块调用冷却截止时间戳"),

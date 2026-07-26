@@ -191,8 +191,13 @@ class CookieTokenManager:
 
     # ==================== Token缓存（数据库） ====================
 
-    async def _is_local_slider_disabled(self) -> bool:
-        """实时读取“本机滑块不处理”开关，读取失败时禁止调用 Token API。"""
+    async def _is_local_slider_disabled(self) -> bool | None:
+        """实时读取“本机滑块不处理”开关。
+
+        Returns:
+            True 表示不处理本机滑块，False 表示允许处理；读取失败返回 None，
+            调用方应保持原有的安全策略，不调用 Token API。
+        """
         try:
             async with async_session_maker() as session:
                 value = (
@@ -205,7 +210,7 @@ class CookieTokenManager:
             return str(value or "false").strip().lower() == "true"
         except Exception as e:
             logger.warning(f"【{self.cookie_id}】读取本机滑块处理开关失败，本次禁止调用Token API: {e}")
-            return True
+            return None
 
     async def _get_processing_risk_control_skip_result(
         self,
@@ -1032,22 +1037,44 @@ class CookieTokenManager:
             )
             
             # 开关每次均实时查库，确保运行中的 WebSocket 无需重启即可生效。
-            local_slider_disabled = await self._is_local_slider_disabled()
-            if local_slider_disabled:
+            local_slider_setting = await self._is_local_slider_disabled()
+            local_slider_disabled = local_slider_setting is True
+            if local_slider_setting is not False:
                 cached = await self._get_cached_token(allow_expired=True)
                 if cached:
                     return await self._use_cached_token(cached)
 
-                self.current_token = None
-                self.last_token_refresh_status = "skipped_local_slider_disabled"
+                if not getattr(self, "_last_cache_lookup_succeeded", True):
+                    self.last_token_refresh_status = "skipped_startup_cache_lookup_failed"
+                    logger.warning(
+                        f"【{self.cookie_id}】Token缓存读取失败，无法确认缓存是否存在，"
+                        "本次不调用Token接口，等待下次轮询"
+                    )
+                    return self.current_token
+
+                if local_slider_setting is None:
+                    self.current_token = None
+                    self.last_token_refresh_status = (
+                        "skipped_local_slider_config_unavailable"
+                    )
+                    logger.warning(
+                        f"【{self.cookie_id}】本机滑块处理开关读取失败且Token缓存不存在，"
+                        "按安全策略不发起Token接口请求，等待下次轮询"
+                    )
+                    return None
+
                 logger.warning(
                     f"【{self.cookie_id}】本机滑块不处理已开启且Token缓存不存在，"
-                    "跳过该账号并等待下次轮询"
+                    "继续请求Token接口；若首选和备用接口最终仍需滑块，"
+                    "将跳过本机滑块并等待下次轮询"
                 )
-                return None
 
             # 常规模式仅在首次调用时读取有效缓存，重试时保持原有接口处理逻辑。
-            if captcha_retry_count == 0 and token_expiry_retry_count == 0:
+            if (
+                not local_slider_disabled
+                and captcha_retry_count == 0
+                and token_expiry_retry_count == 0
+            ):
                 cached = await self._get_cached_token(
                     allow_expired=is_initial_cache_attempt,
                     expired_cache_reason="websocket_startup",
@@ -1161,6 +1188,21 @@ class CookieTokenManager:
 
             # 检查是否需要滑块验证
             if self.need_captcha_verification(res_json):
+                if local_slider_disabled:
+                    self.current_token = None
+                    self.last_token_refresh_status = "skipped_local_slider_disabled"
+                    actual_mode_label = get_token_api_mode_label(api_result.api_mode)
+                    switch_text = (
+                        f"（首选{get_token_api_mode_label(token_api_mode)}，已自动切换）"
+                        if api_result.api_mode != token_api_mode
+                        else ""
+                    )
+                    logger.warning(
+                        f"【{self.cookie_id}】{actual_mode_label}{switch_text}请求后仍需滑块验证，"
+                        "本机滑块不处理已开启，本次不启动本机滑块，等待下次轮询"
+                    )
+                    return None
+
                 logger.warning(f"【{self.cookie_id}】检测到需要滑块验证，开始处理...")
 
                 try:
