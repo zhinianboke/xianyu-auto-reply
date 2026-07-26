@@ -474,11 +474,19 @@ async def solve_captcha(request: SolveCaptchaRequest):
         merged_cookies_str = _merged_cookie_string(cookie_updates)
         if not request.account_row_id or request.account_row_id <= 0:
             return merged_cookies_str, False, "未携带账号行ID，未写回Cookie"
-        saved_cookies_str = await merge_account_cookie_fields(
-            int(request.account_row_id),
-            raw_id,
-            cookie_updates,
-        )
+        try:
+            saved_cookies_str = await merge_account_cookie_fields(
+                int(request.account_row_id),
+                raw_id,
+                cookie_updates,
+            )
+        except Exception as persist_error:
+            message = (
+                f"{source}返回Cookie合并写回异常："
+                f"{type(persist_error).__name__}: {persist_error}"
+            )
+            logger.error(f"【过滑块接口】account_id={safe_id} {message}")
+            return merged_cookies_str, False, message
         if saved_cookies_str:
             msg = f"{source}返回Cookie已写回数据库"
             logger.info(f"【过滑块接口】account_id={safe_id} {msg}")
@@ -697,8 +705,25 @@ async def solve_captcha(request: SolveCaptchaRequest):
                 weight_class=weight_class,
                 slider_mode=selected_slider_mode,
             )
+    except asyncio.CancelledError:
+        cancelled_cookies = refetched_token_result.get("new_cookies")
+        if isinstance(cancelled_cookies, dict) and cancelled_cookies:
+            await _persist_cookie_updates(cancelled_cookies, "重取Token")
+        logger.warning(f"【过滑块接口】account_id={safe_id} 执行任务被取消")
+        raise
     except Exception as e:
         logger.error(f"【过滑块接口】account_id={safe_id} 执行异常: {e}")
+        exception_cookie_data: dict[str, object] = {}
+        exception_cookies = refetched_token_result.get("new_cookies")
+        if isinstance(exception_cookies, dict) and exception_cookies:
+            _, exception_cookie_saved, exception_cookie_message = (
+                await _persist_cookie_updates(exception_cookies, "重取Token")
+            )
+            exception_cookie_data = {
+                "cookies": exception_cookies,
+                "cookie_saved": exception_cookie_saved,
+                "cookie_message": exception_cookie_message,
+            }
         _update_log(
             "error",
             f"过滑块执行异常，耗时: {_time.time() - start_ts:.2f}秒",
@@ -708,7 +733,7 @@ async def solve_captcha(request: SolveCaptchaRequest):
             "success": False,
             "code": 500,
             "message": f"过滑块执行异常: {str(e)}",
-            "data": None,
+            "data": exception_cookie_data or None,
             "_risk_log_id": log_id,
         }
 
@@ -759,8 +784,10 @@ async def solve_captcha(request: SolveCaptchaRequest):
     if success and cookies:
         # 浏览器 Cookie 与重取链接时 Token 接口下发的 Cookie 一次性合并写回，
         # 防止 fresh_url 分支丢失新 _m_h5_tk。
-        combined_cookies = dict(refetched_cookies)
-        combined_cookies.update(cookies)
+        # 浏览器可能返回注入时的全量旧 Cookie，重取 Token 接口
+        # 下发的是已知最新增量，同名字段必须以重取结果为准。
+        combined_cookies = dict(cookies)
+        combined_cookies.update(refetched_cookies)
         merged_cookies_str, cookie_saved, cookie_message = await _persist_cookie_updates(
             combined_cookies,
             "过滑块",

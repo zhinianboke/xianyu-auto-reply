@@ -2,7 +2,7 @@
 IM Token 续期定时任务。
 
 功能：
-1. 查询启用账号中两个到期日均失效且无处理中风控日志的 Token 缓存
+1. 查询启用账号中未来 1 小时内到期且无处理中风控日志的 Token 缓存
 2. 使用缓存表已有 Device ID 请求最新 Token
 3. 接口下发的 Set-Cookie（如新 _m_h5_tk）合并写回账号，令牌过期时重试一次
 4. 命中“挤爆了”等风控响应时调用 WebSocket 滑块，合并新 Cookie 后重试获取 Token
@@ -40,7 +40,10 @@ from common.services.token_api_mode import (
     get_token_api_mode_label,
     load_token_api_mode,
 )
-from common.services.token_renewal_cache_service import write_renewed_token_cache
+from common.services.token_renewal_cache_service import (
+    get_token_renewal_cutoff,
+    write_renewed_token_cache,
+)
 from common.utils.time_utils import get_beijing_now_naive
 
 from app.core.config import get_settings
@@ -72,7 +75,7 @@ class TokenRenewalResult:
 
 
 class TokenRenewalTask:
-    """为已到期 Token 缓存预取下一枚 Token。"""
+    """为未来 1 小时内到期的 Token 缓存预取下一枚 Token。"""
 
     def __init__(self, max_concurrency: int = TOKEN_RENEWAL_MAX_CONCURRENCY):
         """初始化 Token 续期任务。
@@ -163,8 +166,9 @@ class TokenRenewalTask:
                 )
 
     async def _load_candidates(self) -> list[TokenRenewalCandidate]:
-        """查询可续期且没有任何处理中风控日志的启用账号。"""
+        """查询未来 1 小时内到期且无处理中风控日志的账号。"""
         now = get_beijing_now_naive()
+        renewal_cutoff = get_token_renewal_cutoff(now)
         processing_risk_exists = exists(
             select(XYRiskControlLog.id).where(
                 XYRiskControlLog.account_identifier == XYAccount.account_id,
@@ -186,10 +190,10 @@ class TokenRenewalTask:
                     .join(XYAccount, XYAccount.unb == TokenCache.user_id)
                     .where(
                         XYAccount.status == "active",
-                        TokenCache.expire_at <= now,
+                        TokenCache.expire_at <= renewal_cutoff,
                         or_(
                             TokenCache.renew_expire_at.is_(None),
-                            TokenCache.renew_expire_at <= now,
+                            TokenCache.renew_expire_at <= renewal_cutoff,
                         ),
                         ~processing_risk_exists,
                     )

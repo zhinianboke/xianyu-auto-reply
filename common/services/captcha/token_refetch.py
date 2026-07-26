@@ -37,6 +37,9 @@ from common.utils.xianyu_utils import generate_sign
 # token 接口地址前缀与 appKey
 _TOKEN_API_BASE_URL = "https://h5api.m.goofish.com/h5"
 _APP_KEY = "34839810"
+# 重取链接在浏览器验证的 20 秒总超时内执行，必须预留导航和滑动时间。
+_TOKEN_REFETCH_TOTAL_TIMEOUT_SECONDS = 10.0
+_TOKEN_API_CONNECT_TIMEOUT_SECONDS = 3.0
 
 
 def _post_token_api(
@@ -45,6 +48,7 @@ def _post_token_api(
     cookies: Dict[str, str],
     cookies_str: str,
     device_id: str,
+    request_timeout_seconds: float,
 ) -> tuple[object, Dict[str, str]]:
     """同步请求一次 token 接口。
 
@@ -54,6 +58,7 @@ def _post_token_api(
         cookies: Cookie 字典（需含 _m_h5_tk 用于签名）
         cookies_str: Cookie 原始字符串（作为请求头 cookie）
         device_id: 设备 ID（拼入请求体 deviceId）
+        request_timeout_seconds: 本次 HTTP 请求的剩余超时预算。
 
     Returns:
         ``(响应JSON, 接口下发的Cookie)``
@@ -109,12 +114,17 @@ def _post_token_api(
     logger.info(
         f"【{cookie_id}】重新请求新鲜的滑块验证链接（{get_token_api_mode_label(api_mode)}）..."
     )
+    connect_timeout = min(
+        _TOKEN_API_CONNECT_TIMEOUT_SECONDS,
+        max(0.1, request_timeout_seconds / 2),
+    )
+    read_timeout = max(0.1, request_timeout_seconds - connect_timeout)
     resp = requests.post(
         f"{_TOKEN_API_BASE_URL}/{api_name}/1.0/",
         params=params,
         data=data,
         headers=headers,
-        timeout=15,
+        timeout=(connect_timeout, read_timeout),
     )
     res_json = resp.json()
     try:
@@ -130,6 +140,7 @@ def _request_token_api_with_expiry_retry(
     cookies: Dict[str, str],
     cookies_str: str,
     device_id: str,
+    deadline: float,
 ) -> tuple[object, Dict[str, str], Dict[str, str], str]:
     """请求指定 Token 接口，并在 mtop 令牌过期时自动重试一次。
 
@@ -139,6 +150,7 @@ def _request_token_api_with_expiry_retry(
         cookies: 当前 Cookie 字典。
         cookies_str: 当前 Cookie 字符串。
         device_id: 设备 ID。
+        deadline: 本轮重取链接的单调时钟截止时间。
 
     Returns:
         ``(最终响应JSON, 累计响应Cookie, 最新Cookie字典, 最新Cookie字符串)``。
@@ -149,13 +161,33 @@ def _request_token_api_with_expiry_retry(
     response_json: object = None
 
     for attempt in range(2):
-        response_json, response_cookies = _post_token_api(
-            cookie_id,
-            api_mode,
-            current_cookies,
-            current_cookies_str,
-            device_id,
-        )
+        remaining_seconds = deadline - time.monotonic()
+        if remaining_seconds <= 0:
+            if response_cookie_updates:
+                logger.warning(
+                    f"【{cookie_id}】{get_token_api_mode_label(api_mode)}重试前总超时预算已用尽，"
+                    "保留首次响应下发的Cookie"
+                )
+                break
+            raise requests.Timeout("Token验证链接重取已超过总超时预算")
+        try:
+            response_json, response_cookies = _post_token_api(
+                cookie_id,
+                api_mode,
+                current_cookies,
+                current_cookies_str,
+                device_id,
+                remaining_seconds,
+            )
+        except Exception as request_error:
+            if not response_cookie_updates:
+                raise
+            logger.warning(
+                f"【{cookie_id}】{get_token_api_mode_label(api_mode)}使用新Cookie重试失败，"
+                f"保留首次响应下发的Cookie: "
+                f"{type(request_error).__name__}: {request_error}"
+            )
+            break
         if response_cookies:
             response_cookie_updates.update(response_cookies)
             current_cookies.update(response_cookies)
@@ -214,6 +246,7 @@ def request_fresh_captcha_url(
         "fresh_url": None,
     }
     try:
+        deadline = time.monotonic() + _TOKEN_REFETCH_TOTAL_TIMEOUT_SECONDS
         # Token接口方式跟随系统设置实时生效；首选接口触发风控时，自动切换到
         # 另一个接口重试一次，与异步 Token 请求路径保持一致。
         primary_mode = load_token_api_mode_sync(cookie_id)
@@ -226,6 +259,7 @@ def request_fresh_captcha_url(
                 current_cookies,
                 current_cookies_str,
                 device_id,
+                deadline,
             )
         )
         result["new_cookies"] = dict(response_cookies)
@@ -251,6 +285,7 @@ def request_fresh_captcha_url(
                     current_cookies,
                     current_cookies_str,
                     device_id,
+                    deadline,
                 )
                 merged_new_cookies = dict(result.get("new_cookies") or {})
                 merged_new_cookies.update(fallback_cookies)

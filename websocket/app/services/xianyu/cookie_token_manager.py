@@ -460,8 +460,12 @@ class CookieTokenManager:
 
     # ==================== Cookie更新 ====================
 
-    async def update_config_cookies(self):
-        """更新数据库中的cookies（不会覆盖账号密码等其他字段）"""
+    async def update_config_cookies(self) -> bool:
+        """更新数据库中的 Cookie（不覆盖账号密码等其他字段）。
+
+        Returns:
+            写回成功返回 True，账号缺失、数据库失败或异常返回 False。
+        """
         try:
             # 更新数据库中的Cookie
             if hasattr(self.parent, 'cookie_id') and self.cookie_id:
@@ -483,18 +487,27 @@ class CookieTokenManager:
                     )
                     if not success:
                         logger.warning(f"更新Cookie到数据库失败: {self.cookie_id}")
+                        await self.send_token_refresh_notification(
+                            f"数据库Cookie更新失败: {self.cookie_id}",
+                            "db_update_failed",
+                        )
+                        return False
                     else:
                         logger.warning(f"已更新Cookie到数据库: {self.cookie_id}")
+                        return True
                 except Exception as e:
                     logger.error(f"更新数据库Cookie失败: {self._safe_str(e)}")
                     await self.send_token_refresh_notification(f"数据库Cookie更新失败: {str(e)}", "db_update_failed")
+                    return False
             else:
                 logger.warning("Cookie ID不存在，无法更新数据库")
                 await self.send_token_refresh_notification("Cookie ID不存在，无法更新数据库", "cookie_id_missing")
+                return False
 
         except Exception as e:
             logger.error(f"更新Cookie失败: {self._safe_str(e)}")
             await self.send_token_refresh_notification(f"Cookie更新失败: {str(e)}", "cookie_update_failed")
+            return False
 
     # ==================== 滑块验证检测 ====================
 
@@ -670,6 +683,37 @@ class CookieTokenManager:
                 )
                 return None
 
+            async def _persist_refetched_cookie_updates() -> bool:
+                """合并并写回重取验证链接时下发的 Cookie。"""
+                refetched_cookies = dict(
+                    getattr(self, "_refetch_new_cookies", {}) or {}
+                )
+                if not refetched_cookies:
+                    return True
+                try:
+                    self.cookies.update(refetched_cookies)
+                    self.cookies_str = "; ".join(
+                        f"{key}={value}" for key, value in self.cookies.items()
+                    )
+                    if not await self.update_config_cookies():
+                        logger.error(
+                            f"【{self.cookie_id}】重取验证链接时下发的"
+                            "Cookie未能写回数据库"
+                        )
+                        return False
+                    logger.info(
+                        f"【{self.cookie_id}】已合并并写回重取验证链接时下发的"
+                        f" {len(refetched_cookies)} 个Cookie字段"
+                    )
+                    self._refetch_new_cookies = {}
+                    return True
+                except Exception as merge_error:
+                    logger.error(
+                        f"【{self.cookie_id}】合并重取验证链接Cookie失败: "
+                        f"{self._safe_str(merge_error)}"
+                    )
+                    return False
+
             try:
                 from app.services.captcha.slider_stealth import run_slider_verification_with_fallback
 
@@ -712,26 +756,7 @@ class CookieTokenManager:
 
                 # 重取验证链接的 Token 请求可能在任意结果分支下发新 Cookie（尤其是
                 # _m_h5_tk）。浏览器流程结束后统一写回，不能只在 token_ok 分支处理。
-                refetched_cookies = dict(
-                    getattr(self, "_refetch_new_cookies", {}) or {}
-                )
-                if refetched_cookies:
-                    try:
-                        self.cookies.update(refetched_cookies)
-                        self.cookies_str = "; ".join(
-                            f"{key}={value}" for key, value in self.cookies.items()
-                        )
-                        await self.update_config_cookies()
-                        logger.info(
-                            f"【{self.cookie_id}】已合并并写回重取验证链接时下发的"
-                            f" {len(refetched_cookies)} 个Cookie字段"
-                        )
-                        self._refetch_new_cookies = {}
-                    except Exception as merge_e:
-                        logger.error(
-                            f"【{self.cookie_id}】合并重取验证链接Cookie失败: "
-                            f"{self._safe_str(merge_e)}"
-                        )
+                await _persist_refetched_cookie_updates()
 
                 # 重取链接时发现 token 已可用（风控解除，无需滑块）：直接采用，跳过滑块结果处理。
                 # Cookie 已在上方统一写回；返回 cookies_str，让上层清缓存后重试 Token 刷新。
@@ -843,7 +868,8 @@ class CookieTokenManager:
                         # 打印更新后的x5sec值
                         logger.warning(f"【{self.cookie_id}】准备保存到数据库的x5sec: {updated_cookies.get('x5sec', '无')}")
 
-                        await self.update_config_cookies()
+                        if not await self.update_config_cookies():
+                            raise RuntimeError("滑块Cookie写回数据库失败")
                         logger.info(f"【{self.cookie_id}】滑块验证成功后，数据库cookies已自动更新")
                         logger.info(f"【{self.cookie_id}】滑块验证成功: 新增{new_cookie_count}个x5, 更新{updated_cookie_count}个x5")
 
@@ -856,6 +882,7 @@ class CookieTokenManager:
                         logger.error(f"【{self.cookie_id}】自动更新数据库cookies失败: {self._safe_str(update_e)}")
                         self.cookies_str = old_cookies_str
                         self.cookies = old_cookies_dict
+                        return None
 
                     return cookies_str
                 else:
@@ -921,6 +948,7 @@ class CookieTokenManager:
             except asyncio.CancelledError:
                 # 任务被取消，记录日志并重新抛出
                 logger.warning(f"【{self.cookie_id}】滑块验证任务被取消")
+                await _persist_refetched_cookie_updates()
                 captcha_duration = time.time() - captcha_start_time
                 if log_id:
                     try:
@@ -936,6 +964,7 @@ class CookieTokenManager:
 
             except Exception as stealth_e:
                 logger.error(f"【{self.cookie_id}】滑块验证异常: {self._safe_str(stealth_e)}")
+                await _persist_refetched_cookie_updates()
                 
                 # 更新风控日志为异常状态
                 captcha_duration = time.time() - captcha_start_time
@@ -994,7 +1023,13 @@ class CookieTokenManager:
             self.cookies = merged_cookies_dict
 
             # 更新数据库
-            await self.update_config_cookies()
+            if not await self.update_config_cookies():
+                self.cookies_str = "; ".join(
+                    f"{key}={value}" for key, value in current_cookies_dict.items()
+                )
+                self.cookies = current_cookies_dict
+                logger.error(f"【{self.cookie_id}】Cookie写回数据库失败，本次不重启")
+                return False
             logger.info(f"【{self.cookie_id}】cookies已更新到数据库")
 
             # Cookie已变更，清除旧的Token缓存（新Cookie需要重新获取Token）
@@ -1170,8 +1205,12 @@ class CookieTokenManager:
             if new_cookies:
                 self.cookies.update(new_cookies)
                 self.cookies_str = '; '.join([f"{k}={v}" for k, v in self.cookies.items()])
-                await self.update_config_cookies()
-                logger.warning("已更新Cookie到数据库")
+                if await self.update_config_cookies():
+                    logger.warning("已更新Cookie到数据库")
+                else:
+                    logger.error(
+                        f"【{self.cookie_id}】Token接口下发的Cookie写回数据库失败"
+                    )
 
             new_token = extract_im_access_token(res_json)
             if new_token:
@@ -1419,7 +1458,8 @@ class CookieTokenManager:
                 if renew_result.updated_cookie_names:
                     self.cookies_str = renew_result.new_cookies_str
                     self.cookies = trans_cookies(self.cookies_str)
-                    await self.update_config_cookies()
+                    if not await self.update_config_cookies():
+                        raise RuntimeError("接口续期Cookie写回数据库失败")
                     logger.info(
                         f"【{self.cookie_id}】接口返回Cookie已更新 "
                         f"{len(renew_result.updated_cookie_names)} 个字段："

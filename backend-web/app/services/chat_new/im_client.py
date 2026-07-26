@@ -656,11 +656,19 @@ class GoofishImClient:
                 merged_str = merge_cookies(self.cookies_str, new_cookies)
                 self.cookies_str = merged_str
                 self.cookies = trans_cookies(merged_str)
-                await update_account_cookies_in_db(self.account_id, merged_str)
-                logger.info(
-                    f"【{self.account_id}】已合并Token接口下发的 "
-                    f"{len(new_cookies)} 个Cookie字段并更新到数据库"
+                cookie_saved = await update_account_cookies_in_db(
+                    self.account_id,
+                    merged_str,
                 )
+                if cookie_saved:
+                    logger.info(
+                        f"【{self.account_id}】已合并Token接口下发的 "
+                        f"{len(new_cookies)} 个Cookie字段并更新到数据库"
+                    )
+                else:
+                    logger.error(
+                        f"【{self.account_id}】Token接口下发的Cookie写回数据库失败"
+                    )
 
             # 检查令牌过期，使用新Cookie重试（最多1次）
             ret = result.get("ret", [])
