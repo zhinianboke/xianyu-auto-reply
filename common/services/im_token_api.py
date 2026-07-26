@@ -17,7 +17,11 @@ from typing import Any
 import aiohttp
 from loguru import logger
 
-from common.services.captcha.token_response import get_token_captcha_reason
+from common.services.captcha.token_response import (
+    extract_token_captcha_url,
+    get_token_captcha_reason,
+    is_token_expired_response,
+)
 from common.services.token_api_mode import (
     DEFAULT_TOKEN_API_MODE,
     get_alternate_token_api_mode,
@@ -211,7 +215,8 @@ async def request_im_token_with_fallback(
     """调用 Token 接口，触发风控时自动切换到另一个接口重试一次。
 
     切换仅作用于本次调用，不修改系统设置：下次仍从用户选择的接口开始。
-    两个接口都被风控时返回「另一个接口」的响应，由调用方按既有逻辑走滑块流程。
+    备用接口返回 Token、有效验证链接或令牌过期时采用备用响应；
+    备用接口请求异常或返回其他不可处理失败时，保留首选接口的风控响应。
 
     Args:
         cookies_str: 账号 Cookie 字符串。
@@ -251,12 +256,20 @@ async def request_im_token_with_fallback(
     # 首个接口下发的 Cookie（可能含新 _m_h5_tk）需带入重试请求，
     # 与项目既有的「合并响应 Cookie 后重试」口径一致
     fallback_cookies_str = _merge_cookies(cookies_str, result.response_cookies)
-    fallback_result = await request_im_token(
-        fallback_cookies_str,
-        device_id,
-        api_mode=fallback_mode,
-        timeout_seconds=timeout_seconds,
-    )
+    try:
+        fallback_result = await request_im_token(
+            fallback_cookies_str,
+            device_id,
+            api_mode=fallback_mode,
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception as fallback_error:
+        logger.warning(
+            f"{prefix}{get_token_api_mode_label(fallback_mode)}请求失败，"
+            f"继续使用{get_token_api_mode_label(primary_mode)}风控响应: "
+            f"{type(fallback_error).__name__}: {fallback_error}"
+        )
+        return result
 
     # 两次请求下发的 Cookie 都要交回调用方写库，避免切换过程中丢失 Cookie 更新
     merged_response_cookies = dict(result.response_cookies)
@@ -269,8 +282,22 @@ async def request_im_token_with_fallback(
         )
         return fallback_result
 
+    if is_token_expired_response(fallback_result.response_json):
+        logger.warning(
+            f"{prefix}{get_token_api_mode_label(fallback_mode)}返回令牌过期，"
+            "使用合并后的Cookie交由调用方重试"
+        )
+        return fallback_result
+
+    if extract_token_captcha_url(fallback_result.response_json):
+        logger.warning(
+            f"{prefix}{get_token_api_mode_label(fallback_mode)}同样需要验证，"
+            "按原有流程处理备用接口验证链接"
+        )
+        return fallback_result
+
     logger.warning(
-        f"{prefix}{get_token_api_mode_label(fallback_mode)}同样未取到Token，"
-        "按原有流程处理（滑块验证等）"
+        f"{prefix}{get_token_api_mode_label(fallback_mode)}未返回可用Token或验证链接，"
+        f"继续使用{get_token_api_mode_label(primary_mode)}风控响应"
     )
-    return fallback_result
+    return replace(result, response_cookies=merged_response_cookies)
