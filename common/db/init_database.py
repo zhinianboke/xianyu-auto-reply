@@ -180,6 +180,11 @@ class DatabaseInitializer:
             "滑块滑动方式：browser/real_mouse",
         ),
         (
+            "token.api_mode",
+            "miniapp",
+            "Token获取方式：miniapp-小程序接口/web-网页接口",
+        ),
+        (
             "captcha.remote_processing_max",
             "20",
             "远程调用允许的最大处理中滑块日志数，0=不限制",

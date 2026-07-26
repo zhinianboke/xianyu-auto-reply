@@ -36,6 +36,7 @@ import { ThemeFontSettingsCard } from './ThemeFontSettingsCard'
 import { ServiceRestartCard } from './ServiceRestartCard'
 import { PasswordLoginModeSetting } from './PasswordLoginModeSetting'
 import { SliderModeSetting } from './SliderModeSetting'
+import { TokenApiModeSetting } from './TokenApiModeSetting'
 import { useMenuVisibilityStore } from '@/store/menuVisibilityStore'
 import type {
   AuthFooterAdSettings,
@@ -694,6 +695,12 @@ export function Settings() {
                 value={settings?.['captcha.slider_mode']}
                 onSaved={(mode) => setSettings((current) => (
                   current ? { ...current, 'captcha.slider_mode': mode } : current
+                ))}
+              />
+              <TokenApiModeSetting
+                value={settings?.['token.api_mode']}
+                onSaved={(mode) => setSettings((current) => (
+                  current ? { ...current, 'token.api_mode': mode } : current
                 ))}
               />
             </div>

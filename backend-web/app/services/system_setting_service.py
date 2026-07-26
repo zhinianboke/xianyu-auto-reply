@@ -15,6 +15,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.system_setting import SystemSetting
+from common.services.token_api_mode import (
+    TOKEN_API_MODE_SETTING_KEY,
+    normalize_token_api_mode,
+)
 from common.utils.text_utils import escape_xss
 
 SENSITIVE_KEYS = {"admin_password_hash"}
@@ -73,6 +77,8 @@ DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
     "captcha.slider_mode": ("browser", "滑块滑动方式：browser/real_mouse"),
     # 账号密码登录模式：protocol-协议登录 / browser-浏览器登录
     "password_login.mode": ("browser", "账号密码登录模式：protocol/browser"),
+    # Token获取方式：miniapp-小程序接口 / web-网页接口
+    "token.api_mode": ("miniapp", "Token获取方式：miniapp-小程序接口/web-网页接口"),
 }
 
 # 不需要XSS转义的键（布尔值、数字等）
@@ -131,6 +137,8 @@ NO_ESCAPE_KEYS = {
     "captcha.real_mouse_weight_remote",
     # 账号密码登录模式：枚举字符串，无需转义
     "password_login.mode",
+    # Token获取方式：枚举字符串，无需转义
+    "token.api_mode",
 }
 
 
@@ -175,6 +183,10 @@ class SystemSettingService:
         slider_mode = str(settings.get("captcha.slider_mode") or "").strip().lower()
         settings["captcha.slider_mode"] = (
             slider_mode if slider_mode in {"browser", "real_mouse"} else "browser"
+        )
+        # Token获取方式：非法值统一回落到默认的小程序接口
+        settings[TOKEN_API_MODE_SETTING_KEY] = normalize_token_api_mode(
+            settings.get(TOKEN_API_MODE_SETTING_KEY)
         )
         return settings
 

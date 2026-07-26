@@ -20,6 +20,7 @@ from common.models.user import User, UserRole
 from common.schemas.common import ApiResponse
 from common.schemas.system_setting import SystemSettingUpdate
 from app.services.system_setting_service import SENSITIVE_KEYS, SystemSettingService
+from common.services.token_api_mode import TOKEN_API_MODE_SETTING_KEY, TOKEN_API_MODES
 from common.utils.logging_utils import update_log_retention
 from common.utils.browser_utils import is_frozen
 
@@ -224,6 +225,13 @@ async def update_system_setting(
             return ApiResponse(
                 success=False,
                 message="滑块滑动方式无效，请选择浏览器自动滑动或真实鼠标滑动",
+            )
+    if key == TOKEN_API_MODE_SETTING_KEY:
+        setting_value = str(payload.value or "").strip().lower()
+        if setting_value not in TOKEN_API_MODES:
+            return ApiResponse(
+                success=False,
+                message="Token获取方式无效，请选择小程序接口或网页接口",
             )
 
     retention_days: int | None = None

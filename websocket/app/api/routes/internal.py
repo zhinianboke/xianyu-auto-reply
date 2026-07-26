@@ -20,7 +20,10 @@ from common.services.captcha.slider_mode import (
     refresh_slider_mode_from_database,
 )
 from common.services.captcha.weighted_runner import real_mouse_weighted_runner
-from common.services.im_token_api import extract_im_access_token, request_im_token
+from common.services.im_token_api import (
+    extract_im_access_token,
+    request_im_token_with_fallback,
+)
 from common.services.risk_control_log_query_service import (
     check_account_processing_risk_control_log,
     get_account_risk_control_lock,
@@ -30,6 +33,7 @@ from common.services.token_renewal_cache_service import (
     upsert_token_cache,
     write_renewed_token_cache,
 )
+from common.services.token_api_mode import load_token_api_mode
 from common.utils.xianyu_utils import trans_cookies
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -522,8 +526,15 @@ async def solve_captcha(request: SolveCaptchaRequest):
             try:
                 token_request_cookies = merged_cookies_str
                 last_token_response: object = None
+                # Token接口方式实时查库，与 WebSocket 主流程保持一致
+                token_api_mode = await load_token_api_mode(safe_id)
                 for token_attempt in range(2):
-                    token_result = await request_im_token(token_request_cookies, device_id)
+                    token_result = await request_im_token_with_fallback(
+                        token_request_cookies,
+                        device_id,
+                        api_mode=token_api_mode,
+                        log_tag=safe_id,
+                    )
                     last_token_response = token_result.response_json
                     if token_result.response_cookies:
                         response_cookies = dict(token_result.response_cookies)
@@ -632,12 +643,29 @@ async def solve_captcha(request: SolveCaptchaRequest):
                 _cookies_dict = trans_cookies(existing_cookies_str)
             except Exception:
                 _cookies_dict = {}
+            refetch_cookies_state = [existing_cookies_str]
 
             def _remote_url_provider():
                 """凭传入的 Cookie 重新请求 token 接口，拿到新鲜验证链接（远程端链接过期兜底）。"""
-                res = request_fresh_captcha_url(safe_id, _cookies_dict, existing_cookies_str, device_id)
+                res = request_fresh_captcha_url(
+                    safe_id,
+                    _cookies_dict,
+                    refetch_cookies_state[0],
+                    device_id,
+                )
+                accumulated_cookies = dict(
+                    refetched_token_result.get("new_cookies") or {}
+                )
                 refetched_token_result.clear()
                 refetched_token_result.update(res)
+                response_cookies = res.get("new_cookies")
+                if isinstance(response_cookies, dict) and response_cookies:
+                    accumulated_cookies.update(response_cookies)
+                    _cookies_dict.update(response_cookies)
+                    refetch_cookies_state[0] = "; ".join(
+                        f"{name}={value}" for name, value in _cookies_dict.items()
+                    )
+                refetched_token_result["new_cookies"] = accumulated_cookies
                 if res.get("token_ok"):
                     # 风控已解除、无需滑块：返回哨兵，让上层提前结束滑块流程
                     return CAPTCHA_NOT_REQUIRED
@@ -685,12 +713,13 @@ async def solve_captcha(request: SolveCaptchaRequest):
         }
 
     duration = _time.time() - start_ts
+    refetched_cookies = refetched_token_result.get("new_cookies")
+    if not isinstance(refetched_cookies, dict):
+        refetched_cookies = {}
+
     if success and not cookies and refetched_token_result.get("token_ok"):
-        refreshed_cookies = refetched_token_result.get("new_cookies")
-        if not isinstance(refreshed_cookies, dict):
-            refreshed_cookies = {}
         merged_cookies_str, cookie_saved, cookie_message = await _persist_cookie_updates(
-            refreshed_cookies,
+            refetched_cookies,
             "重取Token",
         )
         token_cache_data = await _persist_token_cache(
@@ -706,7 +735,7 @@ async def solve_captcha(request: SolveCaptchaRequest):
         cookie_saved = cookie_saved and token_response_cookie_saved
         if not token_response_cookie_saved:
             cookie_message = f"{cookie_message}；滑块后Token接口Cookie合并写回失败"
-        returned_cookies = {**refreshed_cookies, **token_response_cookies}
+        returned_cookies = {**refetched_cookies, **token_response_cookies}
         _update_log(
             "success",
             f"重取验证链接时Token已可用，无需滑块，耗时: {duration:.2f}秒",
@@ -728,8 +757,12 @@ async def solve_captcha(request: SolveCaptchaRequest):
             "_risk_log_id": log_id,
         }
     if success and cookies:
+        # 浏览器 Cookie 与重取链接时 Token 接口下发的 Cookie 一次性合并写回，
+        # 防止 fresh_url 分支丢失新 _m_h5_tk。
+        combined_cookies = dict(refetched_cookies)
+        combined_cookies.update(cookies)
         merged_cookies_str, cookie_saved, cookie_message = await _persist_cookie_updates(
-            cookies,
+            combined_cookies,
             "过滑块",
         )
         token_cache_data = await _persist_token_cache(
@@ -745,7 +778,7 @@ async def solve_captcha(request: SolveCaptchaRequest):
         cookie_saved = cookie_saved and token_response_cookie_saved
         if not token_response_cookie_saved:
             cookie_message = f"{cookie_message}；滑块后Token接口Cookie合并写回失败"
-        returned_cookies = {**cookies, **token_response_cookies}
+        returned_cookies = {**combined_cookies, **token_response_cookies}
         _update_log(
             "success",
             f"远程过滑块成功，耗时: {duration:.2f}秒",
@@ -763,6 +796,20 @@ async def solve_captcha(request: SolveCaptchaRequest):
             },
             "_risk_log_id": log_id,
         }
+    # 即使滑块最终失败，重取验证链接阶段下发的 Cookie 也必须写回，避免下一轮
+    # 继续使用已经过期的 _m_h5_tk。
+    failure_cookie_data: dict[str, object] = {}
+    if refetched_cookies:
+        _, refetch_cookie_saved, refetch_cookie_message = await _persist_cookie_updates(
+            refetched_cookies,
+            "重取Token",
+        )
+        failure_cookie_data = {
+            "cookies": refetched_cookies,
+            "cookie_saved": refetch_cookie_saved,
+            "cookie_message": refetch_cookie_message,
+        }
+
     # 验证链接已过期：明确告知调用方刷新URL后重试（区别于普通过滑块失败）
     # 注意：url_expired 不是"通过引擎"，不写入 captcha_engine 字段（避免污染引擎枚举/前端展示），
     # 过期信息体现在 processing_result 文案与返回体 data 中即可。
@@ -773,7 +820,11 @@ async def solve_captcha(request: SolveCaptchaRequest):
         )
         return {
             "success": False, "code": 200, "message": "验证链接已过期，请刷新URL后重试",
-            "data": {"engine": engine, "url_expired": True},
+            "data": {
+                "engine": engine,
+                "url_expired": True,
+                **failure_cookie_data,
+            },
             "_risk_log_id": log_id,
         }
     _update_log(
@@ -785,7 +836,11 @@ async def solve_captcha(request: SolveCaptchaRequest):
         "success": False,
         "code": 200,
         "message": "过滑块失败",
-        "data": {"engine": engine, "url_expired": False},
+        "data": {
+            "engine": engine,
+            "url_expired": False,
+            **failure_cookie_data,
+        },
         "_risk_log_id": log_id,
     }
 

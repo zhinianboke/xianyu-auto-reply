@@ -28,8 +28,18 @@ from common.models.scheduled_token_renewal_log import ScheduledTokenRenewalLog
 from common.models.token_cache import TokenCache
 from common.models.xy_account import XYAccount
 from common.services.account_cookie_service import merge_account_cookie_fields
-from common.services.captcha.token_response import is_token_captcha_required
-from common.services.im_token_api import extract_im_access_token, request_im_token
+from common.services.captcha.token_response import (
+    is_token_captcha_required,
+    is_token_expired_response,
+)
+from common.services.im_token_api import (
+    extract_im_access_token,
+    request_im_token_with_fallback,
+)
+from common.services.token_api_mode import (
+    get_token_api_mode_label,
+    load_token_api_mode,
+)
 from common.services.token_renewal_cache_service import write_renewed_token_cache
 from common.utils.time_utils import get_beijing_now_naive
 
@@ -211,17 +221,8 @@ class TokenRenewalTask:
 
     @staticmethod
     def _is_token_expired_response(response_json: Any) -> bool:
-        """判断接口响应是否为 mtop 令牌过期（_m_h5_tk 失效）。
-
-        Args:
-            response_json: IM Token API 返回的 JSON 数据。
-        Returns:
-            令牌过期返回 True，否则返回 False。
-        """
-        if not isinstance(response_json, dict):
-            return False
-        ret_str = json.dumps(response_json.get("ret", []) or [], ensure_ascii=False)
-        return "FAIL_SYS_TOKEN_EXOIRED" in ret_str or "FAIL_SYS_TOKEN_EXPIRED" in ret_str
+        """判断接口响应是否为 mtop 令牌过期（_m_h5_tk 失效）。"""
+        return is_token_expired_response(response_json)
 
     @staticmethod
     def _is_captcha_required_response(response_json: Any) -> bool:
@@ -272,9 +273,20 @@ class TokenRenewalTask:
             token_expired_retries = 0
             captcha_retries = 0
             failure_message: str | None = None
+            # Token接口方式每次实时查库，系统设置修改后无需重启即可生效
+            api_mode = await load_token_api_mode(candidate.account_id)
+            logger.info(
+                f"【{self.task_name}】【{candidate.account_id}】Token续期使用"
+                f"{get_token_api_mode_label(api_mode)}"
+            )
             while True:
                 try:
-                    result = await request_im_token(cookies_str, candidate.device_id)
+                    result = await request_im_token_with_fallback(
+                        cookies_str,
+                        candidate.device_id,
+                        api_mode=api_mode,
+                        log_tag=candidate.account_id,
+                    )
                 except asyncio.TimeoutError:
                     logger.error(f"【{self.task_name}】【{candidate.account_id}】请求超时")
                     return self._failed_result(candidate, "Token接口请求超时")

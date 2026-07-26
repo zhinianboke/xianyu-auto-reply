@@ -22,19 +22,29 @@ from sqlalchemy import select
 from common.db.session import async_session_maker
 from common.models.system_setting import SystemSetting
 from common.models.token_cache import TokenCache
-from common.services.im_token_api import extract_im_access_token, request_im_token
+from common.services.im_token_api import (
+    extract_im_access_token,
+    request_im_token_with_fallback,
+)
 from common.services.risk_control_log_query_service import (
     check_account_processing_risk_control_log,
     get_account_risk_control_lock,
 )
 from common.services.token_renewal_cache_service import mark_token_cache_expired
+from common.services.token_api_mode import (
+    get_token_api_mode_label,
+    load_token_api_mode,
+)
 from common.services.captcha.concurrency import run_browser_task
 from common.services.captcha.slider_mode import (
     SLIDER_MODE_REAL_MOUSE,
     refresh_slider_mode_from_database,
 )
 from common.services.captcha.token_refetch import request_fresh_captcha_url
-from common.services.captcha.token_response import get_token_captcha_reason
+from common.services.captcha.token_response import (
+    get_token_captcha_reason,
+    is_token_expired_response,
+)
 from common.services.captcha.weighted_runner import real_mouse_weighted_runner
 from common.utils.cookie_refresh import get_account_by_identity, update_account_cookies_in_db
 from common.utils.xianyu_utils import trans_cookies
@@ -524,13 +534,25 @@ class CookieTokenManager:
                 self.cookie_id, self.cookies, self.cookies_str, self.device_id
             )
 
+            # 无论最终拿到 Token 还是新验证链接，都先把接口下发的 Cookie 合并进
+            # 当前实例并累计，供后续回调继续使用，并在浏览器流程返回后统一写库。
+            refetched_cookies = res.get("new_cookies")
+            if isinstance(refetched_cookies, dict) and refetched_cookies:
+                self.cookies.update(refetched_cookies)
+                self.cookies_str = "; ".join(
+                    f"{key}={value}" for key, value in self.cookies.items()
+                )
+                accumulated_cookies = dict(
+                    getattr(self, "_refetch_new_cookies", {}) or {}
+                )
+                accumulated_cookies.update(refetched_cookies)
+                self._refetch_new_cookies = accumulated_cookies
+
             # 风控已解除、token 直接可用：缓存结果并返回哨兵，让上层提前结束滑块流程、直接采用新 token
             if res.get("token_ok"):
                 try:
                     self._refetch_token_ok = True
                     self._refetch_new_token = res.get("new_token")
-                    # 捕获接口可能下发的刷新后 cookie
-                    self._refetch_new_cookies = res.get("new_cookies") or {}
                 except Exception:
                     pass
                 return CAPTCHA_NOT_REQUIRED
@@ -683,20 +705,33 @@ class CookieTokenManager:
                         slider_mode=selected_slider_mode,
                     )
 
+                # 重取验证链接的 Token 请求可能在任意结果分支下发新 Cookie（尤其是
+                # _m_h5_tk）。浏览器流程结束后统一写回，不能只在 token_ok 分支处理。
+                refetched_cookies = dict(
+                    getattr(self, "_refetch_new_cookies", {}) or {}
+                )
+                if refetched_cookies:
+                    try:
+                        self.cookies.update(refetched_cookies)
+                        self.cookies_str = "; ".join(
+                            f"{key}={value}" for key, value in self.cookies.items()
+                        )
+                        await self.update_config_cookies()
+                        logger.info(
+                            f"【{self.cookie_id}】已合并并写回重取验证链接时下发的"
+                            f" {len(refetched_cookies)} 个Cookie字段"
+                        )
+                        self._refetch_new_cookies = {}
+                    except Exception as merge_e:
+                        logger.error(
+                            f"【{self.cookie_id}】合并重取验证链接Cookie失败: "
+                            f"{self._safe_str(merge_e)}"
+                        )
+
                 # 重取链接时发现 token 已可用（风控解除，无需滑块）：直接采用，跳过滑块结果处理。
-                # 合并接口可能下发的刷新 cookie，并返回 cookies_str，让上层 refresh_token
-                # 清缓存后重试 token 刷新（此时风控已解除，会直接成功）。
+                # Cookie 已在上方统一写回；返回 cookies_str，让上层清缓存后重试 Token 刷新。
                 if getattr(self, '_refetch_token_ok', False):
                     logger.info(f"【{self.cookie_id}】滑块流程中检测到 token 已可用，直接采用，跳过滑块验证")
-                    try:
-                        if getattr(self, '_refetch_new_cookies', None):
-                            self.cookies.update(self._refetch_new_cookies)
-                            self.cookies_str = '; '.join([f"{k}={v}" for k, v in self.cookies.items()])
-                            await self.update_config_cookies()
-                            logger.info(f"【{self.cookie_id}】已合并重取 token 时下发的刷新 cookie")
-                    except Exception as merge_e:
-                        logger.warning(f"【{self.cookie_id}】合并重取 cookie 失败（可忽略）: {self._safe_str(merge_e)}")
-
                     captcha_duration = time.time() - captcha_start_time
                     if log_id:
                         try:
@@ -1079,8 +1114,23 @@ class CookieTokenManager:
                 except Exception as reload_e:
                     logger.warning(f"【{self.cookie_id}】从数据库重新加载cookie失败，继续使用当前cookie: {self._safe_str(reload_e)}")
 
-            logger.info(f"【{self.cookie_id}】发起Token刷新API请求")
-            api_result = await request_im_token(self.cookies_str, self.device_id)
+            # Token获取方式每次实时查库，确保系统设置修改后无需重启即可生效
+            token_api_mode = await load_token_api_mode(self.cookie_id)
+            logger.info(
+                f"【{self.cookie_id}】发起Token刷新API请求，"
+                f"使用{get_token_api_mode_label(token_api_mode)}"
+            )
+            api_result = await request_im_token_with_fallback(
+                self.cookies_str,
+                self.device_id,
+                api_mode=token_api_mode,
+                log_tag=self.cookie_id,
+            )
+            if api_result.api_mode != token_api_mode:
+                logger.warning(
+                    f"【{self.cookie_id}】本次Token刷新已自动切换为"
+                    f"{get_token_api_mode_label(api_result.api_mode)}"
+                )
             logger.info(
                 f"【{self.cookie_id}】Token刷新API响应: "
                 f"状态码={api_result.status_code}, 耗时={api_result.duration_seconds:.2f}秒"
@@ -1190,16 +1240,14 @@ class CookieTokenManager:
 
             # FAIL_SYS_TOKEN_EXOIRED/EXPIRED：允许自动重试一次
             try:
-                if isinstance(res_json, dict) and token_expiry_retry_count < 1:
+                if token_expiry_retry_count < 1 and is_token_expired_response(res_json):
                     ret_value = res_json.get('ret', []) or []
-                    ret_str = json.dumps(ret_value, ensure_ascii=False)
-                    if 'FAIL_SYS_TOKEN_EXOIRED' in ret_str or 'FAIL_SYS_TOKEN_EXPIRED' in ret_str:
-                        logger.warning(f"【{self.cookie_id}】检测到令牌过期，准备重试一次: {ret_value}")
-                        await asyncio.sleep(0.5)
-                        return await self.refresh_token(
-                            captcha_retry_count=captcha_retry_count,
-                            token_expiry_retry_count=token_expiry_retry_count + 1,
-                        )
+                    logger.warning(f"【{self.cookie_id}】检测到令牌过期，准备重试一次: {ret_value}")
+                    await asyncio.sleep(0.5)
+                    return await self.refresh_token(
+                        captcha_retry_count=captcha_retry_count,
+                        token_expiry_retry_count=token_expiry_retry_count + 1,
+                    )
             except Exception as retry_e:
                 logger.warning(f"【{self.cookie_id}】令牌过期重试判断异常: {self._safe_str(retry_e)}")
 
