@@ -1,0 +1,4 @@
+services:
+  websocket:
+    image: xianyu-websocket:thread-guard-v0.1.2
+    pull_policy: never
