@@ -36,6 +36,9 @@ class TokenManager:
         self.last_cookie_refresh_time = 0
         self.cookie_refresh_lock = asyncio.Lock()
         self.cookie_refresh_enabled = True
+        self.cookie_refresh_failure_count = 0
+        self.cookie_refresh_backoff_base = 60
+        self.cookie_refresh_backoff_max = 900
         
         # 消息接收标识 - 用于控制Cookie刷新
         self.last_message_received_time = 0
@@ -132,6 +135,7 @@ class TokenManager:
                 new_token = await self.xianyu.refresh_token()
                 
                 if new_token:
+                    self.cookie_refresh_failure_count = 0
                     self.last_cookie_refresh_time = current_time
                     logger.info(f"【{self.cookie_id}】Cookie刷新任务完成,Token已更新")
                 elif getattr(self.xianyu, "last_token_refresh_status", "") in (
@@ -155,17 +159,20 @@ class TokenManager:
                         f"等待下一个{self.cookie_refresh_interval}秒刷新周期"
                     )
                 else:
-                    logger.warning(f"【{self.cookie_id}】Cookie刷新任务失败,Token刷新未成功，5秒后立即重试")
-                    # 失败后不更新 last_cookie_refresh_time，等待5秒后立即重试
-                    await self.xianyu._interruptible_sleep(5)
-                    logger.info(f"【{self.cookie_id}】开始重试Cookie刷新任务...")
-                    retry_token = await self.xianyu.refresh_token()
-                    if retry_token:
-                        self.last_cookie_refresh_time = time.time()
-                        logger.info(f"【{self.cookie_id}】Cookie刷新重试成功,Token已更新")
-                    else:
-                        logger.warning(f"【{self.cookie_id}】Cookie刷新重试仍失败,等待下一个刷新周期")
-                        self.last_cookie_refresh_time = time.time()
+                    self.cookie_refresh_failure_count += 1
+                    retry_delay = min(
+                        self.cookie_refresh_backoff_base * (2 ** (self.cookie_refresh_failure_count - 1)),
+                        self.cookie_refresh_backoff_max,
+                    )
+                    # cookie_refresh_loop 按固定周期检查。将上次刷新时间回拨，
+                    # 使下一次尝试在 retry_delay 后发生，而不是 5 秒后立刻重试。
+                    self.last_cookie_refresh_time = (
+                        time.time() - self.cookie_refresh_interval + retry_delay
+                    )
+                    logger.warning(
+                        f"【{self.cookie_id}】Cookie刷新任务失败，"
+                        f"第{self.cookie_refresh_failure_count}次失败后将在约{retry_delay}秒后重试"
+                    )
                     
             except Exception as e:
                 logger.error(f"【{self.cookie_id}】执行Cookie刷新任务异常: {str(e)}")
