@@ -136,7 +136,7 @@ async def get_api_card_content(
                 logger.error(f"不支持的HTTP方法: {method}")
                 return None
 
-        if status_code == 200:
+        if 200 <= status_code < 300:
             content = extract_card_api_response_content(response_text, response_field)
             logger.info(f"API调用成功，返回内容长度: {len(content)}")
             return content
