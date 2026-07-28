@@ -414,6 +414,17 @@ curl -X POST \
 
 curl -H 'X-API-Key: <用户API Key>' \
   http://127.0.0.1:8089/api/v1/product-publish/publish/batch/<batch_id>/status
+
+# 发布成功后绑定卡券；item_title 会保存到卡券商品关联记录
+curl -X POST \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: <用户API Key>' \
+  -d '{
+    "card_ids":[6],
+    "item_ids":["1067769058126"],
+    "item_title":"【秒发】游戏名称"
+  }' \
+  http://127.0.0.1:8089/api/v1/cards/batch-bind
 ```
 
 批次状态的 `data.done` 表示任务是否结束，`data.items[]` 返回每个账号和素材的 `status`、`item_id`、`item_url` 与错误信息。外部图片仅允许公网 HTTP/HTTPS 图片，最多 10MB。

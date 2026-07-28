@@ -1063,6 +1063,7 @@ class DatabaseInitializer:
                 user_id BIGINT NOT NULL COMMENT '所属用户ID',
                 card_id BIGINT NOT NULL COMMENT '卡券ID',
                 item_id VARCHAR(64) NOT NULL COMMENT '商品ID',
+                item_title VARCHAR(255) DEFAULT NULL COMMENT '商品标题',
                 source VARCHAR(20) DEFAULT 'own' COMMENT '卡券来源：own-自有，dock_l1-一级对接，dock_l2-二级对接',
                 dock_record_id BIGINT NOT NULL DEFAULT 0 COMMENT '对接记录ID（对接卡券时关联，0表示自有卡券）',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -1897,6 +1898,7 @@ class DatabaseInitializer:
             ("is_deleted", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除'", "content"),
         ],
         "xy_card_item_relations": [
+            ("item_title", "VARCHAR(255) DEFAULT NULL COMMENT '商品标题'", "item_id"),
             ("source", "VARCHAR(20) DEFAULT 'own' COMMENT '卡券来源：own-自有，dock_l1-一级对接，dock_l2-二级对接'", "item_id"),
             ("dock_record_id", "BIGINT DEFAULT NULL COMMENT '对接记录ID（对接卡券时关联）'", "source"),
         ],

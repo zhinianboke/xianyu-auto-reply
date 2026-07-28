@@ -10,6 +10,7 @@ from jose import JWTError
 from pydantic import ValidationError
 
 from app.api import deps
+from app.api.routes.cards import BatchBindRequest
 from app.api.routes.product_publish import (
     BatchPublishRequest,
     ExternalMaterialUpsertRequest,
@@ -19,6 +20,7 @@ from app.services.product_publish_service import (
     _comparable_material_titles,
 )
 from common.models.user import UserStatus
+from common.services.card_matcher import CardMatcher
 from common.utils.security import generate_api_key, hash_api_key, mask_api_key
 from common.utils.time_utils import get_beijing_now_naive
 
@@ -75,6 +77,22 @@ class SequenceSession:
         self.commits += 1
 
 
+class CapturingResult:
+    rowcount = 1
+
+
+class CapturingCardSession:
+    def __init__(self):
+        self.calls = []
+
+    async def execute(self, statement, parameters):
+        self.calls.append((str(statement), parameters))
+        return CapturingResult()
+
+    async def flush(self):
+        return None
+
+
 class ApiKeySecurityTests(unittest.TestCase):
     def test_api_key_only_exposes_hash_and_mask(self):
         api_key = generate_api_key()
@@ -128,6 +146,41 @@ class ExternalRequestValidationTests(unittest.TestCase):
         self.assertEqual(
             _comparable_material_titles("【秒发】  测试游戏 "),
             ["【秒发】 测试游戏", "测试游戏"],
+        )
+
+    def test_card_binding_accepts_item_title(self):
+        request = BatchBindRequest(
+            card_ids=[6],
+            item_ids=["1067769058126"],
+            item_title="【秒发】黄昏远征军",
+        )
+        self.assertEqual(request.item_title, "【秒发】黄昏远征军")
+
+        with self.assertRaises(ValidationError):
+            BatchBindRequest(
+                card_ids=[6],
+                item_ids=["1067769058126"],
+                item_title="测" * 256,
+            )
+
+
+class CardBindingPersistenceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_batch_binding_persists_item_title(self):
+        session = CapturingCardSession()
+        matcher = CardMatcher(session)
+
+        result = await matcher.batch_bind_cards_to_items(
+            user_id=1,
+            card_ids=[6],
+            item_ids=["1067769058126"],
+            item_title="【秒发】黄昏远征军",
+        )
+
+        self.assertEqual(result, {"success_count": 1, "fail_count": 0})
+        self.assertEqual(len(session.calls), 2)
+        self.assertEqual(
+            session.calls[1][1]["item_title"],
+            "【秒发】黄昏远征军",
         )
 
 

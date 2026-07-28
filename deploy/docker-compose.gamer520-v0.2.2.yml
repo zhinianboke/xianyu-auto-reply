@@ -1,9 +1,9 @@
 services:
   backend-web:
-    image: xianyu-backend-web:gamer520-v0.2.3
+    image: xianyu-backend-web:gamer520-v0.2.4
     pull_policy: never
     environment:
-      VERSION: "0.2.3"
+      VERSION: "0.2.4"
 
   frontend:
     image: xianyu-frontend:gamer520-v0.2.2

@@ -333,6 +333,7 @@ class CardMatcher:
         user_id: int,
         card_ids: List[int],
         item_ids: List[str],
+        item_title: Optional[str] = None,
     ) -> Dict[str, int]:
         """
         批量绑定卡券到商品（INSERT IGNORE 避免重复）
@@ -341,6 +342,7 @@ class CardMatcher:
             user_id: 用户ID
             card_ids: 卡券ID列表
             item_ids: 商品ID列表
+            item_title: 商品标题；批量传入多个商品ID时共用该标题
             
         Returns:
             {"success_count": 成功数量, "fail_count": 失败数量}
@@ -363,6 +365,24 @@ class CardMatcher:
                     )
                     if result.rowcount > 0:
                         success_count += 1
+                    if item_title:
+                        await self.session.execute(
+                            text("""
+                                UPDATE xy_card_item_relations
+                                SET item_title = :item_title,
+                                    updated_at = NOW()
+                                WHERE user_id = :user_id
+                                  AND card_id = :card_id
+                                  AND item_id = :item_id
+                                  AND dock_record_id = 0
+                            """),
+                            {
+                                "user_id": user_id,
+                                "card_id": card_id,
+                                "item_id": item_id,
+                                "item_title": item_title.strip()[:255],
+                            },
+                        )
                 except Exception as e:
                     logger.warning(f"绑定卡券 {card_id} 到商品 {item_id} 失败: {e}")
                     fail_count += 1
