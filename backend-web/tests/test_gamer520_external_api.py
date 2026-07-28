@@ -14,6 +14,10 @@ from app.api.routes.product_publish import (
     BatchPublishRequest,
     ExternalMaterialUpsertRequest,
 )
+from app.services.product_publish_service import (
+    ProductMaterialService,
+    _comparable_material_titles,
+)
 from common.models.user import UserStatus
 from common.utils.security import generate_api_key, hash_api_key, mask_api_key
 from common.utils.time_utils import get_beijing_now_naive
@@ -37,6 +41,12 @@ class FakeResult:
     def scalar_one_or_none(self):
         return self.user
 
+    def scalars(self):
+        return self
+
+    def first(self):
+        return self.user
+
 
 class FakeSession:
     def __init__(self, user):
@@ -51,6 +61,18 @@ class FakeSession:
 
     async def refresh(self, _user):
         return None
+
+
+class SequenceSession:
+    def __init__(self, results):
+        self.results = list(results)
+        self.commits = 0
+
+    async def execute(self, _statement):
+        return FakeResult(self.results.pop(0))
+
+    async def commit(self):
+        self.commits += 1
 
 
 class ApiKeySecurityTests(unittest.TestCase):
@@ -101,6 +123,33 @@ class ExternalRequestValidationTests(unittest.TestCase):
             material_ids=[1],
         )
         self.assertIsNone(legacy.request_id)
+
+    def test_second_delivery_prefix_does_not_change_product_name(self):
+        self.assertEqual(
+            _comparable_material_titles("【秒发】  测试游戏 "),
+            ["【秒发】 测试游戏", "测试游戏"],
+        )
+
+
+class ExternalMaterialDeduplicationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_existing_same_name_material_is_skipped(self):
+        duplicate = SimpleNamespace(
+            id=88,
+            source_content_hash="existing-hash",
+        )
+        session = SequenceSession([None, duplicate])
+        service = ProductMaterialService(session)
+
+        results = await service.upsert_external(
+            user_id=1,
+            source_type="gamer520",
+            items=[external_item(1)],
+        )
+
+        self.assertEqual(results[0]["action"], "skipped")
+        self.assertEqual(results[0]["material_id"], 88)
+        self.assertIn("同名", results[0]["reason"])
+        self.assertEqual(session.commits, 1)
 
 
 class RestAuthenticationTests(unittest.IsolatedAsyncioTestCase):
