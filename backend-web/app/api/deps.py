@@ -10,8 +10,9 @@ FastAPI依赖注入模块
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from datetime import timedelta
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,10 +22,12 @@ from app.core.security import decode_token
 from common.db.session import async_session_maker
 from common.models import User, UserRole, UserStatus
 from common.schemas.auth import TokenPayload
+from common.utils.security import hash_api_key
+from common.utils.time_utils import get_beijing_now_naive
 
 settings = get_settings()
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"/api/v1/auth/token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"/api/v1/auth/token", auto_error=False)
 
 
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
@@ -34,27 +37,48 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def get_current_user(
-    token: str = Depends(oauth2_scheme),
+    token: str | None = Depends(oauth2_scheme),
+    api_key: str | None = Header(default=None, alias="X-API-Key"),
     session: AsyncSession = Depends(get_db_session),
 ) -> User:
-    """获取当前用户"""
+    """通过 JWT 或 X-API-Key 获取当前用户；JWT 存在时不回退 API Key。"""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    try:
-        payload = TokenPayload(**decode_token(token))
-    except (JWTError, ValueError):
-        raise credentials_exception
-    if payload.sub is None:
+    from sqlalchemy import select
+
+    user = None
+    if token:
+        try:
+            payload = TokenPayload(**decode_token(token))
+        except (JWTError, ValueError):
+            raise credentials_exception
+        if payload.sub is None:
+            raise credentials_exception
+        result = await session.execute(select(User).where(User.id == int(payload.sub)))
+        user = result.scalar_one_or_none()
+    elif api_key:
+        normalized_key = api_key.strip()
+        if not normalized_key:
+            raise credentials_exception
+        result = await session.execute(
+            select(User).where(User.api_key_hash == hash_api_key(normalized_key))
+        )
+        user = result.scalar_one_or_none()
+        if user:
+            now = get_beijing_now_naive()
+            if (
+                user.api_key_last_used_at is None
+                or now - user.api_key_last_used_at >= timedelta(minutes=5)
+            ):
+                user.api_key_last_used_at = now
+                await session.commit()
+                await session.refresh(user)
+    else:
         raise credentials_exception
 
-    # 查询用户
-    from sqlalchemy import select
-    result = await session.execute(select(User).where(User.id == int(payload.sub)))
-    user = result.scalar_one_or_none()
-    
     if not user:
         raise credentials_exception
     return user

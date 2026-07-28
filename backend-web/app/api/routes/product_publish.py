@@ -10,11 +10,15 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
+from uuid import UUID
 
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_user, get_db_session
@@ -87,6 +91,44 @@ class BatchPublishRequest(BaseModel):
     """批量发布请求"""
     account_ids: List[str] = Field(..., min_length=1, description="账号ID列表")
     material_ids: List[int] = Field(..., min_length=1, description="素材ID列表")
+    request_id: Optional[UUID] = Field(None, description="可选的客户端幂等请求ID")
+
+
+class ExternalMaterialItem(BaseModel):
+    """外部系统同步的单条商品素材。"""
+
+    external_id: str = Field(..., min_length=1, max_length=128)
+    content_hash: str = Field(..., pattern=r"^[a-f0-9]{64}$")
+    title: str = Field(..., min_length=1, max_length=200)
+    description: str = Field(..., min_length=1)
+    price: float = Field(..., gt=0)
+    images: List[str] = Field(..., min_length=1, max_length=9)
+    category: Optional[str] = Field(None, max_length=100)
+    delivery_method: str = Field("express", pattern=r"^(express|pickup)$")
+    postage: float = Field(0, ge=0)
+    address: Optional[str] = Field(None, max_length=200)
+    brand: Optional[str] = Field(None, max_length=100)
+    condition: str = Field("全新", max_length=20)
+    remark: Optional[str] = Field(None, max_length=500)
+
+    @field_validator("images")
+    @classmethod
+    def validate_images(cls, images: List[str]) -> List[str]:
+        normalized: List[str] = []
+        for image in images:
+            value = image.strip()
+            parsed = urlparse(value)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError("外部素材图片必须是有效的 HTTP/HTTPS URL")
+            normalized.append(value)
+        return normalized
+
+
+class ExternalMaterialUpsertRequest(BaseModel):
+    """外部素材批量幂等写入请求。"""
+
+    source: str = Field(..., min_length=1, max_length=32, pattern=r"^[a-zA-Z0-9_-]+$")
+    items: List[ExternalMaterialItem] = Field(..., min_length=1, max_length=20)
 
 
 # ==================== 素材库接口 ====================
@@ -101,6 +143,26 @@ async def create_material(
     svc = ProductMaterialService(session)
     material = await svc.create(current_user.id, req.model_dump())
     return ApiResponse(success=True, message="素材创建成功", data={"id": material.id})
+
+
+@router.post("/materials/external/upsert", response_model=ApiResponse)
+async def upsert_external_materials(
+    req: ExternalMaterialUpsertRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """按来源商品ID批量幂等创建或更新素材。"""
+    svc = ProductMaterialService(session)
+    items = await svc.upsert_external(
+        user_id=current_user.id,
+        source_type=req.source,
+        items=[item.model_dump() for item in req.items],
+    )
+    return ApiResponse(
+        success=True,
+        message=f"外部素材同步完成，共处理 {len(items)} 条",
+        data={"items": items},
+    )
 
 
 @router.get("/materials", response_model=ApiResponse)
@@ -247,17 +309,92 @@ async def publish_batch(
     前端通过 GET /publish/batch/{batch_id}/status 查询进度。
     后台会按账号循环，每个账号依次发布所有素材，复用同一浏览器实例。
     """
+    from common.models.publish_batch import PublishBatch
+    from common.models.xy_account import XYAccount
+
+    account_ids = list(dict.fromkeys(account_id.strip() for account_id in req.account_ids if account_id.strip()))
+    material_ids = list(dict.fromkeys(req.material_ids))
+    if not account_ids or not material_ids:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="账号和素材不能为空")
+
+    account_rows = (
+        await session.execute(
+            select(XYAccount.account_id).where(
+                XYAccount.owner_id == current_user.id,
+                XYAccount.account_id.in_(account_ids),
+            )
+        )
+    ).scalars().all()
+    missing_accounts = [account_id for account_id in account_ids if account_id not in set(account_rows)]
+    if missing_accounts:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"账号不存在或无权使用: {', '.join(missing_accounts)}",
+        )
+
+    request_id = str(req.request_id or uuid.uuid4())
+    existing_batch = (
+        await session.execute(
+            select(PublishBatch).where(
+                PublishBatch.user_id == current_user.id,
+                PublishBatch.request_id == request_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing_batch:
+        return ApiResponse(
+            success=True,
+            message="该请求已提交，返回原批次",
+            data={
+                "batch_id": existing_batch.batch_id,
+                "total": existing_batch.total,
+                "idempotent_replay": True,
+            },
+        )
+
     mat_svc = ProductMaterialService(session)
     from app.services.product_publish_service import _material_to_dict
-    materials = [_material_to_dict(m) for m in await mat_svc.list_by_ids(req.material_ids, current_user.id)]
+    materials = [_material_to_dict(m) for m in await mat_svc.list_by_ids(material_ids, current_user.id)]
 
-    if not materials:
-        return ApiResponse(success=False, message="没有找到有效的素材")
+    if len(materials) != len(material_ids):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="包含不存在或无权使用的素材")
 
-    batch_id = str(uuid.uuid4())
+    batch_id = request_id
+    batch = PublishBatch(
+        batch_id=batch_id,
+        user_id=current_user.id,
+        request_id=request_id,
+        account_ids=account_ids,
+        material_ids=material_ids,
+        status="queued",
+        total=len(account_ids) * len(materials),
+    )
+    session.add(batch)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        existing_batch = (
+            await session.execute(
+                select(PublishBatch).where(
+                    PublishBatch.user_id == current_user.id,
+                    PublishBatch.request_id == request_id,
+                )
+            )
+        ).scalar_one()
+        return ApiResponse(
+            success=True,
+            message="该请求已提交，返回原批次",
+            data={
+                "batch_id": existing_batch.batch_id,
+                "total": existing_batch.total,
+                "idempotent_replay": True,
+            },
+        )
+
     await PublishBatchStatusService.init_batch(
         batch_id=batch_id,
-        account_ids=req.account_ids,
+        account_ids=account_ids,
         material_count=len(materials),
     )
 
@@ -265,17 +402,18 @@ async def publish_batch(
     background_tasks.add_task(
         _run_batch_publish_background,
         user_id=current_user.id,
-        account_ids=req.account_ids,
+        account_ids=account_ids,
         materials=materials,
         batch_id=batch_id,
     )
 
     return ApiResponse(
         success=True,
-        message=f"批量发布任务已提交，共 {len(req.account_ids)} 个账号 × {len(materials)} 件商品",
+        message=f"批量发布任务已提交，共 {len(account_ids)} 个账号 × {len(materials)} 件商品",
         data={
             "batch_id": batch_id,
-            "total": len(req.account_ids) * len(materials),
+            "total": len(account_ids) * len(materials),
+            "idempotent_replay": False,
         },
     )
 
@@ -286,109 +424,115 @@ async def get_batch_status(
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
-    """查询批量发布任务进度"""
-    from sqlalchemy import select, func
+    """查询持久化批量发布进度和逐商品结果。"""
+    from sqlalchemy import func
+    from common.models.publish_batch import PublishBatch
     from common.models.publish_log import PublishLog
 
-    unknown_sync_message = "批量任务同步状态缓存不存在，无法判断自动获取商品结果"
+    batch = (
+        await session.execute(
+            select(PublishBatch).where(
+                PublishBatch.batch_id == batch_id,
+                PublishBatch.user_id == current_user.id,
+            )
+        )
+    ).scalar_one_or_none()
 
-    stmt = select(
+    counts_rows = (await session.execute(select(
         PublishLog.status,
         func.count().label("cnt"),
     ).where(
         PublishLog.batch_id == batch_id,
         PublishLog.user_id == current_user.id,
-    ).group_by(PublishLog.status)
+    ).group_by(PublishLog.status))).all()
+    counts = {row.status: int(row.cnt) for row in counts_rows}
 
-    rows = (await session.execute(stmt)).all()
-    counts = {r.status: r.cnt for r in rows}
+    if batch is None and not counts:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="批量任务不存在")
 
-    account_stmt = select(
+    account_rows = (await session.execute(select(
         PublishLog.account_id,
         PublishLog.status,
         func.count().label("cnt"),
     ).where(
         PublishLog.batch_id == batch_id,
         PublishLog.user_id == current_user.id,
-    ).group_by(PublishLog.account_id, PublishLog.status)
-    account_rows = (await session.execute(account_stmt)).all()
+    ).group_by(PublishLog.account_id, PublishLog.status))).all()
 
     account_count_map: Dict[str, Dict[str, int]] = {}
     for row in account_rows:
         status_map = account_count_map.setdefault(row.account_id, {})
         status_map[row.status] = int(row.cnt)
 
-    total = sum(counts.values())
+    log_rows = (
+        await session.execute(
+            select(PublishLog)
+            .where(
+                PublishLog.batch_id == batch_id,
+                PublishLog.user_id == current_user.id,
+            )
+            .order_by(PublishLog.id)
+        )
+    ).scalars().all()
+
+    configured_accounts = list(batch.account_ids or []) if batch else list(account_count_map.keys())
+    configured_materials = list(batch.material_ids or []) if batch else []
+    total = int(batch.total) if batch else sum(counts.values())
     success = counts.get("success", 0)
     failed = counts.get("failed", 0)
     publishing = counts.get("publishing", 0)
-    pending = counts.get("pending", 0)
+    pending = max(total - success - failed - publishing, 0)
     batch_snapshot = await PublishBatchStatusService.get_batch_snapshot(batch_id)
 
-    if batch_snapshot is None:
-        if total == 0:
-            return ApiResponse(success=False, message="批量任务不存在或状态已失效")
-        return ApiResponse(success=False, message="批量任务状态已失效，请到发布日志查看执行结果")
-
     account_statuses: List[Dict[str, Any]] = []
-    if batch_snapshot:
-        material_count = int(batch_snapshot.get("material_count") or 0)
-        account_order = batch_snapshot.get("account_order") or []
-        account_sync_map = batch_snapshot.get("accounts") or {}
-        expected_total = material_count * len(account_order)
-        if expected_total > total:
-            total = expected_total
-            pending = max(total - success - failed - publishing, 0)
+    material_count = len(configured_materials)
+    account_sync_map = (batch_snapshot or {}).get("accounts") or {}
+    for account_id in configured_accounts:
+        status_map = account_count_map.get(account_id, {})
+        account_total = material_count if material_count else sum(status_map.values())
+        account_success = int(status_map.get("success", 0))
+        account_failed = int(status_map.get("failed", 0))
+        account_publishing = int(status_map.get("publishing", 0))
+        account_pending = max(account_total - account_success - account_failed - account_publishing, 0)
+        sync_info = account_sync_map.get(account_id, {})
+        default_sync_status = "unknown" if batch and batch.status in {"completed", "failed"} else "pending"
+        account_statuses.append(
+            {
+                "account_id": account_id,
+                "total": account_total,
+                "success": account_success,
+                "failed": account_failed,
+                "publishing": account_publishing,
+                "pending": account_pending,
+                "sync_status": sync_info.get("sync_status", default_sync_status),
+                "sync_message": sync_info.get("sync_message", "批次缓存不可用，逐商品结果仍可查询"),
+                "sync_total_count": int(sync_info.get("sync_total_count") or 0),
+                "sync_saved_count": int(sync_info.get("sync_saved_count") or 0),
+            }
+        )
 
-        for account_id in account_order:
-            status_map = account_count_map.get(account_id, {})
-            account_total = material_count if material_count > 0 else sum(status_map.values())
-            account_success = int(status_map.get("success", 0))
-            account_failed = int(status_map.get("failed", 0))
-            account_publishing = int(status_map.get("publishing", 0))
-            account_pending = max(account_total - account_success - account_failed - account_publishing, 0)
-            sync_info = account_sync_map.get(account_id, {})
-            account_statuses.append(
-                {
-                    "account_id": account_id,
-                    "total": account_total,
-                    "success": account_success,
-                    "failed": account_failed,
-                    "publishing": account_publishing,
-                    "pending": account_pending,
-                    "sync_status": sync_info.get("sync_status", "pending"),
-                    "sync_message": sync_info.get("sync_message", "等待该账号发布完成后自动获取商品"),
-                    "sync_total_count": int(sync_info.get("sync_total_count") or 0),
-                    "sync_saved_count": int(sync_info.get("sync_saved_count") or 0),
-                }
-            )
-
-        extra_account_ids = [account_id for account_id in account_count_map.keys() if account_id not in set(account_order)]
-        for account_id in extra_account_ids:
-            status_map = account_count_map.get(account_id, {})
-            account_total = sum(status_map.values())
-            account_success = int(status_map.get("success", 0))
-            account_failed = int(status_map.get("failed", 0))
-            account_publishing = int(status_map.get("publishing", 0))
-            account_pending = int(status_map.get("pending", 0))
-            account_statuses.append(
-                {
-                    "account_id": account_id,
-                    "total": account_total,
-                    "success": account_success,
-                    "failed": account_failed,
-                    "publishing": account_publishing,
-                    "pending": account_pending,
-                    "sync_status": "unknown",
-                    "sync_message": unknown_sync_message,
-                    "sync_total_count": 0,
-                    "sync_saved_count": 0,
-                }
-            )
+    done = bool(batch and batch.status in {"completed", "failed"})
+    if done:
+        pending = 0
     sync_finished = all(
         account_status.get("sync_status") in {"success", "failed", "skipped", "unknown"}
         for account_status in account_statuses
     ) if account_statuses else True
+    if batch is None:
+        done = total > 0 and publishing == 0 and pending == 0 and sync_finished
+
+    items = [
+        {
+            "log_id": row.id,
+            "account_id": row.account_id,
+            "material_id": row.material_id,
+            "status": row.status,
+            "item_id": row.item_id,
+            "item_url": row.item_url,
+            "error_message": row.error_message,
+        }
+        for row in log_rows
+    ]
 
     return ApiResponse(
         success=True,
@@ -400,8 +544,11 @@ async def get_batch_status(
             "failed": failed,
             "publishing": publishing,
             "pending": pending,
-            "finished": total > 0 and (publishing + pending) == 0 and sync_finished,
+            "status": batch.status if batch else ("completed" if done else "running"),
+            "finished": done,
+            "done": done,
             "account_statuses": account_statuses,
+            "items": items,
         },
     )
 
@@ -529,19 +676,51 @@ async def _run_batch_publish_background(
 ) -> None:
     """后台异步执行批量发布任务"""
     from common.db.session import async_session_maker
+    from common.models.publish_batch import PublishBatch
     from loguru import logger
+    from sqlalchemy import select
     import traceback
 
     async with async_session_maker() as session:
         svc = PublishExecutorService(session)
         try:
+            batch = (
+                await session.execute(
+                    select(PublishBatch).where(PublishBatch.batch_id == batch_id)
+                )
+            ).scalar_one_or_none()
+            if batch:
+                batch.status = "running"
+                await session.commit()
+
             # 直接将 batch_id 传给 service，确保日志与路由返回值一致
-            await svc.batch_publish(
+            result = await svc.batch_publish(
                 user_id=user_id,
                 account_ids=account_ids,
                 materials=materials,
                 batch_id=batch_id,
             )
+            batch = (
+                await session.execute(
+                    select(PublishBatch).where(PublishBatch.batch_id == batch_id)
+                )
+            ).scalar_one_or_none()
+            if batch:
+                batch.status = "completed"
+                batch.success_count = int(result.get("success_count") or 0)
+                batch.failed_count = int(result.get("failed_count") or 0)
+                batch.finished_at = get_beijing_now_naive()
+                await session.commit()
         except Exception as e:
             logger.error(f"批量发布后台任务异常: {e}\n{traceback.format_exc()}")
-            await PublishBatchStatusService.clear_batch(batch_id)
+            await session.rollback()
+            batch = (
+                await session.execute(
+                    select(PublishBatch).where(PublishBatch.batch_id == batch_id)
+                )
+            ).scalar_one_or_none()
+            if batch:
+                batch.status = "failed"
+                batch.error_message = str(e)[:1000]
+                batch.finished_at = get_beijing_now_naive()
+                await session.commit()
