@@ -379,6 +379,45 @@ npm run dev
 }
 ```
 
+## 外部素材与幂等发布 API
+
+管理员可在用户管理中为目标用户生成 API Key。明文只返回一次，后续 REST 请求使用 `X-API-Key`，权限与该用户 JWT 等价；重置、撤销或停用用户后立即失效。
+
+```bash
+# 最多 20 条，以 source + external_id 幂等创建或更新素材
+curl -X POST \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: <用户API Key>' \
+  -d '{
+    "source":"gamer520",
+    "items":[{
+      "external_id":"118842",
+      "content_hash":"<64位小写SHA-256>",
+      "title":"【秒发】游戏名称",
+      "description":"商品简介",
+      "price":1,
+      "images":["https://example.com/cover.jpg"]
+    }]
+  }' \
+  http://127.0.0.1:8089/api/v1/product-publish/materials/external/upsert
+
+# request_id 必须是 UUID；重复请求返回原 batch_id
+curl -X POST \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: <用户API Key>' \
+  -d '{
+    "account_ids":["账号ID"],
+    "material_ids":[123],
+    "request_id":"00000000-0000-4000-8000-000000000001"
+  }' \
+  http://127.0.0.1:8089/api/v1/product-publish/publish/batch
+
+curl -H 'X-API-Key: <用户API Key>' \
+  http://127.0.0.1:8089/api/v1/product-publish/publish/batch/<batch_id>/status
+```
+
+批次状态的 `data.done` 表示任务是否结束，`data.items[]` 返回每个账号和素材的 `status`、`item_id`、`item_url` 与错误信息。外部图片仅允许公网 HTTP/HTTPS 图片，最多 10MB。
+
 ## 构建脚本速查
 
 | 脚本 | 平台 | 作用 |

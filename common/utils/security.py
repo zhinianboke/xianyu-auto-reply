@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import secrets
 import string
 from datetime import datetime, timedelta, timezone
@@ -23,6 +24,7 @@ pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 # 秘钥生成可用字符集：大小写字母 + 数字
 _SECRET_KEY_ALPHABET = string.ascii_letters + string.digits
+_API_KEY_PREFIX = "xyk_"
 
 
 def generate_secret_key(length: int = 32) -> str:
@@ -37,6 +39,23 @@ def generate_secret_key(length: int = 32) -> str:
         随机秘钥字符串
     """
     return ''.join(secrets.choice(_SECRET_KEY_ALPHABET) for _ in range(length))
+
+
+def generate_api_key() -> str:
+    """生成面向外部服务的高熵 API Key。"""
+    return f"{_API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
+
+
+def hash_api_key(api_key: str) -> str:
+    """对 API Key 做不可逆 SHA-256 摘要，数据库不保存明文。"""
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+
+def mask_api_key(api_key: str) -> str:
+    """生成可安全展示的 API Key 掩码。"""
+    if len(api_key) <= 12:
+        return f"{api_key[:4]}****"
+    return f"{api_key[:8]}…{api_key[-4:]}"
 
 
 # 已知的弱/占位 JWT 密钥（与 deploy.sh / update.sh 中的 WEAK_JWT_KEYS 保持一致）。

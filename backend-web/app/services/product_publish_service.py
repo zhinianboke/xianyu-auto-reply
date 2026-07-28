@@ -46,6 +46,74 @@ class ProductMaterialService:
         await self.session.refresh(material)
         return material
 
+    async def upsert_external(
+        self,
+        user_id: int,
+        source_type: str,
+        items: List[dict],
+    ) -> List[dict]:
+        """按外部来源商品ID批量幂等创建或更新素材。"""
+        results: List[dict] = []
+        for item in items:
+            external_id = str(item["external_id"])
+            stmt = select(ProductMaterial).where(
+                ProductMaterial.user_id == user_id,
+                ProductMaterial.source_type == source_type,
+                ProductMaterial.source_item_id == external_id,
+            )
+            material = (await self.session.execute(stmt)).scalar_one_or_none()
+
+            if material is None:
+                material = ProductMaterial(
+                    user_id=user_id,
+                    title=item["title"],
+                    description=item["description"],
+                    price=float(item["price"]),
+                    original_price=None,
+                    category=item.get("category"),
+                    images=item.get("images", []),
+                    delivery_method=item.get("delivery_method", "express"),
+                    postage=float(item.get("postage", 0)),
+                    address=item.get("address"),
+                    brand=item.get("brand"),
+                    condition=item.get("condition", "全新"),
+                    remark=item.get("remark"),
+                    source_type=source_type,
+                    source_item_id=external_id,
+                    source_content_hash=item["content_hash"],
+                )
+                self.session.add(material)
+                await self.session.flush()
+                action = "created"
+            elif material.source_content_hash == item["content_hash"]:
+                action = "unchanged"
+            else:
+                material.title = item["title"]
+                material.description = item["description"]
+                material.price = float(item["price"])
+                material.category = item.get("category")
+                material.images = item.get("images", [])
+                material.delivery_method = item.get("delivery_method", "express")
+                material.postage = float(item.get("postage", 0))
+                material.address = item.get("address")
+                material.brand = item.get("brand")
+                material.condition = item.get("condition", "全新")
+                material.remark = item.get("remark")
+                material.source_content_hash = item["content_hash"]
+                action = "updated"
+
+            results.append(
+                {
+                    "external_id": external_id,
+                    "material_id": material.id,
+                    "action": action,
+                    "content_hash": material.source_content_hash,
+                }
+            )
+
+        await self.session.commit()
+        return results
+
     async def list_materials(
         self, user_id: int = None, page: int = 1, page_size: int = 20,
         title: str = None, category: str = None, condition: str = None,
@@ -190,6 +258,9 @@ def _material_to_dict(m: ProductMaterial) -> dict:
         "brand": m.brand,
         "condition": m.condition,
         "remark": m.remark,
+        "source_type": m.source_type,
+        "source_item_id": m.source_item_id,
+        "source_content_hash": m.source_content_hash,
         "created_at": safe_isoformat(m.created_at),
         "updated_at": safe_isoformat(m.updated_at),
     }

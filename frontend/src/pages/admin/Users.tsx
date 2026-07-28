@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Users as UsersIcon, RefreshCw, Plus, ChevronLeft, ChevronRight, Loader2, Pencil, Power, PowerOff, Wallet, Search, X } from 'lucide-react'
+import { Users as UsersIcon, RefreshCw, Plus, ChevronLeft, ChevronRight, KeyRound, Loader2, Pencil, Power, PowerOff, Wallet, Search, X } from 'lucide-react'
 import { getUsers, deleteUser, updateUser } from '@/api/admin'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
@@ -7,6 +7,7 @@ import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { UserFormModal } from './UserFormModal'
 import { UserRechargeModal } from './UserRechargeModal'
+import { UserApiKeyModal } from './UserApiKeyModal'
 import { getApiErrorMessage } from '@/utils/request'
 import type { User } from '@/types'
 
@@ -63,6 +64,7 @@ export function Users() {
   const [showFormModal, setShowFormModal] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
   const [rechargingUser, setRechargingUser] = useState<User | null>(null)
+  const [apiKeyUser, setApiKeyUser] = useState<User | null>(null)
 
   const loadUsers = async () => {
     if (!_hasHydrated || !isAuthenticated || !token) return
@@ -278,6 +280,14 @@ export function Users() {
                           编辑
                         </button>
                         <button
+                          onClick={() => setApiKeyUser(user)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg hover:bg-violet-50 dark:hover:bg-violet-900/20 text-violet-600 dark:text-violet-400 transition-colors"
+                          title="API Key"
+                        >
+                          <KeyRound className="w-4 h-4" />
+                          API Key
+                        </button>
+                        <button
                           onClick={() => setRechargingUser(user)}
                           className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-900/20 text-amber-600 dark:text-amber-400 transition-colors"
                           title="余额调整"
@@ -399,6 +409,16 @@ export function Users() {
           onSuccess={() => {
             setRechargingUser(null)
             loadUsers()
+          }}
+        />
+      )}
+
+      {apiKeyUser && (
+        <UserApiKeyModal
+          user={apiKeyUser}
+          onClose={() => setApiKeyUser(null)}
+          onUpdated={() => {
+            void loadUsers()
           }}
         />
       )}

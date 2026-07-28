@@ -20,6 +20,7 @@ class PublishLog(TimestampMixin, Base):
     __tablename__ = "xy_publish_logs"
     __table_args__ = (
         Index("idx_publish_user_created", "user_id", "created_at"),
+        Index("idx_publish_user_batch", "user_id", "batch_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
