@@ -224,7 +224,12 @@ class XianyuPublisher:
             await self.set_cookies(cookie_data["cookie"])
 
             logger.info("\n[步骤1] 🌐 先访问闲鱼首页，触发Cookie初始化...")
-            await self.page.goto("https://www.goofish.com", wait_until="networkidle", timeout=30000)
+            # 闲鱼首页存在持续网络连接，等待 networkidle 会稳定超时。
+            await self.page.goto(
+                "https://www.goofish.com",
+                wait_until="domcontentloaded",
+                timeout=60000,
+            )
             await asyncio.sleep(1)
 
             logger.info("\n[步骤2] 🌐 访问登录页面...")
@@ -237,7 +242,11 @@ class XianyuPublisher:
 
             publish_url = "https://www.goofish.com/publish?spm=a21ybx.item.sidebar.1.297e3da6aDZAmV"
             logger.info(f"\n[步骤3] 🌐 访问发布页面: {publish_url}")
-            await self.page.goto(publish_url, wait_until="networkidle", timeout=60000)
+            await self.page.goto(
+                publish_url,
+                wait_until="domcontentloaded",
+                timeout=60000,
+            )
             await asyncio.sleep(3)
 
             current_url = self.page.url
