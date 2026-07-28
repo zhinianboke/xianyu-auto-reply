@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import desc, func, select
@@ -18,6 +19,21 @@ from common.models.product_material import ProductMaterial
 # ==================== 素材库服务 ====================
 
 from common.utils.time_utils import safe_isoformat
+
+
+def _comparable_material_titles(title: str) -> List[str]:
+    """返回用于同名判断的标题，兼容 Gamer520 自动添加的“秒发”前缀。"""
+    normalized = re.sub(r"\s+", " ", str(title or "")).strip()
+    without_prefix = re.sub(r"^【秒发】\s*", "", normalized).strip()
+    return list(
+        dict.fromkeys(
+            value
+            for value in (normalized, without_prefix)
+            if value
+        )
+    )
+
+
 class ProductMaterialService:
     """商品素材库 CRUD 服务"""
 
@@ -64,6 +80,30 @@ class ProductMaterialService:
             material = (await self.session.execute(stmt)).scalar_one_or_none()
 
             if material is None:
+                comparable_titles = _comparable_material_titles(item["title"])
+                duplicate_stmt = (
+                    select(ProductMaterial)
+                    .where(
+                        ProductMaterial.user_id == user_id,
+                        func.trim(ProductMaterial.title).in_(comparable_titles),
+                    )
+                    .order_by(ProductMaterial.id.asc())
+                )
+                duplicate = (
+                    await self.session.execute(duplicate_stmt)
+                ).scalars().first()
+                if duplicate is not None:
+                    results.append(
+                        {
+                            "external_id": external_id,
+                            "material_id": duplicate.id,
+                            "action": "skipped",
+                            "content_hash": duplicate.source_content_hash,
+                            "reason": "素材库已存在同名商品",
+                        }
+                    )
+                    continue
+
                 material = ProductMaterial(
                     user_id=user_id,
                     title=item["title"],

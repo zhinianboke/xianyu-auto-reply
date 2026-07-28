@@ -1,6 +1,6 @@
 [project]
 name = "xianyu-backend-web-service"
-version = "0.2.1"
+version = "0.2.3"
 description = "闲鱼自动回复系统 - Backend-Web服务"
 requires-python = ">=3.11"
 
