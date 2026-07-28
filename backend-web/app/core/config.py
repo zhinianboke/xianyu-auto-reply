@@ -30,7 +30,7 @@ class BackendWebConfig(BaseConfig):
 
     # 服务配置
     project_name: str = Field(default="Xianyu Backend-Web Service")
-    version: str = Field(default="0.1.0")
+    version: str = Field(default="0.2.1")
     api_v1_prefix: str = Field(default="/api/v1")
     service_port: int = Field(default=8089, alias="BACKEND_WEB_PORT")
     
