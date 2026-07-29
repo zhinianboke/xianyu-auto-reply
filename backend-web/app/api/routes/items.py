@@ -108,6 +108,7 @@ async def list_items_paginated(
     is_multi_spec: bool | None = Query(default=None, description="多规格筛选"),
     multi_quantity_delivery: bool | None = Query(default=None, description="多数量发货筛选"),
     current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
     item_service: ItemService = Depends(deps.get_item_service),
 ):
     """获取商品列表（分页），支持多条件筛选
@@ -121,9 +122,20 @@ async def list_items_paginated(
     - multi_quantity_delivery: 多数量发货（true/false）
     """
     owner_id, _ = resolve_owner_scope(current_user)
+    account = None
+    if cookie_id:
+        account = await account_service.get_account_for_user(
+            owner_id,
+            cookie_id,
+        )
+        if not account:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="账号不存在或无权限访问",
+            )
     items, total = await item_service.list_items_paginated(
         owner_id=owner_id,
-        account_id=cookie_id,
+        account_pk=account.id if account else None,
         page=page,
         page_size=page_size,
         keyword=keyword,
@@ -197,7 +209,10 @@ async def list_items_by_cookie(
     if not account:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账号不存在")
 
-    items = await item_service.list_items(owner_id, cookie_id)
+    items = await item_service.list_items(
+        owner_id,
+        account_pk=account.id,
+    )
     return {"items": items}
 
 

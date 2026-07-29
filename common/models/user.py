@@ -12,7 +12,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, Index, String
+from sqlalchemy import BigInteger, DateTime, Enum, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from common.db.base_class import Base, TimestampMixin
@@ -65,6 +65,7 @@ class User(TimestampMixin, Base):
     secret_key: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, comment='分销秘钥，32位随机字符，全局唯一')
     api_key_hash: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, comment="外部 API Key 的 SHA-256 摘要")
     api_key_mask: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="API Key 脱敏展示值")
+    api_key_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True, comment="API Key 加密密文")
     api_key_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="API Key 创建或重置时间")
     api_key_last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="API Key 最近使用时间")
     # 账号到期日（精确到时分秒）：NULL 表示永不过期；到期后 WebSocket 不再连接并自动禁用账号

@@ -376,6 +376,7 @@ class DatabaseInitializer:
                 last_login_at DATETIME COMMENT '最后登录时间',
                 api_key_hash VARCHAR(64) DEFAULT NULL UNIQUE COMMENT '外部 API Key 的 SHA-256 摘要',
                 api_key_mask VARCHAR(32) DEFAULT NULL COMMENT 'API Key 脱敏展示值',
+                api_key_ciphertext TEXT DEFAULT NULL COMMENT 'API Key 加密密文',
                 api_key_created_at DATETIME DEFAULT NULL COMMENT 'API Key 创建或重置时间',
                 api_key_last_used_at DATETIME DEFAULT NULL COMMENT 'API Key 最近使用时间',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -448,7 +449,7 @@ class DatabaseInitializer:
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_owner_id (owner_id),
                 UNIQUE KEY uk_account_id (account_id),
-                INDEX idx_unb (unb),
+                UNIQUE KEY uk_account_unb (unb),
                 INDEX idx_account_created (created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='闲鱼账号表';
         """,
@@ -1875,7 +1876,8 @@ class DatabaseInitializer:
             ("secret_key", "VARCHAR(64) DEFAULT NULL UNIQUE COMMENT '分销秘钥，32位随机字符，全局唯一'", "dock_code"),
             ("api_key_hash", "VARCHAR(64) DEFAULT NULL UNIQUE COMMENT '外部 API Key 的 SHA-256 摘要'", "secret_key"),
             ("api_key_mask", "VARCHAR(32) DEFAULT NULL COMMENT 'API Key 脱敏展示值'", "api_key_hash"),
-            ("api_key_created_at", "DATETIME DEFAULT NULL COMMENT 'API Key 创建或重置时间'", "api_key_mask"),
+            ("api_key_ciphertext", "TEXT DEFAULT NULL COMMENT 'API Key 加密密文'", "api_key_mask"),
+            ("api_key_created_at", "DATETIME DEFAULT NULL COMMENT 'API Key 创建或重置时间'", "api_key_ciphertext"),
             ("api_key_last_used_at", "DATETIME DEFAULT NULL COMMENT 'API Key 最近使用时间'", "api_key_created_at"),
             ("expire_at", "DATETIME DEFAULT NULL COMMENT '账号到期日（精确到秒，NULL=永不过期）'", "api_key_last_used_at"),
         ],
@@ -3380,6 +3382,42 @@ class DatabaseInitializer:
                         logger.info("✓ xy_accounts: 创建 uk_account_id 全局唯一约束")
             except Exception as e:
                 logger.warning(f"✗ xy_accounts uk_account_id 创建失败: {e}")
+
+            # unb 是 Cookie 内的真实闲鱼账号身份。不同业务别名绑定同一 unb 会让
+            # 商品采集与 WebSocket 消息串号，因此在数据无冲突时补建全局唯一约束。
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_accounts'
+                    AND INDEX_NAME = 'uk_account_unb'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    dup_check = text("""
+                        SELECT COUNT(*) FROM (
+                            SELECT unb
+                            FROM xy_accounts
+                            WHERE unb IS NOT NULL AND unb <> ''
+                            GROUP BY unb
+                            HAVING COUNT(*) > 1
+                        ) AS dup
+                    """)
+                    dup_result = await conn.execute(dup_check)
+                    dup_groups = dup_result.scalar() or 0
+                    if dup_groups > 0:
+                        logger.warning(
+                            f"✗ xy_accounts 存在 {dup_groups} 组 unb 重复数据，"
+                            "暂不创建 uk_account_unb 唯一约束，请先处理重复账号"
+                        )
+                    else:
+                        await conn.execute(text(
+                            "ALTER TABLE xy_accounts "
+                            "ADD UNIQUE KEY uk_account_unb (unb)"
+                        ))
+                        logger.info("✓ xy_accounts: 创建 uk_account_unb 全局唯一约束")
+            except Exception as e:
+                logger.warning(f"✗ xy_accounts uk_account_unb 创建失败: {e}")
 
 
     async def create_default_admin(self):
