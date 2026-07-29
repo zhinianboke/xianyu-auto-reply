@@ -122,7 +122,11 @@ class CookieTokenManager:
     @property
     def device_id(self):
         return self.parent.device_id
-    
+
+    @device_id.setter
+    def device_id(self, value):
+        self.parent.device_id = value
+
     @property
     def myid(self):
         return self.parent.myid
