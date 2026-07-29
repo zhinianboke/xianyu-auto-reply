@@ -500,6 +500,7 @@ async def solve_captcha(request: SolveCaptchaRequest):
         merged_cookies_str: str,
         cookie_saved: bool,
     ) -> dict:
+        nonlocal device_id
         if not request.persist_token_cache:
             return {}
         if not cookie_saved:
@@ -543,6 +544,8 @@ async def solve_captcha(request: SolveCaptchaRequest):
                         api_mode=token_api_mode,
                         log_tag=safe_id,
                     )
+                    if token_result.device_id:
+                        device_id = token_result.device_id
                     last_token_response = token_result.response_json
                     if token_result.response_cookies:
                         response_cookies = dict(token_result.response_cookies)
@@ -743,6 +746,9 @@ async def solve_captcha(request: SolveCaptchaRequest):
         refetched_cookies = {}
 
     if success and not cookies and refetched_token_result.get("token_ok"):
+        refetched_device_id = str(refetched_token_result.get("device_id") or "").strip()
+        if refetched_device_id:
+            device_id = refetched_device_id
         merged_cookies_str, cookie_saved, cookie_message = await _persist_cookie_updates(
             refetched_cookies,
             "重取Token",

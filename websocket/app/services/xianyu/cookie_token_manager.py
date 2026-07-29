@@ -571,6 +571,9 @@ class CookieTokenManager:
                 try:
                     self._refetch_token_ok = True
                     self._refetch_new_token = res.get("new_token")
+                    refetch_device_id = str(res.get("device_id") or "").strip()
+                    if refetch_device_id:
+                        self.device_id = refetch_device_id
                 except Exception:
                     pass
                 return CAPTCHA_NOT_REQUIRED
@@ -1100,7 +1103,7 @@ class CookieTokenManager:
 
                 logger.warning(
                     f"【{self.cookie_id}】本机滑块不处理已开启且Token缓存不存在，"
-                    "继续请求Token接口；若首选和备用接口最终仍需滑块，"
+                    "继续请求Token接口；若网页接口最终仍需滑块，"
                     "将跳过本机滑块并等待下次轮询"
                 )
 
@@ -1188,11 +1191,9 @@ class CookieTokenManager:
                 api_mode=token_api_mode,
                 log_tag=self.cookie_id,
             )
-            if api_result.api_mode != token_api_mode:
-                logger.warning(
-                    f"【{self.cookie_id}】本次Token刷新已自动切换为"
-                    f"{get_token_api_mode_label(api_result.api_mode)}"
-                )
+            if api_result.device_id and api_result.device_id != self.device_id:
+                self.device_id = api_result.device_id
+                logger.info(f"【{self.cookie_id}】已更新远程接口返回的Device ID")
             logger.info(
                 f"【{self.cookie_id}】Token刷新API响应: "
                 f"状态码={api_result.status_code}, 耗时={api_result.duration_seconds:.2f}秒"
@@ -1230,14 +1231,8 @@ class CookieTokenManager:
                 if local_slider_disabled:
                     self.current_token = None
                     self.last_token_refresh_status = "skipped_local_slider_disabled"
-                    actual_mode_label = get_token_api_mode_label(api_result.api_mode)
-                    switch_text = (
-                        f"（首选{get_token_api_mode_label(token_api_mode)}，已自动切换）"
-                        if api_result.api_mode != token_api_mode
-                        else ""
-                    )
                     logger.warning(
-                        f"【{self.cookie_id}】{actual_mode_label}{switch_text}请求后仍需滑块验证，"
+                        f"【{self.cookie_id}】{get_token_api_mode_label(api_result.api_mode)}请求后仍需滑块验证，"
                         "本机滑块不处理已开启，本次不启动本机滑块，等待下次轮询"
                     )
                     return None

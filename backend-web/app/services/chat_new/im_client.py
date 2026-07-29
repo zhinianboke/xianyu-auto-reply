@@ -630,8 +630,7 @@ class GoofishImClient:
             _captcha_retry: 过滑块内部重试计数，外部不需要传
         """
         try:
-            # Token接口方式实时查库，并统一使用公共回退逻辑：首选接口触发风控时，
-            # 自动切换到另一个接口重试一次。
+            # Token 接口方式实时查库，确保系统设置修改后无需重启即可生效。
             api_mode = await load_token_api_mode(self.account_id)
             logger.info(
                 f"【{self.account_id}】获取IM Token，使用{get_token_api_mode_label(api_mode)}"
@@ -643,14 +642,12 @@ class GoofishImClient:
                 timeout_seconds=REQUEST_TIMEOUT,
                 log_tag=self.account_id,
             )
-            if api_result.api_mode != api_mode:
-                logger.warning(
-                    f"【{self.account_id}】本次获取IM Token已自动切换为"
-                    f"{get_token_api_mode_label(api_result.api_mode)}"
-                )
+            if api_result.device_id and api_result.device_id != self.device_id:
+                self.device_id = api_result.device_id
+                logger.info(f"【{self.account_id}】已更新远程接口返回的Device ID")
             result = api_result.response_json
 
-            # 两次接口请求下发的 Cookie 已由公共回退逻辑合并，统一写回账号。
+            # Token 接口下发的 Cookie 统一写回账号。
             new_cookies = api_result.response_cookies
             if new_cookies:
                 merged_str = merge_cookies(self.cookies_str, new_cookies)

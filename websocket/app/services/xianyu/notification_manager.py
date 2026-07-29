@@ -326,7 +326,7 @@ class NotificationManager:
             'Token定时刷新失败', 'token定时刷新失败', 'TOKEN定时刷新失败',
             '初始化时无法获取有效Token', '初始化时无法获取有效token',
             'accessToken', 'access_token', '_m_h5_tk',
-            # 两种Token获取方式的接口名都要识别，避免小程序接口报错漏判
+            # 识别内置网页 Token 接口名，避免接口报错漏判
             *TOKEN_API_NAMES.values(),
         ]
 

@@ -181,8 +181,8 @@ class DatabaseInitializer:
         ),
         (
             "token.api_mode",
-            "miniapp",
-            "Token获取方式：miniapp-小程序接口/web-网页接口",
+            "web",
+            "Token获取方式：web-网页接口/remote-远程接口",
         ),
         (
             "captcha.remote_processing_max",

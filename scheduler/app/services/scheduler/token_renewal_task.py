@@ -391,7 +391,7 @@ class TokenRenewalTask:
             cache_write = await write_renewed_token_cache(
                 cache_id=candidate.cache_id,
                 token_user_id=candidate.user_id,
-                device_id=candidate.device_id,
+                device_id=result.device_id or candidate.device_id,
                 token=new_token,
             )
             if not cache_write.success:

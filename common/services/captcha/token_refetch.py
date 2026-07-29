@@ -10,7 +10,7 @@
 说明：
     本机处理（cookie_token_manager._request_captcha_url_sync）与远程过滑块接口
     （internal /captcha/solve）共用本逻辑，避免在多处重复实现（项目开发规范第 36 条）。
-    使用的 token 接口（小程序 / 网页）跟随系统设置 token.api_mode，每次实时查库，
+    使用的 token 接口（网页 / 远程接口）跟随系统设置 token.api_mode，每次实时查库，
     与 WebSocket 主流程口径一致。
 """
 
@@ -22,12 +22,18 @@ from loguru import logger
 
 from common.services.captcha.token_response import (
     extract_token_captcha_url,
-    get_token_captcha_reason,
     is_token_expired_response,
 )
 from common.services.im_token_api import extract_im_access_token
+from common.services.remote_token_api import (
+    load_remote_token_settings_sync,
+    request_remote_xianyu_token_from_settings_sync,
+    validate_remote_token_settings,
+)
+from common.services.remote_token_risk_log_service import record_remote_token_risk_log_sync
 from common.services.token_api_mode import (
-    get_alternate_token_api_mode,
+    TOKEN_API_MODE_REMOTE,
+    TOKEN_API_MODE_WEB,
     get_token_api_mode_label,
     get_token_api_name,
     load_token_api_mode_sync,
@@ -40,6 +46,7 @@ _APP_KEY = "34839810"
 # 重取链接在浏览器验证的 20 秒总超时内执行，必须预留导航和滑动时间。
 _TOKEN_REFETCH_TOTAL_TIMEOUT_SECONDS = 10.0
 _TOKEN_API_CONNECT_TIMEOUT_SECONDS = 3.0
+_REMOTE_FALLBACK_EVENT_PREFIX = "重取滑块验证链接时本地网页Token接口获取失败后调用远程接口"
 
 
 def _post_token_api(
@@ -54,7 +61,7 @@ def _post_token_api(
 
     Args:
         cookie_id: 账号标识（仅用于日志）
-        api_mode: Token 获取方式（小程序 / 网页）
+        api_mode: Token 获取方式（网页）
         cookies: Cookie 字典（需含 _m_h5_tk 用于签名）
         cookies_str: Cookie 原始字符串（作为请求头 cookie）
         device_id: 设备 ID（拼入请求体 deviceId）
@@ -215,6 +222,96 @@ def _request_token_api_with_expiry_retry(
     )
 
 
+def _try_remote_token_fallback(
+    cookie_id: str,
+    result: Dict[str, object],
+    *,
+    cookies_str: str,
+    timeout_seconds: float,
+    local_failure_reason: str,
+) -> bool:
+    """在远程接口已配置时，以远程 Token 结果回退本地网页接口失败。
+
+    Args:
+        cookie_id: 账号标识，用于日志和风控记录。
+        result: 当前重取结果，远程成功时会写入 Token 与设备信息。
+        cookies_str: 当前账号完整 Cookie 字符串，传给远程接口 data.cookies。
+        timeout_seconds: 远程请求可用的剩余超时预算。
+        local_failure_reason: 本地网页接口失败原因。
+    Returns:
+        远程接口是否成功返回有效 Token。
+    """
+    try:
+        remote_settings = load_remote_token_settings_sync()
+    except Exception as exc:
+        logger.warning(
+            f"【{cookie_id}】本地网页接口获取Token失败（{local_failure_reason}），"
+            f"读取远程接口配置失败，跳过远程回退: {type(exc).__name__}: {exc}"
+        )
+        return False
+
+    config_error = validate_remote_token_settings(
+        remote_settings.url,
+        remote_settings.secret_key,
+    )
+    if config_error:
+        logger.info(
+            f"【{cookie_id}】本地网页接口获取Token失败（{local_failure_reason}），"
+            f"远程接口未配置，跳过远程回退: {config_error}"
+        )
+        return False
+
+    event_description = f"{_REMOTE_FALLBACK_EVENT_PREFIX}：{local_failure_reason}"
+    logger.warning(
+        f"【{cookie_id}】本地网页接口获取Token失败（{local_failure_reason}），"
+        "开始调用远程接口获取Token"
+    )
+    try:
+        remote_result = request_remote_xianyu_token_from_settings_sync(
+            cookies=cookies_str,
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception as exc:
+        error_message = f"{type(exc).__name__}: {exc}"
+        record_remote_token_risk_log_sync(
+            account_identifier=cookie_id,
+            success=False,
+            message=error_message,
+            event_description=event_description,
+        )
+        logger.warning(
+            f"【{cookie_id}】本地网页接口获取Token失败后的远程回退异常: "
+            f"{error_message}"
+        )
+        return False
+
+    record_remote_token_risk_log_sync(
+        account_identifier=cookie_id,
+        success=remote_result.success,
+        message=remote_result.message,
+        api_mode=remote_result.api_mode,
+        status_code=remote_result.status_code,
+        duration_seconds=remote_result.duration_seconds,
+        event_description=event_description,
+    )
+    if not remote_result.success:
+        logger.warning(
+            f"【{cookie_id}】本地网页接口获取Token失败后的远程回退失败: "
+            f"{remote_result.message or '未返回错误说明'}"
+        )
+        return False
+
+    result["token_ok"] = True
+    result["new_token"] = remote_result.token
+    result["device_id"] = remote_result.device_id
+    result["api_mode"] = remote_result.api_mode
+    logger.info(
+        f"【{cookie_id}】本地网页接口获取Token失败后远程回退成功，"
+        f"实际接口={remote_result.api_mode or '未返回'}"
+    )
+    return True
+
+
 def request_fresh_captcha_url(
     cookie_id: str,
     cookies: Dict[str, str],
@@ -236,74 +333,53 @@ def request_fresh_captcha_url(
         dict：
           - token_ok (bool): 风控是否已解除、token 直接可用（无需滑块）
           - new_token (str|None): token_ok 时下发的 accessToken
+          - device_id (str|None): token_ok 时远程接口返回的设备标识
+          - api_mode (str|None): token_ok 时远程接口实际使用的接口方式
           - new_cookies (dict): 接口下发的刷新 cookie（可能为空）
           - fresh_url (str|None): 新鲜的验证链接（需要继续过滑块时）
     """
     result: Dict[str, object] = {
         "token_ok": False,
         "new_token": None,
+        "device_id": None,
+        "api_mode": None,
         "new_cookies": {},
         "fresh_url": None,
     }
     try:
         deadline = time.monotonic() + _TOKEN_REFETCH_TOTAL_TIMEOUT_SECONDS
-        # Token接口方式跟随系统设置实时生效；首选接口触发风控时，自动切换到
-        # 另一个接口重试一次，与异步 Token 请求路径保持一致。
-        primary_mode = load_token_api_mode_sync(cookie_id)
+        # 网页模式只调用本地网页端接口；远程模式先本地、失败后再远程。
+        configured_mode = load_token_api_mode_sync(cookie_id)
+        remote_fallback_enabled = configured_mode == TOKEN_API_MODE_REMOTE
+
         current_cookies = dict(cookies)
         current_cookies_str = cookies_str
-        primary_response, response_cookies, current_cookies, current_cookies_str = (
-            _request_token_api_with_expiry_retry(
-                cookie_id,
-                primary_mode,
-                current_cookies,
-                current_cookies_str,
-                device_id,
-                deadline,
-            )
-        )
-        result["new_cookies"] = dict(response_cookies)
-        final_response = primary_response
-
-        captcha_reason = get_token_captcha_reason(primary_response)
-        if captcha_reason:
-            fallback_mode = get_alternate_token_api_mode(primary_mode)
-            logger.warning(
-                f"【{cookie_id}】{get_token_api_mode_label(primary_mode)}触发风控"
-                f"（{captcha_reason}），重取链接时自动切换到"
-                f"{get_token_api_mode_label(fallback_mode)}重试"
-            )
-            try:
-                (
-                    fallback_response,
-                    fallback_cookies,
-                    current_cookies,
-                    current_cookies_str,
-                ) = _request_token_api_with_expiry_retry(
+        try:
+            primary_response, response_cookies, current_cookies, current_cookies_str = (
+                _request_token_api_with_expiry_retry(
                     cookie_id,
-                    fallback_mode,
+                    TOKEN_API_MODE_WEB,
                     current_cookies,
                     current_cookies_str,
                     device_id,
                     deadline,
                 )
-                merged_new_cookies = dict(result.get("new_cookies") or {})
-                merged_new_cookies.update(fallback_cookies)
-                result["new_cookies"] = merged_new_cookies
-
-                # 备用接口只有在拿到 Token 或有效验证链接时才覆盖首选接口结果；
-                # 其他失败保留首选接口的可处理滑块链接。
-                if extract_im_access_token(fallback_response) or extract_token_captcha_url(
-                    fallback_response
-                ):
-                    final_response = fallback_response
-            except Exception as fallback_error:
-                logger.warning(
-                    f"【{cookie_id}】备用Token接口请求失败，继续使用首选接口验证链接: "
-                    f"{fallback_error}"
+            )
+        except Exception as local_error:
+            if remote_fallback_enabled:
+                remaining_seconds = max(0.1, deadline - time.monotonic())
+                _try_remote_token_fallback(
+                    cookie_id,
+                    result,
+                    cookies_str=cookies_str,
+                    timeout_seconds=remaining_seconds,
+                    local_failure_reason=(
+                        f"请求异常：{type(local_error).__name__}: {local_error}"
+                    ),
                 )
-
-        new_token = extract_im_access_token(final_response)
+            return result
+        result["new_cookies"] = dict(response_cookies)
+        new_token = extract_im_access_token(primary_response)
         if new_token:
             logger.info(
                 f"【{cookie_id}】重新请求 token 已成功（风控已解除），无需滑块验证"
@@ -312,7 +388,18 @@ def request_fresh_captcha_url(
             result["new_token"] = new_token
             return result
 
-        new_url = extract_token_captcha_url(final_response)
+        if remote_fallback_enabled:
+            remaining_seconds = max(0.1, deadline - time.monotonic())
+            if _try_remote_token_fallback(
+                cookie_id,
+                result,
+                cookies_str=cookies_str,
+                timeout_seconds=remaining_seconds,
+                local_failure_reason="未返回有效Token",
+            ):
+                return result
+
+        new_url = extract_token_captcha_url(primary_response)
         if new_url:
             logger.info(f"【{cookie_id}】已获取新鲜验证链接")
             result["fresh_url"] = new_url
