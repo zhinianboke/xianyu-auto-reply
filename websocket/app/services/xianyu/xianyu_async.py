@@ -713,6 +713,19 @@ class XianyuAsync:
                     item_id = parsed_message.get("item_id", "")
                     send_user_id = parsed_message.get("send_user_id", "")
                     msg_time = parsed_message.get("msg_time", "")
+
+                    # The phase-one bridge is strictly mirror-only. It runs in
+                    # the background so a slow private HTTP peer never blocks
+                    # the platform WebSocket or changes existing reply logic.
+                    try:
+                        from app.services.integrations.dropship_bridge import dropship_bridge
+                        asyncio.create_task(dropship_bridge.publish_message(
+                            self.cookie_id,
+                            getattr(self, "myid", self.cookie_id),
+                            parsed_message,
+                        ))
+                    except Exception as bridge_error:
+                        logger.warning(f"【{self.cookie_id}】闲鱼分销消息桥接初始化失败: {type(bridge_error).__name__}")
                     
                     # 0. 检查是否是自己发出的消息，且包含重发货触发关键字
                     myid = getattr(self, 'myid', self.cookie_id)

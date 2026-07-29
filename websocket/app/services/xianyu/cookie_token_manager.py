@@ -1161,6 +1161,15 @@ class CookieTokenManager:
                             from common.db.compat import db_manager
                             db_manager.disable_account(self.cookie_id, reason="账号已掉线且未配置账号密码，自动禁用")
                             logger.warning(f"【{self.cookie_id}】账号已自动禁用")
+                            try:
+                                from app.services.integrations.dropship_bridge import dropship_bridge
+                                asyncio.create_task(
+                                    dropship_bridge.publish_account_stop(self.cookie_id, "cookie_expired")
+                                )
+                            except Exception as bridge_error:
+                                logger.warning(
+                                    f"【{self.cookie_id}】Cookie失效状态桥接初始化失败: {type(bridge_error).__name__}"
+                                )
                         except Exception as disable_e:
                             logger.error(f"【{self.cookie_id}】自动禁用账号失败: {self._safe_str(disable_e)}")
 
