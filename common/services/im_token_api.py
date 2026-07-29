@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, replace
 from typing import Any
@@ -36,6 +37,10 @@ from common.utils.xianyu_utils import generate_sign, trans_cookies
 
 IM_TOKEN_API_BASE_URL = "https://h5api.m.goofish.com/h5"
 REMOTE_FALLBACK_EVENT_DESCRIPTION = "本地网页Token接口获取失败后调用远程接口"
+# 远程接口取 Token 超时时的最大尝试次数（首次 + 重试 2 次）；全部超时后才交由上层处理滑块
+REMOTE_TOKEN_TIMEOUT_MAX_ATTEMPTS = 3
+# 远程接口超时重试之间的等待秒数
+REMOTE_TOKEN_TIMEOUT_RETRY_DELAY_SECONDS = 1.0
 
 
 def build_im_token_api_url(api_mode: str = DEFAULT_TOKEN_API_MODE) -> str:
@@ -259,33 +264,64 @@ async def _request_remote_token_from_settings(
 ) -> ImTokenApiResult:
     """调用远程 Token 接口并记录完整的风控日志。
 
+    远程接口请求超时（asyncio.TimeoutError）时，最多尝试
+    ``REMOTE_TOKEN_TIMEOUT_MAX_ATTEMPTS`` 次（首次 + 重试 2 次）；
+    连续全部超时才向调用方抛出，由上层回退逻辑继续处理滑块。
+    非超时异常（如连接、SSL、解析错误）不重试，直接抛出。
+
     Args:
         device_id: 当前账号的设备 ID。
         cookies: 当前账号完整 Cookie 字符串，传给远程接口 data.cookies。
-        timeout_seconds: HTTP 请求总超时时间。
+        timeout_seconds: 单次 HTTP 请求总超时时间。
         log_tag: 账号标识，用于日志定位。
         event_description: 风控日志事件说明。
     Returns:
         统一的 Token 接口响应结果。
     Raises:
-        Exception: 远程请求发生网络或解析异常时向调用方抛出。
+        Exception: 远程请求连续超时，或发生非超时异常时向调用方抛出。
     """
     prefix = f"【{log_tag}】" if log_tag else ""
-    try:
-        remote_result = await request_remote_xianyu_token_from_settings(
-            cookies=cookies,
-            timeout_seconds=timeout_seconds,
-        )
-    except Exception as exc:
-        message = f"{type(exc).__name__}: {exc}"
-        logger.warning(f"{prefix}远程接口取Token异常: {message}")
-        await record_remote_token_risk_log(
-            account_identifier=log_tag,
-            success=False,
-            message=message,
-            event_description=event_description,
-        )
-        raise
+    remote_result = None
+    for attempt in range(1, REMOTE_TOKEN_TIMEOUT_MAX_ATTEMPTS + 1):
+        try:
+            remote_result = await request_remote_xianyu_token_from_settings(
+                cookies=cookies,
+                timeout_seconds=timeout_seconds,
+            )
+            break
+        except asyncio.TimeoutError as exc:
+            # 仅「超时」才重试；其余异常走下面的分支，不重试
+            message = f"{type(exc).__name__}: {exc}"
+            if attempt < REMOTE_TOKEN_TIMEOUT_MAX_ATTEMPTS:
+                logger.warning(
+                    f"{prefix}远程接口取Token超时（第{attempt}/"
+                    f"{REMOTE_TOKEN_TIMEOUT_MAX_ATTEMPTS}次），"
+                    f"{REMOTE_TOKEN_TIMEOUT_RETRY_DELAY_SECONDS}秒后重试: {message}"
+                )
+                await asyncio.sleep(REMOTE_TOKEN_TIMEOUT_RETRY_DELAY_SECONDS)
+                continue
+            # 最后一次仍超时：记录风控日志并抛出，交由上层处理滑块
+            logger.warning(
+                f"{prefix}远程接口取Token连续{REMOTE_TOKEN_TIMEOUT_MAX_ATTEMPTS}次超时，"
+                "放弃远程接口，交由上层继续处理滑块"
+            )
+            await record_remote_token_risk_log(
+                account_identifier=log_tag,
+                success=False,
+                message=f"连续{REMOTE_TOKEN_TIMEOUT_MAX_ATTEMPTS}次超时: {message}",
+                event_description=event_description,
+            )
+            raise
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            logger.warning(f"{prefix}远程接口取Token异常: {message}")
+            await record_remote_token_risk_log(
+                account_identifier=log_tag,
+                success=False,
+                message=message,
+                event_description=event_description,
+            )
+            raise
 
     if remote_result.success:
         logger.info(

@@ -924,9 +924,19 @@ class OrderService:
                     XYOrder.order_no.in_(unique_order_nos)
                 )
                 existing_result = await self.session.execute(existing_stmt)
+                existing_orders = existing_result.scalars().all()
+                # 关键：把批量预加载的订单对象脱离 session（expunge）。
+                # 本页会对多条订单依次调用 _upsert_order，其中任一订单触发 rollback
+                # （如并发插入命中唯一约束）都会让本 session 内所有对象过期；此后再读取
+                # existing.status 等列属性会触发同步刷新 IO，在异步 session 下抛出
+                # "greenlet_spawn has not been called" 并导致本页后续订单连环失败。
+                # 脱离 session 后这些对象仍保留已加载的列值，rollback 不再影响它们；
+                # 更新走 update().where(id==...) 的 Core 语句，也不依赖对象是否在 session 中。
+                for existing_order in existing_orders:
+                    self.session.expunge(existing_order)
                 existing_orders_map = {
                     existing.order_no: existing
-                    for existing in existing_result.scalars().all()
+                    for existing in existing_orders
                 }
 
             page_all_existing = (
