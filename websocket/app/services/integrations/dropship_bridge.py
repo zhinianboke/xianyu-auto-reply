@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections import Counter
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -13,6 +15,24 @@ from app.core.config import get_settings
 
 class DropshipBridge:
     """Mirror buyer messages and account stops without exposing a send action."""
+
+    def __init__(self) -> None:
+        # Diagnostics deliberately contain no buyer, message, image, cookie, or
+        # endpoint data. They make the private pilot observable without logs.
+        self._attempts: Counter[str] = Counter()
+        self._delivered: Counter[str] = Counter()
+        self._skipped: Counter[str] = Counter()
+        self._failed: Counter[str] = Counter()
+        self._last_delivery_at: datetime | None = None
+
+    def delivery_status(self) -> dict[str, Any]:
+        return {
+            "attempts": dict(self._attempts),
+            "delivered": dict(self._delivered),
+            "skipped": dict(self._skipped),
+            "failed": dict(self._failed),
+            "last_delivery_at": self._last_delivery_at.isoformat() if self._last_delivery_at else None,
+        }
 
     @staticmethod
     def _account_refs(raw_mapping: str) -> dict[str, str]:
@@ -37,14 +57,20 @@ class DropshipBridge:
     async def _post(self, payload: dict[str, Any]) -> bool:
         settings = get_settings()
         endpoint = settings.dropship_webhook_url.strip()
+        kind = str(payload.get("kind") or "unknown")
         if not endpoint:
+            self._skipped[f"{kind}:webhook_unconfigured"] += 1
             return False
+        self._attempts[kind] += 1
         try:
             async with httpx.AsyncClient(timeout=settings.dropship_bridge_timeout_seconds) as client:
                 response = await client.post(endpoint, json=payload)
                 response.raise_for_status()
+            self._delivered[kind] += 1
+            self._last_delivery_at = datetime.now(timezone.utc)
             return True
         except httpx.HTTPError as exc:
+            self._failed[f"{kind}:{type(exc).__name__}"] += 1
             # Never log chat contents, image links, cookies, or the endpoint.
             logger.warning("xianyu-dropship bridge delivery failed: {}", type(exc).__name__)
             return False
@@ -60,8 +86,10 @@ class DropshipBridge:
         sender_id = parsed_message.get("send_user_id")
         conversation_id = parsed_message.get("chat_id")
         if not account_ref or not isinstance(message_id, str) or not message_id:
+            self._skipped["message:missing_mapping_or_id"] += 1
             return False
         if sender_id == own_user_id or not isinstance(conversation_id, str) or not conversation_id:
+            self._skipped["message:own_or_missing_conversation"] += 1
             return False
 
         image_urls = parsed_message.get("image_urls")

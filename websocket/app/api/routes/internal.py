@@ -814,6 +814,18 @@ async def get_connection_stats():
         }
 
 
+@router.get("/integrations/dropship/status")
+async def get_dropship_bridge_status():
+    """Safe bridge counters for the firewall-only phase-one integration."""
+    from app.services.integrations.dropship_bridge import dropship_bridge
+
+    return {
+        "success": True,
+        "code": 200,
+        "data": dropship_bridge.delivery_status(),
+    }
+
+
 @router.get("/accounts/{account_id}/status")
 async def get_account_status(account_id: str):
     """
