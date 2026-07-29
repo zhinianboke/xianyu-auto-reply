@@ -24,6 +24,7 @@ from . import (
     card_dock,
     data_analysis,
     distribution,
+    dropship_chat,
     dropship_market,
     chat_new,
     chat_new_ws,
@@ -172,6 +173,7 @@ api_router.include_router(data_analysis.router, tags=["数据分析"])  # 已定
 
 # Goofish相关
 api_router.include_router(goofish_compass.router, tags=["Goofish数据罗盘"])  # 已定义prefix="/compass/goofish"
+api_router.include_router(dropship_chat.router, tags=["Dropship integration"])
 api_router.include_router(dropship_market.router, tags=["Dropship integration"])
 api_router.include_router(goofish_crawler.router, tags=["Goofish定时采集"])  # 已定义prefix="/goofish/crawler"
 

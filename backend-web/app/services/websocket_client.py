@@ -119,8 +119,9 @@ class WebSocketServiceClient:
         try:
             response = await self.http_client.post(url, json={
                 "chat_id": chat_id,
-                "content": content,
-                "message_type": message_type
+                # The internal websocket contract accepts `message`; keep the
+                # public helper signature stable for its existing callers.
+                "message": content,
             })
             return response
         except Exception as e:
