@@ -23,19 +23,26 @@ from sqlalchemy import text
 from app.services.websocket_client import websocket_client
 from common.db.session import async_session_maker
 from common.utils.cookie_refresh import (
-    extract_cookies_from_response,
     merge_cookies,
     update_account_cookies_in_db,
+)
+from common.services.captcha.token_response import is_token_expired_response
+from common.services.im_token_api import (
+    extract_im_access_token,
+    request_im_token_with_fallback,
 )
 from common.services.token_renewal_cache_service import (
     mark_token_cache_expired,
     upsert_token_cache,
 )
+from common.services.token_api_mode import (
+    get_token_api_mode_label,
+    load_token_api_mode,
+)
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.xianyu_utils import (
     generate_device_id,
     generate_mid,
-    generate_sign,
     generate_uuid,
     trans_cookies,
 )
@@ -43,8 +50,6 @@ from common.utils.xianyu_utils import (
 
 # WebSocket连接地址
 WS_URL = "wss://wss-goofish.dingtalk.com/"
-# IM Token获取地址
-TOKEN_API_URL = "https://h5api.m.goofish.com/h5/mtop.taobao.idlemessage.pc.login.token/1.0/"
 # 请求超时（秒）
 REQUEST_TIMEOUT = 20
 # 心跳间隔（秒）
@@ -625,74 +630,47 @@ class GoofishImClient:
             _captcha_retry: 过滑块内部重试计数，外部不需要传
         """
         try:
-            timestamp = str(int(time.time() * 1000))
-            data_val = json.dumps(
-                {
-                    "appKey": "444e9908a51d1cb236a27862abc769c9",
-                    "deviceId": self.device_id,
-                },
-                separators=(",", ":"),
+            # Token 接口方式实时查库，确保系统设置修改后无需重启即可生效。
+            api_mode = await load_token_api_mode(self.account_id)
+            logger.info(
+                f"【{self.account_id}】获取IM Token，使用{get_token_api_mode_label(api_mode)}"
             )
+            api_result = await request_im_token_with_fallback(
+                self.cookies_str,
+                self.device_id,
+                api_mode=api_mode,
+                timeout_seconds=REQUEST_TIMEOUT,
+                log_tag=self.account_id,
+            )
+            if api_result.device_id and api_result.device_id != self.device_id:
+                self.device_id = api_result.device_id
+                logger.info(f"【{self.account_id}】已更新远程接口返回的Device ID")
+            result = api_result.response_json
 
-            token_part = self.cookies.get("_m_h5_tk", "").split("_")[0]
-            sign = generate_sign(timestamp, token_part, data_val)
-
-            params = {
-                "jsv": "2.7.2",
-                "appKey": "34839810",
-                "t": timestamp,
-                "sign": sign,
-                "v": "1.0",
-                "type": "originaljson",
-                "accountSite": "xianyu",
-                "dataType": "json",
-                "timeout": "20000",
-                "api": "mtop.taobao.idlemessage.pc.login.token",
-                "sessionOption": "AutoLoginOnly",
-                "spm_cnt": "a21ybx.im.0.0",
-                "spm_pre": "a21ybx.home.sidebar.1.4c053da6vYwnmf",
-                "log_id": "4c053da6vYwnmf",
-            }
-
-            headers = {
-                "accept": "application/json",
-                "content-type": "application/x-www-form-urlencoded",
-                "cookie": self.cookies_str,
-                "referer": "https://www.goofish.com/",
-                "origin": "https://www.goofish.com",
-                "user-agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/146.0.0.0 Safari/537.36"
-                ),
-            }
-
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    TOKEN_API_URL,
-                    params=params,
-                    data={"data": data_val},
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
-                ) as resp:
-                    result = await resp.json(content_type=None)
-
-                    # ---- 先提取响应中的 Set-Cookie 增量更新 ----
-                    new_cookies = extract_cookies_from_response(resp)
-                    if new_cookies:
-                        merged_str = merge_cookies(self.cookies_str, new_cookies)
-                        self.cookies_str = merged_str
-                        self.cookies = trans_cookies(merged_str)
-                        await update_account_cookies_in_db(self.account_id, merged_str)
-                        logger.info(
-                            f"【{self.account_id}】已从Set-Cookie合并 {len(new_cookies)} 个Cookie字段并更新到数据库"
-                        )
+            # Token 接口下发的 Cookie 统一写回账号。
+            new_cookies = api_result.response_cookies
+            if new_cookies:
+                merged_str = merge_cookies(self.cookies_str, new_cookies)
+                self.cookies_str = merged_str
+                self.cookies = trans_cookies(merged_str)
+                cookie_saved = await update_account_cookies_in_db(
+                    self.account_id,
+                    merged_str,
+                )
+                if cookie_saved:
+                    logger.info(
+                        f"【{self.account_id}】已合并Token接口下发的 "
+                        f"{len(new_cookies)} 个Cookie字段并更新到数据库"
+                    )
+                else:
+                    logger.error(
+                        f"【{self.account_id}】Token接口下发的Cookie写回数据库失败"
+                    )
 
             # 检查令牌过期，使用新Cookie重试（最多1次）
             ret = result.get("ret", [])
             ret_str = str(ret)
-            if ("令牌过期" in ret_str or "FAIL_SYS_TOKEN_EXOIRED" in ret_str
-                    or "FAIL_SYS_TOKEN_EXPIRED" in ret_str):
+            if is_token_expired_response(result):
                 if _retry < 1:
                     logger.warning(
                         f"【{self.account_id}】令牌过期，已更新Cookie，准备重试获取Token（第{_retry + 1}次）"
@@ -733,7 +711,7 @@ class GoofishImClient:
                     _retry=_retry, _captcha_retry=_captcha_retry + 1
                 )
 
-            access_token = result.get("data", {}).get("accessToken", "")
+            access_token = extract_im_access_token(result) or ""
             if not access_token:
                 logger.error(
                     f"【{self.account_id}】Token响应异常: "

@@ -2546,6 +2546,7 @@ class XianyuAsync:
                                 'failed_captcha_max_retries',
                                 'skipped_cooldown',
                                 'skipped_local_slider_disabled',
+                                'skipped_local_slider_config_unavailable',
                                 'skipped_risk_control_processing',
                                 'skipped_risk_control_check_failed',
                                 'skipped_startup_cache_lookup_failed',
@@ -2584,13 +2585,14 @@ class XianyuAsync:
                             #   该状态属于确定性可恢复但短期内无法自愈（账密错误冷却 5 小时 /
                             #   上次登录间隔 300 秒未到），每 5 秒重试无意义且会刷屏日志、
                             #   占用 token API 配额。
-                            # - 本机滑块不处理且无缓存：等待 Cookie 刷新的 3 分钟轮询周期。
+                            # - 本机滑块不处理且接口最终仍需滑块：等待 Cookie 刷新的 3 分钟轮询周期。
                             # - 其他场景（滑块、网络故障、API 业务失败）：保持 5 秒快速重试，
                             #   避免延误账号恢复。
                             if refresh_status == 'skipped_cooldown':
                                 sleep_duration = 300
                             elif refresh_status in (
                                 'skipped_local_slider_disabled',
+                                'skipped_local_slider_config_unavailable',
                                 'skipped_risk_control_processing',
                                 'skipped_risk_control_check_failed',
                                 'skipped_startup_cache_lookup_failed',

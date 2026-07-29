@@ -24,6 +24,7 @@ from common.utils.notification_utils import (
     send_telegram_notification,
     send_pushplus_notification
 )
+from common.services.token_api_mode import TOKEN_API_NAMES
 from common.utils.text_utils import safe_str
 
 
@@ -325,7 +326,8 @@ class NotificationManager:
             'Token定时刷新失败', 'token定时刷新失败', 'TOKEN定时刷新失败',
             '初始化时无法获取有效Token', '初始化时无法获取有效token',
             'accessToken', 'access_token', '_m_h5_tk',
-            'mtop.taobao.idlemessage.pc.login.token'
+            # 识别内置网页 Token 接口名，避免接口报错漏判
+            *TOKEN_API_NAMES.values(),
         ]
 
         error_message_lower = error_message.lower()

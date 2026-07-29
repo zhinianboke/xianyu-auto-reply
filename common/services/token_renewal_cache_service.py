@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import or_, update
 from sqlalchemy.dialects.mysql import insert
@@ -22,6 +22,18 @@ from common.utils.time_utils import get_beijing_now_naive, random_token_cache_ex
 
 DEFAULT_DB_MAX_ATTEMPTS = 3
 DEFAULT_DB_RETRY_DELAY_SECONDS = 0.5
+TOKEN_RENEWAL_LOOKAHEAD = timedelta(hours=1)
+
+
+def get_token_renewal_cutoff(reference_time: datetime | None = None) -> datetime:
+    """计算 Token 续期候选截止时间。
+
+    Args:
+        reference_time: 参考时间，默认为当前北京时间。
+    Returns:
+        参考时间后 1 小时，用于选取即将到期的 Token。
+    """
+    return (reference_time or get_beijing_now_naive()) + TOKEN_RENEWAL_LOOKAHEAD
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,7 +226,7 @@ async def write_renewed_token_cache(
         token_user_id: Token 缓存用户 ID。
         device_id: 当前缓存绑定的 Device ID。
         token: 新获取的 IM Token。
-        checked_at: 判定原缓存已失效的时间，默认当前北京时间。
+        checked_at: 续期候选截止时间，默认为当前北京时间后 1 小时。
         max_attempts: 数据库写入最大尝试次数。
         retry_delay_seconds: 相邻重试之间的等待秒数。
     Returns:
@@ -224,7 +236,7 @@ async def write_renewed_token_cache(
         return TokenRenewalCacheWriteResult(False, message="Token缓存写入失败：新Token为空")
 
     renew_expire_at, ttl_hours = random_token_cache_expiry()
-    checked_time = checked_at or get_beijing_now_naive()
+    checked_time = checked_at or get_token_renewal_cutoff()
     attempts = max(1, int(max_attempts))
     last_error = ""
     for attempt in range(1, attempts + 1):

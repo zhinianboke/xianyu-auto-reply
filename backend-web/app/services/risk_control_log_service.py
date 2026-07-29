@@ -228,6 +228,7 @@ class RiskControlLogService:
         day_filters = [
             XYRiskControlLog.created_at >= start_dt,
             XYRiskControlLog.created_at <= end_dt,
+            XYRiskControlLog.event_type == "slider_captcha",
         ]
         if owner_id is not None:
             day_filters.append(XYRiskControlLog.owner_id == owner_id)

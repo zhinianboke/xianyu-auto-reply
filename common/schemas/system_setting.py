@@ -7,3 +7,8 @@ class SystemSettingUpdate(BaseModel):
     value: str
     description: str | None = None
 
+
+class RemoteTokenTestRequest(BaseModel):
+    remote_url: str
+    remote_secret_key: str
+

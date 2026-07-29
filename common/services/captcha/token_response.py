@@ -1,13 +1,15 @@
 """
-Token 接口滑块响应判断工具。
+Token 接口响应判断工具。
 
 功能：
 1. 统一判断 refresh_token 与定时 Token 续期的滑块触发场景
 2. 提取 Token 响应中的 punish 验证链接
 3. 返回命中的风控原因，便于调用方记录明确日志
+4. 统一判断 mtop 令牌过期（_m_h5_tk 失效），供各取 Token 路径共用
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 
@@ -20,6 +22,13 @@ TOKEN_CAPTCHA_KEYWORDS = (
     "请稍后重试",
     "punish?x5secdata",
     "captcha",
+)
+
+# mtop 令牌（_m_h5_tk）过期的错误标识，两种 Token 接口返回一致
+TOKEN_EXPIRED_KEYWORDS = (
+    "FAIL_SYS_TOKEN_EXOIRED",
+    "FAIL_SYS_TOKEN_EXPIRED",
+    "令牌过期",
 )
 
 
@@ -59,3 +68,21 @@ def get_token_captcha_reason(response_json: Any) -> str | None:
 def is_token_captcha_required(response_json: Any) -> bool:
     """判断 Token 响应是否需要滑块验证。"""
     return get_token_captcha_reason(response_json) is not None
+
+
+def is_token_expired_response(response_json: Any) -> bool:
+    """判断 Token 响应是否为 mtop 令牌（_m_h5_tk）过期。
+
+    令牌过期是可自愈状态：接口会通过 Set-Cookie 下发新的 _m_h5_tk，
+    调用方合并 Cookie 后重试即可成功，无需走滑块或密码登录。
+
+    Args:
+        response_json: Token 接口返回的 JSON 数据。
+    Returns:
+        令牌过期返回 True，否则返回 False。
+    """
+    if not isinstance(response_json, dict):
+        return False
+    ret_value = response_json.get("ret", []) or []
+    ret_text = json.dumps(ret_value, ensure_ascii=False)
+    return any(keyword in ret_text for keyword in TOKEN_EXPIRED_KEYWORDS)

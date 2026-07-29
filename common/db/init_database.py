@@ -172,12 +172,17 @@ class DatabaseInitializer:
         (
             "captcha.local_slider_disabled",
             "false",
-            "本机滑块是否停止处理并仅使用Token缓存",
+            "本机是否停止处理滑块；缓存缺失时仍请求Token接口",
         ),
         (
             "captcha.slider_mode",
             "browser",
             "滑块滑动方式：browser/real_mouse",
+        ),
+        (
+            "token.api_mode",
+            "web",
+            "Token获取方式：web-网页接口/remote-远程接口",
         ),
         (
             "captcha.remote_processing_max",
@@ -277,7 +282,7 @@ class DatabaseInitializer:
             "Token续期任务",
             20,
             True,
-            "定时为已到期的启用账号预取IM Token，并写入续期到期日",
+            "定时为未来1小时内到期的启用账号预取IM Token，并写入续期到期日",
         ),
         (
             "cookies_refresh",

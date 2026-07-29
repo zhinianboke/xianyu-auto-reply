@@ -15,6 +15,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.system_setting import SystemSetting
+from common.services.remote_token_api import (
+    TOKEN_REMOTE_SECRET_KEY_SETTING_KEY,
+    TOKEN_REMOTE_URL_SETTING_KEY,
+)
+from common.services.token_api_mode import (
+    TOKEN_API_MODE_SETTING_KEY,
+    normalize_token_api_mode,
+)
 from common.utils.text_utils import escape_xss
 
 SENSITIVE_KEYS = {"admin_password_hash"}
@@ -66,13 +74,20 @@ DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
     "captcha.real_mouse_weight_local": ("1", "real_mouse过滑块本地排队权重"),
     "captcha.real_mouse_weight_remote": ("1", "real_mouse过滑块远程排队权重"),
     "captcha.block_remote_calls": ("true", "是否禁止外部远程调用backend-web过滑块接口"),
-    "captcha.local_slider_disabled": ("false", "本机滑块是否停止处理并仅使用Token缓存"),
+    "captcha.local_slider_disabled": (
+        "false",
+        "本机是否停止处理滑块；缓存缺失时仍请求Token接口",
+    ),
     "captcha.remote_processing_max": ("20", "远程调用允许的最大处理中滑块日志数，0=不限制"),
     "captcha.remote_cooldown_seconds": ("600", "远程调用达到处理中上限后的冷却秒数，0=不冷却"),
     "captcha.remote_cooldown_until": ("0", "远程过滑块调用冷却截止时间戳"),
     "captcha.slider_mode": ("browser", "滑块滑动方式：browser/real_mouse"),
     # 账号密码登录模式：protocol-协议登录 / browser-浏览器登录
     "password_login.mode": ("browser", "账号密码登录模式：protocol/browser"),
+    # Token获取方式：web-网页接口 / remote-远程接口
+    "token.api_mode": ("web", "Token获取方式：web-网页接口/remote-远程接口"),
+    "token.remote_url": ("", "Token远程接口URL"),
+    "token.remote_secret_key": ("", "Token远程接口秘钥"),
 }
 
 # 不需要XSS转义的键（布尔值、数字等）
@@ -131,6 +146,11 @@ NO_ESCAPE_KEYS = {
     "captcha.real_mouse_weight_remote",
     # 账号密码登录模式：枚举字符串，无需转义
     "password_login.mode",
+    # Token获取方式：枚举字符串，无需转义
+    "token.api_mode",
+    # Token远程接口配置：URL 和秘钥不能被 XSS 转义
+    TOKEN_REMOTE_URL_SETTING_KEY,
+    TOKEN_REMOTE_SECRET_KEY_SETTING_KEY,
 }
 
 
@@ -175,6 +195,10 @@ class SystemSettingService:
         slider_mode = str(settings.get("captcha.slider_mode") or "").strip().lower()
         settings["captcha.slider_mode"] = (
             slider_mode if slider_mode in {"browser", "real_mouse"} else "browser"
+        )
+        # Token获取方式：非法值统一回落到默认的网页接口
+        settings[TOKEN_API_MODE_SETTING_KEY] = normalize_token_api_mode(
+            settings.get(TOKEN_API_MODE_SETTING_KEY)
         )
         return settings
 

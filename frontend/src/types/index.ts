@@ -233,6 +233,7 @@ export interface ThemeFontSettings {
 export type ThemeSettings = ThemeAppearanceSettings & ThemeFontSettings
 export type PasswordLoginMode = 'protocol' | 'browser'
 export type SliderMode = 'browser' | 'real_mouse'
+export type TokenApiMode = 'web' | 'remote'
 
 export interface SystemSettings {
   ai_model?: string
@@ -283,6 +284,10 @@ export interface SystemSettings {
   // 账号密码登录方式
   'password_login.mode'?: PasswordLoginMode
   'captcha.slider_mode'?: SliderMode
+  // Token获取方式
+  'token.api_mode'?: TokenApiMode
+  'token.remote_url'?: string
+  'token.remote_secret_key'?: string
   // 代理设置
   'proxy.api_url'?: string
   'proxy.enabled'?: boolean

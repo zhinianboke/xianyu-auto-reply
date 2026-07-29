@@ -2,7 +2,7 @@
 IM Token 续期定时任务。
 
 功能：
-1. 查询启用账号中两个到期日均失效且无处理中风控日志的 Token 缓存
+1. 查询启用账号中未来 1 小时内到期且无处理中风控日志的 Token 缓存
 2. 使用缓存表已有 Device ID 请求最新 Token
 3. 接口下发的 Set-Cookie（如新 _m_h5_tk）合并写回账号，令牌过期时重试一次
 4. 命中“挤爆了”等风控响应时调用 WebSocket 滑块，合并新 Cookie 后重试获取 Token
@@ -28,9 +28,22 @@ from common.models.scheduled_token_renewal_log import ScheduledTokenRenewalLog
 from common.models.token_cache import TokenCache
 from common.models.xy_account import XYAccount
 from common.services.account_cookie_service import merge_account_cookie_fields
-from common.services.captcha.token_response import is_token_captcha_required
-from common.services.im_token_api import extract_im_access_token, request_im_token
-from common.services.token_renewal_cache_service import write_renewed_token_cache
+from common.services.captcha.token_response import (
+    is_token_captcha_required,
+    is_token_expired_response,
+)
+from common.services.im_token_api import (
+    extract_im_access_token,
+    request_im_token_with_fallback,
+)
+from common.services.token_api_mode import (
+    get_token_api_mode_label,
+    load_token_api_mode,
+)
+from common.services.token_renewal_cache_service import (
+    get_token_renewal_cutoff,
+    write_renewed_token_cache,
+)
 from common.utils.time_utils import get_beijing_now_naive
 
 from app.core.config import get_settings
@@ -62,7 +75,7 @@ class TokenRenewalResult:
 
 
 class TokenRenewalTask:
-    """为已到期 Token 缓存预取下一枚 Token。"""
+    """为未来 1 小时内到期的 Token 缓存预取下一枚 Token。"""
 
     def __init__(self, max_concurrency: int = TOKEN_RENEWAL_MAX_CONCURRENCY):
         """初始化 Token 续期任务。
@@ -153,8 +166,9 @@ class TokenRenewalTask:
                 )
 
     async def _load_candidates(self) -> list[TokenRenewalCandidate]:
-        """查询可续期且没有任何处理中风控日志的启用账号。"""
+        """查询未来 1 小时内到期且无处理中风控日志的账号。"""
         now = get_beijing_now_naive()
+        renewal_cutoff = get_token_renewal_cutoff(now)
         processing_risk_exists = exists(
             select(XYRiskControlLog.id).where(
                 XYRiskControlLog.account_identifier == XYAccount.account_id,
@@ -176,10 +190,10 @@ class TokenRenewalTask:
                     .join(XYAccount, XYAccount.unb == TokenCache.user_id)
                     .where(
                         XYAccount.status == "active",
-                        TokenCache.expire_at <= now,
+                        TokenCache.expire_at <= renewal_cutoff,
                         or_(
                             TokenCache.renew_expire_at.is_(None),
-                            TokenCache.renew_expire_at <= now,
+                            TokenCache.renew_expire_at <= renewal_cutoff,
                         ),
                         ~processing_risk_exists,
                     )
@@ -211,17 +225,8 @@ class TokenRenewalTask:
 
     @staticmethod
     def _is_token_expired_response(response_json: Any) -> bool:
-        """判断接口响应是否为 mtop 令牌过期（_m_h5_tk 失效）。
-
-        Args:
-            response_json: IM Token API 返回的 JSON 数据。
-        Returns:
-            令牌过期返回 True，否则返回 False。
-        """
-        if not isinstance(response_json, dict):
-            return False
-        ret_str = json.dumps(response_json.get("ret", []) or [], ensure_ascii=False)
-        return "FAIL_SYS_TOKEN_EXOIRED" in ret_str or "FAIL_SYS_TOKEN_EXPIRED" in ret_str
+        """判断接口响应是否为 mtop 令牌过期（_m_h5_tk 失效）。"""
+        return is_token_expired_response(response_json)
 
     @staticmethod
     def _is_captcha_required_response(response_json: Any) -> bool:
@@ -272,9 +277,20 @@ class TokenRenewalTask:
             token_expired_retries = 0
             captcha_retries = 0
             failure_message: str | None = None
+            # Token接口方式每次实时查库，系统设置修改后无需重启即可生效
+            api_mode = await load_token_api_mode(candidate.account_id)
+            logger.info(
+                f"【{self.task_name}】【{candidate.account_id}】Token续期使用"
+                f"{get_token_api_mode_label(api_mode)}"
+            )
             while True:
                 try:
-                    result = await request_im_token(cookies_str, candidate.device_id)
+                    result = await request_im_token_with_fallback(
+                        cookies_str,
+                        candidate.device_id,
+                        api_mode=api_mode,
+                        log_tag=candidate.account_id,
+                    )
                 except asyncio.TimeoutError:
                     logger.error(f"【{self.task_name}】【{candidate.account_id}】请求超时")
                     return self._failed_result(candidate, "Token接口请求超时")
@@ -375,7 +391,7 @@ class TokenRenewalTask:
             cache_write = await write_renewed_token_cache(
                 cache_id=candidate.cache_id,
                 token_user_id=candidate.user_id,
-                device_id=candidate.device_id,
+                device_id=result.device_id or candidate.device_id,
                 token=new_token,
             )
             if not cache_write.success:
