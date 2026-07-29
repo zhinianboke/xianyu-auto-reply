@@ -1863,6 +1863,7 @@ class AutoDeliveryHandler:
                 'card_api_config': card.get('api_config'),
                 'card_delay_seconds': card.get('delay_seconds', 0),
                 'card_description': card.get('description'),
+                'item_title': card.get('item_title'),
                 'is_multi_spec': card.get('is_multi_spec', False),
                 'spec_name': card.get('spec_name'),
                 'spec_value': card.get('spec_value'),
@@ -2020,7 +2021,20 @@ class AutoDeliveryHandler:
                 # 根据卡券类型处理发货内容
                 if rule['card_type'] == 'api':
                     # API类型：调用API获取内容，传入订单和商品信息用于动态参数替换
-                    text_content = await self._get_api_card_content(rule, order_id, item_id, send_user_id, spec_name, spec_value, chat_id=chat_id, send_user_name=send_user_name)
+                    api_item_title = item_title or ''
+                    if api_item_title == '待获取商品信息':
+                        api_item_title = rule.get('item_title') or ''
+                    text_content = await self._get_api_card_content(
+                        rule,
+                        order_id,
+                        item_id,
+                        send_user_id,
+                        spec_name,
+                        spec_value,
+                        chat_id=chat_id,
+                        send_user_name=send_user_name,
+                        item_title=api_item_title,
+                    )
                     if text_content is None:
                         self._last_delivery_fail_reason = f"获取API卡券内容失败: 卡券ID={rule['card_id']}, 名称={rule['card_name']}"
                         logger.warning(self._last_delivery_fail_reason)
@@ -2059,6 +2073,8 @@ class AutoDeliveryHandler:
                 # 尝试从数据库获取真实商品标题
                 real_item_title = item_title or ''
                 if not real_item_title or real_item_title == '待获取商品信息':
+                    real_item_title = rule.get('item_title') or ''
+                if not real_item_title:
                     try:
                         item_info = db_manager.get_item_info(self.cookie_id, item_id)
                         if item_info:
@@ -2592,7 +2608,7 @@ class AutoDeliveryHandler:
 
     # ==================== API卡券获取 ====================
 
-    async def _get_api_card_content(self, rule, order_id=None, item_id=None, buyer_id=None, spec_name=None, spec_value=None, retry_count=0, chat_id=None, send_user_name=None):
+    async def _get_api_card_content(self, rule, order_id=None, item_id=None, buyer_id=None, spec_name=None, spec_value=None, retry_count=0, chat_id=None, send_user_name=None, item_title=None):
         """调用API获取卡券内容，支持动态参数替换和重试机制"""
         max_retries = 4
 
@@ -2633,7 +2649,17 @@ class AutoDeliveryHandler:
 
             # 如果是POST请求且有动态参数，进行参数替换
             if method == 'POST' and params:
-                params = await self._replace_api_dynamic_params(params, order_id, item_id, buyer_id, spec_name, spec_value, chat_id=chat_id, send_user_name=send_user_name)
+                params = await self._replace_api_dynamic_params(
+                    params,
+                    order_id,
+                    item_id,
+                    buyer_id,
+                    spec_name,
+                    spec_value,
+                    chat_id=chat_id,
+                    send_user_name=send_user_name,
+                    item_title=item_title,
+                )
 
             retry_info = f" (重试 {retry_count + 1}/{max_retries})" if retry_count > 0 else ""
             logger.info(f"调用API获取卡券: {method} {url}{retry_info}")
@@ -2670,7 +2696,7 @@ class AutoDeliveryHandler:
                         wait_time = (retry_count + 1) * 2  # 递增等待时间: 2s, 4s, 6s
                         logger.info(f"等待 {wait_time} 秒后重试...")
                         await asyncio.sleep(wait_time)
-                        return await self._get_api_card_content(rule, order_id, item_id, buyer_id, spec_name, spec_value, retry_count + 1, chat_id=chat_id, send_user_name=send_user_name)
+                        return await self._get_api_card_content(rule, order_id, item_id, buyer_id, spec_name, spec_value, retry_count + 1, chat_id=chat_id, send_user_name=send_user_name, item_title=item_title)
 
                 return None
 
@@ -2682,7 +2708,7 @@ class AutoDeliveryHandler:
                 wait_time = (retry_count + 1) * 2  # 递增等待时间
                 logger.info(f"等待 {wait_time} 秒后重试...")
                 await asyncio.sleep(wait_time)
-                return await self._get_api_card_content(rule, order_id, item_id, buyer_id, spec_name, spec_value, retry_count + 1, chat_id=chat_id, send_user_name=send_user_name)
+                return await self._get_api_card_content(rule, order_id, item_id, buyer_id, spec_name, spec_value, retry_count + 1, chat_id=chat_id, send_user_name=send_user_name, item_title=item_title)
             else:
                 logger.error(f"API调用网络异常，已达到最大重试次数: {self._safe_str(e)}")
                 return None
@@ -2708,7 +2734,7 @@ class AutoDeliveryHandler:
 
     # ==================== API参数替换 ====================
 
-    async def _replace_api_dynamic_params(self, params, order_id=None, item_id=None, buyer_id=None, spec_name=None, spec_value=None, chat_id=None, send_user_name=None):
+    async def _replace_api_dynamic_params(self, params, order_id=None, item_id=None, buyer_id=None, spec_name=None, spec_value=None, chat_id=None, send_user_name=None, item_title=None):
         """替换API请求参数中的动态参数"""
         try:
             if not params or not isinstance(params, dict):
@@ -2753,6 +2779,7 @@ class AutoDeliveryHandler:
             param_mapping = {
                 'order_id': order_id or '',
                 'item_id': item_id or '',
+                'item_title': item_title or '',
                 'buyer_id': buyer_id or '',
                 'cookie_id': self.cookie_id or '',
                 'spec_name': spec_name or '',
@@ -2793,6 +2820,12 @@ class AutoDeliveryHandler:
                 param_mapping.update({
                     'item_detail': item_detail,
                 })
+                if not param_mapping['item_title']:
+                    param_mapping['item_title'] = (
+                        item_info.get('title')
+                        or item_info.get('item_title')
+                        or ''
+                    )
 
             # 递归替换参数
             replaced_params = recursive_replace_params(params, param_mapping)

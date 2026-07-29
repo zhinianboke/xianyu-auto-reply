@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -20,6 +20,7 @@ from app.services.product_publish_service import (
     _comparable_material_titles,
 )
 from common.models.user import UserStatus
+from common.services.card_delivery_content import _build_api_params
 from common.services.card_matcher import CardMatcher
 from common.utils.security import generate_api_key, hash_api_key, mask_api_key
 from common.utils.time_utils import get_beijing_now_naive
@@ -182,6 +183,66 @@ class CardBindingPersistenceTests(unittest.IsolatedAsyncioTestCase):
             session.calls[1][1]["item_title"],
             "【秒发】黄昏远征军",
         )
+
+
+class CardApiDynamicParameterTests(unittest.TestCase):
+    def test_item_title_is_replaced_in_nested_post_params(self):
+        params = {
+            "item_id": "{item_id}",
+            "item_title": "{item_title}",
+            "nested": [{"display_name": "商品：{item_title}"}],
+        }
+
+        result = _build_api_params(
+            params,
+            {
+                "item_id": "1070619749960",
+                "item_title": "【秒发】黄昏远征军",
+            },
+        )
+
+        self.assertEqual(result["item_id"], "1070619749960")
+        self.assertEqual(result["item_title"], "【秒发】黄昏远征军")
+        self.assertEqual(
+            result["nested"][0]["display_name"],
+            "商品：【秒发】黄昏远征军",
+        )
+
+
+class CardRelationItemTitleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_relation_item_title_is_exposed_to_delivery_card(self):
+        card = SimpleNamespace(
+            id=6,
+            user_id=1,
+            item_id=None,
+            name="下载源卡券",
+            type="api",
+            description=None,
+            enabled=True,
+            delay_seconds=0,
+            delivery_count=0,
+            is_multi_spec=False,
+            spec_name=None,
+            spec_value=None,
+            api_config=None,
+            text_content=None,
+            data_content=None,
+            image_url=None,
+            image_urls=None,
+            created_at=None,
+            updated_at=None,
+        )
+        matcher = CardMatcher(SimpleNamespace())
+        matcher._query_cards_with_source = AsyncMock(
+            return_value=[
+                (card, "own", 0, "【秒发】黄昏远征军"),
+            ],
+        )
+
+        cards = await matcher.get_cards_by_item_id("1070619749960")
+
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0]["item_title"], "【秒发】黄昏远征军")
 
 
 class ExternalMaterialDeduplicationTests(unittest.IsolatedAsyncioTestCase):

@@ -68,10 +68,11 @@ class CardMatcher:
         if relation_rows:
             # 关联表有数据：每行转为字典，附带 source 信息
             all_cards = []
-            for card, card_source, dock_record_id in relation_rows:
+            for card, card_source, dock_record_id, item_title in relation_rows:
                 card_dict = self._card_to_dict(card)
                 card_dict["card_source"] = card_source or "own"
                 card_dict["dock_record_id"] = dock_record_id
+                card_dict["item_title"] = item_title or ""
                 all_cards.append(card_dict)
             
             # 规格匹配过滤（对字典列表过滤）
@@ -475,17 +476,22 @@ class CardMatcher:
 
     async def _query_cards_with_source(self, item_id: str) -> List[tuple]:
         """
-        从关联表查询商品关联的启用卡券，同时返回 source 和 dock_record_id。
+        从关联表查询商品关联的启用卡券，同时返回 source、dock_record_id 和商品标题。
         不使用 .scalars() 以避免 SQLAlchemy identity map 去重。
         
         Args:
             item_id: 商品ID
             
         Returns:
-            [(Card, source, dock_record_id), ...] 元组列表
+            [(Card, source, dock_record_id, item_title), ...] 元组列表
         """
         stmt = (
-            select(Card, CardItemRelation.source, CardItemRelation.dock_record_id)
+            select(
+                Card,
+                CardItemRelation.source,
+                CardItemRelation.dock_record_id,
+                CardItemRelation.item_title,
+            )
             .join(
                 CardItemRelation,
                 Card.id == CardItemRelation.card_id,
