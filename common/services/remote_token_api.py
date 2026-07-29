@@ -4,7 +4,7 @@
 功能：
 1. 读取系统设置中的远程 Token 接口地址和接口秘钥
 2. 按约定使用 X-API-Key 请求头调用远程接口
-3. 统一校验远程接口返回的 token、device_id、api_mode 字段
+3. 统一校验远程接口返回的 token、device_id 字段（api_mode 为可选字段，缺失不校验）
 4. 同时提供异步和同步调用入口，供主流程与滑块线程复用
 """
 from __future__ import annotations
@@ -179,14 +179,7 @@ def _parse_remote_token_response(
             status_code=status_code,
             duration_seconds=duration_seconds,
         )
-    if not api_mode:
-        return RemoteTokenResult(
-            success=False,
-            message="远程接口返回成功但缺少api_mode",
-            response_json=response_json,
-            status_code=status_code,
-            duration_seconds=duration_seconds,
-        )
+    # api_mode 为远程接口可选返回字段，缺失时不再校验，保持空字符串由下游兜底展示
 
     return RemoteTokenResult(
         success=True,
