@@ -56,19 +56,6 @@ class WebSocketConfig(BaseConfig):
         alias="BACKEND_WEB_SERVICE_URL"
     )
 
-    # Phase-one private-network bridge to xianyu-dropship. These values carry
-    # no browser credentials. The account reference map is intentionally
-    # opaque and is configured per adapter account, never derived from a
-    # Goofish ID or cookie.
-    dropship_webhook_url: str = Field(default="", alias="DROPSHIP_WEBHOOK_URL")
-    dropship_account_refs_json: str = Field(default="{}", alias="DROPSHIP_ACCOUNT_REFS_JSON")
-    dropship_bridge_timeout_seconds: int = Field(
-        default=5,
-        ge=1,
-        le=30,
-        alias="DROPSHIP_BRIDGE_TIMEOUT_SECONDS",
-    )
-    
     # 静态文件目录（共享）
     static_dir: str = Field(default="static", alias="STATIC_DIR")
 
