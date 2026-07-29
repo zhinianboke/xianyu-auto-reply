@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import secrets
 import string
@@ -56,6 +57,45 @@ def mask_api_key(api_key: str) -> str:
     if len(api_key) <= 12:
         return f"{api_key[:4]}****"
     return f"{api_key[:8]}…{api_key[-4:]}"
+
+
+def _api_key_encryption_key(secret: str) -> bytes:
+    """从服务端稳定密钥派生 API Key 专用的 Fernet 密钥。"""
+    normalized_secret = str(secret or "").strip()
+    if not normalized_secret:
+        raise ValueError("API Key 加密密钥不能为空")
+    digest = hashlib.sha256(
+        b"xianyu-api-key-encryption-v1\0"
+        + normalized_secret.encode("utf-8")
+    ).digest()
+    return base64.urlsafe_b64encode(digest)
+
+
+def encrypt_api_key(api_key: str, secret: str) -> str:
+    """加密保存 API Key 明文，供管理员后续查看。"""
+    from cryptography.fernet import Fernet
+
+    normalized_key = str(api_key or "").strip()
+    if not normalized_key:
+        raise ValueError("API Key 不能为空")
+    return Fernet(_api_key_encryption_key(secret)).encrypt(
+        normalized_key.encode("utf-8")
+    ).decode("ascii")
+
+
+def decrypt_api_key(ciphertext: str, secret: str) -> str:
+    """解密管理员可查看的 API Key；密钥不匹配时返回统一错误。"""
+    from cryptography.fernet import Fernet, InvalidToken
+
+    normalized_ciphertext = str(ciphertext or "").strip()
+    if not normalized_ciphertext:
+        raise ValueError("API Key 密文为空")
+    try:
+        return Fernet(_api_key_encryption_key(secret)).decrypt(
+            normalized_ciphertext.encode("ascii")
+        ).decode("utf-8")
+    except (InvalidToken, UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("API Key 无法解密，请重置后重试") from exc
 
 
 # 已知的弱/占位 JWT 密钥（与 deploy.sh / update.sh 中的 WEAK_JWT_KEYS 保持一致）。

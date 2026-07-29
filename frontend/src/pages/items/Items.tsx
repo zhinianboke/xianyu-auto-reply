@@ -33,6 +33,7 @@ export function Items() {
     totalPages: 0,
   })
   const [itemsLoading, setItemsLoading] = useState(false)
+  const itemsRequestIdRef = useRef(0)
   
   // 筛选状态
   const [filters, setFilters] = useState<ItemFilterParams>({
@@ -122,15 +123,20 @@ export function Items() {
     if (!_hasHydrated || !isAuthenticated || !token) {
       return
     }
+    const requestedAccount = selectedAccount
+    const requestId = ++itemsRequestIdRef.current
     try {
       setItemsLoading(true)
       const trimmedKeyword = currentKeyword.trim()
-      const result = await getItemsPaginated(page, pageSize, selectedAccount || undefined, {
+      const result = await getItemsPaginated(page, pageSize, requestedAccount || undefined, {
         ...currentFilters,
         keyword: trimmedKeyword || null,
       })
+      if (requestId !== itemsRequestIdRef.current) return
       if (result.success) {
-        const nextItems = result.data || []
+        const nextItems = (result.data || []).filter(
+          (item) => !requestedAccount || item.cookie_id === requestedAccount,
+        )
         const visibleIds = new Set(nextItems.map((item) => item.id))
         setItems(nextItems)
         setSelectedIds((previous) => new Set(
@@ -144,10 +150,13 @@ export function Items() {
         })
       }
     } catch {
+      if (requestId !== itemsRequestIdRef.current) return
       addToast({ type: 'error', message: '加载商品列表失败' })
     } finally {
-      setItemsLoading(false)
-      setLoading(false)
+      if (requestId === itemsRequestIdRef.current) {
+        setItemsLoading(false)
+        setLoading(false)
+      }
     }
   }
 
@@ -264,6 +273,8 @@ export function Items() {
 
   useEffect(() => {
     if (!_hasHydrated || !isAuthenticated || !token) return
+    setItems([])
+    setSelectedIds(new Set())
     loadItems(1, pagination.pageSize, filters)
   }, [_hasHydrated, isAuthenticated, token, selectedAccount])
 

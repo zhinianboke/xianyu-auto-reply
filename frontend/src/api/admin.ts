@@ -22,6 +22,7 @@ export interface AdminUserApiItem {
   expire_at?: string | null
   has_api_key?: boolean
   api_key_mask?: string | null
+  api_key_recoverable?: boolean
   api_key_created_at?: string | null
   api_key_last_used_at?: string | null
 }
@@ -63,6 +64,7 @@ const mapAdminUser = (user: AdminUserApiItem): User => ({
   expire_at: user.expire_at,
   has_api_key: user.has_api_key,
   api_key_mask: user.api_key_mask,
+  api_key_recoverable: user.api_key_recoverable,
   api_key_created_at: user.api_key_created_at,
   api_key_last_used_at: user.api_key_last_used_at,
 })
@@ -106,6 +108,18 @@ export interface ResetUserApiKeyResult {
   api_key: string
   api_key_mask: string
   created_at: string
+}
+
+export interface UserApiKeyResult {
+  api_key: string | null
+  api_key_mask: string | null
+  requires_reset: boolean
+}
+
+export const getUserApiKey = (
+  userId: number,
+): Promise<ApiResponse<UserApiKeyResult>> => {
+  return get(`${ADMIN_PREFIX}/users/${userId}/api-key`)
 }
 
 export const resetUserApiKey = (

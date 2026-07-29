@@ -33,20 +33,45 @@ class ItemService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    def _resolve_account_fetch_user_id(self, account: XYAccount) -> str:
+    async def _resolve_account_fetch_user_id(self, account: XYAccount) -> str:
         from common.utils.xianyu_utils import extract_account_user_id_from_cookie
 
         cookie_user_id = extract_account_user_id_from_cookie(account.cookie)
         stored_user_id = str(account.unb or "").strip()
-        fallback_user_id = str(account.account_id or "").strip()
-        resolved_user_id = cookie_user_id or stored_user_id or fallback_user_id
-
-        if cookie_user_id and cookie_user_id != stored_user_id:
-            logger.warning(
-                f"账号[{account.account_id}]库内unb[{stored_user_id or '-'}]与当前Cookie账号[{cookie_user_id}]不一致，本次同步将按Cookie账号抓取商品"
+        if not cookie_user_id:
+            raise ValueError(
+                f"账号[{account.account_id}] Cookie 缺少 unb/munb，无法确认商品归属"
+            )
+        if stored_user_id and cookie_user_id != stored_user_id:
+            raise ValueError(
+                f"账号[{account.account_id}] Cookie 实际账号[{cookie_user_id}]"
+                f"与已记录账号[{stored_user_id}]不一致，已阻止商品同步"
             )
 
-        return resolved_user_id
+        conflict_stmt = select(XYAccount).where(XYAccount.id != account.id)
+        other_accounts = (await self.session.execute(conflict_stmt)).scalars().all()
+        for other_account in other_accounts:
+            other_user_id = str(other_account.unb or "").strip()
+            if not other_user_id:
+                other_user_id = extract_account_user_id_from_cookie(
+                    other_account.cookie
+                )
+            if other_user_id == cookie_user_id:
+                conflict_label = (
+                    other_account.account_id
+                    if other_account.owner_id == account.owner_id
+                    else "其他用户"
+                )
+                raise ValueError(
+                    f"账号[{account.account_id}] Cookie 与账号"
+                    f"[{conflict_label}]相同，已阻止商品串写"
+                )
+
+        if not stored_user_id:
+            account.unb = cookie_user_id
+            self.session.add(account)
+            await self.session.commit()
+        return cookie_user_id
 
     def _collect_valid_item_entries(self, items: list[dict]) -> tuple[list[tuple[str, dict]], int]:
         valid_items = []
@@ -90,21 +115,36 @@ class ItemService:
         """
         return set((await self._get_existing_item_map(account, item_ids)).keys())
 
-    async def list_items(self, owner_id: int | None, account_id: str | None = None) -> list[dict]:
+    async def list_items(
+        self,
+        owner_id: int | None,
+        account_id: str | None = None,
+        account_pk: int | None = None,
+    ) -> list[dict]:
         """获取商品列表
         
         Args:
             owner_id: 用户ID，None表示查询所有用户（管理员）
             account_id: 账号ID（可选）
         """
+        from sqlalchemy import and_
+
         stmt = (
             select(XYCatalogItem, XYAccount.account_id)
-            .outerjoin(XYAccount, XYCatalogItem.account_pk == XYAccount.id)
+            .outerjoin(
+                XYAccount,
+                and_(
+                    XYCatalogItem.account_pk == XYAccount.id,
+                    XYCatalogItem.owner_id == XYAccount.owner_id,
+                ),
+            )
             .order_by(XYCatalogItem.created_at.desc())
         )
         if owner_id is not None:
             stmt = stmt.where(XYCatalogItem.owner_id == owner_id)
-        if account_id:
+        if account_pk is not None:
+            stmt = stmt.where(XYCatalogItem.account_pk == account_pk)
+        elif account_id:
             stmt = stmt.where(XYAccount.account_id == account_id)
         rows = await self.session.execute(stmt)
         items_data = rows.all()
@@ -119,6 +159,7 @@ class ItemService:
         self,
         owner_id: int | None,
         account_id: str | None = None,
+        account_pk: int | None = None,
         page: int = 1,
         page_size: int = 20,
         keyword: str | None = None,
@@ -145,13 +186,21 @@ class ItemService:
         
         base_stmt = (
             select(XYCatalogItem, XYAccount.account_id)
-            .outerjoin(XYAccount, XYCatalogItem.account_pk == XYAccount.id)
+            .outerjoin(
+                XYAccount,
+                and_(
+                    XYCatalogItem.account_pk == XYAccount.id,
+                    XYCatalogItem.owner_id == XYAccount.owner_id,
+                ),
+            )
         )
         
         conditions = []
         if owner_id is not None:
             conditions.append(XYCatalogItem.owner_id == owner_id)
-        if account_id:
+        if account_pk is not None:
+            conditions.append(XYCatalogItem.account_pk == account_pk)
+        elif account_id:
             conditions.append(XYAccount.account_id == account_id)
         if keyword and keyword.strip():
             keyword_like = f"%{keyword.strip()}%"
@@ -202,8 +251,14 @@ class ItemService:
         
         # 查询总数：仅在按账号筛选时才需要 JOIN 账号表，否则直接基于商品表统计，避免无谓 JOIN
         count_stmt = select(func.count(XYCatalogItem.id)).select_from(XYCatalogItem)
-        if account_id:
-            count_stmt = count_stmt.outerjoin(XYAccount, XYCatalogItem.account_pk == XYAccount.id)
+        if account_id and account_pk is None:
+            count_stmt = count_stmt.outerjoin(
+                XYAccount,
+                and_(
+                    XYCatalogItem.account_pk == XYAccount.id,
+                    XYCatalogItem.owner_id == XYAccount.owner_id,
+                ),
+            )
         if conditions:
             count_stmt = count_stmt.where(and_(*conditions))
         total_result = await self.session.execute(count_stmt)
@@ -231,7 +286,7 @@ class ItemService:
         """从指定账号抓取单页商品并入库"""
         from common.utils.item_info_manager import ItemInfoManager
 
-        myid = self._resolve_account_fetch_user_id(account)
+        myid = await self._resolve_account_fetch_user_id(account)
 
         manager = ItemInfoManager(account.account_id, account.cookie)
         try:
@@ -336,7 +391,7 @@ class ItemService:
         """抓取指定账号全部商品并入库（实际实现，调用方需已持有账号锁）"""
         from common.utils.item_info_manager import ItemInfoManager
 
-        myid = self._resolve_account_fetch_user_id(account)
+        myid = await self._resolve_account_fetch_user_id(account)
         normalized_required_title_keyword = str(required_title_keyword or "").strip()
 
         manager = ItemInfoManager(account.account_id, account.cookie)

@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Check, Copy, KeyRound, Loader2, RotateCw, Trash2, X } from 'lucide-react'
 
-import { resetUserApiKey, revokeUserApiKey } from '@/api/admin'
+import { getUserApiKey, resetUserApiKey, revokeUserApiKey } from '@/api/admin'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/request'
 import type { User } from '@/types'
@@ -20,11 +20,45 @@ function formatTime(value?: string | null) {
 export function UserApiKeyModal({ user, onClose, onUpdated }: Props) {
   const { addToast } = useUIStore()
   const [loading, setLoading] = useState(false)
+  const [keyLoading, setKeyLoading] = useState(Boolean(user.has_api_key))
   const [plainKey, setPlainKey] = useState('')
+  const [requiresReset, setRequiresReset] = useState(
+    Boolean(user.has_api_key && !user.api_key_recoverable),
+  )
   const [copied, setCopied] = useState(false)
   const [hasApiKey, setHasApiKey] = useState(Boolean(user.has_api_key))
   const [keyMask, setKeyMask] = useState(user.api_key_mask ?? '')
   const [createdAt, setCreatedAt] = useState(user.api_key_created_at ?? null)
+
+  useEffect(() => {
+    let active = true
+    if (!user.has_api_key) {
+      setKeyLoading(false)
+      return () => {
+        active = false
+      }
+    }
+
+    setKeyLoading(true)
+    getUserApiKey(user.user_id)
+      .then((result) => {
+        if (!active || !result.success || !result.data) return
+        setPlainKey(result.data.api_key ?? '')
+        setKeyMask(result.data.api_key_mask ?? user.api_key_mask ?? '')
+        setRequiresReset(result.data.requires_reset)
+      })
+      .catch((error) => {
+        if (!active) return
+        addToast({ type: 'error', message: getApiErrorMessage(error, 'API Key 加载失败') })
+      })
+      .finally(() => {
+        if (active) setKeyLoading(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [addToast, user.api_key_mask, user.has_api_key, user.user_id])
 
   const handleReset = async () => {
     if (hasApiKey && !window.confirm('重置后旧 API Key 会立即失效，确定继续吗？')) {
@@ -38,11 +72,12 @@ export function UserApiKeyModal({ user, onClose, onUpdated }: Props) {
         return
       }
       setPlainKey(result.data.api_key)
+      setRequiresReset(false)
       setHasApiKey(true)
       setKeyMask(result.data.api_key_mask)
       setCreatedAt(result.data.created_at)
       setCopied(false)
-      addToast({ type: 'success', message: 'API Key 已生成，请立即复制保存' })
+      addToast({ type: 'success', message: 'API Key 已生成并展示完整明文' })
       onUpdated()
     } catch (error) {
       addToast({ type: 'error', message: getApiErrorMessage(error, 'API Key 生成失败') })
@@ -74,6 +109,7 @@ export function UserApiKeyModal({ user, onClose, onUpdated }: Props) {
         return
       }
       setPlainKey('')
+      setRequiresReset(false)
       setHasApiKey(false)
       addToast({ type: 'success', message: 'API Key 已撤销' })
       onUpdated()
@@ -108,9 +144,24 @@ export function UserApiKeyModal({ user, onClose, onUpdated }: Props) {
                 {hasApiKey ? '已启用' : '未生成'}
               </span>
             </div>
-            <div className="flex justify-between gap-4">
-              <span className="text-slate-500">掩码</span>
-              <code>{keyMask || '—'}</code>
+            <div className="flex items-start justify-between gap-4">
+              <span className="text-slate-500 shrink-0">API Key</span>
+              <div className="flex min-w-0 items-start gap-2">
+                {keyLoading ? (
+                  <Loader2 className="mt-0.5 h-4 w-4 animate-spin text-slate-400" />
+                ) : (
+                  <code className="break-all text-right">{plainKey || keyMask || '—'}</code>
+                )}
+                {plainKey && (
+                  <button
+                    className="shrink-0 text-blue-600 hover:text-blue-500"
+                    onClick={handleCopy}
+                    title="复制完整 API Key"
+                  >
+                    {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                  </button>
+                )}
+              </div>
             </div>
             <div className="flex justify-between gap-4">
               <span className="text-slate-500">创建时间</span>
@@ -122,23 +173,16 @@ export function UserApiKeyModal({ user, onClose, onUpdated }: Props) {
             </div>
           </div>
 
-          {plainKey && (
+          {requiresReset && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-900/20 p-4">
               <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
-                该密钥只展示一次，请立即复制到目标服务的安全环境变量。
+                这是升级前生成的旧 Key，系统只保存了哈希，无法恢复明文。请重置一次，之后可随时在这里查看完整 Key。
               </p>
-              <div className="mt-3 flex gap-2">
-                <input className="input-ios font-mono text-xs" value={plainKey} readOnly />
-                <button className="btn-ios-secondary whitespace-nowrap" onClick={handleCopy}>
-                  {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                  {copied ? '已复制' : '复制'}
-                </button>
-              </div>
             </div>
           )}
 
           <p className="text-sm text-slate-500">
-            API Key 可访问该用户拥有权限的 REST API，不会自动过期；重置、撤销或停用用户会立即失效。
+            完整 API Key 仅管理员可查看；重置、撤销或停用用户后会立即失效。
           </p>
         </div>
         <div className="modal-footer justify-between">

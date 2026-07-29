@@ -25,6 +25,8 @@ class XYAccount(TimestampMixin, Base):
     __table_args__ = (
         # account_id 全局唯一：闲鱼账号ID不允许重复（业务大量代码仅按 account_id 查询）
         Index("uk_account_id", "account_id", unique=True),
+        # unb 是 Cookie 中的真实闲鱼账号身份，必须全局唯一，避免用不同别名重复绑定。
+        Index("uk_account_unb", "unb", unique=True),
         Index("idx_account_created", "created_at"),
     )
 
@@ -32,7 +34,7 @@ class XYAccount(TimestampMixin, Base):
     owner_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="所属用户ID")
     account_id: Mapped[str] = mapped_column(String(80), nullable=False, comment="账号标识")
     display_name: Mapped[str | None] = mapped_column(String(120), comment="显示名称")
-    unb: Mapped[str | None] = mapped_column(String(64), index=True, comment="UNB标识")
+    unb: Mapped[str | None] = mapped_column(String(64), comment="UNB标识")
     cookie: Mapped[str] = mapped_column(Text, nullable=False, comment="Cookie信息")
     login_method: Mapped[str] = mapped_column(String(20), nullable=False, comment="登录方式")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", comment="账号状态")
@@ -135,4 +137,3 @@ class XYAccount(TimestampMixin, Base):
         back_populates="account",
         viewonly=True,
     )
-

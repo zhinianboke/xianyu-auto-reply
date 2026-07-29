@@ -5,11 +5,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from jose import JWTError
 from pydantic import ValidationError
 
 from app.api import deps
+from app.api.routes import admin as admin_routes
 from app.api.routes.cards import BatchBindRequest
 from app.api.routes.product_publish import (
     BatchPublishRequest,
@@ -19,10 +20,18 @@ from app.services.product_publish_service import (
     ProductMaterialService,
     _comparable_material_titles,
 )
+from app.services.account_service import AccountService
 from common.models.user import UserStatus
 from common.services.card_delivery_content import _build_api_params
 from common.services.card_matcher import CardMatcher
-from common.utils.security import generate_api_key, hash_api_key, mask_api_key
+from common.services.item_service import ItemService
+from common.utils.security import (
+    decrypt_api_key,
+    encrypt_api_key,
+    generate_api_key,
+    hash_api_key,
+    mask_api_key,
+)
 from common.utils.time_utils import get_beijing_now_naive
 
 
@@ -94,6 +103,55 @@ class CapturingCardSession:
         return None
 
 
+class ListResult:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self.rows
+
+    def first(self):
+        return self.rows[0] if self.rows else None
+
+
+class ListSession:
+    def __init__(self, rows):
+        self.rows = rows
+        self.commits = 0
+        self.added = []
+
+    async def execute(self, _statement):
+        return ListResult(self.rows)
+
+    async def commit(self):
+        self.commits += 1
+
+    def add(self, value):
+        self.added.append(value)
+
+
+class EmptyQueryResult:
+    def scalar(self):
+        return 0
+
+    def all(self):
+        return []
+
+
+class QueryCaptureSession:
+    def __init__(self):
+        self.statements = []
+
+    async def execute(self, statement):
+        self.statements.append(
+            str(statement.compile(compile_kwargs={"literal_binds": True}))
+        )
+        return EmptyQueryResult()
+
+
 class ApiKeySecurityTests(unittest.TestCase):
     def test_api_key_only_exposes_hash_and_mask(self):
         api_key = generate_api_key()
@@ -104,6 +162,82 @@ class ApiKeySecurityTests(unittest.TestCase):
         self.assertNotIn(api_key, digest)
         self.assertTrue(mask_api_key(api_key).startswith(api_key[:8]))
         self.assertTrue(mask_api_key(api_key).endswith(api_key[-4:]))
+
+    def test_api_key_ciphertext_can_be_reopened_by_admin(self):
+        api_key = generate_api_key()
+        ciphertext = encrypt_api_key(api_key, "stable-runtime-secret")
+
+        self.assertNotIn(api_key, ciphertext)
+        self.assertEqual(
+            decrypt_api_key(ciphertext, "stable-runtime-secret"),
+            api_key,
+        )
+        with self.assertRaisesRegex(ValueError, "无法解密"):
+            decrypt_api_key(ciphertext, "different-secret")
+
+
+class AdminApiKeyViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_admin_can_view_full_api_key_without_response_caching(self):
+        api_key = generate_api_key()
+        user = SimpleNamespace(
+            api_key_hash=hash_api_key(api_key),
+            api_key_mask=mask_api_key(api_key),
+            api_key_ciphertext=encrypt_api_key(
+                api_key,
+                admin_routes.settings.jwt_secret_key,
+            ),
+        )
+        user_service = SimpleNamespace(get=AsyncMock(return_value=user))
+        response = Response()
+
+        result = await admin_routes.get_user_api_key(
+            user_id=1,
+            response=response,
+            _=SimpleNamespace(),
+            user_service=user_service,
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["api_key"], api_key)
+        self.assertFalse(result.data["requires_reset"])
+        self.assertEqual(response.headers["cache-control"], "no-store")
+
+
+class AccountIsolationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_duplicate_cookie_identity_is_rejected(self):
+        existing = SimpleNamespace(
+            id=1,
+            owner_id=7,
+            account_id="账号A",
+            unb=None,
+            cookie="unb=123456; tracknick=account-a",
+        )
+        service = AccountService(ListSession([existing]))
+
+        with self.assertRaisesRegex(ValueError, "账号A"):
+            await service.validate_cookie_identity(
+                7,
+                "unb=123456; tracknick=account-a",
+                exclude_pk=2,
+            )
+
+    async def test_catalog_query_uses_exact_account_primary_key(self):
+        session = QueryCaptureSession()
+        service = ItemService(session)
+
+        items, total = await service.list_items_paginated(
+            owner_id=7,
+            account_pk=42,
+        )
+
+        self.assertEqual(items, [])
+        self.assertEqual(total, 0)
+        self.assertTrue(
+            all("xy_catalog_items.account_id = 42" in sql for sql in session.statements)
+        )
+        self.assertTrue(
+            all("xy_catalog_items.owner_id = 7" in sql for sql in session.statements)
+        )
 
 
 class ExternalRequestValidationTests(unittest.TestCase):
