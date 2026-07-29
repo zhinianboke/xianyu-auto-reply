@@ -1,4 +1,7 @@
 {
+  "name": "xianyu-auto-reply-self",
+  "version": "0.2.7",
+  "private": true,
   "dependencies": {
     "claude": "^0.1.1"
   }

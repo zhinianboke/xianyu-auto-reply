@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -103,6 +103,7 @@ class BatchBindRequest(BaseModel):
     """批量绑定卡券到商品（多对多关联表方式）"""
     card_ids: List[int]
     item_ids: List[str]
+    item_title: Optional[str] = Field(default=None, max_length=255)
 
 
 class UpdateCardItemsRequest(BaseModel):
@@ -415,6 +416,11 @@ async def batch_bind_cards(
         user_id=current_user.id,
         card_ids=request.card_ids,
         item_ids=request.item_ids,
+        item_title=(
+            request.item_title.strip()
+            if request.item_title and request.item_title.strip()
+            else None
+        ),
     )
 
     return ApiResponse(

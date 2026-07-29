@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import String, cast, or_, select
+from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.card_item_relation import CardItemRelation
@@ -45,13 +45,29 @@ class SelectableItemService:
             card_id: 卡券ID
             owner_id: 用户ID，None 表示管理员（不加 owner 过滤）
         """
+        catalog_join = (
+            CardItemRelation.item_id == XYCatalogItem.item_id
+        )
+        if owner_id is not None:
+            catalog_join = and_(
+                catalog_join,
+                XYCatalogItem.owner_id == owner_id,
+            )
         stmt = (
-            select(XYCatalogItem.item_id, XYCatalogItem.title, XYCatalogItem.price)
-            .join(CardItemRelation, CardItemRelation.item_id == XYCatalogItem.item_id)
+            select(
+                CardItemRelation.item_id,
+                func.coalesce(
+                    XYCatalogItem.title,
+                    CardItemRelation.item_title,
+                ),
+                XYCatalogItem.price,
+            )
+            .select_from(CardItemRelation)
+            .outerjoin(XYCatalogItem, catalog_join)
             .where(CardItemRelation.card_id == card_id)
         )
         if owner_id is not None:
-            stmt = stmt.where(XYCatalogItem.owner_id == owner_id)
+            stmt = stmt.where(CardItemRelation.user_id == owner_id)
         rows = await self.session.execute(stmt)
 
         seen: set[str] = set()

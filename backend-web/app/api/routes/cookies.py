@@ -424,6 +424,17 @@ async def _update_account_status_and_task(
     from app.services.websocket_client import websocket_client
 
     original_disable_reason = account.disable_reason
+    if enabled:
+        try:
+            resolved_unb = await account_service.validate_account_cookie_identity(
+                account
+            )
+            if account.unb != resolved_unb:
+                account.unb = resolved_unb
+                account_service.session.add(account)
+                await account_service.session.commit()
+        except ValueError as exc:
+            return False, str(exc)
     await account_service.update_status(
         account, enabled, disable_reason="手动禁用" if not enabled else None
     )

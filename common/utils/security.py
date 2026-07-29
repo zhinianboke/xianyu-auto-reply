@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import secrets
 import string
 from datetime import datetime, timedelta, timezone
@@ -23,6 +25,7 @@ pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 # 秘钥生成可用字符集：大小写字母 + 数字
 _SECRET_KEY_ALPHABET = string.ascii_letters + string.digits
+_API_KEY_PREFIX = "xyk_"
 
 
 def generate_secret_key(length: int = 32) -> str:
@@ -37,6 +40,62 @@ def generate_secret_key(length: int = 32) -> str:
         随机秘钥字符串
     """
     return ''.join(secrets.choice(_SECRET_KEY_ALPHABET) for _ in range(length))
+
+
+def generate_api_key() -> str:
+    """生成面向外部服务的高熵 API Key。"""
+    return f"{_API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
+
+
+def hash_api_key(api_key: str) -> str:
+    """对 API Key 做不可逆 SHA-256 摘要，数据库不保存明文。"""
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+
+def mask_api_key(api_key: str) -> str:
+    """生成可安全展示的 API Key 掩码。"""
+    if len(api_key) <= 12:
+        return f"{api_key[:4]}****"
+    return f"{api_key[:8]}…{api_key[-4:]}"
+
+
+def _api_key_encryption_key(secret: str) -> bytes:
+    """从服务端稳定密钥派生 API Key 专用的 Fernet 密钥。"""
+    normalized_secret = str(secret or "").strip()
+    if not normalized_secret:
+        raise ValueError("API Key 加密密钥不能为空")
+    digest = hashlib.sha256(
+        b"xianyu-api-key-encryption-v1\0"
+        + normalized_secret.encode("utf-8")
+    ).digest()
+    return base64.urlsafe_b64encode(digest)
+
+
+def encrypt_api_key(api_key: str, secret: str) -> str:
+    """加密保存 API Key 明文，供管理员后续查看。"""
+    from cryptography.fernet import Fernet
+
+    normalized_key = str(api_key or "").strip()
+    if not normalized_key:
+        raise ValueError("API Key 不能为空")
+    return Fernet(_api_key_encryption_key(secret)).encrypt(
+        normalized_key.encode("utf-8")
+    ).decode("ascii")
+
+
+def decrypt_api_key(ciphertext: str, secret: str) -> str:
+    """解密管理员可查看的 API Key；密钥不匹配时返回统一错误。"""
+    from cryptography.fernet import Fernet, InvalidToken
+
+    normalized_ciphertext = str(ciphertext or "").strip()
+    if not normalized_ciphertext:
+        raise ValueError("API Key 密文为空")
+    try:
+        return Fernet(_api_key_encryption_key(secret)).decrypt(
+            normalized_ciphertext.encode("ascii")
+        ).decode("utf-8")
+    except (InvalidToken, UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("API Key 无法解密，请重置后重试") from exc
 
 
 # 已知的弱/占位 JWT 密钥（与 deploy.sh / update.sh 中的 WEAK_JWT_KEYS 保持一致）。

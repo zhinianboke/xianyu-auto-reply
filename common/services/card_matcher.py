@@ -68,10 +68,11 @@ class CardMatcher:
         if relation_rows:
             # 关联表有数据：每行转为字典，附带 source 信息
             all_cards = []
-            for card, card_source, dock_record_id in relation_rows:
+            for card, card_source, dock_record_id, item_title in relation_rows:
                 card_dict = self._card_to_dict(card)
                 card_dict["card_source"] = card_source or "own"
                 card_dict["dock_record_id"] = dock_record_id
+                card_dict["item_title"] = item_title or ""
                 all_cards.append(card_dict)
             
             # 规格匹配过滤（对字典列表过滤）
@@ -333,6 +334,7 @@ class CardMatcher:
         user_id: int,
         card_ids: List[int],
         item_ids: List[str],
+        item_title: Optional[str] = None,
     ) -> Dict[str, int]:
         """
         批量绑定卡券到商品（INSERT IGNORE 避免重复）
@@ -341,6 +343,7 @@ class CardMatcher:
             user_id: 用户ID
             card_ids: 卡券ID列表
             item_ids: 商品ID列表
+            item_title: 商品标题；批量传入多个商品ID时共用该标题
             
         Returns:
             {"success_count": 成功数量, "fail_count": 失败数量}
@@ -363,6 +366,24 @@ class CardMatcher:
                     )
                     if result.rowcount > 0:
                         success_count += 1
+                    if item_title:
+                        await self.session.execute(
+                            text("""
+                                UPDATE xy_card_item_relations
+                                SET item_title = :item_title,
+                                    updated_at = NOW()
+                                WHERE user_id = :user_id
+                                  AND card_id = :card_id
+                                  AND item_id = :item_id
+                                  AND dock_record_id = 0
+                            """),
+                            {
+                                "user_id": user_id,
+                                "card_id": card_id,
+                                "item_id": item_id,
+                                "item_title": item_title.strip()[:255],
+                            },
+                        )
                 except Exception as e:
                     logger.warning(f"绑定卡券 {card_id} 到商品 {item_id} 失败: {e}")
                     fail_count += 1
@@ -455,17 +476,22 @@ class CardMatcher:
 
     async def _query_cards_with_source(self, item_id: str) -> List[tuple]:
         """
-        从关联表查询商品关联的启用卡券，同时返回 source 和 dock_record_id。
+        从关联表查询商品关联的启用卡券，同时返回 source、dock_record_id 和商品标题。
         不使用 .scalars() 以避免 SQLAlchemy identity map 去重。
         
         Args:
             item_id: 商品ID
             
         Returns:
-            [(Card, source, dock_record_id), ...] 元组列表
+            [(Card, source, dock_record_id, item_title), ...] 元组列表
         """
         stmt = (
-            select(Card, CardItemRelation.source, CardItemRelation.dock_record_id)
+            select(
+                Card,
+                CardItemRelation.source,
+                CardItemRelation.dock_record_id,
+                CardItemRelation.item_title,
+            )
             .join(
                 CardItemRelation,
                 Card.id == CardItemRelation.card_id,

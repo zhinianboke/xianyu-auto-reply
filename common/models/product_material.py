@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Index, JSON, Numeric, String, Text
+from sqlalchemy import BigInteger, Index, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base, TimestampMixin
@@ -20,6 +20,12 @@ class ProductMaterial(TimestampMixin, Base):
     __tablename__ = "xy_product_materials"
     __table_args__ = (
         Index("idx_pm_user_created", "user_id", "created_at"),
+        UniqueConstraint(
+            "user_id",
+            "source_type",
+            "source_item_id",
+            name="uk_pm_user_source_item",
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
@@ -36,3 +42,6 @@ class ProductMaterial(TimestampMixin, Base):
     brand: Mapped[str | None] = mapped_column(String(100), comment="品牌")
     condition: Mapped[str] = mapped_column(String(20), default="全新", comment="成色：全新/99新/95新等")
     remark: Mapped[str | None] = mapped_column(String(500), comment="备注（仅内部使用，不发布到闲鱼）")
+    source_type: Mapped[str | None] = mapped_column(String(32), comment="外部素材来源类型")
+    source_item_id: Mapped[str | None] = mapped_column(String(128), comment="外部来源商品ID")
+    source_content_hash: Mapped[str | None] = mapped_column(String(64), comment="外部来源内容哈希")

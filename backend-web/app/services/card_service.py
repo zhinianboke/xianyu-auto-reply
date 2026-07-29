@@ -683,6 +683,7 @@ class CardService:
         user_id: int,
         card_ids: List[int],
         item_ids: List[str],
+        item_title: Optional[str] = None,
     ) -> Dict[str, int]:
         """批量绑定卡券到商品（通过关联表，不再复制卡券）
         
@@ -690,12 +691,18 @@ class CardService:
             user_id: 用户ID
             card_ids: 卡券ID列表
             item_ids: 商品ID列表
+            item_title: 商品标题；批量传入多个商品ID时共用该标题
             
         Returns:
             {"success_count": 成功数量, "fail_count": 失败数量}
         """
         matcher = CardMatcher(self.session)
-        result = await matcher.batch_bind_cards_to_items(user_id, card_ids, item_ids)
+        result = await matcher.batch_bind_cards_to_items(
+            user_id,
+            card_ids,
+            item_ids,
+            item_title=item_title,
+        )
         await self.session.commit()
         return result
 

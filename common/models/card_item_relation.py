@@ -33,6 +33,7 @@ class CardItemRelation(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment="所属用户ID")
     card_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment="卡券ID")
     item_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True, comment="商品ID")
+    item_title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment="商品标题")
     source: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default="own", comment="卡券来源：own-自有，dock_l1-一级对接，dock_l2-二级对接")
     dock_record_id: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0", comment="对接记录ID（对接卡券时关联，0表示自有卡券）")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")

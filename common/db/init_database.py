@@ -369,6 +369,11 @@ class DatabaseInitializer:
                 role ENUM('ADMIN', 'OPERATOR', 'MEMBER') DEFAULT 'MEMBER' COMMENT '用户角色',
                 account_limit INT DEFAULT NULL COMMENT '可添加账号数量',
                 last_login_at DATETIME COMMENT '最后登录时间',
+                api_key_hash VARCHAR(64) DEFAULT NULL UNIQUE COMMENT '外部 API Key 的 SHA-256 摘要',
+                api_key_mask VARCHAR(32) DEFAULT NULL COMMENT 'API Key 脱敏展示值',
+                api_key_ciphertext TEXT DEFAULT NULL COMMENT 'API Key 加密密文',
+                api_key_created_at DATETIME DEFAULT NULL COMMENT 'API Key 创建或重置时间',
+                api_key_last_used_at DATETIME DEFAULT NULL COMMENT 'API Key 最近使用时间',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_external_id (external_id),
@@ -439,7 +444,7 @@ class DatabaseInitializer:
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_owner_id (owner_id),
                 UNIQUE KEY uk_account_id (account_id),
-                INDEX idx_unb (unb),
+                UNIQUE KEY uk_account_unb (unb),
                 INDEX idx_account_created (created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='闲鱼账号表';
         """,
@@ -1059,6 +1064,7 @@ class DatabaseInitializer:
                 user_id BIGINT NOT NULL COMMENT '所属用户ID',
                 card_id BIGINT NOT NULL COMMENT '卡券ID',
                 item_id VARCHAR(64) NOT NULL COMMENT '商品ID',
+                item_title VARCHAR(255) DEFAULT NULL COMMENT '商品标题',
                 source VARCHAR(20) DEFAULT 'own' COMMENT '卡券来源：own-自有，dock_l1-一级对接，dock_l2-二级对接',
                 dock_record_id BIGINT NOT NULL DEFAULT 0 COMMENT '对接记录ID（对接卡券时关联，0表示自有卡券）',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -1258,12 +1264,39 @@ class DatabaseInitializer:
                 brand VARCHAR(100) DEFAULT NULL COMMENT '品牌',
                 `condition` VARCHAR(20) DEFAULT '全新' COMMENT '成色',
                 remark VARCHAR(500) DEFAULT NULL COMMENT '备注（仅内部使用）',
+                source_type VARCHAR(32) DEFAULT NULL COMMENT '外部素材来源类型',
+                source_item_id VARCHAR(128) DEFAULT NULL COMMENT '外部来源商品ID',
+                source_content_hash VARCHAR(64) DEFAULT NULL COMMENT '外部来源内容哈希',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_user_id (user_id),
                 INDEX idx_created_at (created_at),
-                INDEX idx_pm_user_created (user_id, created_at)
+                INDEX idx_pm_user_created (user_id, created_at),
+                UNIQUE KEY uk_pm_user_source_item (user_id, source_type, source_item_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品素材库表';
+        """,
+
+        # 37.1 商品批量发布任务表
+        "xy_publish_batches": """
+            CREATE TABLE IF NOT EXISTS xy_publish_batches (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                batch_id VARCHAR(36) NOT NULL COMMENT '服务端批次ID',
+                user_id BIGINT NOT NULL COMMENT '操作用户ID',
+                request_id VARCHAR(36) NOT NULL COMMENT '客户端幂等请求ID',
+                account_ids JSON NOT NULL COMMENT '发布账号ID列表',
+                material_ids JSON NOT NULL COMMENT '素材ID列表',
+                status VARCHAR(20) NOT NULL DEFAULT 'queued' COMMENT 'queued/running/completed/failed',
+                total INT NOT NULL DEFAULT 0,
+                success_count INT NOT NULL DEFAULT 0,
+                failed_count INT NOT NULL DEFAULT 0,
+                error_message VARCHAR(1000) DEFAULT NULL,
+                finished_at DATETIME DEFAULT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_publish_batch_id (batch_id),
+                UNIQUE KEY uk_publish_batch_user_request (user_id, request_id),
+                INDEX idx_publish_batch_user_created (user_id, created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品批量发布任务表';
         """,
 
         # 38.1 定时求小红花执行日志表
@@ -1836,7 +1869,17 @@ class DatabaseInitializer:
             ("login_locked_until", "DATETIME COMMENT '登录锁定截止时间'", "login_fail_count"),
             ("dock_code", "VARCHAR(32) DEFAULT NULL UNIQUE COMMENT '对接码，用于分销商识别'", "login_locked_until"),
             ("secret_key", "VARCHAR(64) DEFAULT NULL UNIQUE COMMENT '分销秘钥，32位随机字符，全局唯一'", "dock_code"),
-            ("expire_at", "DATETIME DEFAULT NULL COMMENT '账号到期日（精确到秒，NULL=永不过期）'", "secret_key"),
+            ("api_key_hash", "VARCHAR(64) DEFAULT NULL UNIQUE COMMENT '外部 API Key 的 SHA-256 摘要'", "secret_key"),
+            ("api_key_mask", "VARCHAR(32) DEFAULT NULL COMMENT 'API Key 脱敏展示值'", "api_key_hash"),
+            ("api_key_ciphertext", "TEXT DEFAULT NULL COMMENT 'API Key 加密密文'", "api_key_mask"),
+            ("api_key_created_at", "DATETIME DEFAULT NULL COMMENT 'API Key 创建或重置时间'", "api_key_ciphertext"),
+            ("api_key_last_used_at", "DATETIME DEFAULT NULL COMMENT 'API Key 最近使用时间'", "api_key_created_at"),
+            ("expire_at", "DATETIME DEFAULT NULL COMMENT '账号到期日（精确到秒，NULL=永不过期）'", "api_key_last_used_at"),
+        ],
+        "xy_product_materials": [
+            ("source_type", "VARCHAR(32) DEFAULT NULL COMMENT '外部素材来源类型'", "remark"),
+            ("source_item_id", "VARCHAR(128) DEFAULT NULL COMMENT '外部来源商品ID'", "source_type"),
+            ("source_content_hash", "VARCHAR(64) DEFAULT NULL COMMENT '外部来源内容哈希'", "source_item_id"),
         ],
         "xy_default_replies": [
             ("item_id", "VARCHAR(64) DEFAULT NULL COMMENT '商品ID'", "account_id"),
@@ -1857,6 +1900,7 @@ class DatabaseInitializer:
             ("is_deleted", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除'", "content"),
         ],
         "xy_card_item_relations": [
+            ("item_title", "VARCHAR(255) DEFAULT NULL COMMENT '商品标题'", "item_id"),
             ("source", "VARCHAR(20) DEFAULT 'own' COMMENT '卡券来源：own-自有，dock_l1-一级对接，dock_l2-二级对接'", "item_id"),
             ("dock_record_id", "BIGINT DEFAULT NULL COMMENT '对接记录ID（对接卡券时关联）'", "source"),
         ],
@@ -2859,6 +2903,24 @@ class DatabaseInitializer:
             except Exception as e:
                 logger.warning(f"✗ xy_product_materials idx_pm_user_created 创建失败: {e}")
 
+            # 外部素材按用户、来源和来源商品ID唯一，保证同步接口幂等
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_product_materials'
+                    AND INDEX_NAME = 'uk_pm_user_source_item'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    await conn.execute(text(
+                        "ALTER TABLE xy_product_materials "
+                        "ADD UNIQUE KEY uk_pm_user_source_item (user_id, source_type, source_item_id)"
+                    ))
+                    logger.info("✓ xy_product_materials: 创建 uk_pm_user_source_item 唯一索引")
+            except Exception as e:
+                logger.warning(f"✗ xy_product_materials 外部素材唯一索引创建失败: {e}")
+
             # 为 xy_publish_logs 补建 (user_id, created_at) 复合索引
             try:
                 check = text("""
@@ -2875,6 +2937,24 @@ class DatabaseInitializer:
                     logger.info("✓ xy_publish_logs: 创建 idx_publish_user_created 复合索引")
             except Exception as e:
                 logger.warning(f"✗ xy_publish_logs idx_publish_user_created 创建失败: {e}")
+
+            # 批次状态按用户和批次读取逐商品结果
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_publish_logs'
+                    AND INDEX_NAME = 'idx_publish_user_batch'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    await conn.execute(text(
+                        "ALTER TABLE xy_publish_logs "
+                        "ADD INDEX idx_publish_user_batch (user_id, batch_id)"
+                    ))
+                    logger.info("✓ xy_publish_logs: 创建 idx_publish_user_batch 复合索引")
+            except Exception as e:
+                logger.warning(f"✗ xy_publish_logs idx_publish_user_batch 创建失败: {e}")
 
             auto_reply_log_table_exists = False
             try:
@@ -3297,6 +3377,42 @@ class DatabaseInitializer:
                         logger.info("✓ xy_accounts: 创建 uk_account_id 全局唯一约束")
             except Exception as e:
                 logger.warning(f"✗ xy_accounts uk_account_id 创建失败: {e}")
+
+            # unb 是 Cookie 内的真实闲鱼账号身份。不同业务别名绑定同一 unb 会让
+            # 商品采集与 WebSocket 消息串号，因此在数据无冲突时补建全局唯一约束。
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_accounts'
+                    AND INDEX_NAME = 'uk_account_unb'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    dup_check = text("""
+                        SELECT COUNT(*) FROM (
+                            SELECT unb
+                            FROM xy_accounts
+                            WHERE unb IS NOT NULL AND unb <> ''
+                            GROUP BY unb
+                            HAVING COUNT(*) > 1
+                        ) AS dup
+                    """)
+                    dup_result = await conn.execute(dup_check)
+                    dup_groups = dup_result.scalar() or 0
+                    if dup_groups > 0:
+                        logger.warning(
+                            f"✗ xy_accounts 存在 {dup_groups} 组 unb 重复数据，"
+                            "暂不创建 uk_account_unb 唯一约束，请先处理重复账号"
+                        )
+                    else:
+                        await conn.execute(text(
+                            "ALTER TABLE xy_accounts "
+                            "ADD UNIQUE KEY uk_account_unb (unb)"
+                        ))
+                        logger.info("✓ xy_accounts: 创建 uk_account_unb 全局唯一约束")
+            except Exception as e:
+                logger.warning(f"✗ xy_accounts uk_account_unb 创建失败: {e}")
 
 
     async def create_default_admin(self):

@@ -20,6 +20,11 @@ export interface AdminUserApiItem {
   card_count?: number
   balance?: string | null
   expire_at?: string | null
+  has_api_key?: boolean
+  api_key_mask?: string | null
+  api_key_recoverable?: boolean
+  api_key_created_at?: string | null
+  api_key_last_used_at?: string | null
 }
 
 export interface CreateAdminUserPayload {
@@ -57,6 +62,11 @@ const mapAdminUser = (user: AdminUserApiItem): User => ({
   account_limit: user.account_limit,
   balance: user.balance,
   expire_at: user.expire_at,
+  has_api_key: user.has_api_key,
+  api_key_mask: user.api_key_mask,
+  api_key_recoverable: user.api_key_recoverable,
+  api_key_created_at: user.api_key_created_at,
+  api_key_last_used_at: user.api_key_last_used_at,
 })
 
 // 获取用户列表
@@ -92,6 +102,34 @@ export const updateUser = (userId: number, payload: UpdateAdminUserPayload): Pro
 // 停用用户
 export const deleteUser = (userId: number): Promise<ApiResponse> => {
   return del(`${ADMIN_PREFIX}/users/${userId}`)
+}
+
+export interface ResetUserApiKeyResult {
+  api_key: string
+  api_key_mask: string
+  created_at: string
+}
+
+export interface UserApiKeyResult {
+  api_key: string | null
+  api_key_mask: string | null
+  requires_reset: boolean
+}
+
+export const getUserApiKey = (
+  userId: number,
+): Promise<ApiResponse<UserApiKeyResult>> => {
+  return get(`${ADMIN_PREFIX}/users/${userId}/api-key`)
+}
+
+export const resetUserApiKey = (
+  userId: number,
+): Promise<ApiResponse<ResetUserApiKeyResult>> => {
+  return post(`${ADMIN_PREFIX}/users/${userId}/api-key/reset`)
+}
+
+export const revokeUserApiKey = (userId: number): Promise<ApiResponse> => {
+  return del(`${ADMIN_PREFIX}/users/${userId}/api-key`)
 }
 
 // 管理员手动调整用户余额（正数充值 / 负数扣减）

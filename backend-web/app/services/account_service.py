@@ -18,6 +18,7 @@ from common.services.account_limit_service import AccountLimitService
 from common.models.xy_account import XYAccount
 from common.models.user import User
 from common.utils.cookie_refresh import clear_cookie_refresh_snapshot
+from common.utils.xianyu_utils import extract_account_user_id_from_cookie
 
 # UTC时区常量
 UTC = timezone.utc
@@ -28,6 +29,53 @@ class AccountService:
 
     def __init__(self, session: AsyncSession):
         self.session = session
+
+    async def validate_cookie_identity(
+        self,
+        owner_id: int,
+        cookie_value: str,
+        *,
+        exclude_pk: int | None = None,
+        expected_unb: str | None = None,
+    ) -> str:
+        """校验 Cookie 真实闲鱼账号，防止同一登录态绑定到多个业务账号。"""
+        cookie_unb = extract_account_user_id_from_cookie(cookie_value)
+        normalized_expected = str(expected_unb or "").strip()
+        if normalized_expected and cookie_unb and normalized_expected != cookie_unb:
+            raise ValueError(
+                f"Cookie 实际账号 {cookie_unb} 与已记录账号 {normalized_expected} 不一致"
+            )
+
+        resolved_unb = cookie_unb or normalized_expected
+        if not resolved_unb:
+            raise ValueError("Cookie 缺少 unb/munb，无法确认闲鱼账号身份")
+
+        stmt = select(XYAccount)
+        if exclude_pk is not None:
+            stmt = stmt.where(XYAccount.id != exclude_pk)
+        other_accounts = (await self.session.execute(stmt)).scalars().all()
+        for other in other_accounts:
+            other_unb = str(other.unb or "").strip()
+            if not other_unb:
+                other_unb = extract_account_user_id_from_cookie(other.cookie)
+            if other_unb == resolved_unb:
+                if other.owner_id == owner_id:
+                    raise ValueError(
+                        f"该 Cookie 已属于账号「{other.account_id}」，不能绑定到多个账号"
+                    )
+                raise ValueError("该 Cookie 已绑定到其他用户，不能重复添加")
+        return resolved_unb
+
+    async def validate_account_cookie_identity(
+        self,
+        account: XYAccount,
+    ) -> str:
+        return await self.validate_cookie_identity(
+            account.owner_id,
+            account.cookie,
+            exclude_pk=account.id,
+            expected_unb=account.unb,
+        )
 
     async def list_account_options(self, owner_id: int | None = None) -> list[dict]:
         stmt = select(
@@ -339,6 +387,11 @@ class AccountService:
             raise ValueError("账号ID已存在")
 
         await AccountLimitService(self.session).ensure_can_add_account(owner_id)
+        resolved_unb = await self.validate_cookie_identity(
+            owner_id,
+            cookie_value,
+            expected_unb=unb,
+        )
 
         account = XYAccount(
             owner_id=owner_id,
@@ -349,7 +402,7 @@ class AccountService:
             auto_confirm=False,
             pause_duration=10,
             show_browser=False,
-            unb=unb,
+            unb=resolved_unb,
             last_login_at=datetime.now(tz=UTC),
         )
         self.session.add(account)
@@ -358,7 +411,14 @@ class AccountService:
         return account
 
     async def update_cookie(self, account: XYAccount, value: str) -> None:
+        resolved_unb = await self.validate_cookie_identity(
+            account.owner_id,
+            value,
+            exclude_pk=account.id,
+            expected_unb=account.unb,
+        )
         account.cookie = value
+        account.unb = resolved_unb
         account.metadata_json = clear_cookie_refresh_snapshot(account.metadata_json)
         self.session.add(account)
         await self.session.commit()
@@ -469,6 +529,12 @@ class AccountService:
         account: XYAccount | None = None
         if unb:
             account = await self.get_account_by_unb(owner_id, unb)
+        resolved_unb = await self.validate_cookie_identity(
+            owner_id,
+            cookies,
+            exclude_pk=account.id if account else None,
+            expected_unb=unb,
+        )
 
         created = False
         if account:
@@ -477,7 +543,7 @@ class AccountService:
             account.status = "active"
             account.disable_reason = None  # 清空禁用原因
             account.login_method = login_method
-            account.unb = unb
+            account.unb = resolved_unb
             account.last_login_at = datetime.now(tz=UTC)
             if hasattr(account, "updated_at"):
                 account.updated_at = datetime.now(tz=UTC)
@@ -494,7 +560,7 @@ class AccountService:
                 auto_confirm=False,
                 pause_duration=10,
                 show_browser=False,
-                unb=unb,
+                unb=resolved_unb,
                 last_login_at=datetime.now(tz=UTC),
                 created_at=datetime.now(tz=UTC),
                 updated_at=datetime.now(tz=UTC),
@@ -541,6 +607,12 @@ class AccountService:
         if existing and existing.owner_id != owner_id:
             raise ValueError(f"账号ID {account_id} 已被其他用户占用，无法登录")
 
+        resolved_unb = await self.validate_cookie_identity(
+            owner_id,
+            cookies,
+            exclude_pk=existing.id if existing else None,
+            expected_unb=unb or (existing.unb if existing else None),
+        )
         now = datetime.now(tz=UTC)
         created = False
         if existing:
@@ -553,8 +625,7 @@ class AccountService:
             existing.status = "active"
             existing.disable_reason = None
             existing.last_login_at = now
-            if unb:
-                existing.unb = unb
+            existing.unb = resolved_unb
             if hasattr(existing, "updated_at"):
                 existing.updated_at = now
             account_obj = existing
@@ -571,7 +642,7 @@ class AccountService:
                 status="active",
                 auto_confirm=False,
                 pause_duration=10,
-                unb=unb,
+                unb=resolved_unb,
                 last_login_at=now,
                 created_at=now,
                 updated_at=now,

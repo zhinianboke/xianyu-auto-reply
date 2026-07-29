@@ -43,6 +43,7 @@ from common.models.agent_order import AgentOrder
 from common.models.settlement_record import SettlementRecord
 from common.models.product_material import ProductMaterial
 from common.models.publish_log import PublishLog
+from common.models.publish_batch import PublishBatch
 from common.models.publish_address import PublishAddress
 from common.models.user_publish_address import UserPublishAddress
 from common.models.listing_monitor_category import ListingMonitorCategory
@@ -110,6 +111,7 @@ __all__ = [
     "AgentOrder",
     "ProductMaterial",
     "PublishLog",
+    "PublishBatch",
     "PublishAddress",
     "UserPublishAddress",
     "ListingMonitorCategory",

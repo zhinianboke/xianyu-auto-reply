@@ -82,7 +82,7 @@ async def get_api_card_content(
 
     Args:
         api_config: 卡券 api_config（JSON 字符串或 dict）
-        context: 动态参数上下文（用于 POST 参数占位符替换），如 order_id/item_id/buyer_id 等
+        context: 动态参数上下文（用于 POST 参数占位符替换），如 order_id/item_id/item_title/buyer_id 等
         retry_count: 当前重试次数（内部递归用）
 
     Returns:
@@ -136,7 +136,7 @@ async def get_api_card_content(
                 logger.error(f"不支持的HTTP方法: {method}")
                 return None
 
-        if status_code == 200:
+        if 200 <= status_code < 300:
             content = extract_card_api_response_content(response_text, response_field)
             logger.info(f"API调用成功，返回内容长度: {len(content)}")
             return content
@@ -169,7 +169,7 @@ def _build_api_params(params: dict, context: Dict[str, str]) -> dict:
 
     Args:
         params: 原始参数（含占位符）
-        context: 上下文映射，提货场景包含 order_id/item_id/buyer_id/spec_name/spec_value 等
+        context: 上下文映射，提货场景包含 order_id/item_id/item_title/buyer_id/spec_name/spec_value 等
 
     Returns:
         替换后的参数
@@ -180,6 +180,7 @@ def _build_api_params(params: dict, context: Dict[str, str]) -> dict:
     param_mapping = {
         'order_id': context.get('order_id', ''),
         'item_id': context.get('item_id', ''),
+        'item_title': context.get('item_title', ''),
         'buyer_id': context.get('buyer_id', ''),
         'spec_name': context.get('spec_name', ''),
         'spec_value': context.get('spec_value', ''),

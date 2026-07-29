@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -39,6 +39,13 @@ from app.services.recharge_service import RechargeService
 from common.services.settlement_service import BALANCE_KEY
 
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
+from common.utils.security import (
+    decrypt_api_key,
+    encrypt_api_key,
+    generate_api_key,
+    hash_api_key,
+    mask_api_key,
+)
 router = APIRouter(tags=["admin"])
 settings = get_settings()
 
@@ -118,6 +125,11 @@ def _build_user_payload(
         "card_count": 0,
         "balance": _format_balance(balance_map.get(user.id)),
         "expire_at": safe_isoformat(user.expire_at),
+        "has_api_key": bool(user.api_key_hash),
+        "api_key_mask": user.api_key_mask,
+        "api_key_recoverable": bool(user.api_key_ciphertext),
+        "api_key_created_at": safe_isoformat(user.api_key_created_at),
+        "api_key_last_used_at": safe_isoformat(user.api_key_last_used_at),
     }
 
 
@@ -182,6 +194,115 @@ async def create_user(
         return ApiResponse(success=False, message=f"创建用户失败: {str(exc)}")
 
     return ApiResponse(success=True, message="用户创建成功", data={"user": _build_user_payload(user)})
+
+
+@router.post("/users/{user_id}/api-key/reset", response_model=ApiResponse)
+async def reset_user_api_key(
+    user_id: int,
+    _: User = Depends(deps.get_current_admin_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+    user_service: UserService = Depends(deps.get_user_service),
+) -> ApiResponse:
+    """生成或重置用户唯一的 API Key，并加密保存供管理员查看。"""
+    user = await user_service.get(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+
+    api_key = generate_api_key()
+    user.api_key_hash = hash_api_key(api_key)
+    user.api_key_mask = mask_api_key(api_key)
+    user.api_key_ciphertext = encrypt_api_key(
+        api_key,
+        settings.jwt_secret_key,
+    )
+    user.api_key_created_at = get_beijing_now_naive()
+    user.api_key_last_used_at = None
+    await session.commit()
+
+    return ApiResponse(
+        success=True,
+        message="API Key 已生成，可在用户管理中再次查看",
+        data={
+            "api_key": api_key,
+            "api_key_mask": user.api_key_mask,
+            "created_at": safe_isoformat(user.api_key_created_at),
+        },
+    )
+
+
+@router.get("/users/{user_id}/api-key", response_model=ApiResponse)
+async def get_user_api_key(
+    user_id: int,
+    response: Response,
+    _: User = Depends(deps.get_current_admin_user),
+    user_service: UserService = Depends(deps.get_user_service),
+) -> ApiResponse:
+    """仅管理员可查看用户当前 API Key 的完整明文。"""
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    user = await user_service.get(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+    if not user.api_key_hash:
+        return ApiResponse(success=False, message="该用户尚未生成 API Key")
+    if not user.api_key_ciphertext:
+        return ApiResponse(
+            success=True,
+            message="旧 API Key 未保存可恢复密文，请重置一次",
+            data={
+                "api_key": None,
+                "api_key_mask": user.api_key_mask,
+                "requires_reset": True,
+            },
+        )
+
+    try:
+        api_key = decrypt_api_key(
+            user.api_key_ciphertext,
+            settings.jwt_secret_key,
+        )
+        if hash_api_key(api_key) != user.api_key_hash:
+            raise ValueError("API Key 密文与摘要不一致")
+    except ValueError:
+        return ApiResponse(
+            success=True,
+            message="API Key 无法解密，请重置一次",
+            data={
+                "api_key": None,
+                "api_key_mask": user.api_key_mask,
+                "requires_reset": True,
+            },
+        )
+
+    return ApiResponse(
+        success=True,
+        data={
+            "api_key": api_key,
+            "api_key_mask": user.api_key_mask,
+            "requires_reset": False,
+        },
+    )
+
+
+@router.delete("/users/{user_id}/api-key", response_model=ApiResponse)
+async def revoke_user_api_key(
+    user_id: int,
+    _: User = Depends(deps.get_current_admin_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+    user_service: UserService = Depends(deps.get_user_service),
+) -> ApiResponse:
+    """撤销用户当前 API Key。"""
+    user = await user_service.get(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+
+    user.api_key_hash = None
+    user.api_key_mask = None
+    user.api_key_ciphertext = None
+    user.api_key_created_at = None
+    user.api_key_last_used_at = None
+    await session.commit()
+    return ApiResponse(success=True, message="API Key 已撤销")
 
 
 @router.put("/users/{user_id}", response_model=ApiResponse)

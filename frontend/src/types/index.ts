@@ -14,6 +14,11 @@ export interface User {
   account_limit?: number | null
   balance?: string | null
   expire_at?: string | null
+  has_api_key?: boolean
+  api_key_mask?: string | null
+  api_key_recoverable?: boolean
+  api_key_created_at?: string | null
+  api_key_last_used_at?: string | null
 }
 
 export interface LoginRequest {
