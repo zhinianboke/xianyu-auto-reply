@@ -19,6 +19,34 @@ from common.models.xy_account import XYAccount
 
 REMOTE_TOKEN_EVENT_TYPE = "remote_token"
 
+# 远程回退场景下，风控日志事件描述使用的远程接口结果文案
+REMOTE_OUTCOME_SUCCESS = "远程接口获取Token成功"
+REMOTE_OUTCOME_FAILED = "远程接口获取Token失败"
+
+
+def build_remote_fallback_event_description(
+    *,
+    local_failure_reason: str,
+    remote_outcome: str,
+    scene: str = "",
+) -> str:
+    """构造「本地接口失败后回退远程接口」的风控日志事件描述。
+
+    事件描述同时说明本地网页接口返回了什么、远程接口最终是否成功，
+    避免只写本地失败原因导致与处理结果、处理状态看起来互相矛盾。
+
+    Args:
+        local_failure_reason: 本地网页接口失败原因（如「未返回有效Token」）。
+        remote_outcome: 远程接口结果文案（如「远程接口获取Token成功」）。
+        scene: 场景前缀，如「重取滑块验证链接时」；普通取 Token 场景传空。
+    Returns:
+        用于风控日志 event_description 的中文事件描述。
+    """
+    scene_text = str(scene or "").strip()
+    reason = str(local_failure_reason or "").strip() or "未说明原因"
+    outcome = str(remote_outcome or "").strip() or "远程接口结果未知"
+    return f"{scene_text}本地网页Token接口返回：{reason}；{outcome}"
+
 
 def build_remote_token_log_result(
     *,

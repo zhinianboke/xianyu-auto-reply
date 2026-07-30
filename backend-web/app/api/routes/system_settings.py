@@ -23,6 +23,7 @@ from app.services.system_setting_service import SENSITIVE_KEYS, SystemSettingSer
 from common.services.remote_token_api import (
     TOKEN_REMOTE_SECRET_KEY_SETTING_KEY,
     TOKEN_REMOTE_URL_SETTING_KEY,
+    is_remote_token_empty_cookies_message,
     request_remote_xianyu_token,
     validate_remote_token_settings,
 )
@@ -373,6 +374,12 @@ async def test_token_remote_interface(
             message=f"远程接口测试失败：{type(exc).__name__}: {exc}",
         )
 
+    # 连通性测试传空 Cookie，远程接口仅抱怨 Cookie 长度时说明地址与秘钥已通过校验，视为测试通过
+    connectivity_only = not result.success and is_remote_token_empty_cookies_message(result.message)
+    connectivity_passed = result.success or connectivity_only
+
+    # 风控日志按「是否真的取到 Token」记录，避免出现「获取Token成功；说明：参数cookies长度不足」这类矛盾文案；
+    # 仅连通性通过的场景在事件描述中说明原因
     await record_remote_token_risk_log(
         account_identifier="系统设置远程接口测试",
         success=result.success,
@@ -382,13 +389,28 @@ async def test_token_remote_interface(
         duration_seconds=result.duration_seconds,
         owner_id=current_user.id,
         call_user=current_user.username,
-        event_description="系统设置测试远程Token接口",
+        event_description=(
+            "系统设置测试远程Token接口：地址与秘钥校验通过，因测试只传空Cookie未取Token"
+            if connectivity_only
+            else "系统设置测试远程Token接口"
+        ),
     )
 
-    if not result.success:
+    if not connectivity_passed:
         return ApiResponse(
             success=False,
             message=f"远程接口返回：{result.message or '未返回错误说明'}",
+        )
+
+    if connectivity_only:
+        return ApiResponse(
+            success=True,
+            message="远程接口连通性测试成功，请点击保存",
+            data={
+                "token": "",
+                "device_id": "",
+                "api_mode": result.api_mode,
+            },
         )
 
     return ApiResponse(

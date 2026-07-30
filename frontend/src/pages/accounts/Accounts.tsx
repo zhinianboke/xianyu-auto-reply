@@ -1879,6 +1879,13 @@ export function Accounts() {
 
   return (
     <div className="space-y-4">
+      {/* 顶部红字提示：滑块验证无法通过或账号持续离线时，引导用户改用远程接口取 Token */}
+      <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 dark:border-red-500/30 dark:bg-red-500/10">
+        <p className="text-sm font-medium text-red-600 dark:text-red-400">
+          如遇滑块验证无法通过或者账号管理在线状态一直离线的场景，可到「系统设置 - 基础设置 - Token获取方式」，调整为远程接口。
+        </p>
+      </div>
+
       {/* Header */}
       <div className="page-header flex-between">
         <div>

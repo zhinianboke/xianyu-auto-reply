@@ -30,7 +30,12 @@ from common.services.remote_token_api import (
     request_remote_xianyu_token_from_settings_sync,
     validate_remote_token_settings,
 )
-from common.services.remote_token_risk_log_service import record_remote_token_risk_log_sync
+from common.services.remote_token_risk_log_service import (
+    REMOTE_OUTCOME_FAILED,
+    REMOTE_OUTCOME_SUCCESS,
+    build_remote_fallback_event_description,
+    record_remote_token_risk_log_sync,
+)
 from common.services.token_api_mode import (
     TOKEN_API_MODE_REMOTE,
     TOKEN_API_MODE_WEB,
@@ -46,7 +51,8 @@ _APP_KEY = "34839810"
 # 重取链接在浏览器验证的 20 秒总超时内执行，必须预留导航和滑动时间。
 _TOKEN_REFETCH_TOTAL_TIMEOUT_SECONDS = 10.0
 _TOKEN_API_CONNECT_TIMEOUT_SECONDS = 3.0
-_REMOTE_FALLBACK_EVENT_PREFIX = "重取滑块验证链接时本地网页Token接口获取失败后调用远程接口"
+# 重取滑块验证链接场景的风控日志事件描述前缀
+_REMOTE_FALLBACK_EVENT_SCENE = "重取滑块验证链接时"
 
 
 def _post_token_api(
@@ -261,7 +267,6 @@ def _try_remote_token_fallback(
         )
         return False
 
-    event_description = f"{_REMOTE_FALLBACK_EVENT_PREFIX}：{local_failure_reason}"
     logger.warning(
         f"【{cookie_id}】本地网页接口获取Token失败（{local_failure_reason}），"
         "开始调用远程接口获取Token"
@@ -277,7 +282,11 @@ def _try_remote_token_fallback(
             account_identifier=cookie_id,
             success=False,
             message=error_message,
-            event_description=event_description,
+            event_description=build_remote_fallback_event_description(
+                local_failure_reason=local_failure_reason,
+                remote_outcome=REMOTE_OUTCOME_FAILED,
+                scene=_REMOTE_FALLBACK_EVENT_SCENE,
+            ),
         )
         logger.warning(
             f"【{cookie_id}】本地网页接口获取Token失败后的远程回退异常: "
@@ -292,7 +301,13 @@ def _try_remote_token_fallback(
         api_mode=remote_result.api_mode,
         status_code=remote_result.status_code,
         duration_seconds=remote_result.duration_seconds,
-        event_description=event_description,
+        event_description=build_remote_fallback_event_description(
+            local_failure_reason=local_failure_reason,
+            remote_outcome=(
+                REMOTE_OUTCOME_SUCCESS if remote_result.success else REMOTE_OUTCOME_FAILED
+            ),
+            scene=_REMOTE_FALLBACK_EVENT_SCENE,
+        ),
     )
     if not remote_result.success:
         logger.warning(

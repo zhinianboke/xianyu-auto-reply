@@ -150,9 +150,13 @@ export function TokenApiModeSetting({
         return
       }
 
+      // 仅连通性通过时后端不返回 token，此时直接展示后端提示，避免出现「实际接口：未返回」
+      const apiMode = result.data?.api_mode
       addToast({
         type: 'success',
-        message: `远程接口测试成功，实际接口：${result.data?.api_mode || '未返回'}`,
+        message: result.data?.token
+          ? `远程接口测试成功，实际接口：${apiMode || '未返回'}`
+          : result.message || '远程接口连通性测试成功，请点击保存',
       })
     } catch (error) {
       addToast({
@@ -221,7 +225,7 @@ export function TokenApiModeSetting({
                 disabled={saving || testing}
                 required
                 onChange={(event) => setRemoteUrlValue(event.target.value)}
-                placeholder="https://example.com/api/token"
+                placeholder="https://api.xianyusite.shop/api/external/invoke"
                 className="input-ios"
               />
             </div>

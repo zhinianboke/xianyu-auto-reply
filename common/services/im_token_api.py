@@ -31,12 +31,16 @@ from common.services.remote_token_api import (
     request_remote_xianyu_token_from_settings,
     validate_remote_token_settings,
 )
-from common.services.remote_token_risk_log_service import record_remote_token_risk_log
+from common.services.remote_token_risk_log_service import (
+    REMOTE_OUTCOME_FAILED,
+    REMOTE_OUTCOME_SUCCESS,
+    build_remote_fallback_event_description,
+    record_remote_token_risk_log,
+)
 from common.utils.xianyu_utils import generate_sign, trans_cookies
 
 
 IM_TOKEN_API_BASE_URL = "https://h5api.m.goofish.com/h5"
-REMOTE_FALLBACK_EVENT_DESCRIPTION = "本地网页Token接口获取失败后调用远程接口"
 # 远程接口取 Token 超时时的最大尝试次数（首次 + 重试 2 次）；全部超时后才交由上层处理滑块
 REMOTE_TOKEN_TIMEOUT_MAX_ATTEMPTS = 3
 # 远程接口超时重试之间的等待秒数
@@ -260,7 +264,7 @@ async def _request_remote_token_from_settings(
     cookies: str,
     timeout_seconds: int,
     log_tag: str,
-    event_description: str,
+    local_failure_reason: str,
 ) -> ImTokenApiResult:
     """调用远程 Token 接口并记录完整的风控日志。
 
@@ -274,7 +278,7 @@ async def _request_remote_token_from_settings(
         cookies: 当前账号完整 Cookie 字符串，传给远程接口 data.cookies。
         timeout_seconds: 单次 HTTP 请求总超时时间。
         log_tag: 账号标识，用于日志定位。
-        event_description: 风控日志事件说明。
+        local_failure_reason: 本地网页接口失败原因，写入风控日志事件描述。
     Returns:
         统一的 Token 接口响应结果。
     Raises:
@@ -309,7 +313,10 @@ async def _request_remote_token_from_settings(
                 account_identifier=log_tag,
                 success=False,
                 message=f"连续{REMOTE_TOKEN_TIMEOUT_MAX_ATTEMPTS}次超时: {message}",
-                event_description=event_description,
+                event_description=build_remote_fallback_event_description(
+                    local_failure_reason=local_failure_reason,
+                    remote_outcome=REMOTE_OUTCOME_FAILED,
+                ),
             )
             raise
         except Exception as exc:
@@ -319,7 +326,10 @@ async def _request_remote_token_from_settings(
                 account_identifier=log_tag,
                 success=False,
                 message=message,
-                event_description=event_description,
+                event_description=build_remote_fallback_event_description(
+                    local_failure_reason=local_failure_reason,
+                    remote_outcome=REMOTE_OUTCOME_FAILED,
+                ),
             )
             raise
 
@@ -339,7 +349,12 @@ async def _request_remote_token_from_settings(
         api_mode=remote_result.api_mode,
         status_code=remote_result.status_code,
         duration_seconds=remote_result.duration_seconds,
-        event_description=event_description,
+        event_description=build_remote_fallback_event_description(
+            local_failure_reason=local_failure_reason,
+            remote_outcome=(
+                REMOTE_OUTCOME_SUCCESS if remote_result.success else REMOTE_OUTCOME_FAILED
+            ),
+        ),
     )
     return _remote_result_to_im_token_result(remote_result, device_id)
 
@@ -394,9 +409,7 @@ async def _try_remote_token_fallback(
             cookies=cookies,
             timeout_seconds=timeout_seconds,
             log_tag=log_tag,
-            event_description=(
-                f"{REMOTE_FALLBACK_EVENT_DESCRIPTION}：{local_failure_reason}"
-            ),
+            local_failure_reason=local_failure_reason,
         )
     except Exception as exc:
         logger.warning(

@@ -27,6 +27,31 @@ TOKEN_REMOTE_URL_SETTING_KEY = "token.remote_url"
 TOKEN_REMOTE_SECRET_KEY_SETTING_KEY = "token.remote_secret_key"
 REMOTE_TOKEN_TYPE = "xianyu_token"
 
+# 连通性测试会故意传空 Cookie，远程接口若只抱怨 Cookie 长度，说明地址与秘钥均已通过校验
+REMOTE_TOKEN_EMPTY_COOKIES_HINTS = (
+    "cookies长度不足",
+    "cookie长度不足",
+    "cookies不能为空",
+    "cookie不能为空",
+)
+
+
+def is_remote_token_empty_cookies_message(message: str) -> bool:
+    """判断远程接口返回是否仅为「Cookie 为空/长度不足」这类参数校验失败。
+
+    连通性测试不传真实 Cookie，远程接口回复这类信息时表示请求已到达且秘钥有效，
+    可视为连通性测试通过。
+
+    Args:
+        message: 远程接口返回的 message 文案。
+    Returns:
+        属于空 Cookie 参数校验失败返回 True，否则返回 False。
+    """
+    normalized = str(message or "").replace(" ", "").replace("　", "").lower()
+    if not normalized:
+        return False
+    return any(hint in normalized for hint in REMOTE_TOKEN_EMPTY_COOKIES_HINTS)
+
 
 @dataclass(frozen=True, slots=True)
 class RemoteTokenSettings:
