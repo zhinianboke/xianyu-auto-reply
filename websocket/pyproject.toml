@@ -1,6 +1,6 @@
 [project]
 name = "xianyu-websocket-service"
-version = "0.1.4"
+version = "0.2.8"
 description = "闲鱼自动回复系统 - WebSocket服务"
 requires-python = ">=3.11"
 

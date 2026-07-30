@@ -1,5 +1,11 @@
 # 更新日志
 
+## 0.2.8 - 2026-07-30
+
+- 新增 GitHub Actions 生产发布流水线：版本标签或手动触发后并行构建 Backend、WebSocket、Scheduler 和 Frontend 的 `linux/amd64` 镜像并推送 GHCR。
+- 新增受限 SSH 部署脚本和生产 Compose 覆盖文件；部署前自动备份 MySQL，只重建四个应用容器，并验证容器与公网健康状态。
+- Actions 仅使用短期 `GITHUB_TOKEN` 登录 GHCR，普通分支和 Pull Request 不触发生产部署，服务器专用密钥不能执行任意 Shell 命令。
+
 ## 0.2.5 - 2026-07-29
 
 - 卡券 API 配置的“POST 请求可用参数”增加 `item_title` 快捷变量；自动发货、手动发货和提货请求均支持将 `{item_title}` 替换为真实商品标题，并在商品目录尚未采集到外部发布商品时回退使用卡券关联记录保存的标题。

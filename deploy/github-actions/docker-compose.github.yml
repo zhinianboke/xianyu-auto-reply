@@ -1,0 +1,18 @@
+services:
+  backend-web:
+    image: ghcr.io/yingyanzhitong/xianyu-backend-web:${CUSTOM_IMAGE_TAG:?请配置 CUSTOM_IMAGE_TAG}
+    pull_policy: always
+    environment:
+      VERSION: ${CUSTOM_IMAGE_TAG}
+
+  websocket:
+    image: ghcr.io/yingyanzhitong/xianyu-websocket:${CUSTOM_IMAGE_TAG:?请配置 CUSTOM_IMAGE_TAG}
+    pull_policy: always
+
+  scheduler:
+    image: ghcr.io/yingyanzhitong/xianyu-scheduler:${CUSTOM_IMAGE_TAG:?请配置 CUSTOM_IMAGE_TAG}
+    pull_policy: always
+
+  frontend:
+    image: ghcr.io/yingyanzhitong/xianyu-frontend:${CUSTOM_IMAGE_TAG:?请配置 CUSTOM_IMAGE_TAG}
+    pull_policy: always
