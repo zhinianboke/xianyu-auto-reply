@@ -23,6 +23,15 @@ import { getApiErrorMessage } from '@/utils/request'
 import { getBeijingDateInputValue } from '@/utils/date'
 import type { Account } from '@/types'
 
+// Token获取方式专用域名：这些是取Token的远程接口地址，不是过滑块远程服务，禁止填到本页保存
+const TOKEN_API_ONLY_DOMAINS = ['api.xianyusite.shop', 'api.zhinianblog.cn']
+
+/** 返回远程服务URL中命中的Token接口域名，未命中返回空字符串 */
+const findTokenApiDomain = (url: string): string => {
+  const lowered = url.trim().toLowerCase()
+  return TOKEN_API_ONLY_DOMAINS.find((domain) => lowered.includes(domain)) || ''
+}
+
 export function RiskLogs() {
   const { addToast } = useUIStore()
   const { isAuthenticated, token, _hasHydrated, user } = useAuthStore()
@@ -201,7 +210,23 @@ export function RiskLogs() {
     }
   }
 
+  /**
+   * 校验远程服务URL是否误填了Token获取接口域名，命中则提示并返回 true（保存/测试共用）
+   */
+  const rejectTokenApiUrl = (url: string): boolean => {
+    const tokenApiDomain = findTokenApiDomain(url)
+    if (!tokenApiDomain) return false
+    addToast({
+      type: 'error',
+      message: `该URL（${tokenApiDomain}）不是在此处填写，需要在「系统设置-Token获取方式」中填写`,
+    })
+    return true
+  }
+
   const handleSaveRemoteConfig = async () => {
+    // 先拦截误填的Token接口域名，避免把取Token地址存成过滑块服务地址
+    if (rejectTokenApiUrl(remoteUrl)) return
+
     const parseNonnegativeInteger = (value: string, label: string) => {
       const normalized = value.trim()
       if (!/^\d+$/.test(normalized)) {
@@ -257,6 +282,8 @@ export function RiskLogs() {
       addToast({ type: 'error', message: '请先填写远程服务URL' })
       return
     }
+    // 误填Token获取接口域名时不发起测试请求
+    if (rejectTokenApiUrl(url)) return
     try {
       setTesting(true)
       const res = await testRemoteSliderSolve(url, remoteSecret.trim())

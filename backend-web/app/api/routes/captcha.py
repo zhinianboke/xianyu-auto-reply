@@ -98,6 +98,31 @@ REMOTE_CONFIG_BLOCK_REMOTE_CALLS_KEY = "captcha.block_remote_calls"
 REMOTE_CONFIG_WEIGHT_LOCAL_KEY = "captcha.real_mouse_weight_local"
 REMOTE_CONFIG_WEIGHT_REMOTE_KEY = "captcha.real_mouse_weight_remote"
 
+# Token获取方式专用域名：这些是取Token的远程接口地址，不属于过滑块远程服务，
+# 误填到风控日志的远程服务URL会导致过滑块一直失败，因此保存时直接拦截。
+TOKEN_API_ONLY_DOMAINS = ("api.xianyusite.shop", "api.zhinianblog.cn")
+
+
+def _check_token_api_domain(url: str) -> Optional[ApiResponse]:
+    """
+    校验过滑块远程服务URL是否误填了「Token获取方式」的接口域名。
+
+    保存与测试两处入口共用，命中则直接返回失败响应，避免各处重复写文案。
+
+    Args:
+        url: 用户填写的远程过滑块服务URL
+    Returns:
+        命中时返回失败的 ApiResponse；未命中返回 None
+    """
+    lowered = (url or "").strip().lower()
+    for domain in TOKEN_API_ONLY_DOMAINS:
+        if domain in lowered:
+            return ApiResponse(
+                success=False,
+                message=f"该URL（{domain}）不是在此处填写，需要在「系统设置-Token获取方式」中填写",
+            )
+    return None
+
 
 def _sanitize_weight(value, default: float = 1.0) -> float:
     """把权重值规整为非负浮点数，非法则回退默认（1）。"""
@@ -635,6 +660,10 @@ async def test_remote_slider_solve(
         return ApiResponse(success=False, message="请先填写远程服务URL")
     if not url.lower().startswith(("http://", "https://")):
         return ApiResponse(success=False, message="远程服务URL 必须以 http:// 或 https:// 开头")
+    # 误填Token获取接口域名时直接拦截，不向远程发起请求
+    domain_error = _check_token_api_domain(url)
+    if domain_error:
+        return domain_error
 
     payload = {
         "secret_key": (request.secret_key or "").strip(),
@@ -737,8 +766,14 @@ async def update_remote_config(
     if request.remote_cooldown_seconds is not None and request.remote_cooldown_seconds < 0:
         return ApiResponse(success=False, message="远程调用冷却时间不能小于 0")
 
+    # 拦截误填的 Token 获取接口域名，避免把取Token地址配成过滑块服务地址
+    remote_url = (request.url or "").strip()
+    domain_error = _check_token_api_domain(remote_url)
+    if domain_error:
+        return domain_error
+
     settings_to_save: dict[str, tuple[str, str | None]] = {
-        REMOTE_CONFIG_URL_KEY: ((request.url or "").strip(), "远程过滑块服务URL"),
+        REMOTE_CONFIG_URL_KEY: (remote_url, "远程过滑块服务URL"),
         REMOTE_CONFIG_SECRET_KEY: ((request.secret_key or "").strip(), "远程过滑块秘钥"),
         REMOTE_CONFIG_PASS_COOKIES_KEY: (
             "true" if request.pass_cookies else "false",
