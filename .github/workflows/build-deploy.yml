@@ -1,0 +1,134 @@
+name: 构建并部署生产镜像
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "要构建和部署的版本号，例如 0.2.8"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: xianyu-production
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.version.outputs.image_tag }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7.0.1
+
+      - name: 解析版本号
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            image_tag="${GITHUB_REF_NAME#v}"
+          else
+            image_tag="${{ inputs.version }}"
+          fi
+          if [[ ! "${image_tag}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "版本号格式无效：${image_tag}" >&2
+            exit 1
+          fi
+          package_version="$(node -p "require('./package.json').version")"
+          if [[ "${package_version}" != "${image_tag}" ]]; then
+            echo "package.json 版本 ${package_version} 与部署版本 ${image_tag} 不一致" >&2
+            exit 1
+          fi
+          echo "image_tag=${image_tag}" >> "${GITHUB_OUTPUT}"
+
+  build:
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: backend-web
+            dockerfile: backend-web/Dockerfile
+          - component: websocket
+            dockerfile: websocket/Dockerfile
+          - component: scheduler
+            dockerfile: scheduler/Dockerfile
+          - component: frontend
+            dockerfile: docker/frontend/Dockerfile
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7.0.1
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 配置 Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+
+      - name: 构建并推送 ${{ matrix.component }}
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/xianyu-${{ matrix.component }}:${{ needs.version.outputs.image_tag }}
+            ghcr.io/${{ github.repository_owner }}/xianyu-${{ matrix.component }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+
+  deploy:
+    needs:
+      - version
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 安装 Cloudflare SSH 代理
+        shell: bash
+        run: |
+          curl -fsSL \
+            https://github.com/cloudflare/cloudflared/releases/download/2026.7.3/cloudflared-linux-amd64 \
+            -o cloudflared
+          echo "9d71c677db00134c1bd4144b7783486b654ad281b1ea62b4972098d19f770f17  cloudflared" |
+            sha256sum -c -
+          sudo install -m 0755 cloudflared /usr/local/bin/cloudflared
+
+      - name: 配置受限 SSH
+        shell: bash
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          umask 077
+          mkdir -p "${HOME}/.ssh"
+          printf '%s\n' "${DEPLOY_SSH_KEY}" > "${HOME}/.ssh/deploy_key"
+          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+
+      - name: 部署到生产服务器
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_TAG: ${{ needs.version.outputs.image_tag }}
+        run: |
+          printf '%s' "${GHCR_TOKEN}" |
+            ssh -i "${HOME}/.ssh/deploy_key" \
+              -o BatchMode=yes \
+              -o IdentitiesOnly=yes \
+              -o "ProxyCommand=cloudflared access ssh --hostname %h" \
+              "${DEPLOY_USER}@${DEPLOY_HOST}" \
+              "deploy ${IMAGE_TAG} ${GITHUB_ACTOR}"

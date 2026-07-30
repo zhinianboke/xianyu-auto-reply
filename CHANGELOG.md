@@ -1,5 +1,11 @@
 # 更新日志
 
+## 0.2.8 - 2026-07-30
+
+- 新增 GitHub Actions 生产发布流水线：版本标签或手动触发后并行构建 Backend、WebSocket、Scheduler 和 Frontend 的 `linux/amd64` 镜像并推送 GHCR。
+- 新增受限 SSH 部署脚本和生产 Compose 覆盖文件；部署前自动备份 MySQL，只重建四个应用容器，并验证容器与公网健康状态。
+- Actions 仅使用短期 `GITHUB_TOKEN` 登录 GHCR，普通分支和 Pull Request 不触发生产部署，服务器专用密钥不能执行任意 Shell 命令。
+
 ## 0.2.6 - 2026-07-29
 
 - 商品管理改为按账号数据库主键和所属用户精确查询，前端切换账号时丢弃过期请求并立即清空旧列表，避免慢请求覆盖后产生跨账号展示。
