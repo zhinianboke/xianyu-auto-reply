@@ -196,12 +196,12 @@ export function TokenApiModeSetting({
           <p className="mt-1">
             秘钥请到{' '}
             <a
-              href="https://api.zhinianblog.cn"
+              href="https://api.xianyusite.shop"
               target="_blank"
               rel="noreferrer"
               className="font-medium underline underline-offset-2 hover:opacity-80"
             >
-              https://api.zhinianblog.cn
+              https://api.xianyusite.shop
             </a>{' '}
             获取
           </p>
