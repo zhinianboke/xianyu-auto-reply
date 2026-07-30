@@ -13,6 +13,8 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from app.core.http_client import get_http_client
+from app.core.config import get_settings
 from common.models.auto_reply_message_log import XYAutoReplyMessageLog
 
 
@@ -74,6 +76,28 @@ def clean_param(param_str: str) -> str:
     return param_str
 
 
+async def _send_via_websocket(account_id: str, chat_id: str, message: str) -> dict:
+    """直接调用 WebSocket 服务的 /internal/accounts/{id}/send-message 接口。
+
+    说明：websocket_client.send_message 内部使用的字段名（content）
+    与 WebSocket 服务端 Schema（message）不一致，会触发 422 校验错误；
+    这里绕过封装层直接发送正确的 payload。
+    """
+    settings = get_settings()
+    base_url = settings.websocket_service_url.rstrip('/')
+    url = f"{base_url}/internal/accounts/{account_id}/send-message"
+    try:
+        client = get_http_client()
+        return await client.post(url, json={
+            "chat_id": chat_id,
+            "message": message,
+            "wait_result": False,
+        })
+    except Exception as e:
+        logger.error(f"调用websocket发送消息失败: account_id={account_id}, 错误: {e}")
+        return {"success": False, "message": f"调用websocket发送消息失败: {str(e)}"}
+
+
 # ==================== 路由 ====================
 
 @router.post("/send", response_model=SendMessageResponse)
@@ -123,14 +147,10 @@ async def send_message(request: SendMessageRequest):
                     message=f"参数 {param_name} 不能为空"
                 )
         
-        # 通过WebSocket服务发送消息
-        from app.services.websocket_client import websocket_client
-        
-        result = await websocket_client.send_message(
+        result = await _send_via_websocket(
             account_id=cleaned_cookie_id,
             chat_id=cleaned_chat_id,
-            content=cleaned_message,
-            message_type="text"
+            message=cleaned_message,
         )
         
         if result.get('success'):
@@ -233,13 +253,10 @@ async def send_message_by_nickname(
             f"account_id={matched_account_id}"
         )
 
-        from app.services.websocket_client import websocket_client
-
-        result = await websocket_client.send_message(
+        result = await _send_via_websocket(
             account_id=matched_account_id,
             chat_id=matched_chat_id,
-            content=cleaned_message,
-            message_type="text",
+            message=cleaned_message,
         )
 
         if result.get("success"):
