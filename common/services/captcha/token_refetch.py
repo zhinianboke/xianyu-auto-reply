@@ -235,6 +235,7 @@ def _try_remote_token_fallback(
     cookies_str: str,
     timeout_seconds: float,
     local_failure_reason: str,
+    local_duration_seconds: float = 0,
 ) -> bool:
     """在远程接口已配置时，以远程 Token 结果回退本地网页接口失败。
 
@@ -244,6 +245,7 @@ def _try_remote_token_fallback(
         cookies_str: 当前账号完整 Cookie 字符串，传给远程接口 data.cookies。
         timeout_seconds: 远程请求可用的剩余超时预算。
         local_failure_reason: 本地网页接口失败原因。
+        local_duration_seconds: 本地网页接口耗时，与远程耗时分开记入风控日志。
     Returns:
         远程接口是否成功返回有效 Token。
     """
@@ -271,6 +273,8 @@ def _try_remote_token_fallback(
         f"【{cookie_id}】本地网页接口获取Token失败（{local_failure_reason}），"
         "开始调用远程接口获取Token"
     )
+    # 远程整体耗时自行计时：异常时拿不到 RemoteTokenResult.duration_seconds
+    remote_started_at = time.monotonic()
     try:
         remote_result = request_remote_xianyu_token_from_settings_sync(
             cookies=cookies_str,
@@ -282,6 +286,8 @@ def _try_remote_token_fallback(
             account_identifier=cookie_id,
             success=False,
             message=error_message,
+            duration_seconds=time.monotonic() - remote_started_at,
+            local_duration_seconds=local_duration_seconds,
             event_description=build_remote_fallback_event_description(
                 local_failure_reason=local_failure_reason,
                 remote_outcome=REMOTE_OUTCOME_FAILED,
@@ -301,6 +307,7 @@ def _try_remote_token_fallback(
         api_mode=remote_result.api_mode,
         status_code=remote_result.status_code,
         duration_seconds=remote_result.duration_seconds,
+        local_duration_seconds=local_duration_seconds,
         event_description=build_remote_fallback_event_description(
             local_failure_reason=local_failure_reason,
             remote_outcome=(
@@ -391,6 +398,10 @@ def request_fresh_captcha_url(
                     local_failure_reason=(
                         f"请求异常：{type(local_error).__name__}: {local_error}"
                     ),
+                    # 本地耗时由总预算反推，避免额外调用 monotonic 影响超时预算计算
+                    local_duration_seconds=(
+                        _TOKEN_REFETCH_TOTAL_TIMEOUT_SECONDS - remaining_seconds
+                    ),
                 )
             return result
         result["new_cookies"] = dict(response_cookies)
@@ -411,6 +422,10 @@ def request_fresh_captcha_url(
                 cookies_str=cookies_str,
                 timeout_seconds=remaining_seconds,
                 local_failure_reason="未返回有效Token",
+                # 本地耗时由总预算反推，避免额外调用 monotonic 影响超时预算计算
+                local_duration_seconds=(
+                    _TOKEN_REFETCH_TOTAL_TIMEOUT_SECONDS - remaining_seconds
+                ),
             ):
                 return result
 

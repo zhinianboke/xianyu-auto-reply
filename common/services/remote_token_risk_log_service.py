@@ -55,15 +55,20 @@ def build_remote_token_log_result(
     api_mode: str = "",
     status_code: int = 0,
     duration_seconds: float = 0,
+    local_duration_seconds: float = 0,
 ) -> str:
     """构造远程 Token 获取结果文案。
+
+    取 Token 是「先本地网页接口、失败后再远程接口」两段串行流程，耗时分开记录，
+    便于排查究竟是本地慢还是远程慢；两段都有时额外给出总耗时。
 
     Args:
         success: 远程接口业务是否成功。
         message: 远程接口返回或本地解析出的结果说明。
         api_mode: 远程接口返回的实际 Token 接口。
         status_code: HTTP 状态码。
-        duration_seconds: 请求耗时。
+        duration_seconds: 远程接口耗时。
+        local_duration_seconds: 本地网页接口耗时（含令牌过期重试）。
     Returns:
         用于风控日志 processing_result 的中文结果文案。
     """
@@ -75,8 +80,12 @@ def build_remote_token_log_result(
         parts.append(f"实际接口：{api_mode}")
     if status_code:
         parts.append(f"HTTP状态：{status_code}")
+    if local_duration_seconds:
+        parts.append(f"本地接口耗时：{local_duration_seconds:.2f}秒")
     if duration_seconds:
-        parts.append(f"耗时：{duration_seconds:.2f}秒")
+        parts.append(f"远程接口耗时：{duration_seconds:.2f}秒")
+    if local_duration_seconds and duration_seconds:
+        parts.append(f"总耗时：{local_duration_seconds + duration_seconds:.2f}秒")
     return "；".join(parts)
 
 
@@ -88,6 +97,7 @@ async def record_remote_token_risk_log(
     api_mode: str = "",
     status_code: int = 0,
     duration_seconds: float = 0,
+    local_duration_seconds: float = 0,
     owner_id: int | None = None,
     call_user: str | None = None,
     event_description: str = "远程接口获取闲鱼Token",
@@ -100,7 +110,8 @@ async def record_remote_token_risk_log(
         message: 结果说明。
         api_mode: 实际 Token 接口。
         status_code: HTTP 状态码。
-        duration_seconds: 请求耗时。
+        duration_seconds: 远程接口耗时。
+        local_duration_seconds: 本地网页接口耗时；无本地调用时传 0。
         owner_id: 所属用户 ID；账号不存在时使用该值。
         call_user: 调用用户说明。
         event_description: 事件描述。
@@ -114,6 +125,7 @@ async def record_remote_token_risk_log(
         api_mode=api_mode,
         status_code=status_code,
         duration_seconds=duration_seconds,
+        local_duration_seconds=local_duration_seconds,
     )
     try:
         async with async_session_maker() as session:
@@ -156,6 +168,7 @@ def record_remote_token_risk_log_sync(
     api_mode: str = "",
     status_code: int = 0,
     duration_seconds: float = 0,
+    local_duration_seconds: float = 0,
     event_description: str = "远程接口获取闲鱼Token",
 ) -> None:
     """同步记录远程 Token 获取风控日志。
@@ -166,7 +179,8 @@ def record_remote_token_risk_log_sync(
         message: 结果说明。
         api_mode: 实际 Token 接口。
         status_code: HTTP 状态码。
-        duration_seconds: 请求耗时。
+        duration_seconds: 远程接口耗时。
+        local_duration_seconds: 本地网页接口耗时；无本地调用时传 0。
         event_description: 事件描述。
     Returns:
         无返回值；写入失败只记录日志，不影响取 Token 主流程。
@@ -178,6 +192,7 @@ def record_remote_token_risk_log_sync(
         api_mode=api_mode,
         status_code=status_code,
         duration_seconds=duration_seconds,
+        local_duration_seconds=local_duration_seconds,
     )
     try:
         log_id = db_manager.add_risk_control_log(

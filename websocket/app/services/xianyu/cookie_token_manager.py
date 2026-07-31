@@ -24,6 +24,7 @@ from common.models.system_setting import SystemSetting
 from common.models.token_cache import TokenCache
 from common.services.im_token_api import (
     extract_im_access_token,
+    is_session_expired_token_result,
     request_im_token_with_fallback,
 )
 from common.services.risk_control_log_query_service import (
@@ -1230,6 +1231,48 @@ class CookieTokenManager:
                 await self._set_cached_token(new_token, self.device_id)
                 return new_token
 
+            # Session过期先于滑块判断：Cookie 已失效时滑块验证结果同样无效，
+            # 过滑块纯属白跑（占用并发槽位、失败后还会清缓存发通知），
+            # 必须直接走密码登录续期。（仅Session过期触发密码登录，令牌过期不触发）
+            if is_session_expired_token_result(api_result):
+                refresh_result = await self.try_password_login_refresh("Session过期")
+
+                if refresh_result == "no_credentials":
+                    # 未配置密码，禁用账号
+                    logger.warning(f"【{self.cookie_id}】Session过期且未配置密码，立即禁用账号")
+
+                    # 自动禁用账号
+                    try:
+                        from common.db.compat import db_manager
+                        db_manager.disable_account(self.cookie_id, reason="账号已掉线且未配置账号密码，自动禁用")
+                        logger.warning(f"【{self.cookie_id}】账号已自动禁用")
+                    except Exception as disable_e:
+                        logger.error(f"【{self.cookie_id}】自动禁用账号失败: {self._safe_str(disable_e)}")
+
+                    notification_sent = True
+                    return None
+                if refresh_result is True:
+                    # 刷新成功，清除旧缓存并重新获取token
+                    await self._delete_cached_token()
+                    return await self.refresh_token(captcha_retry_count + 1)
+                if refresh_result == "skipped_cooldown":
+                    # 密码登录冷却期内跳过：包括「上次登录冷却 300 秒内」与「账密错误
+                    # 冷却 5 小时内」两种确定性可恢复状态。账号本身一切正常，只是
+                    # 当下不能立即用密码登录刷新 cookie，应等待冷却结束 / 用户修正
+                    # 账密。标记为 skipped_cooldown（main 循环 non_counted_statuses
+                    # 已包含此状态，不计入 _token_fetch_failures，避免被自动禁用）。
+                    self.last_token_refresh_status = "skipped_cooldown"
+                    self.current_token = None
+                    await self._delete_cached_token()
+                    return None
+
+                # 刷新失败（密码登录真实失败：账号信息缺失等）
+                notification_sent = True
+                self.last_token_refresh_status = "failed_session_expired"
+                self.current_token = None
+                await self._delete_cached_token()
+                return None
+
             # 检查是否需要滑块验证
             if self.need_captcha_verification(res_json):
                 if local_slider_disabled:
@@ -1272,48 +1315,6 @@ class CookieTokenManager:
                     logger.error(f"【{self.cookie_id}】滑块验证处理异常: {self._safe_str(captcha_e)}")
                     notification_sent = True
                     self.last_token_refresh_status = "failed_captcha_exception"
-                    self.current_token = None
-                    await self._delete_cached_token()
-                    return None
-
-            # 检查是否包含"Session过期"（仅Session过期触发密码登录，令牌过期不触发）
-            if isinstance(res_json, dict):
-                res_json_str = json.dumps(res_json, ensure_ascii=False, separators=(',', ':'))
-                if 'Session过期' in res_json_str:
-                    refresh_result = await self.try_password_login_refresh("Session过期")
-
-                    if refresh_result == "no_credentials":
-                        # 未配置密码，禁用账号
-                        logger.debug(f"【{self.cookie_id}】Session过期且未配置密码，立即禁用账号")
-
-                        # 自动禁用账号
-                        try:
-                            from common.db.compat import db_manager
-                            db_manager.disable_account(self.cookie_id, reason="账号已掉线且未配置账号密码，自动禁用")
-                            logger.warning(f"【{self.cookie_id}】账号已自动禁用")
-                        except Exception as disable_e:
-                            logger.error(f"【{self.cookie_id}】自动禁用账号失败: {self._safe_str(disable_e)}")
-
-                        notification_sent = True
-                        return None
-                    if refresh_result is True:
-                        # 刷新成功，清除旧缓存并重新获取token
-                        await self._delete_cached_token()
-                        return await self.refresh_token(captcha_retry_count + 1)
-                    if refresh_result == "skipped_cooldown":
-                        # 密码登录冷却期内跳过：包括「上次登录冷却 300 秒内」与「账密错误
-                        # 冷却 5 小时内」两种确定性可恢复状态。账号本身一切正常，只是
-                        # 当下不能立即用密码登录刷新 cookie，应等待冷却结束 / 用户修正
-                        # 账密。标记为 skipped_cooldown（main 循环 non_counted_statuses
-                        # 已包含此状态，不计入 _token_fetch_failures，避免被自动禁用）。
-                        self.last_token_refresh_status = "skipped_cooldown"
-                        self.current_token = None
-                        await self._delete_cached_token()
-                        return None
-
-                    # 刷新失败（密码登录真实失败：账号信息缺失等）
-                    notification_sent = True
-                    self.last_token_refresh_status = "failed_session_expired"
                     self.current_token = None
                     await self._delete_cached_token()
                     return None

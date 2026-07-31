@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass, replace
 from typing import Any
@@ -37,6 +38,7 @@ from common.services.remote_token_risk_log_service import (
     build_remote_fallback_event_description,
     record_remote_token_risk_log,
 )
+from common.utils.cookie_refresh import is_session_expired_error
 from common.utils.xianyu_utils import generate_sign, trans_cookies
 
 
@@ -68,6 +70,9 @@ class ImTokenApiResult:
     duration_seconds: float
     api_mode: str = DEFAULT_TOKEN_API_MODE
     device_id: str = ""
+    # 远程接口回退失败时的原因文本。独立字段承载，不写入 response_json 的 ret / data，
+    # 避免污染滑块关键词与令牌过期的子串判断，也不覆盖本地响应里的滑块验证链接。
+    remote_failure_message: str = ""
 
 
 def extract_im_access_token(response_json: Any) -> str | None:
@@ -93,6 +98,30 @@ def extract_im_access_token(response_json: Any) -> str | None:
         return None
     access_token = data.get("accessToken")
     return access_token if isinstance(access_token, str) and access_token else None
+
+
+def is_session_expired_token_result(result: ImTokenApiResult) -> bool:
+    """判断取 Token 结果是否为 Session 过期（Cookie 已失效）。
+
+    同时检查本地响应体与远程接口回退失败原因：远程回退失败时响应体保留的是本地结果，
+    Session 过期信息只在 ``remote_failure_message`` 里，两处都要判。
+
+    Args:
+        result: 取 Token 的请求结果。
+
+    Returns:
+        True 表示 Session 已过期，需要走密码登录续期。
+    """
+    response_json = result.response_json
+    if isinstance(response_json, dict):
+        response_text = json.dumps(response_json, ensure_ascii=False, separators=(',', ':'))
+        if is_session_expired_error([response_text]):
+            return True
+
+    return bool(
+        result.remote_failure_message
+        and is_session_expired_error([result.remote_failure_message])
+    )
 
 
 def _merge_cookie_string(cookies_str: str, cookie_updates: dict[str, str]) -> str:
@@ -245,9 +274,10 @@ def _remote_result_to_im_token_result(
             device_id=result.device_id,
         )
 
+    failure_message = result.message or "远程接口取Token失败"
     return ImTokenApiResult(
         response_json={
-            "ret": [f"FAIL::{result.message or '远程接口取Token失败'}"],
+            "ret": [f"FAIL::{failure_message}"],
             "data": result.response_json,
         },
         response_cookies={},
@@ -255,6 +285,8 @@ def _remote_result_to_im_token_result(
         duration_seconds=result.duration_seconds,
         api_mode=TOKEN_API_MODE_REMOTE,
         device_id=current_device_id,
+        # 远程失败原因单独留一份，供上层在回退失败、只剩本地响应时判断 Session 过期
+        remote_failure_message=failure_message,
     )
 
 
@@ -265,6 +297,7 @@ async def _request_remote_token_from_settings(
     timeout_seconds: int,
     log_tag: str,
     local_failure_reason: str,
+    local_duration_seconds: float = 0,
 ) -> ImTokenApiResult:
     """调用远程 Token 接口并记录完整的风控日志。
 
@@ -279,6 +312,7 @@ async def _request_remote_token_from_settings(
         timeout_seconds: 单次 HTTP 请求总超时时间。
         log_tag: 账号标识，用于日志定位。
         local_failure_reason: 本地网页接口失败原因，写入风控日志事件描述。
+        local_duration_seconds: 本地网页接口已消耗的耗时，与远程耗时分开记入风控日志。
     Returns:
         统一的 Token 接口响应结果。
     Raises:
@@ -286,6 +320,9 @@ async def _request_remote_token_from_settings(
     """
     prefix = f"【{log_tag}】" if log_tag else ""
     remote_result = None
+    # 远程整体耗时自行计时：超时/异常时拿不到 RemoteTokenResult.duration_seconds，
+    # 且连续重试与重试间隔的开销也需要体现在风控日志里
+    remote_started_at = time.monotonic()
     for attempt in range(1, REMOTE_TOKEN_TIMEOUT_MAX_ATTEMPTS + 1):
         try:
             remote_result = await request_remote_xianyu_token_from_settings(
@@ -313,6 +350,8 @@ async def _request_remote_token_from_settings(
                 account_identifier=log_tag,
                 success=False,
                 message=f"连续{REMOTE_TOKEN_TIMEOUT_MAX_ATTEMPTS}次超时: {message}",
+                duration_seconds=time.monotonic() - remote_started_at,
+                local_duration_seconds=local_duration_seconds,
                 event_description=build_remote_fallback_event_description(
                     local_failure_reason=local_failure_reason,
                     remote_outcome=REMOTE_OUTCOME_FAILED,
@@ -326,6 +365,8 @@ async def _request_remote_token_from_settings(
                 account_identifier=log_tag,
                 success=False,
                 message=message,
+                duration_seconds=time.monotonic() - remote_started_at,
+                local_duration_seconds=local_duration_seconds,
                 event_description=build_remote_fallback_event_description(
                     local_failure_reason=local_failure_reason,
                     remote_outcome=REMOTE_OUTCOME_FAILED,
@@ -349,6 +390,7 @@ async def _request_remote_token_from_settings(
         api_mode=remote_result.api_mode,
         status_code=remote_result.status_code,
         duration_seconds=remote_result.duration_seconds,
+        local_duration_seconds=local_duration_seconds,
         event_description=build_remote_fallback_event_description(
             local_failure_reason=local_failure_reason,
             remote_outcome=(
@@ -366,6 +408,7 @@ async def _try_remote_token_fallback(
     timeout_seconds: int,
     log_tag: str,
     local_failure_reason: str,
+    local_duration_seconds: float = 0,
 ) -> ImTokenApiResult | None:
     """在远程接口已配置时，尝试作为本地网页接口的回退。
 
@@ -375,6 +418,7 @@ async def _try_remote_token_fallback(
         timeout_seconds: HTTP 请求总超时时间。
         log_tag: 账号标识，用于日志定位。
         local_failure_reason: 本地接口失败原因。
+        local_duration_seconds: 本地网页接口耗时，与远程耗时分开记入风控日志。
     Returns:
         已调用远程接口时返回响应结果；远程未配置或读取失败时返回 None。
     """
@@ -410,6 +454,7 @@ async def _try_remote_token_fallback(
             timeout_seconds=timeout_seconds,
             log_tag=log_tag,
             local_failure_reason=local_failure_reason,
+            local_duration_seconds=local_duration_seconds,
         )
     except Exception as exc:
         logger.warning(
@@ -417,6 +462,30 @@ async def _try_remote_token_fallback(
             f"{type(exc).__name__}: {exc}"
         )
         return None
+
+
+def _attach_remote_failure(
+    local_result: ImTokenApiResult,
+    remote_result: ImTokenApiResult | None,
+) -> ImTokenApiResult:
+    """远程回退失败时，把远程失败原因挂到即将返回的本地结果上。
+
+    只写 ``remote_failure_message`` 字段，本地响应的 ret / data 保持原样，
+    确保滑块关键词判断与滑块验证链接提取不受影响。
+
+    Args:
+        local_result: 本地网页接口的响应结果。
+        remote_result: 远程回退结果；未配置或读取失败时为 None。
+
+    Returns:
+        带上远程失败原因的本地结果；无远程失败信息时原样返回。
+    """
+    if not remote_result or not remote_result.remote_failure_message:
+        return local_result
+    return replace(
+        local_result,
+        remote_failure_message=remote_result.remote_failure_message,
+    )
 
 
 async def request_im_token_with_fallback(
@@ -450,6 +519,8 @@ async def request_im_token_with_fallback(
     configured_mode = normalize_token_api_mode(api_mode)
     remote_fallback_enabled = configured_mode == TOKEN_API_MODE_REMOTE
 
+    # 本地网页接口耗时单独累计（含令牌过期重试），与远程耗时分开记入风控日志
+    local_started_at = time.monotonic()
     try:
         local_result = await request_im_token(
             cookies_str,
@@ -466,9 +537,17 @@ async def request_im_token_with_fallback(
             timeout_seconds=timeout_seconds,
             log_tag=log_tag,
             local_failure_reason=f"请求异常：{type(local_error).__name__}: {local_error}",
+            local_duration_seconds=time.monotonic() - local_started_at,
         )
         if remote_result and extract_im_access_token(remote_result.response_json):
             return remote_result
+        # 本地请求本身已异常，没有可返回的响应体，远程失败原因只能记日志留痕
+        if remote_result and remote_result.remote_failure_message:
+            prefix = f"【{log_tag}】" if log_tag else ""
+            logger.warning(
+                f"{prefix}本地网页接口请求异常且远程回退失败: "
+                f"{remote_result.remote_failure_message}"
+            )
         raise
 
     if extract_im_access_token(local_result.response_json):
@@ -508,13 +587,14 @@ async def request_im_token_with_fallback(
                     "令牌过期后本地重试异常："
                     f"{type(local_retry_error).__name__}: {local_retry_error}"
                 ),
+                local_duration_seconds=time.monotonic() - local_started_at,
             )
             if remote_result and extract_im_access_token(remote_result.response_json):
                 return replace(
                     remote_result,
                     response_cookies=local_result.response_cookies,
                 )
-            return local_result
+            return _attach_remote_failure(local_result, remote_result)
 
         cumulative_response_cookies = dict(local_result.response_cookies)
         cumulative_response_cookies.update(retried_local_result.response_cookies)
@@ -532,6 +612,7 @@ async def request_im_token_with_fallback(
         timeout_seconds=timeout_seconds,
         log_tag=log_tag,
         local_failure_reason=local_failure_reason,
+        local_duration_seconds=time.monotonic() - local_started_at,
     )
     if remote_result and extract_im_access_token(remote_result.response_json):
         # 保留本地接口下发的 Cookie，避免本地响应更新的 _m_h5_tk 丢失。
@@ -539,4 +620,4 @@ async def request_im_token_with_fallback(
             remote_result,
             response_cookies=local_result.response_cookies,
         )
-    return local_result
+    return _attach_remote_failure(local_result, remote_result)
