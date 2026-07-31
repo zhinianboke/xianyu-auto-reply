@@ -350,6 +350,9 @@ class FakeStockInput:
     async def fill(self, value):
         self.values.append(value)
 
+    async def input_value(self):
+        return self.values[-1] if self.values else ""
+
 
 class FakeStockPage:
     def __init__(self):
@@ -381,6 +384,41 @@ class XianyuPublisherStockTests(unittest.IsolatedAsyncioTestCase):
         await publisher._fill_stock({})
 
         self.assertEqual(page.selector_calls, 0)
+
+    async def test_missing_stock_field_stops_publish_instead_of_using_default(self):
+        publisher = XianyuPublisher()
+        publisher.page = object()
+        publisher._find_stock_input = AsyncMock(return_value=None)
+        publisher._enable_single_stock_spec = AsyncMock()
+
+        with self.assertRaisesRegex(Exception, "避免按默认库存上架"):
+            await publisher._fill_stock({"stock": 12})
+
+        publisher._enable_single_stock_spec.assert_awaited_once()
+
+
+class CardMatcherStockSpecTests(unittest.TestCase):
+    def test_generic_card_falls_back_for_inventory_spec(self):
+        matcher = CardMatcher(SimpleNamespace())
+        generic = {"id": 6, "is_multi_spec": False}
+
+        matched = matcher._match_card_dicts_by_spec([generic], "份数", "标准版")
+
+        self.assertEqual(matched, [generic])
+
+    def test_exact_multi_spec_card_takes_priority_over_generic_card(self):
+        matcher = CardMatcher(SimpleNamespace())
+        generic = {"id": 6, "is_multi_spec": False}
+        exact = {
+            "id": 7,
+            "is_multi_spec": True,
+            "spec_name": "份数",
+            "spec_value": "标准版",
+        }
+
+        matched = matcher._match_card_dicts_by_spec([generic, exact], "份数", "标准版")
+
+        self.assertEqual(matched, [exact])
 
 
 class CardBindingPersistenceTests(unittest.IsolatedAsyncioTestCase):

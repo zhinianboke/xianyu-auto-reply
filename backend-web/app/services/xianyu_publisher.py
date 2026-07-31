@@ -403,7 +403,7 @@ class XianyuPublisher:
         return result
 
     async def _fill_stock(self, item_data: dict) -> None:
-        """按需填写闲鱼库存，未设置库存时保留页面默认值。"""
+        """按需填写闲鱼规格库存，未设置库存时保留页面默认值。"""
         stock = item_data.get("stock")
         if stock is None:
             logger.info("\n[库存] 未设置库存，保留闲鱼页面默认值")
@@ -419,36 +419,91 @@ class XianyuPublisher:
             raise Exception("库存必须是大于 0 的整数")
 
         logger.info(f"\n[库存] 📦 设置库存: {stock}")
+        stock_input = await self._find_stock_input()
+        if not stock_input:
+            await self._enable_single_stock_spec()
+            stock_input = await self._find_stock_input()
+
+        if not stock_input:
+            raise Exception("当前闲鱼发布页未生成规格库存输入框，已停止发布以避免按默认库存上架")
+
+        await stock_input.fill("")
+        await stock_input.fill(str(stock))
+        actual_stock = await stock_input.input_value()
+        if actual_stock != str(stock):
+            raise Exception(f"库存填写校验失败：期望 {stock}，实际 {actual_stock or '空'}")
+        logger.info("✅ 规格库存已输入并校验")
+
+    async def _find_stock_input(self):
+        """返回当前规格库存输入框；不同版本闲鱼页面的属性名会变化。"""
+        if not self.page:
+            return None
+
         stock_selectors = [
             'input[placeholder*="库存"]',
             'input[aria-label*="库存"]',
             'input[placeholder*="数量"]',
             'input[aria-label*="数量"]',
-            'input[name*="stock"]',
-            'input[id*="stock"]',
-            '[class*="stock"] input',
-            '[class*="inventory"] input',
+            'input[name*="stock" i]',
+            'input[id*="stock" i]',
+            'input[name*="inventory" i]',
+            'input[id*="inventory" i]',
+            '[class*="stock" i] input',
+            '[class*="inventory" i] input',
             'xpath=//*[contains(normalize-space(.), "库存")]/following::input[1]',
             'xpath=//*[contains(normalize-space(.), "数量")]/following::input[1]',
         ]
 
-        stock_input = None
         for selector in stock_selectors:
             try:
                 candidate = await self.page.wait_for_selector(selector, timeout=2000)
                 if candidate and await candidate.is_visible() and await candidate.is_enabled():
-                    stock_input = candidate
                     logger.info(f"✅ 找到库存输入框: {selector}")
-                    break
+                    return candidate
             except Exception:
                 continue
 
-        if not stock_input:
-            raise Exception("当前闲鱼发布页未显示库存输入框，无法按设置库存发布")
+        return None
 
-        await stock_input.fill("")
-        await stock_input.fill(str(stock))
-        logger.info("✅ 库存已输入")
+    async def _enable_single_stock_spec(self) -> None:
+        """将普通发布页切换为单规格，令闲鱼展示可填写的规格库存。"""
+        if not self.page:
+            raise Exception("浏览器页面未初始化")
+
+        logger.info("[库存] 当前页面没有库存字段，创建单规格：份数 / 标准版")
+
+        spec_value = await self.page.query_selector(
+            '#itemProperties_0_propertyValues_0_propertyValue'
+        )
+        if not spec_value or not await spec_value.is_visible():
+            spec_trigger = self.page.get_by_text("添加规格类型", exact=False).first
+            try:
+                await spec_trigger.click(timeout=5000)
+            except Exception as exc:
+                raise Exception("当前闲鱼发布页不支持创建规格，无法设置库存") from exc
+
+            property_name = await self.page.wait_for_selector(
+                '#itemProperties_0_propertyName', timeout=5000
+            )
+            if not property_name:
+                raise Exception("未找到规格类型选择框，无法设置库存")
+
+            await property_name.click()
+            try:
+                await self.page.get_by_text("份数", exact=True).first.click(timeout=5000)
+            except Exception as exc:
+                raise Exception("未找到“份数”规格类型，无法设置库存") from exc
+
+            spec_value = await self.page.wait_for_selector(
+                '#itemProperties_0_propertyValues_0_propertyValue', timeout=5000
+            )
+
+        if not spec_value or not await spec_value.is_visible():
+            raise Exception("未找到规格值输入框，无法设置库存")
+
+        await spec_value.fill("标准版")
+        await spec_value.press("Tab")
+        await asyncio.sleep(1)
 
     async def _upload_images(self, images: list):
         """上传商品图片列表（按原项目流程）"""

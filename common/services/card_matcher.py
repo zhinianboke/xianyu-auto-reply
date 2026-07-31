@@ -531,7 +531,8 @@ class CardMatcher:
         根据规格信息过滤匹配的卡券
         
         匹配规则：
-        - 有规格信息时：多规格卡券需 spec_name+spec_value 完全匹配
+        - 有规格信息时：优先匹配 spec_name+spec_value 完全一致的多规格卡券
+        - 未命中多规格卡券时：回退非多规格卡券（通用卡券）
         - 无规格信息时：只返回非多规格卡券（通用卡券）
         
         Args:
@@ -543,6 +544,7 @@ class CardMatcher:
             匹配的卡券字典列表
         """
         matched = []
+        generic_cards = []
         has_spec_info = bool(spec_name and spec_value)
         
         for card in cards:
@@ -563,11 +565,9 @@ class CardMatcher:
                         )
                 # 多规格卡券但没有传入规格信息，跳过
             else:
-                # 非多规格卡券：只有在没有传入规格信息时才添加
-                if not has_spec_info:
-                    matched.append(self._card_to_dict(card))
-        
-        return matched
+                generic_cards.append(self._card_to_dict(card))
+
+        return matched or generic_cards
 
     def _match_card_dicts_by_spec(
         self,
@@ -590,6 +590,7 @@ class CardMatcher:
             匹配的卡券字典列表
         """
         matched = []
+        generic_cards = []
         has_spec_info = bool(spec_name and spec_value)
         
         for cd in card_dicts:
@@ -609,10 +610,9 @@ class CardMatcher:
                             f"vs 订单[{spec_name}:{spec_value}]"
                         )
             else:
-                if not has_spec_info:
-                    matched.append(cd)
-        
-        return matched
+                generic_cards.append(cd)
+
+        return matched or generic_cards
 
     @staticmethod
     def _card_to_dict(card: Card) -> Dict[str, Any]:
