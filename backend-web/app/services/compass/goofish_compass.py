@@ -368,7 +368,10 @@ class GoofishCompassService:
         if value is None:
             return None
         if isinstance(value, (int, float)):
-            return cls._normalize_price_text(round(float(value) / 100, 2))
+            amount = float(value)
+            if amount.is_integer() and amount >= 100:
+                amount /= 100
+            return cls._normalize_price_text(round(amount, 2))
         if isinstance(value, str):
             text = re.sub(r"\s+", "", value)
             if not text:
