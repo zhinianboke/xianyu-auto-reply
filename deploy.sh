@@ -48,20 +48,27 @@ echo ""
 
 # ========== 生成 .env 配置文件 ==========
 if [ ! -f "$ENV_FILE" ]; then
-    echo -e "${YELLOW}[提示] 首次部署，生成默认配置文件 .env${NC}"
-    cat > "$ENV_FILE" << 'ENVEOF'
+    command -v openssl >/dev/null 2>&1 || {
+        echo -e "${RED}[错误] 缺少 openssl，无法生成数据库和 Redis 随机密码${NC}"
+        exit 1
+    }
+    mysql_root_password="$(openssl rand -hex 32)"
+    mysql_password="$(openssl rand -hex 32)"
+    redis_password="$(openssl rand -hex 32)"
+    echo -e "${YELLOW}[提示] 首次部署，生成随机配置文件 .env${NC}"
+    cat > "$ENV_FILE" << ENVEOF
 # ==========================================
 # 闲鱼自动回复系统 - 环境变量配置
 # ==========================================
 
 # MySQL数据库配置（Docker内置，自动创建）
-MYSQL_ROOT_PASSWORD=xianyu@2026
+MYSQL_ROOT_PASSWORD=${mysql_root_password}
 MYSQL_DATABASE=xianyu_data
 MYSQL_USER=xianyu
-MYSQL_PASSWORD=xianyu@2026
+MYSQL_PASSWORD=${mysql_password}
 
 # Redis缓存配置（Docker内置）
-REDIS_PASSWORD=xianyu@2026
+REDIS_PASSWORD=${redis_password}
 REDIS_DB=0
 
 # 说明：JWT 密钥由数据库统一托管（首次启动自动生成并持久化），无需在此配置
@@ -110,8 +117,8 @@ CAPTCHA_DRISSIONPAGE_HEADLESS=true
 
 # 分销卡券上游服务基址（「分销卡券」页面提货 + 个人设置一键创建对接卡密秘钥共用此基址）
 CARD_DOCK_BASE_URL=http://backend.zhinianboke.com
-# 个人设置「对接卡密秘钥」一键创建密钥的鉴权 key（基址复用 CARD_DOCK_BASE_URL）
-EXTERNAL_API_KEY=zhinian_bk
+# 个人设置「对接卡密秘钥」一键创建密钥的鉴权 key（必须自行配置）
+EXTERNAL_API_KEY=
 
 # 前端公网访问地址（用于生成前端页面分享链接，留空则使用默认）
 FRONTEND_PUBLIC_URL=
@@ -126,8 +133,8 @@ ENABLE_REMOTE_ANNOUNCEMENTS=true
 # 是否启用远程官方弹窗公告合并展示（官方服务器自身部署建议设为 false）
 ENABLE_REMOTE_POPUP_ANNOUNCEMENTS=true
 ENVEOF
-    echo -e "${GREEN}✓ 已生成 .env 文件${NC}"
-    echo -e "${YELLOW}[提示] 如需修改配置（如端口等），请编辑 $ENV_FILE 后重新运行${NC}"
+    echo -e "${GREEN}✓ 已生成随机数据库与 Redis 密码${NC}"
+    echo -e "${YELLOW}[提示] 请在 $ENV_FILE 中填写 EXTERNAL_API_KEY 后重新运行${NC}"
     echo ""
 fi
 
@@ -147,10 +154,10 @@ services:
     container_name: xianyu-mysql
     restart: unless-stopped
     environment:
-      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-xianyu@2026}
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:?请配置 MYSQL_ROOT_PASSWORD}
       - MYSQL_DATABASE=${MYSQL_DATABASE:-xianyu_data}
       - MYSQL_USER=${MYSQL_USER:-xianyu}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-xianyu@2026}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:?请配置 MYSQL_PASSWORD}
       - TZ=Asia/Shanghai
     command:
       - --character-set-server=utf8mb4
@@ -163,7 +170,7 @@ services:
     networks:
       - xianyu-network
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-xianyu@2026}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:?请配置 MYSQL_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -176,7 +183,7 @@ services:
     restart: unless-stopped
     command: >
       redis-server
-      --requirepass ${REDIS_PASSWORD:-xianyu@2026}
+      --requirepass ${REDIS_PASSWORD:?请配置 REDIS_PASSWORD}
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
       --appendonly yes
@@ -187,7 +194,7 @@ services:
     networks:
       - xianyu-network
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-xianyu@2026}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?请配置 REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -205,11 +212,11 @@ services:
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=${MYSQL_USER:-xianyu}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-xianyu@2026}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:?请配置 MYSQL_PASSWORD}
       - MYSQL_DATABASE=${MYSQL_DATABASE:-xianyu_data}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-xianyu@2026}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?请配置 REDIS_PASSWORD}
       - REDIS_DB=${REDIS_DB:-0}
       - BACKEND_WEB_PORT=8089
       - HOST=0.0.0.0
@@ -223,7 +230,7 @@ services:
       - BACKUP_DIR=/app/backups
       - BACKEND_WEB_PUBLIC_URL=${BACKEND_WEB_PUBLIC_URL:-}
       - CARD_DOCK_BASE_URL=${CARD_DOCK_BASE_URL:-http://backend.zhinianboke.com}
-      - EXTERNAL_API_KEY=${EXTERNAL_API_KEY:-zhinian_bk}
+      - EXTERNAL_API_KEY=${EXTERNAL_API_KEY:?请配置 EXTERNAL_API_KEY}
       - FRONTEND_PUBLIC_URL=${FRONTEND_PUBLIC_URL:-}
       - AUTO_START_CRAWL_JOBS=${AUTO_START_CRAWL_JOBS:-true}
       - REMOTE_OFFICIAL_BASE_URL=${REMOTE_OFFICIAL_BASE_URL:-https://xy.zhinianboke.com}
@@ -266,11 +273,11 @@ services:
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=${MYSQL_USER:-xianyu}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-xianyu@2026}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:?请配置 MYSQL_PASSWORD}
       - MYSQL_DATABASE=${MYSQL_DATABASE:-xianyu_data}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-xianyu@2026}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?请配置 REDIS_PASSWORD}
       - REDIS_DB=${REDIS_DB:-0}
       - WEBSOCKET_PORT=8090
       - HOST=0.0.0.0
@@ -319,11 +326,11 @@ services:
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=${MYSQL_USER:-xianyu}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-xianyu@2026}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:?请配置 MYSQL_PASSWORD}
       - MYSQL_DATABASE=${MYSQL_DATABASE:-xianyu_data}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-xianyu@2026}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?请配置 REDIS_PASSWORD}
       - REDIS_DB=${REDIS_DB:-0}
       - SCHEDULER_PORT=8091
       - HOST=0.0.0.0

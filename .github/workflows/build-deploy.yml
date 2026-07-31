@@ -124,8 +124,25 @@ jobs:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IMAGE_TAG: ${{ needs.version.outputs.image_tag }}
+          XIANYU_MYSQL_ROOT_PASSWORD: ${{ secrets.XIANYU_MYSQL_ROOT_PASSWORD }}
+          XIANYU_MYSQL_PASSWORD: ${{ secrets.XIANYU_MYSQL_PASSWORD }}
+          XIANYU_REDIS_PASSWORD: ${{ secrets.XIANYU_REDIS_PASSWORD }}
+          XIANYU_EXTERNAL_API_KEY: ${{ secrets.XIANYU_EXTERNAL_API_KEY }}
         run: |
-          printf '%s' "${GHCR_TOKEN}" |
+          encode_secret() {
+            printf '%s' "$1" | base64 --wrap=0
+          }
+          : "${XIANYU_MYSQL_ROOT_PASSWORD:?缺少 XIANYU_MYSQL_ROOT_PASSWORD}"
+          : "${XIANYU_MYSQL_PASSWORD:?缺少 XIANYU_MYSQL_PASSWORD}"
+          : "${XIANYU_REDIS_PASSWORD:?缺少 XIANYU_REDIS_PASSWORD}"
+          : "${XIANYU_EXTERNAL_API_KEY:?缺少 XIANYU_EXTERNAL_API_KEY}"
+          {
+            printf '%s\n' "${GHCR_TOKEN}"
+            printf 'MYSQL_ROOT_PASSWORD=%s\n' "$(encode_secret "${XIANYU_MYSQL_ROOT_PASSWORD}")"
+            printf 'MYSQL_PASSWORD=%s\n' "$(encode_secret "${XIANYU_MYSQL_PASSWORD}")"
+            printf 'REDIS_PASSWORD=%s\n' "$(encode_secret "${XIANYU_REDIS_PASSWORD}")"
+            printf 'EXTERNAL_API_KEY=%s\n' "$(encode_secret "${XIANYU_EXTERNAL_API_KEY}")"
+          } |
             ssh -i "${HOME}/.ssh/deploy_key" \
               -o BatchMode=yes \
               -o IdentitiesOnly=yes \

@@ -1,6 +1,6 @@
 {
   "name": "xianyu-auto-reply-self",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "private": true,
   "dependencies": {
     "claude": "^0.1.1"

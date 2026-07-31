@@ -67,21 +67,32 @@ generate_env() {
     if [ -f "$ENV_FILE" ]; then
         return
     fi
-    echo -e "${YELLOW}[提示] 首次构建，生成默认 .env 配置${NC}"
-    cat > "$ENV_FILE" << 'ENVEOF'
+    command -v openssl >/dev/null 2>&1 || {
+        echo -e "${RED}[错误] 缺少 openssl，无法生成数据库和 Redis 随机密码${NC}"
+        exit 1
+    }
+    local mysql_root_password mysql_password redis_password
+    mysql_root_password="$(openssl rand -hex 32)"
+    mysql_password="$(openssl rand -hex 32)"
+    redis_password="$(openssl rand -hex 32)"
+    echo -e "${YELLOW}[提示] 首次构建，生成随机 .env 配置${NC}"
+    cat > "$ENV_FILE" << ENVEOF
 # ==========================================
 # 闲鱼自动回复系统 - 环境变量配置（本地构建）
 # ==========================================
 
 # MySQL数据库
-MYSQL_ROOT_PASSWORD=xianyu@2026
+MYSQL_ROOT_PASSWORD=${mysql_root_password}
 MYSQL_DATABASE=xianyu_data
 MYSQL_USER=xianyu
-MYSQL_PASSWORD=xianyu@2026
+MYSQL_PASSWORD=${mysql_password}
 
 # Redis
-REDIS_PASSWORD=xianyu@2026
+REDIS_PASSWORD=${redis_password}
 REDIS_DB=0
+
+# 卡券上游服务鉴权 Key（必须自行配置）
+EXTERNAL_API_KEY=
 
 # 说明：JWT 密钥由数据库统一托管（首次启动自动生成并持久化），无需在此配置
 
@@ -105,7 +116,8 @@ RATE_INTERVAL=20
 # 验证码并发数
 MAX_CAPTCHA_CONCURRENT=3
 ENVEOF
-    echo -e "${GREEN}✓ 已生成 .env 文件，如需修改请编辑后重新运行${NC}"
+    echo -e "${GREEN}✓ 已生成随机数据库与 Redis 密码${NC}"
+    echo -e "${YELLOW}[提示] 请在 $ENV_FILE 中填写 EXTERNAL_API_KEY 后再启动服务${NC}"
     echo ""
     # 重新设置 DC_CMD 以包含 env-file
     DC_CMD="$DC -f $COMPOSE_FILE --env-file $ENV_FILE"
