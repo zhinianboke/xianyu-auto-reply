@@ -165,7 +165,7 @@ class ItemParser:
 
     @staticmethod
     def _parse_unit_price(value: Any) -> float | None:
-        """Return the first numeric amount from the listing price text.
+        """Return the first numeric amount in yuan from listing price text.
 
         Search cards often render a range (for example ``¥9.9-19.9``) or
         append text such as ``起``.  The research contract exposes the
@@ -176,11 +176,18 @@ class ItemParser:
             return None
         if isinstance(value, (int, float)):
             return float(value)
-        match = re.search(r"(?<!\d)(\d+(?:\.\d+)?)(?!\d)", str(value).replace(",", ""))
+        text = str(value).replace(",", "").strip()
+        has_currency = text.startswith(("¥", "￥"))
+        match = re.search(r"(?<!\d)(\d+(?:\.\d+)?)(?!\d)", text)
         if not match:
             return None
         try:
-            return round(float(match.group(1)), 2)
+            amount = float(match.group(1))
+            # Some search payload variants expose a bare integer in fen while
+            # the card text variant already contains the yuan symbol.
+            if not has_currency and amount.is_integer() and amount >= 100:
+                amount /= 100
+            return round(amount, 2)
         except (TypeError, ValueError):
             return None
 
