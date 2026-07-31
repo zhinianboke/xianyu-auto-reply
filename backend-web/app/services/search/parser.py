@@ -1,4 +1,4 @@
-﻿"""
+"""
 商品数据解析器
 
 解析闲鱼API返回的商品数据
@@ -6,14 +6,120 @@
 from __future__ import annotations
 
 import re
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from urllib.parse import parse_qs, urlparse
 
 from loguru import logger
 
 
 class ItemParser:
     """商品数据解析器"""
+
+    _ITEM_ID_KEYS = {
+        "item_id", "itemid", "item_id_str", "id", "auctionid", "auction_id",
+        "productid", "product_id", "offerid", "offer_id",
+    }
+    _TITLE_KEYS = {"title", "raw_title", "itemtitle", "item_title", "name", "subject"}
+    _PRICE_KEYS = {
+        "price", "pricetext", "price_text", "displayprice", "display_price",
+        "soldprice", "sold_price", "viewprice", "view_price", "currentprice",
+    }
+    _URL_KEYS = {
+        "item_url", "itemurl", "targeturl", "target_url", "url", "detailurl",
+        "detail_url", "jumpurl", "jump_url", "clickurl", "click_url",
+    }
+    _IMAGE_KEYS = {
+        "picurl", "pic_url", "image", "imageurl", "image_url", "mainimage",
+        "main_image", "imgurl", "img_url",
+    }
+    _SELLER_KEYS = {"usernickname", "user_nick_name", "sellername", "seller_name", "nickname"}
+    _AREA_KEYS = {"area", "location", "city", "region"}
+    _COUNT_KEYS = {
+        "wantcount", "want_count", "likecount", "like_count", "favcount",
+        "favoritecount", "collectcount", "collect_count",
+    }
+    _PUBLISH_TIME_KEYS = {"publishtime", "publish_time", "createdtime", "created_time"}
+
+    @staticmethod
+    def _coerce_json(value: Any) -> Any:
+        """Unwrap JSON strings returned by newer MTOP response variants."""
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if len(text) < 2 or text[0] not in "[{":
+            return value
+        try:
+            return json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return value
+
+    @classmethod
+    def _walk_dicts(cls, value: Any) -> Any:
+        """Yield nested dictionaries while tolerating wrapper/list/string variants."""
+        stack: list[Any] = [cls._coerce_json(value)]
+        seen: set[int] = set()
+        visited = 0
+        while stack and visited < 2000:
+            current = cls._coerce_json(stack.pop())
+            visited += 1
+            if isinstance(current, dict):
+                identity = id(current)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                yield current
+                stack.extend(current.values())
+            elif isinstance(current, list):
+                stack.extend(current)
+
+    @classmethod
+    def _find_first_value(cls, root: Any, keys: set[str]) -> Any:
+        """Find a non-empty value by key anywhere in a response wrapper."""
+        normalized_keys = {key.lower() for key in keys}
+        for mapping in cls._walk_dicts(root):
+            for key, value in mapping.items():
+                if str(key).lower() not in normalized_keys:
+                    continue
+                value = cls._coerce_json(value)
+                if value not in (None, "", [], {}):
+                    return value
+        return None
+
+    @classmethod
+    def _scalar_text(cls, value: Any, default: str = "") -> str:
+        """Convert scalar/dict wrapper values to display text."""
+        value = cls._coerce_json(value)
+        if value in (None, "", [], {}):
+            return default
+        if isinstance(value, (str, int, float)):
+            return str(value).strip()
+        if isinstance(value, list):
+            parts = [cls._scalar_text(item) for item in value]
+            return "".join(part for part in parts if part)
+        if isinstance(value, dict):
+            for key in ("text", "value", "content", "url", "href", "name"):
+                if key in value:
+                    result = cls._scalar_text(value[key])
+                    if result:
+                        return result
+        return default
+
+    @staticmethod
+    def _item_id_from_url(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        try:
+            query = parse_qs(urlparse(text).query or "")
+            for key in ("id", "item_id", "itemId"):
+                if query.get(key) and query[key][0]:
+                    return str(query[key][0]).strip()
+        except Exception:
+            pass
+        match = re.search(r"(?:[?&]id=|/item/)([A-Za-z0-9_-]+)", text)
+        return match.group(1) if match else ""
 
     @staticmethod
     async def safe_get(data: Any, *keys, default: Any = "暂无") -> Any:
@@ -50,15 +156,15 @@ class ItemParser:
             return 0
 
     async def parse_item(self, item_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """解析单个商品数据"""
+        """解析单个商品数据，并兼容闲鱼搜索卡片的多种包装结构。"""
         try:
-            # Goofish 搜索接口返回结构可能存在变体：
-            # - data.item.main.exContent
-            # - data.item.main
-            # - item.main(.exContent)
-            # - main(.exContent)
+            item_data = self._coerce_json(item_data)
+            if not isinstance(item_data, (dict, list)):
+                return None
+
             def pick_first_dict(*candidates: Any) -> Dict[str, Any]:
                 for candidate in candidates:
+                    candidate = self._coerce_json(candidate)
                     if isinstance(candidate, dict) and candidate:
                         return candidate
                 return {}
@@ -66,7 +172,6 @@ class ItemParser:
             data_item_main = await self.safe_get(item_data, "data", "item", "main", default={})
             item_main = await self.safe_get(item_data, "item", "main", default={})
             root_main = await self.safe_get(item_data, "main", default={})
-
             main_data = pick_first_dict(
                 await self.safe_get(data_item_main, "exContent", default={}),
                 data_item_main,
@@ -86,48 +191,83 @@ class ItemParser:
                 click_param,
             )
 
-            # 解析商品标题
-            title = await self.safe_get(main_data, "title", default="未知标题")
+            title = self._scalar_text(
+                await self.safe_get(main_data, "title", default=None),
+            ) or self._scalar_text(
+                self._find_first_value(item_data, self._TITLE_KEYS),
+                default="未知标题",
+            )
 
-            # 解析价格
             price = await self._parse_price(main_data)
-
-            # 解析标签（只提取"想要人数"）
-            fish_tags_content = await self._parse_fish_tags(main_data)
-
-            # 其他字段
-            area = await self.safe_get(main_data, "area", default="地区未知")
-            seller = await self.safe_get(main_data, "userNickName", default="匿名卖家")
-            raw_link = await self.safe_get(main_data, "targetUrl", default="")
-            if not raw_link:
-                raw_link = await self.safe_get(
-                    item_data, "data", "item", "main", "targetUrl", default=""
+            if price == "价格异常":
+                price = await self._parse_price(
+                    {"price": self._find_first_value(item_data, self._PRICE_KEYS)}
                 )
-            image_url = await self.safe_get(main_data, "picUrl", default="")
-            item_id = await self.safe_get(click_params, "item_id", default="未知ID")
-            if not item_id or item_id == "未知ID":
-                item_id = await self.safe_get(click_params, "itemId", default=item_id)
-                item_id = await self.safe_get(click_params, "id", default=item_id)
 
-            # 处理发布时间
+            fish_tags_content = await self._parse_fish_tags(main_data)
+            if not fish_tags_content:
+                fish_tags_content = await self._parse_fish_tags(item_data)
+
+            area = self._scalar_text(
+                await self.safe_get(main_data, "area", default=None),
+            ) or self._scalar_text(
+                self._find_first_value(item_data, self._AREA_KEYS),
+                default="地区未知",
+            )
+            seller = self._scalar_text(
+                await self.safe_get(main_data, "userNickName", default=None),
+            ) or self._scalar_text(
+                self._find_first_value(item_data, self._SELLER_KEYS),
+                default="匿名卖家",
+            )
+            raw_link = self._scalar_text(
+                await self.safe_get(main_data, "targetUrl", default=None),
+            ) or self._scalar_text(
+                self._find_first_value(item_data, self._URL_KEYS),
+            )
+            image_url = self._scalar_text(
+                await self.safe_get(main_data, "picUrl", default=None),
+            ) or self._scalar_text(
+                self._find_first_value(item_data, self._IMAGE_KEYS),
+            )
+
+            item_id = self._scalar_text(
+                self._find_first_value(click_params, self._ITEM_ID_KEYS),
+            ) or self._scalar_text(
+                self._find_first_value(item_data, self._ITEM_ID_KEYS),
+            )
+            if not item_id:
+                item_id = self._item_id_from_url(raw_link)
+            if not item_id:
+                # Keep a stable card-level fallback so schema changes do not
+                # turn a non-empty search response into a total parse failure.
+                item_id = f"search-{abs(hash((title, raw_link, image_url, price)))}"
+
             publish_time = await self._parse_publish_time(click_params)
+            if publish_time == "未知时间":
+                publish_time = await self._parse_publish_time(item_data)
 
-            # 提取"人想要"的数字用于排序
             want_count = self.extract_want_count(fish_tags_content)
+            if not want_count:
+                count_value = self._find_first_value(item_data, self._COUNT_KEYS)
+                if isinstance(count_value, (int, float)):
+                    want_count = int(count_value)
+                elif count_value:
+                    want_count = self.extract_want_count(f"{count_value}人想要")
 
             return {
-                "item_id": item_id,
-                "title": title,
+                "item_id": str(item_id),
+                "title": title or "未知标题",
                 "price": price,
-                "unit_price": await self._parse_unit_price(price),
-                "seller_name": seller,
+                "unit_price": self._parse_unit_price(price),
+                "seller_name": seller or "匿名卖家",
                 "item_url": raw_link.replace("fleamarket://", "https://www.goofish.com/"),
-                "main_image": f"https:{image_url}" if image_url and not image_url.startswith("http") else image_url,
+                "main_image": f"https:{image_url}" if image_url.startswith("//") else image_url,
                 "publish_time": publish_time,
                 "tags": [fish_tags_content] if fish_tags_content else [],
-                "area": area,
+                "area": area or "地区未知",
                 "want_count": want_count,
-                "raw_data": item_data
+                "raw_data": item_data,
             }
 
         except Exception as e:
@@ -135,33 +275,65 @@ class ItemParser:
             return None
 
     async def _parse_price(self, main_data: Dict[str, Any]) -> str:
-        """解析价格"""
-        price_parts = await self.safe_get(main_data, "price", default=[])
-        price = "价格异常"
+        """解析价格，兼容文本、数字、字典和列表包装。"""
+        price_value = await self.safe_get(main_data, "price", default=None)
+        if price_value in (None, "", [], {}):
+            return "价格异常"
 
-        if isinstance(price_parts, list):
-            price = "".join([
-                str(p.get("text", "")) for p in price_parts if isinstance(p, dict)
-            ])
-            price = price.replace("当前价", "").strip()
+        if isinstance(price_value, (int, float)):
+            amount = float(price_value)
+            if amount.is_integer() and amount >= 100:
+                amount /= 100
+            return f"¥{amount:g}"
 
-            if price and price != "价格异常":
-                clean_price = price.replace('¥', '').strip()
+        if isinstance(price_value, dict):
+            for key in (
+                "text", "priceText", "price_text", "displayPrice", "value",
+                "amount", "currentPrice", "price",
+            ):
+                if key in price_value:
+                    parsed = await self._parse_price({"price": price_value[key]})
+                    if parsed != "价格异常":
+                        return parsed
+            return "价格异常"
 
-                if "万" in clean_price:
-                    try:
-                        numeric_price = clean_price.replace('万', '').strip()
-                        price_value = float(numeric_price) * 10000
-                        price = f"¥{price_value:.0f}"
-                    except Exception:
-                        price = f"¥{clean_price}"
+        if isinstance(price_value, list):
+            parts: list[str] = []
+            for part in price_value:
+                if isinstance(part, dict):
+                    text = self._scalar_text(part.get("text") or part.get("value"))
                 else:
-                    if clean_price and (clean_price[0].isdigit() or clean_price.replace('.', '').isdigit()):
-                        price = f"¥{clean_price}"
-                    else:
-                        price = clean_price if clean_price else "价格异常"
+                    text = self._scalar_text(part)
+                if text:
+                    parts.append(text)
+            price_text = "".join(parts)
+        else:
+            price_text = self._scalar_text(price_value)
 
-        return price
+        price_text = price_text.replace("当前价", "").strip()
+        if not price_text:
+            return "价格异常"
+
+        had_currency = "¥" in price_text or "￥" in price_text
+        clean_price = price_text.replace("￥", "¥").replace("¥", "").strip()
+        if "万" in clean_price:
+            try:
+                amount = float(clean_price.replace("万", "").strip()) * 10000
+                return f"¥{amount:.0f}"
+            except (TypeError, ValueError):
+                return f"¥{clean_price}"
+
+        if not had_currency:
+            numeric_match = re.fullmatch(r"(\d+(?:\.\d+)?)(?:-(\d+(?:\.\d+)?))?", clean_price)
+            if numeric_match:
+                values = [float(group) for group in numeric_match.groups() if group is not None]
+                if all(value.is_integer() and value >= 100 for value in values):
+                    values = [value / 100 for value in values]
+                    clean_price = "-".join(f"{value:g}" for value in values)
+
+        if re.search(r"\d", clean_price):
+            return f"¥{clean_price}"
+        return clean_price or "价格异常"
 
     @staticmethod
     def _parse_unit_price(value: Any) -> float | None:
@@ -195,28 +367,34 @@ class ItemParser:
             return None
 
     async def _parse_fish_tags(self, main_data: Dict[str, Any]) -> str:
-        """解析商品标签，只提取"想要人数"标签"""
-        fish_tags_content = ""
-        fish_tags = await self.safe_get(main_data, "fishTags", default={})
+        """解析商品标签，只提取"想要人数"标签。"""
+        fish_tags = await self.safe_get(main_data, "fishTags", default=None)
+        if fish_tags in (None, "", [], {}):
+            fish_tags = self._find_first_value(main_data, {"fishTags", "fish_tags"})
+        if fish_tags in (None, "", [], {}):
+            return ""
 
-        for tag_type, tag_data in fish_tags.items():
-            if isinstance(tag_data, dict) and "tagList" in tag_data:
-                tag_list = tag_data.get("tagList", [])
+        for mapping in self._walk_dicts(fish_tags):
+            for key in ("content", "text", "value"):
+                content = self._scalar_text(mapping.get(key))
+                if content and "人想要" in content:
+                    return content
+            tag_list = mapping.get("tagList")
+            if isinstance(tag_list, list):
                 for tag_item in tag_list:
-                    if isinstance(tag_item, dict) and "data" in tag_item:
-                        content = tag_item["data"].get("content", "")
-                        if content and "人想要" in content:
-                            fish_tags_content = content
-                            break
-                if fish_tags_content:
-                    break
+                    content = self._scalar_text(
+                        self._find_first_value(tag_item, {"content", "text", "value"})
+                    )
+                    if content and "人想要" in content:
+                        return content
 
-        return fish_tags_content
+        text = self._scalar_text(fish_tags)
+        return text if "人想要" in text else ""
 
     async def _parse_publish_time(self, click_params: Dict[str, Any]) -> str:
         """解析发布时间"""
         publish_time = "未知时间"
-        publish_timestamp = click_params.get("publishTime", "")
+        publish_timestamp = self._find_first_value(click_params, self._PUBLISH_TIME_KEYS) or ""
 
         if publish_timestamp and str(publish_timestamp).isdigit():
             try:
@@ -247,3 +425,4 @@ class ItemParser:
     def sort_by_want_count(items: List[Dict[str, Any]], reverse: bool = True) -> List[Dict[str, Any]]:
         """按想要人数排序"""
         return sorted(items, key=lambda x: x.get('want_count', 0), reverse=reverse)
+
