@@ -181,6 +181,11 @@ class CookieManager:
 
             # 同步内存状态，避免后续调度再次尝试连接
             self.cookie_status[cookie_id] = False
+            try:
+                from app.services.integrations.dropship_bridge import dropship_bridge
+                asyncio.create_task(dropship_bridge.publish_account_stop(cookie_id, "disabled"))
+            except Exception as bridge_error:
+                logger.warning(f"【{cookie_id}】账号停用状态桥接初始化失败: {type(bridge_error).__name__}")
             logger.warning(
                 f"【{cookie_id}】所属用户(ID:{user_id})已于 {expire_at} 到期，跳过 WebSocket 连接并自动禁用账号"
             )
@@ -412,6 +417,12 @@ class CookieManager:
         old_status = self.cookie_status.get(cookie_id, True)
         self.cookie_status[cookie_id] = enabled
         logger.info(f"更新Cookie状态: {cookie_id} -> {'启用' if enabled else '禁用'}")
+        if old_status and not enabled:
+            try:
+                from app.services.integrations.dropship_bridge import dropship_bridge
+                self._run_in_loop(dropship_bridge.publish_account_stop(cookie_id, "disabled"))
+            except Exception as bridge_error:
+                logger.warning(f"Cookie停用状态桥接初始化失败: {type(bridge_error).__name__}")
 
     def list_cookies(self) -> List[str]:
         """获取所有Cookie ID列表"""

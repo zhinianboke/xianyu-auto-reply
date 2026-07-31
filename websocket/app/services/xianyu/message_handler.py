@@ -268,6 +268,9 @@ class MessageHandler:
             else:
                 msg_time = time.strftime("%Y-%m-%d %H:%M:%S")
 
+            message_type = "text"
+            image_urls = []
+
             # 判断消息格式：有"10"字段且有reminderContent是普通聊天消息
             if message_10 and message_10.get("reminderContent"):
                 # 普通聊天消息格式
@@ -293,6 +296,8 @@ class MessageHandler:
                     if parsed_type == "image" and parsed_images:
                         # 多张图片用换行拼接为链接文本，直接替换 send_message
                         reminder_content = "\n".join(parsed_images)
+                        message_type = "image"
+                        image_urls = parsed_images
                     elif parsed_type == "text" and parsed_text:
                         # 用解码出的准确文本（回退保留 reminderContent）
                         reminder_content = parsed_text
@@ -317,10 +322,14 @@ class MessageHandler:
             # 提取商品ID
             item_id = self._extract_item_id(message)
 
+            message_id = self.extract_message_id(message)
             return {
+                "message_id": str(message_id) if message_id is not None else None,
                 "send_user_id": send_user_id,
                 "send_user_name": send_user_name,
                 "send_message": reminder_content,
+                "message_type": message_type,
+                "image_urls": image_urls,
                 "chat_id": chat_id,
                 "item_id": item_id,
                 "msg_time": msg_time,

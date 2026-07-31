@@ -55,7 +55,7 @@ class WebSocketConfig(BaseConfig):
         default="http://localhost:8089",
         alias="BACKEND_WEB_SERVICE_URL"
     )
-    
+
     # 静态文件目录（共享）
     static_dir: str = Field(default="static", alias="STATIC_DIR")
 

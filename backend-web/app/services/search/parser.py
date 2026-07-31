@@ -119,6 +119,7 @@ class ItemParser:
                 "item_id": item_id,
                 "title": title,
                 "price": price,
+                "unit_price": await self._parse_unit_price(price),
                 "seller_name": seller,
                 "item_url": raw_link.replace("fleamarket://", "https://www.goofish.com/"),
                 "main_image": f"https:{image_url}" if image_url and not image_url.startswith("http") else image_url,
@@ -161,6 +162,37 @@ class ItemParser:
                         price = clean_price if clean_price else "价格异常"
 
         return price
+
+    @staticmethod
+    def _parse_unit_price(value: Any) -> float | None:
+        """Return the first numeric amount in yuan from listing price text.
+
+        Search cards often render a range (for example ``¥9.9-19.9``) or
+        append text such as ``起``.  The research contract exposes the
+        starting/listing unit price separately so callers never have to
+        parse presentation text themselves.
+        """
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            amount = float(value)
+            if amount.is_integer() and amount >= 100:
+                amount /= 100
+            return round(amount, 2)
+        text = str(value).replace(",", "").strip()
+        has_currency = text.startswith(("¥", "￥"))
+        match = re.search(r"(?<!\d)(\d+(?:\.\d+)?)(?!\d)", text)
+        if not match:
+            return None
+        try:
+            amount = float(match.group(1))
+            # Some search payload variants expose a bare integer in fen while
+            # the card text variant already contains the yuan symbol.
+            if not has_currency and amount.is_integer() and amount >= 100:
+                amount /= 100
+            return round(amount, 2)
+        except (TypeError, ValueError):
+            return None
 
     async def _parse_fish_tags(self, main_data: Dict[str, Any]) -> str:
         """解析商品标签，只提取"想要人数"标签"""

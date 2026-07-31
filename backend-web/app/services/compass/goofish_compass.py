@@ -357,6 +357,71 @@ class GoofishCompassService:
         return None
 
     @classmethod
+    def _normalize_detail_price(cls, value: Any) -> str | None:
+        """Normalize detail API amounts to yuan.
+
+        The MTOP detail response has variants that return the amount as an
+        integer number of fen (for example ``9900`` for ¥99).  Text values
+        already carrying ``¥``/``￥`` are presentation values and must not be
+        divided again.
+        """
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            amount = float(value)
+            if amount.is_integer() and amount >= 100:
+                amount /= 100
+            return cls._normalize_price_text(round(amount, 2))
+        if isinstance(value, str):
+            text = re.sub(r"\s+", "", value)
+            if not text:
+                return None
+            if text.startswith(("¥", "￥")):
+                return cls._normalize_price_text(text)
+            if re.fullmatch(r"\d+(?:\.\d+)?", text):
+                amount = float(text)
+                if amount.is_integer() and amount >= 100:
+                    amount /= 100
+                return cls._normalize_price_text(amount)
+            return cls._normalize_price_text(text)
+        if isinstance(value, list):
+            parts: list[str] = []
+            for part in value:
+                if isinstance(part, dict) and "text" in part:
+                    parts.append(str(part.get("text") or ""))
+                elif isinstance(part, str):
+                    parts.append(part)
+            if parts:
+                return cls._normalize_detail_price("".join(parts))
+            for part in value:
+                normalized = cls._normalize_detail_price(part)
+                if normalized:
+                    return normalized
+            return None
+        if isinstance(value, dict):
+            for key in ("text", "priceText", "price_text", "value", "amount", "price", "currentPrice"):
+                if key in value and value.get(key) not in (None, "", [], {}):
+                    normalized = cls._normalize_detail_price(value.get(key))
+                    if normalized:
+                        return normalized
+        return None
+
+    @staticmethod
+    def _price_number(value: Any) -> float | None:
+        """Extract the displayed listing's starting unit price."""
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return round(float(value), 2)
+        match = re.search(r"(?<!\d)(\d+(?:\.\d+)?)(?!\d)", str(value).replace(",", ""))
+        if not match:
+            return None
+        try:
+            return round(float(match.group(1)), 2)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
     def _extract_detail_from_payloads(cls, payloads: list[dict[str, Any]]) -> dict[str, Any]:
         if not payloads:
             return {}
@@ -428,7 +493,7 @@ class GoofishCompassService:
 
         view_count = cls._parse_cn_number(view_value)
         want_count = cls._parse_cn_number(want_value)
-        price_text = cls._normalize_price_text(price_value)
+        price_text = cls._normalize_detail_price(price_value)
 
         result: dict[str, Any] = {}
         if isinstance(description, str):
@@ -437,6 +502,7 @@ class GoofishCompassService:
                 result["description"] = desc_clean
         if price_text:
             result["price"] = price_text
+            result["unit_price"] = cls._price_number(price_text)
         if view_count is not None:
             result["view_count"] = view_count
         if want_count is not None:
@@ -484,6 +550,7 @@ class GoofishCompassService:
                         price_text = self._normalize_price_text(price)
                         if price_text:
                             result.setdefault("price", price_text)
+                            result.setdefault("unit_price", self._price_number(price_text))
         except Exception:
             pass
 
@@ -512,6 +579,7 @@ class GoofishCompassService:
                         price_text = self._normalize_price_text(m.group(1))
                         if price_text:
                             result["price"] = price_text
+                            result["unit_price"] = self._price_number(price_text)
 
                 if "want_count" not in result:
                     m = re.search(r"(\d+(?:\.\d+)?\s*万?)\s*人想要", body_text)
@@ -758,6 +826,8 @@ class GoofishCompassService:
                         if detail.get("want_count") is not None:
                             item["want_count"] = detail["want_count"]
                         item.update(detail)
+                    if item.get("unit_price") is None:
+                        item["unit_price"] = self._price_number(item.get("price"))
 
             return {
                 "items": items,
