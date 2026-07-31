@@ -175,7 +175,10 @@ class ItemParser:
         if value is None:
             return None
         if isinstance(value, (int, float)):
-            return float(value)
+            amount = float(value)
+            if amount.is_integer() and amount >= 100:
+                amount /= 100
+            return round(amount, 2)
         text = str(value).replace(",", "").strip()
         has_currency = text.startswith(("¥", "￥"))
         match = re.search(r"(?<!\d)(\d+(?:\.\d+)?)(?!\d)", text)
