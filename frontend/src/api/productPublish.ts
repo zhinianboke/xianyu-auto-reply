@@ -20,6 +20,7 @@ export interface ProductMaterial {
   title: string
   description: string
   price: number
+  stock?: number | null
   original_price?: number | null
   category?: string | null
   images: string[]
@@ -37,6 +38,7 @@ export interface MaterialCreateParams {
   title: string
   description: string
   price: number
+  stock?: number | null
   original_price?: number | null
   category?: string
   images: string[]
@@ -188,6 +190,7 @@ export const publishSingle = (params: {
   title: string
   description: string
   price: number
+  stock?: number
   original_price?: number | null
   category?: string
   images: string[]        // 本地绝对路径，由 uploadProductImages 返回

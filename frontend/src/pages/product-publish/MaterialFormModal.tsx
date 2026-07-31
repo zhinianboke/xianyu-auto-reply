@@ -28,6 +28,7 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
     title: initial?.title ?? '',
     description: initial?.description ?? '',
     price: initial?.price ?? 0,
+    stock: initial?.stock ?? 999,
     original_price: initial?.original_price ?? undefined,
     category: initial?.category ?? '',
     images: initial?.images ?? [],
@@ -68,6 +69,7 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
     if (!form.title.trim()) { addToast({ type: 'warning', message: '请填写商品标题' }); return }
     if (!form.description.trim()) { addToast({ type: 'warning', message: '请填写商品描述' }); return }
     if (!form.price || form.price <= 0) { addToast({ type: 'warning', message: '请填写有效价格' }); return }
+    if (!form.stock || !Number.isInteger(form.stock) || form.stock <= 0) { addToast({ type: 'warning', message: '库存必须是大于 0 的整数' }); return }
     setSaving(true)
     try {
       if (initial) {
@@ -111,6 +113,12 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
                 <label className="input-label">原价（划线价，选填）</label>
                 <input type="number" className="input-ios" placeholder="0.00" min="0" step="0.01"
                   value={form.original_price || ''} onChange={e => setForm(f => ({ ...f, original_price: parseFloat(e.target.value) || undefined }))} />
+              </div>
+              <div className="input-group">
+                <label className="input-label">闲鱼库存</label>
+                <input type="number" className="input-ios" placeholder="999" min="1" step="1"
+                  value={form.stock || ''} onChange={e => setForm(f => ({ ...f, stock: parseInt(e.target.value, 10) || undefined }))} />
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">发布时填写到闲鱼；默认 999。</p>
               </div>
               <div className="input-group">
                 <label className="input-label">商品分类</label>

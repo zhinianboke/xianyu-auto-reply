@@ -363,6 +363,7 @@ class XianyuPublisher:
             await asyncio.sleep(1)
 
             await self._fill_price(item_data)
+            await self._fill_stock(item_data)
 
             logger.info("\n[步骤10] ⏭️ 跳过服务选择...")
             await asyncio.sleep(1)
@@ -400,6 +401,54 @@ class XianyuPublisher:
                 await self.close()
 
         return result
+
+    async def _fill_stock(self, item_data: dict) -> None:
+        """按需填写闲鱼库存，未设置库存时保留页面默认值。"""
+        stock = item_data.get("stock")
+        if stock is None:
+            logger.info("\n[库存] 未设置库存，保留闲鱼页面默认值")
+            return
+        if not self.page:
+            raise Exception("浏览器页面未初始化")
+
+        try:
+            stock = int(stock)
+        except (TypeError, ValueError) as exc:
+            raise Exception("库存必须是大于 0 的整数") from exc
+        if stock <= 0:
+            raise Exception("库存必须是大于 0 的整数")
+
+        logger.info(f"\n[库存] 📦 设置库存: {stock}")
+        stock_selectors = [
+            'input[placeholder*="库存"]',
+            'input[aria-label*="库存"]',
+            'input[placeholder*="数量"]',
+            'input[aria-label*="数量"]',
+            'input[name*="stock"]',
+            'input[id*="stock"]',
+            '[class*="stock"] input',
+            '[class*="inventory"] input',
+            'xpath=//*[contains(normalize-space(.), "库存")]/following::input[1]',
+            'xpath=//*[contains(normalize-space(.), "数量")]/following::input[1]',
+        ]
+
+        stock_input = None
+        for selector in stock_selectors:
+            try:
+                candidate = await self.page.wait_for_selector(selector, timeout=2000)
+                if candidate and await candidate.is_visible() and await candidate.is_enabled():
+                    stock_input = candidate
+                    logger.info(f"✅ 找到库存输入框: {selector}")
+                    break
+            except Exception:
+                continue
+
+        if not stock_input:
+            raise Exception("当前闲鱼发布页未显示库存输入框，无法按设置库存发布")
+
+        await stock_input.fill("")
+        await stock_input.fill(str(stock))
+        logger.info("✅ 库存已输入")
 
     async def _upload_images(self, images: list):
         """上传商品图片列表（按原项目流程）"""

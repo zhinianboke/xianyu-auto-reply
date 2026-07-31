@@ -47,6 +47,7 @@ class ProductMaterialService:
             title=data["title"],
             description=data["description"],
             price=float(data["price"]),
+            stock=data.get("stock"),
             original_price=float(data["original_price"]) if data.get("original_price") else None,
             category=data.get("category"),
             images=data.get("images", []),
@@ -109,6 +110,7 @@ class ProductMaterialService:
                     title=item["title"],
                     description=item["description"],
                     price=float(item["price"]),
+                    stock=item.get("stock"),
                     original_price=None,
                     category=item.get("category"),
                     images=item.get("images", []),
@@ -126,11 +128,17 @@ class ProductMaterialService:
                 await self.session.flush()
                 action = "created"
             elif material.source_content_hash == item["content_hash"]:
-                action = "unchanged"
+                if "stock" in item and material.stock != item["stock"]:
+                    material.stock = item["stock"]
+                    action = "updated"
+                else:
+                    action = "unchanged"
             else:
                 material.title = item["title"]
                 material.description = item["description"]
                 material.price = float(item["price"])
+                if "stock" in item:
+                    material.stock = item["stock"]
                 material.category = item.get("category")
                 material.images = item.get("images", [])
                 material.delivery_method = item.get("delivery_method", "express")
@@ -289,6 +297,7 @@ def _material_to_dict(m: ProductMaterial) -> dict:
         "title": m.title,
         "description": m.description,
         "price": float(m.price) if m.price is not None else 0,
+        "stock": m.stock,
         "original_price": float(m.original_price) if m.original_price is not None else None,
         "category": m.category,
         "images": m.images or [],

@@ -44,6 +44,7 @@ class MaterialCreateRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200, description="商品标题")
     description: str = Field(..., min_length=1, description="商品描述")
     price: float = Field(..., gt=0, description="售价")
+    stock: Optional[int] = Field(None, ge=1, description="闲鱼库存，留空则不设置")
     original_price: Optional[float] = Field(None, description="原价（划线价）")
     category: Optional[str] = Field(None, max_length=100, description="商品分类")
     images: List[str] = Field(default=[], description="图片URL列表（最多9张）")
@@ -60,6 +61,7 @@ class MaterialUpdateRequest(BaseModel):
     title: Optional[str] = Field(None, max_length=200)
     description: Optional[str] = None
     price: Optional[float] = Field(None, gt=0)
+    stock: Optional[int] = Field(None, ge=1)
     original_price: Optional[float] = None
     category: Optional[str] = None
     images: Optional[List[str]] = None
@@ -77,6 +79,7 @@ class PublishSingleRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     description: str = Field(...)
     price: float = Field(..., gt=0)
+    stock: Optional[int] = Field(None, ge=1, description="闲鱼库存，留空则不设置")
     original_price: Optional[float] = None
     category: Optional[str] = Field(None, description="商品分类")
     images: List[str] = Field(..., min_length=1, description="图片本地路径列表（至少1张）")
@@ -102,6 +105,7 @@ class ExternalMaterialItem(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     description: str = Field(..., min_length=1)
     price: float = Field(..., gt=0)
+    stock: Optional[int] = Field(None, ge=1, description="闲鱼库存，留空则不设置")
     images: List[str] = Field(..., min_length=1, max_length=9)
     category: Optional[str] = Field(None, max_length=100)
     delivery_method: str = Field("express", pattern=r"^(express|pickup)$")
@@ -156,7 +160,7 @@ async def upsert_external_materials(
     items = await svc.upsert_external(
         user_id=current_user.id,
         source_type=req.source,
-        items=[item.model_dump() for item in req.items],
+        items=[item.model_dump(exclude_unset=True) for item in req.items],
     )
     return ApiResponse(
         success=True,

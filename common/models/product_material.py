@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Index, JSON, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base, TimestampMixin
@@ -33,6 +33,7 @@ class ProductMaterial(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False, comment="商品标题")
     description: Mapped[str] = mapped_column(Text, nullable=False, comment="商品描述")
     price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, comment="价格")
+    stock: Mapped[int | None] = mapped_column(Integer, comment="闲鱼发布库存，NULL=不设置")
     original_price: Mapped[float | None] = mapped_column(Numeric(12, 2), comment="原价")
     category: Mapped[str | None] = mapped_column(String(100), comment="商品分类")
     images: Mapped[list | None] = mapped_column(JSON, comment="图片URL列表（最多9张）")

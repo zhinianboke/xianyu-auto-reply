@@ -15,12 +15,15 @@ from app.api.routes.cards import BatchBindRequest
 from app.api.routes.product_publish import (
     BatchPublishRequest,
     ExternalMaterialUpsertRequest,
+    MaterialCreateRequest,
+    PublishSingleRequest,
 )
 from app.services.product_publish_service import (
     ProductMaterialService,
     _comparable_material_titles,
 )
 from app.services.account_service import AccountService
+from app.services.xianyu_publisher import XianyuPublisher
 from common.models.user import UserStatus
 from common.services.card_delivery_content import _build_api_params
 from common.services.card_matcher import CardMatcher
@@ -277,6 +280,41 @@ class ExternalRequestValidationTests(unittest.TestCase):
         )
         self.assertIsNone(legacy.request_id)
 
+    def test_stock_is_optional_for_external_sync_and_validated_when_provided(self):
+        material = external_item(1)
+        material["stock"] = 12
+        request = ExternalMaterialUpsertRequest(source="gamer520", items=[material])
+        self.assertEqual(request.items[0].stock, 12)
+
+        omitted = ExternalMaterialUpsertRequest(
+            source="gamer520",
+            items=[external_item(2)],
+        )
+        self.assertNotIn("stock", omitted.items[0].model_dump(exclude_unset=True))
+
+        material["stock"] = 0
+        with self.assertRaises(ValidationError):
+            ExternalMaterialUpsertRequest(source="gamer520", items=[material])
+
+    def test_material_and_single_publish_accept_positive_stock(self):
+        material = MaterialCreateRequest(
+            title="测试商品",
+            description="测试简介",
+            price=1,
+            stock=999,
+            images=["https://images.example/test.jpg"],
+        )
+        publish = PublishSingleRequest(
+            account_id="account-a",
+            title="测试商品",
+            description="测试简介",
+            price=1,
+            stock=8,
+            images=["/tmp/test.jpg"],
+        )
+        self.assertEqual(material.stock, 999)
+        self.assertEqual(publish.stock, 8)
+
     def test_second_delivery_prefix_does_not_change_product_name(self):
         self.assertEqual(
             _comparable_material_titles("【秒发】  测试游戏 "),
@@ -297,6 +335,52 @@ class ExternalRequestValidationTests(unittest.TestCase):
                 item_ids=["1067769058126"],
                 item_title="测" * 256,
             )
+
+
+class FakeStockInput:
+    def __init__(self):
+        self.values = []
+
+    async def is_visible(self):
+        return True
+
+    async def is_enabled(self):
+        return True
+
+    async def fill(self, value):
+        self.values.append(value)
+
+
+class FakeStockPage:
+    def __init__(self):
+        self.input = FakeStockInput()
+        self.selector_calls = 0
+
+    async def wait_for_selector(self, _selector, timeout):
+        self.selector_calls += 1
+        self.assert_timeout = timeout
+        return self.input
+
+
+class XianyuPublisherStockTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fill_stock_writes_the_requested_value(self):
+        publisher = XianyuPublisher()
+        page = FakeStockPage()
+        publisher.page = page
+
+        await publisher._fill_stock({"stock": 12})
+
+        self.assertEqual(page.input.values, ["", "12"])
+        self.assertEqual(page.assert_timeout, 2000)
+
+    async def test_no_stock_keeps_the_page_default(self):
+        publisher = XianyuPublisher()
+        page = FakeStockPage()
+        publisher.page = page
+
+        await publisher._fill_stock({})
+
+        self.assertEqual(page.selector_calls, 0)
 
 
 class CardBindingPersistenceTests(unittest.IsolatedAsyncioTestCase):

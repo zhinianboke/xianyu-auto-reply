@@ -1255,6 +1255,7 @@ class DatabaseInitializer:
                 title VARCHAR(200) NOT NULL COMMENT '商品标题',
                 description TEXT NOT NULL COMMENT '商品描述',
                 price DECIMAL(12,2) NOT NULL COMMENT '价格',
+                stock INT DEFAULT NULL COMMENT '闲鱼发布库存，NULL=不设置',
                 original_price DECIMAL(12,2) DEFAULT NULL COMMENT '原价（划线价）',
                 category VARCHAR(100) DEFAULT NULL COMMENT '商品分类',
                 images JSON DEFAULT NULL COMMENT '图片URL列表（最多9张）',
@@ -1877,6 +1878,7 @@ class DatabaseInitializer:
             ("expire_at", "DATETIME DEFAULT NULL COMMENT '账号到期日（精确到秒，NULL=永不过期）'", "api_key_last_used_at"),
         ],
         "xy_product_materials": [
+            ("stock", "INT DEFAULT NULL COMMENT '闲鱼发布库存，NULL=不设置'", "price"),
             ("source_type", "VARCHAR(32) DEFAULT NULL COMMENT '外部素材来源类型'", "remark"),
             ("source_item_id", "VARCHAR(128) DEFAULT NULL COMMENT '外部来源商品ID'", "source_type"),
             ("source_content_hash", "VARCHAR(64) DEFAULT NULL COMMENT '外部来源内容哈希'", "source_item_id"),

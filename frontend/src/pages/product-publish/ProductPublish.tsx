@@ -24,6 +24,7 @@ interface PublishForm {
   title: string
   description: string
   price: string
+  stock: string
   original_price: string
   category: string
   address: string
@@ -102,7 +103,7 @@ export function ProductPublish() {
   const [imagePaths, setImagePaths] = useState<string[]>([])
   const [imagePreviews, setImagePreviews] = useState<string[]>([])
   const [form, setForm] = useState<PublishForm>({
-    account_id: '', title: '', description: '', price: '', original_price: '',
+    account_id: '', title: '', description: '', price: '', stock: '999', original_price: '',
     category: '', address: '', delivery_method: 'express', postage: '0', brand: '', condition: '全新',
   })
 
@@ -146,6 +147,7 @@ export function ProductPublish() {
   const applyMaterial = (m: ProductMaterial) => {
     setForm(f => ({
       ...f, title: m.title, description: m.description, price: String(m.price),
+      stock: String(m.stock ?? 999),
       original_price: m.original_price ? String(m.original_price) : '',
       category: m.category || '', address: m.address || '',
       delivery_method: (m.delivery_method as 'express' | 'pickup') || 'express',
@@ -164,6 +166,7 @@ export function ProductPublish() {
     if (!form.title.trim()) { addToast({ type: 'warning', message: '请填写商品标题' }); return }
     if (!form.description.trim()) { addToast({ type: 'warning', message: '请填写商品描述' }); return }
     if (!form.price || parseFloat(form.price) <= 0) { addToast({ type: 'warning', message: '请填写有效价格' }); return }
+    if (!/^[1-9]\d*$/.test(form.stock)) { addToast({ type: 'warning', message: '库存必须是大于 0 的整数' }); return }
     if (imagePaths.length === 0) { addToast({ type: 'warning', message: '请至少上传一张商品图片' }); return }
     setSubmitting(true)
     setResult(null)
@@ -171,6 +174,7 @@ export function ProductPublish() {
       const res = await publishSingle({
         account_id: form.account_id, title: form.title, description: form.description,
         price: parseFloat(form.price),
+        stock: parseInt(form.stock, 10),
         original_price: form.original_price ? parseFloat(form.original_price) : undefined,
         category: form.category || undefined, images: imagePaths, address: form.address || undefined,
         delivery_method: form.delivery_method, postage: parseFloat(form.postage) || 0,
@@ -251,11 +255,16 @@ export function ProductPublish() {
                 value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
             </div>
             {/* 价格 */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="input-group">
                 <label className="input-label">售价（元）<span className="text-red-500">*</span></label>
                 <input type="number" className="input-ios" placeholder="0.00" min="0" step="0.01"
                   value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} />
+              </div>
+              <div className="input-group">
+                <label className="input-label">闲鱼库存<span className="text-red-500">*</span></label>
+                <input type="number" className="input-ios" placeholder="999" min="1" step="1"
+                  value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} />
               </div>
               <div className="input-group">
                 <label className="input-label">原价（元，选填）</label>

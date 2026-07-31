@@ -263,6 +263,7 @@ export function ProductMaterials() {
                 {isAdmin && <th>所属用户</th>}
                 <th>标题</th>
                 <th>价格</th>
+                <th>库存</th>
                 <th>分类</th>
                 <th>成色</th>
                 <th>图片</th>
@@ -272,11 +273,11 @@ export function ProductMaterials() {
             </thead>
             <tbody>
               {tableLoading ? (
-                <tr><td colSpan={isAdmin ? 9 : 8} className="text-center py-12">
+                <tr><td colSpan={isAdmin ? 10 : 9} className="text-center py-12">
                   <RefreshCw className="w-6 h-6 animate-spin text-blue-500 mx-auto" />
                 </td></tr>
               ) : materials.length === 0 ? (
-                <tr><td colSpan={isAdmin ? 9 : 8} className="text-center py-12 text-slate-400">
+                <tr><td colSpan={isAdmin ? 10 : 9} className="text-center py-12 text-slate-400">
                   <div className="flex flex-col items-center gap-2">
                     <Image className="w-12 h-12 text-slate-300" />
                     <p>暂无素材，点击「新建素材」添加</p>
@@ -306,6 +307,7 @@ export function ProductMaterials() {
                       <span className="text-xs text-slate-400 line-through ml-1">{m.original_price}</span>
                     )}
                   </td>
+                  <td className="text-slate-600 dark:text-slate-300">{m.stock ?? '-'}</td>
                   <td className="text-slate-500">{m.category || '-'}</td>
                   <td><span className="badge-gray">{m.condition}</span></td>
                   <td><span className="badge-info">{(m.images || []).length} 张</span></td>
