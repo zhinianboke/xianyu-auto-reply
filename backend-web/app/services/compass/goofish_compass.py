@@ -356,6 +356,21 @@ class GoofishCompassService:
                     return GoofishCompassService._normalize_price_text(value.get(k))
         return None
 
+    @staticmethod
+    def _price_number(value: Any) -> float | None:
+        """Extract the displayed listing's starting unit price."""
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return round(float(value), 2)
+        match = re.search(r"(?<!\d)(\d+(?:\.\d+)?)(?!\d)", str(value).replace(",", ""))
+        if not match:
+            return None
+        try:
+            return round(float(match.group(1)), 2)
+        except (TypeError, ValueError):
+            return None
+
     @classmethod
     def _extract_detail_from_payloads(cls, payloads: list[dict[str, Any]]) -> dict[str, Any]:
         if not payloads:
@@ -437,6 +452,7 @@ class GoofishCompassService:
                 result["description"] = desc_clean
         if price_text:
             result["price"] = price_text
+            result["unit_price"] = cls._price_number(price_text)
         if view_count is not None:
             result["view_count"] = view_count
         if want_count is not None:
@@ -484,6 +500,7 @@ class GoofishCompassService:
                         price_text = self._normalize_price_text(price)
                         if price_text:
                             result.setdefault("price", price_text)
+                            result.setdefault("unit_price", self._price_number(price_text))
         except Exception:
             pass
 
@@ -512,6 +529,7 @@ class GoofishCompassService:
                         price_text = self._normalize_price_text(m.group(1))
                         if price_text:
                             result["price"] = price_text
+                            result["unit_price"] = self._price_number(price_text)
 
                 if "want_count" not in result:
                     m = re.search(r"(\d+(?:\.\d+)?\s*万?)\s*人想要", body_text)
@@ -758,6 +776,8 @@ class GoofishCompassService:
                         if detail.get("want_count") is not None:
                             item["want_count"] = detail["want_count"]
                         item.update(detail)
+                    if item.get("unit_price") is None:
+                        item["unit_price"] = self._price_number(item.get("price"))
 
             return {
                 "items": items,
