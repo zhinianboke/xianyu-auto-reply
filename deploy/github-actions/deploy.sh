@@ -14,11 +14,50 @@ fi
 
 image_tag="${command_parts[1]}"
 github_actor="${command_parts[2]}"
-ghcr_token="$(cat)"
+IFS= read -r ghcr_token || true
 if [[ -z "${ghcr_token}" ]]; then
   echo "缺少 GHCR 临时令牌" >&2
   exit 65
 fi
+
+declare -A deploy_secrets=()
+required_secret_keys=(
+  MYSQL_ROOT_PASSWORD
+  MYSQL_PASSWORD
+  REDIS_PASSWORD
+  EXTERNAL_API_KEY
+)
+while IFS= read -r secret_line; do
+  [[ -z "${secret_line}" ]] && continue
+  secret_key="${secret_line%%=*}"
+  encoded_value="${secret_line#*=}"
+  if [[ "${secret_key}" == "${encoded_value}" ]]; then
+    echo "部署密钥载荷格式无效" >&2
+    exit 66
+  fi
+  case "${secret_key}" in
+    MYSQL_ROOT_PASSWORD|MYSQL_PASSWORD|REDIS_PASSWORD|EXTERNAL_API_KEY) ;;
+    *)
+      echo "部署密钥载荷包含未授权字段" >&2
+      exit 66
+      ;;
+  esac
+  secret_value="$(printf '%s' "${encoded_value}" | base64 --decode)" || {
+    echo "部署密钥载荷解码失败" >&2
+    exit 66
+  }
+  if [[ -z "${secret_value}" || "${secret_value}" == *$'\n'* || "${secret_value}" == *$'\r'* ]]; then
+    echo "部署密钥不能为空或包含换行符" >&2
+    exit 66
+  fi
+  deploy_secrets["${secret_key}"]="${secret_value}"
+done
+for secret_key in "${required_secret_keys[@]}"; do
+  if [[ -z "${deploy_secrets[${secret_key}]:-}" ]]; then
+    echo "缺少部署密钥：${secret_key}" >&2
+    exit 66
+  fi
+done
 
 deploy_dir="/home/ma/xianyu-deploy-v0.2.6"
 compose_files=(
@@ -34,6 +73,21 @@ fi
 
 cd "${deploy_dir}"
 mkdir -p backups
+set_env_value() {
+  local key="$1"
+  local value="$2"
+  local temporary_env
+  temporary_env="$(mktemp "${deploy_dir}/.env.github-actions.XXXXXX")"
+  if [[ -f .env ]]; then
+    grep -v "^${key}=" .env > "${temporary_env}" || true
+  fi
+  printf '%s=%s\n' "${key}" "${value}" >> "${temporary_env}"
+  chmod 600 "${temporary_env}"
+  mv "${temporary_env}" .env
+}
+for secret_key in "${required_secret_keys[@]}"; do
+  set_env_value "${secret_key}" "${deploy_secrets[${secret_key}]}"
+done
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 backup_path="backups/xianyu-before-${image_tag}-${timestamp}.sql.gz"
 docker exec xianyu-mysql sh -lc \

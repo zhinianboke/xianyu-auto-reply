@@ -1,5 +1,11 @@
 # 更新日志
 
+## 0.2.9 - 2026-07-31
+
+- 将生产 MySQL root 密码、MySQL 应用密码、Redis 密码和卡券上游 `EXTERNAL_API_KEY` 迁移为 GitHub Repository Secrets；Actions 通过 Base64 编码的 SSH 标准输入写入服务器 `.env`，不会在日志或仓库中输出明文。
+- GitHub Actions 远端部署钩子只接受四个允许字段，拒绝空值、换行符和未授权字段；写入 `.env` 后设置为仅当前用户可读。
+- 移除 `docker-compose.yml`、本地/远程部署脚本、更新脚本和环境变量示例中的硬编码密码及外部 API Key。首次本地部署会生成随机 MySQL/Redis 密码，外部 API Key 必须显式配置。
+
 ## 0.2.8 - 2026-07-30
 
 - 新增 GitHub Actions 生产发布流水线：版本标签或手动触发后并行构建 Backend、WebSocket、Scheduler 和 Frontend 的 `linux/amd64` 镜像并推送 GHCR。
