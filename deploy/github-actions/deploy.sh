@@ -90,10 +90,15 @@ for secret_key in "${required_secret_keys[@]}"; do
 done
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 backup_path="backups/xianyu-before-${image_tag}-${timestamp}.sql.gz"
+temporary_backup_path="${backup_path}.tmp"
 docker exec xianyu-mysql sh -lc \
   'exec mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' |
-  gzip -9 > "${backup_path}"
-chmod 600 "${backup_path}"
+  gzip -9 > "${temporary_backup_path}"
+chmod 600 "${temporary_backup_path}"
+mv "${temporary_backup_path}" "${backup_path}"
+# 仅在新备份完整写入后清理旧备份，避免部署失败时丢失最后可用备份。
+find backups -maxdepth 1 -type f -name 'xianyu-before-*.sql.gz' \
+  ! -name "$(basename "${backup_path}")" -delete
 
 printf '%s' "${ghcr_token}" |
   docker login ghcr.io -u "${github_actor}" --password-stdin >/dev/null
