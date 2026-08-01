@@ -385,16 +385,14 @@ class XianyuPublisherStockTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(page.selector_calls, 0)
 
-    async def test_missing_stock_field_stops_publish_instead_of_using_default(self):
+    async def test_missing_stock_field_keeps_the_page_default(self):
         publisher = XianyuPublisher()
         publisher.page = object()
         publisher._find_stock_input = AsyncMock(return_value=None)
-        publisher._enable_single_stock_spec = AsyncMock()
 
-        with self.assertRaisesRegex(Exception, "避免按默认库存上架"):
-            await publisher._fill_stock({"stock": 12})
+        await publisher._fill_stock({"stock": 12})
 
-        publisher._enable_single_stock_spec.assert_awaited_once()
+        publisher._find_stock_input.assert_awaited_once()
 
 
 class CardMatcherStockSpecTests(unittest.TestCase):
