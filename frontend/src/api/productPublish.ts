@@ -13,6 +13,8 @@ const PREFIX = '/api/v1/product-publish'
 
 // ==================== 类型定义 ====================
 
+export type ProductDeliveryMethod = 'free_shipping' | 'distance_billing' | 'fixed_fee' | 'no_shipping'
+
 export interface ProductMaterial {
   id: number
   user_id: number
@@ -23,7 +25,8 @@ export interface ProductMaterial {
   original_price?: number | null
   category?: string | null
   images: string[]
-  delivery_method: 'express' | 'pickup'
+  delivery_method: ProductDeliveryMethod
+  support_pickup: boolean
   postage: number
   address?: string | null
   brand?: string | null
@@ -40,12 +43,97 @@ export interface MaterialCreateParams {
   original_price?: number | null
   category?: string
   images: string[]
-  delivery_method?: 'express' | 'pickup'
+  delivery_method?: ProductDeliveryMethod
+  support_pickup?: boolean
   postage?: number
   address?: string
   brand?: string
   condition?: string
   remark?: string
+}
+
+export type AiListingPriceMode = 'fixed' | 'range'
+export type AiListingImageMode = 'ai' | 'random'
+
+export interface AiListingMaterialDefaults {
+  category?: string
+  condition?: string
+  brand?: string
+  delivery_method?: ProductDeliveryMethod
+  support_pickup?: boolean
+  postage?: number
+  address?: string
+  remark?: string
+}
+
+export interface AiListingConfig {
+  id: number
+  user_id: number
+  name: string
+  prompt: string
+  reference_text?: string | null
+  price_mode: AiListingPriceMode
+  fixed_price?: number | null
+  price_min?: number | null
+  price_max?: number | null
+  text_api_url: string
+  text_api_key: string
+  text_model: string
+  image_mode: AiListingImageMode
+  image_api_url?: string | null
+  image_api_key?: string | null
+  image_model?: string | null
+  image_prompt?: string | null
+  image_polish_enabled: boolean
+  image_polish_sequential: boolean
+  random_images: string[]
+  random_image_count: number
+  material_defaults: AiListingMaterialDefaults
+  created_at: string
+  updated_at: string
+}
+
+export interface AiListingConfigParams {
+  name: string
+  prompt: string
+  reference_text?: string
+  price_mode: AiListingPriceMode
+  fixed_price?: number | null
+  price_min?: number | null
+  price_max?: number | null
+  text_api_url: string
+  text_api_key: string
+  text_model: string
+  image_mode: AiListingImageMode
+  image_api_url?: string
+  image_api_key?: string
+  image_model?: string
+  image_prompt?: string
+  image_polish_enabled: boolean
+  image_polish_sequential: boolean
+  random_images: string[]
+  random_image_count: number
+  material_defaults: AiListingMaterialDefaults
+}
+
+export interface AiListingTaskStatus {
+  task_id: string
+  config_id: number
+  config_name?: string
+  total: number
+  current: number
+  success: number
+  failed: number
+  status: 'pending' | 'running' | 'success' | 'failed' | 'partial_success'
+  message: string
+  progress_percent?: number
+  active_stage?: string
+  stage_label?: string
+  stage_detail?: string
+  step_counts?: Record<string, { done: number; total: number }>
+  created_material_ids: number[]
+  errors: string[]
+  finished: boolean
 }
 
 export interface MaterialListResponse {
@@ -180,6 +268,35 @@ export const deleteMaterial = (id: number): Promise<ApiResponse> =>
 export const batchDeleteMaterials = (ids: number[]): Promise<ApiResponse> =>
   post(`${PREFIX}/materials/batch-delete`, { ids })
 
+// ==================== AI铺货接口 ====================
+
+export const getAiListingConfigs = (): Promise<ApiResponse<AiListingConfig[]>> =>
+  get(`${PREFIX}/ai-listing/configs`)
+
+export const createAiListingConfig = (params: AiListingConfigParams): Promise<ApiResponse<AiListingConfig>> =>
+  post(`${PREFIX}/ai-listing/configs`, params)
+
+export const updateAiListingConfig = (
+  id: number,
+  params: AiListingConfigParams
+): Promise<ApiResponse<AiListingConfig>> => put(`${PREFIX}/ai-listing/configs/${id}`, params)
+
+export const deleteAiListingConfig = (id: number): Promise<ApiResponse> =>
+  del(`${PREFIX}/ai-listing/configs/${id}`)
+
+export const startAiListingGeneration = (
+  configId: number,
+  count: number,
+  concurrency: number
+): Promise<ApiResponse<{ task_id: string; total: number }>> =>
+  post(`${PREFIX}/ai-listing/configs/${configId}/generate`, { count, concurrency })
+
+export const getAiListingTaskStatus = (taskId: string): Promise<ApiResponse<AiListingTaskStatus>> =>
+  get(`${PREFIX}/ai-listing/tasks/${taskId}/status`)
+
+export const getAiListingTasks = (): Promise<ApiResponse<AiListingTaskStatus[]>> =>
+  get(`${PREFIX}/ai-listing/tasks`)
+
 // ==================== 发布接口 ====================
 
 /** 单品发布（同步，超时时间需设长） */
@@ -193,6 +310,7 @@ export const publishSingle = (params: {
   images: string[]        // 本地绝对路径，由 uploadProductImages 返回
   address?: string
   delivery_method?: string
+  support_pickup?: boolean
   postage?: number
   brand?: string
   condition?: string
@@ -239,6 +357,10 @@ export const getPublishLogs = (
   if (status) params.append('status', status)
   return get(`${PREFIX}/logs?${params}`)
 }
+
+/** 查询单条发布日志 */
+export const getPublishLog = (logId: number): Promise<ApiResponse<PublishLog>> =>
+  get(`${PREFIX}/logs/${logId}`)
 
 export const clearPublishLogs = async (): Promise<{ success: boolean; message: string }> => {
   return del<{ success: boolean; message: string }>(`${PREFIX}/logs/clear`)

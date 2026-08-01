@@ -89,6 +89,17 @@ class PublishLogService:
                 log.error_message = str(error_message)[:1000]
             await self.session.commit()
 
+    async def get_log(
+        self,
+        log_id: int,
+        user_id: int | None = None,
+    ) -> PublishLog | None:
+        """查询单条发布日志"""
+        stmt = select(PublishLog).where(PublishLog.id == log_id)
+        if user_id is not None:
+            stmt = stmt.where(PublishLog.user_id == user_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def list_logs(
         self,
         user_id: int = None,

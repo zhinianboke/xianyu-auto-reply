@@ -34,7 +34,8 @@ class ProductMaterialService:
             original_price=float(data["original_price"]) if data.get("original_price") else None,
             category=data.get("category"),
             images=data.get("images", []),
-            delivery_method=data.get("delivery_method", "express"),
+            delivery_method=data.get("delivery_method", "free_shipping"),
+            support_pickup=bool(data.get("support_pickup", False)),
             postage=float(data.get("postage", 0)),
             address=data.get("address"),
             brand=data.get("brand"),
@@ -129,7 +130,7 @@ class ProductMaterialService:
 
         updatable = [
             "title", "description", "price", "original_price", "category",
-            "images", "delivery_method", "postage", "address", "brand",
+            "images", "delivery_method", "support_pickup", "postage", "address", "brand",
             "condition", "remark",
         ]
         for field in updatable:
@@ -137,6 +138,8 @@ class ProductMaterialService:
                 value = data[field]
                 if field in ("price", "original_price", "postage"):
                     value = float(value) if value else (None if field == "original_price" else 0)
+                elif field == "support_pickup":
+                    value = bool(value)
                 setattr(material, field, value)
 
         await self.session.commit()
@@ -185,6 +188,7 @@ def _material_to_dict(m: ProductMaterial) -> dict:
         "category": m.category,
         "images": m.images or [],
         "delivery_method": m.delivery_method,
+        "support_pickup": bool(getattr(m, "support_pickup", False)),
         "postage": float(m.postage) if m.postage is not None else 0,
         "address": m.address,
         "brand": m.brand,
