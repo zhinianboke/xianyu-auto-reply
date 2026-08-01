@@ -186,7 +186,7 @@ services:
       - ENABLE_REMOTE_POPUP_ANNOUNCEMENTS=${ENABLE_REMOTE_POPUP_ANNOUNCEMENTS:-true}
       - BROWSER_HEADLESS=true
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - SQL_ECHO=${SQL_ECHO:-true}
+      - SQL_ECHO=${SQL_ECHO:-false}
       - TOKEN_CACHE_TTL_MIN_HOURS=${TOKEN_CACHE_TTL_MIN_HOURS:-5}
       - TOKEN_CACHE_TTL_MAX_HOURS=${TOKEN_CACHE_TTL_MAX_HOURS:-10}
       - TZ=Asia/Shanghai
@@ -236,7 +236,7 @@ services:
       - BACKEND_WEB_SERVICE_URL=http://backend-web:8089
       - STATIC_DIR=/app/static
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - SQL_ECHO=${SQL_ECHO:-true}
+      - SQL_ECHO=${SQL_ECHO:-false}
       - TOKEN_CACHE_TTL_MIN_HOURS=${TOKEN_CACHE_TTL_MIN_HOURS:-5}
       - TOKEN_CACHE_TTL_MAX_HOURS=${TOKEN_CACHE_TTL_MAX_HOURS:-10}
       - TZ=Asia/Shanghai
@@ -286,7 +286,7 @@ services:
       - STATIC_DIR=/app/static
       - BACKUP_DIR=/app/backups
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - SQL_ECHO=${SQL_ECHO:-true}
+      - SQL_ECHO=${SQL_ECHO:-false}
       - TZ=Asia/Shanghai
     volumes:
       - ./xianyu_auto_reply/logs/scheduler:/app/scheduler/logs
@@ -370,8 +370,8 @@ REDIS_IMAGE=registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-redis:7-al
 # 日志级别
 LOG_LEVEL=INFO
 
-# SQL 日志开关：true=打印每条执行的完整 SQL（默认，便于排查）；高并发生产环境可设为 false
-SQL_ECHO=true
+# SQL 日志开关：true=打印每条执行的完整 SQL（便于排查）；默认 false，高并发生产环境建议保持关闭
+SQL_ECHO=false
 
 # IM Token 缓存基础 TTL 随机区间（小时）；之后追加 1~5 小时秒级随机偏移
 TOKEN_CACHE_TTL_MIN_HOURS=5

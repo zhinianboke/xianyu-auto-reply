@@ -98,7 +98,7 @@ services:
       - ENABLE_REMOTE_POPUP_ANNOUNCEMENTS=${ENABLE_REMOTE_POPUP_ANNOUNCEMENTS:-true}
       - BROWSER_HEADLESS=true
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - SQL_ECHO=${SQL_ECHO:-true}
+      - SQL_ECHO=${SQL_ECHO:-false}
       - TOKEN_CACHE_TTL_MIN_HOURS=${TOKEN_CACHE_TTL_MIN_HOURS:-5}
       - TOKEN_CACHE_TTL_MAX_HOURS=${TOKEN_CACHE_TTL_MAX_HOURS:-10}
       - TZ=Asia/Shanghai
@@ -151,7 +151,7 @@ services:
       - BACKEND_WEB_SERVICE_URL=http://backend-web:8089
       - STATIC_DIR=/app/static
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - SQL_ECHO=${SQL_ECHO:-true}
+      - SQL_ECHO=${SQL_ECHO:-false}
       - TOKEN_CACHE_TTL_MIN_HOURS=${TOKEN_CACHE_TTL_MIN_HOURS:-5}
       - TOKEN_CACHE_TTL_MAX_HOURS=${TOKEN_CACHE_TTL_MAX_HOURS:-10}
       - TZ=Asia/Shanghai
@@ -204,7 +204,7 @@ services:
       - STATIC_DIR=/app/static
       - BACKUP_DIR=/app/backups
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - SQL_ECHO=${SQL_ECHO:-true}
+      - SQL_ECHO=${SQL_ECHO:-false}
       - TZ=Asia/Shanghai
     volumes:
       - scheduler_logs:/app/scheduler/logs
