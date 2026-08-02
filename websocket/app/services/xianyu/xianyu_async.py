@@ -809,6 +809,20 @@ class XianyuAsync:
                                                 # 小刀订单 + allow：先免拼再走自动发货流程（参照_handle_card_message的处理）
                                                 # card_only 时订单已被关闭，调免拼无意义
                                                 if order_info.get('is_bargain') and order_buyer_id and pre_action == 'allow':
+                                                    amount_ok = await self.auto_delivery_handler._ensure_order_amount_before_delivery(
+                                                        order_id=order_no,
+                                                        item_id=order_item_id,
+                                                        buyer_id=order_buyer_id,
+                                                    )
+                                                    if not amount_ok:
+                                                        fail_reason = "订单金额为0，发货前刷新订单详情失败，请稍后重试"
+                                                        logger.warning(
+                                                            f"【{self.cookie_id}】重发货触发：订单 {order_no} {fail_reason}"
+                                                        )
+                                                        await self.auto_delivery_handler._update_delivery_fail_reason(
+                                                            order_no, fail_reason
+                                                        )
+                                                        return
                                                     logger.info(f"【{self.cookie_id}】重发货触发: 检测到小刀订单，先调用免拼接口: order_id={order_no}, buyer_id={order_buyer_id}")
                                                     freeshipping_result = await self.auto_delivery_handler.auto_freeshipping(
                                                         order_no, order_item_id, order_buyer_id
@@ -1477,6 +1491,20 @@ class XianyuAsync:
 
                             # 仅 allow 时才调用免拼接口；card_only 时订单已被关闭，调免拼无意义
                             if pre_action == 'allow':
+                                amount_ok = await self.auto_delivery_handler._ensure_order_amount_before_delivery(
+                                    order_id=order_id,
+                                    item_id=item_id,
+                                    buyer_id=send_user_id,
+                                )
+                                if not amount_ok:
+                                    fail_reason = "订单金额为0，发货前刷新订单详情失败，请稍后重试"
+                                    logger.warning(
+                                        f"【{self.cookie_id}】小刀卡片：订单 {order_id} {fail_reason}"
+                                    )
+                                    await self.auto_delivery_handler._update_delivery_fail_reason(
+                                        order_id, fail_reason
+                                    )
+                                    return
                                 freeshipping_result = await self.auto_delivery_handler.auto_freeshipping(
                                     order_id, item_id, send_user_id
                                 )

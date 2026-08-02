@@ -115,6 +115,7 @@ export interface DealerListResponse {
 export interface FundFlow {
   id: number
   user_id: number
+  username?: string       // 关联用户名（用户被删除时为空）
   type: string            // income-收入，expense-支出
   amount: string          // 发生额
   balance_before: string  // 发生前余额
@@ -242,11 +243,13 @@ export const getFundFlows = (
   page: number = 1,
   pageSize: number = 20,
   flowType: string = '',
+  username: string = '',
 ): Promise<FundFlowListResponse> => {
   const params = new URLSearchParams()
   params.append('page', String(page))
   params.append('page_size', String(pageSize))
   if (flowType) params.append('type', flowType)
+  if (username) params.append('username', username)
   return get(`/api/v1/distribution/fund-flows?${params.toString()}`)
 }
 

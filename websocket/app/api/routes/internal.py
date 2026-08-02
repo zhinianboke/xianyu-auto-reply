@@ -1044,6 +1044,20 @@ async def confirm_no_logistics(request: ConfirmNoLogisticsRequest):
     if not xianyu_live:
         return {"success": False, "code": 404, "message": "账号未连接", "data": None}
 
+    # 无物流发货同样属于实际发货入口，金额为0时先刷新订单详情，避免绕过金额保护。
+    amount_ok = await xianyu_live.auto_delivery_handler._ensure_order_amount_before_delivery(
+        order_id=request.order_no,
+        item_id=request.item_id,
+        buyer_id=request.buyer_id,
+    )
+    if not amount_ok:
+        return {
+            "success": False,
+            "code": 400,
+            "message": "订单金额为0，发货前刷新订单详情失败，请稍后重试",
+            "data": None,
+        }
+
     if request.is_bargain:
         result = await xianyu_live.auto_delivery_handler.auto_freeshipping(
             request.order_no, request.item_id, request.buyer_id
@@ -1193,19 +1207,6 @@ async def deliver_order(request: DeliverOrderRequest):
                 detail=f"订单不存在: {request.order_no}"
             )
         
-        # 检查订单金额，金额为0禁止发货
-        order_amount = order_info.get('amount')
-        if order_amount is not None:
-            from decimal import Decimal
-            if Decimal(str(order_amount)) <= 0:
-                logger.warning(f"【内部API】❌ 订单 {request.order_no} 金额为 {order_amount}，禁止发货")
-                return {
-                    "success": False,
-                    "code": 400,
-                    "message": "订单金额为0，禁止发货",
-                    "data": None
-                }
-
         account_id = order_info.get('account_id')
         if not account_id:
             raise HTTPException(
@@ -1222,6 +1223,29 @@ async def deliver_order(request: DeliverOrderRequest):
                 status_code=404,
                 detail=f"账号 {account_id} 未启动或不存在"
             )
+
+        # 检查订单金额，金额为0时仅在实际发货入口刷新一次订单详情。
+        # 正常金额不会请求详情接口，避免普通状态消息带来额外API调用。
+        try:
+            amount_ok = await xianyu_live.auto_delivery_handler._ensure_order_amount_before_delivery(
+                order_id=request.order_no,
+                item_id=request.item_id,
+                buyer_id=request.buyer_id,
+            )
+        except Exception as e:
+            amount_ok = False
+            logger.warning(f"【内部API】订单 {request.order_no} 发货前刷新金额异常: {e}")
+
+        if not amount_ok:
+            logger.warning(
+                f"【内部API】❌ 订单 {request.order_no} 发货前金额无效，禁止发货"
+            )
+            return {
+                "success": False,
+                "code": 400,
+                "message": "订单金额为0，发货前刷新订单详情失败，请稍后重试",
+                "data": None
+            }
         
         # 获取 WebSocket 连接
         ws = xianyu_live.ws

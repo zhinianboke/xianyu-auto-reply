@@ -7,13 +7,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.fund_flow import FundFlow
-from common.utils.pagination import (
-    build_pagination_response,
-    execute_paginated_with_filters,
-)
+from common.models.user import User
+from common.utils.pagination import build_pagination_response
 from common.utils.time_utils import safe_isoformat
 
 
@@ -27,48 +26,73 @@ class FundFlowService:
         self,
         user_id: Optional[int] = None,
         flow_type: str = "",
+        username: str = "",
         page: int = 1,
         page_size: int = 20,
     ) -> Dict[str, Any]:
-        """分页获取资金流水列表
-        
+        """分页获取资金流水列表（关联用户名）
+
+        通过 LEFT JOIN 用户表取出每笔流水对应的用户名，避免用户被软删除后
+        流水记录丢失。管理员可按用户名模糊筛选。
+
         Args:
             user_id: 用户ID，None表示查询所有（管理员）
-            flow_type: 流水类型筛选（income/expense），空字符串表示全部
+            flow_type: 流水类型筛选（income/expense/fee），空字符串表示全部
+            username: 用户名模糊筛选，空字符串表示不筛选
             page: 页码
             page_size: 每页数量
-            
+
         Returns:
             分页数据字典
         """
-        # 收集过滤条件交由公共分页工具同时应用到 list 与 count
-        filters: list = []
+        # 收集过滤条件，统一应用到 list 与 count 两条语句
+        conditions: list = []
         if user_id is not None:
-            filters.append(FundFlow.user_id == user_id)
+            conditions.append(FundFlow.user_id == user_id)
         if flow_type:
-            filters.append(FundFlow.type == flow_type)
+            conditions.append(FundFlow.type == flow_type)
+        if username:
+            # 参数化模糊查询，防 SQL 注入
+            conditions.append(User.username.like(f"%{username.strip()}%"))
 
-        flows, total = await execute_paginated_with_filters(
-            self.session,
-            FundFlow,
-            filters=filters,
-            order_by=[FundFlow.id.desc()],
-            page=page,
-            page_size=page_size,
+        # LEFT JOIN 用户表，同时取出流水与用户名
+        list_stmt = select(FundFlow, User.username).outerjoin(
+            User, User.id == FundFlow.user_id
+        )
+        count_stmt = (
+            select(func.count())
+            .select_from(FundFlow)
+            .outerjoin(User, User.id == FundFlow.user_id)
+        )
+        if conditions:
+            list_stmt = list_stmt.where(*conditions)
+            count_stmt = count_stmt.where(*conditions)
+
+        list_stmt = (
+            list_stmt.order_by(FundFlow.id.desc())
+            .offset(max(page - 1, 0) * page_size)
+            .limit(page_size)
         )
 
-        return build_pagination_response(
-            [self._flow_to_dict(f) for f in flows],
-            total,
-            page,
-            page_size,
-        )
+        total = (await self.session.execute(count_stmt)).scalar() or 0
+        rows = (await self.session.execute(list_stmt)).all()
+        items = [self._flow_to_dict(flow, uname) for flow, uname in rows]
 
-    def _flow_to_dict(self, flow: FundFlow) -> Dict[str, Any]:
-        """将资金流水记录转换为字典"""
+        return build_pagination_response(items, int(total), page, page_size)
+
+    def _flow_to_dict(self, flow: FundFlow, username: Optional[str] = None) -> Dict[str, Any]:
+        """将资金流水记录转换为字典
+
+        Args:
+            flow: 资金流水 ORM 对象
+            username: 关联的用户名（用户被删除时为 None）
+        Returns:
+            资金流水字典
+        """
         return {
             "id": flow.id,
             "user_id": flow.user_id,
+            "username": username,
             "type": flow.type,
             "amount": flow.amount,
             "balance_before": flow.balance_before,
