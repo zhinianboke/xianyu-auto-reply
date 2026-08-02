@@ -44,16 +44,36 @@ class ItemParser:
 
     @staticmethod
     def _coerce_json(value: Any) -> Any:
-        """Unwrap JSON strings returned by newer MTOP response variants."""
+        """Unwrap nested JSON/JSONP strings returned by MTOP variants."""
         if not isinstance(value, str):
             return value
-        text = value.strip()
-        if len(text) < 2 or text[0] not in "[{":
-            return value
-        try:
-            return json.loads(text)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return value
+        current: Any = value
+        # A search card may be wrapped as a JSON string (or JSONP) inside the
+        # result list.  Decode a small, bounded number of layers, but leave
+        # ordinary text values untouched.
+        for _ in range(3):
+            if not isinstance(current, str):
+                return current
+            text = current.strip()
+            if len(text) < 2:
+                return current
+
+            json_text = text
+            if text[0] not in "[{\"":
+                jsonp = re.match(r"^[A-Za-z_$][\w$\.]*\((.*)\);?$", text, re.DOTALL)
+                if not jsonp:
+                    return current
+                json_text = jsonp.group(1).strip()
+
+            try:
+                decoded = json.loads(json_text)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return current
+            if isinstance(decoded, str) and decoded == current:
+                return current
+            current = decoded
+
+        return current
 
     @classmethod
     def _walk_dicts(cls, value: Any) -> Any:
