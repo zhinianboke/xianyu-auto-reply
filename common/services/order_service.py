@@ -23,7 +23,6 @@ from loguru import logger
 
 from common.models.xy_order import XYOrder
 from common.models.xy_catalog_item import XYCatalogItem
-from common.models.xy_account import XYAccount
 from common.models.auto_reply_message_log import XYAutoReplyMessageLog
 
 
@@ -141,36 +140,6 @@ class OrderService:
         if status:
             conditions.append(XYOrder.status == status)
 
-        # 订单列表只展示与订单账号一致的已知商品。历史上个别账号的订单
-        # 拉取会返回其他账号商品，若直接按当前账号落库会造成同一订单号跨
-        # 账号展示。未采集到商品目录的订单仍保留展示，避免误隐藏正常订单。
-        catalog_item_exists = (
-            select(XYCatalogItem.id)
-            .where(
-                XYCatalogItem.owner_id == XYOrder.owner_id,
-                XYCatalogItem.item_id == XYOrder.item_id,
-            )
-            .exists()
-        )
-        catalog_item_matches_order_account = (
-            select(XYCatalogItem.id)
-            .join(XYAccount, XYCatalogItem.account_pk == XYAccount.id)
-            .where(
-                XYCatalogItem.owner_id == XYOrder.owner_id,
-                XYCatalogItem.item_id == XYOrder.item_id,
-                XYAccount.account_id == XYOrder.account_id,
-            )
-            .exists()
-        )
-        conditions.append(
-            or_(
-                XYOrder.item_id.is_(None),
-                XYOrder.item_id == "",
-                ~catalog_item_exists,
-                catalog_item_matches_order_account,
-            )
-        )
-        
         # 搜索关键词（模糊匹配订单号、商品ID、买家ID）
         if search:
             conditions.append(
@@ -793,8 +762,26 @@ class OrderService:
             { total_fetched, new_inserted, updated, failed, errors }
         """
         from common.db.redis_client import distributed_lock
+        from common.utils.xianyu_utils import extract_account_user_id_from_cookie
 
         account_id = account.account_id
+        expected_unb = str(account.unb or "").strip()
+        cookie_unb = str(
+            extract_account_user_id_from_cookie(account.cookie) or ""
+        ).strip()
+        if expected_unb and cookie_unb and cookie_unb != expected_unb:
+            message = (
+                f"账号 {account_id} 的 Cookie 实际身份 {cookie_unb} 与已记录身份 "
+                f"{expected_unb} 不一致，已跳过订单同步，请重新登录该账号"
+            )
+            logger.warning(f"获取闲鱼订单: {message}")
+            return {
+                "total_fetched": 0,
+                "new_inserted": 0,
+                "updated": 0,
+                "failed": 0,
+                "errors": [message],
+            }
         lock_name = f"order_sync:{account_id}"
         try:
             async with distributed_lock(
@@ -948,44 +935,6 @@ class OrderService:
                     seen_order_nos.add(order_no)
                     unique_order_nos.append(order_no)
 
-            item_ids = list(
-                {
-                    parsed["item_id"]
-                    for parsed in parsed_items
-                    if parsed.get("item_id")
-                }
-            )
-            item_account_pks: dict[str, set[int]] = {}
-            if item_ids:
-                catalog_stmt = select(
-                    XYCatalogItem.item_id,
-                    XYCatalogItem.account_pk,
-                ).where(
-                    XYCatalogItem.owner_id == account.owner_id,
-                    XYCatalogItem.item_id.in_(item_ids),
-                )
-                catalog_rows = (await self.session.execute(catalog_stmt)).all()
-                for item_id, account_pk in catalog_rows:
-                    item_account_pks.setdefault(item_id, set()).add(account_pk)
-
-            foreign_account_skipped = 0
-            if item_account_pks:
-                validated_items = []
-                for parsed in parsed_items:
-                    known_account_pks = item_account_pks.get(parsed.get("item_id"), set())
-                    if known_account_pks and account.id not in known_account_pks:
-                        foreign_account_skipped += 1
-                        failed += 1
-                        logger.warning(
-                            f"获取闲鱼订单: 跳过账号 {account.account_id} 的跨账号订单 "
-                            f"{parsed['order_no']}，商品 {parsed['item_id']} "
-                            f"归属账号主键 {sorted(known_account_pks)}"
-                        )
-                        continue
-                    validated_items.append(parsed)
-                parsed_items = validated_items
-                unique_order_nos = [parsed["order_no"] for parsed in parsed_items]
-
             existing_orders_map = {}
             if unique_order_nos:
                 existing_stmt = select(XYOrder).where(
@@ -1025,8 +974,7 @@ class OrderService:
 
             logger.info(
                 f"获取闲鱼订单: 第{page}/{total_pages}页完成, 本页{len(items)}条, "
-                f"累计{total_fetched}条, 总数{total_count}, 跨账号跳过{foreign_account_skipped}条, "
-                f"全页已存在={page_all_existing}"
+                f"累计{total_fetched}条, 总数{total_count}, 全页已存在={page_all_existing}"
             )
 
             # 仅当本页全部订单已存在且无状态变更时才停止翻页；
