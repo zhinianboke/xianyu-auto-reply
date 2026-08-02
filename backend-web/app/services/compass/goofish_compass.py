@@ -312,6 +312,29 @@ class GoofishCompassService:
         return int(num)
 
     @staticmethod
+    def _drop_inconsistent_view_count(item: dict[str, Any]) -> dict[str, Any]:
+        """Suppress a detail-response field that cannot be a listing PV.
+
+        A buyer has to open a listing before marking it as wanted, so a
+        listing-level view count smaller than its wanted count is not a
+        meaningful engagement metric.  Detail payloads include several
+        unrelated cards and counters; treating the first recursively matched
+        ``viewCount`` as authoritative previously allowed such a value to
+        leak into market research.  Keep the independently useful wanted
+        count, but make the unverified view value unavailable to callers.
+        """
+        want_count = GoofishCompassService._parse_cn_number(item.get("want_count"))
+        view_count = GoofishCompassService._parse_cn_number(item.get("view_count"))
+        if want_count is not None:
+            item["want_count"] = want_count
+        if view_count is not None:
+            item["view_count"] = view_count
+        if want_count is not None and view_count is not None and view_count < want_count:
+            item.pop("view_count", None)
+            item["view_count_status"] = "unverified"
+        return item
+
+    @staticmethod
     def _deep_find_first(obj: Any, keys: set[str]) -> Any:
         stack: list[Any] = [obj]
         while stack:
@@ -507,7 +530,7 @@ class GoofishCompassService:
             result["view_count"] = view_count
         if want_count is not None:
             result["want_count"] = want_count
-        return result
+        return cls._drop_inconsistent_view_count(result)
 
     async def _extract_detail_from_dom(self, page: Any) -> dict[str, Any]:
         """
@@ -828,6 +851,7 @@ class GoofishCompassService:
                         item.update(detail)
                     if item.get("unit_price") is None:
                         item["unit_price"] = self._price_number(item.get("price"))
+                    self._drop_inconsistent_view_count(item)
 
             return {
                 "items": items,
