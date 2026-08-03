@@ -142,6 +142,14 @@ class ItemParser:
         return match.group(1) if match else ""
 
     @staticmethod
+    def _canonical_item_url(item_id: Any) -> str:
+        """Return a stable public item URL only for a valid Goofish item ID."""
+        normalized_id = str(item_id or "").strip()
+        if not re.fullmatch(r"\d{6,32}", normalized_id):
+            return ""
+        return f"https://www.goofish.com/item?id={normalized_id}"
+
+    @staticmethod
     async def safe_get(data: Any, *keys, default: Any = "暂无") -> Any:
         """安全获取嵌套字典值"""
         for key in keys:
@@ -281,7 +289,10 @@ class ItemParser:
                 "price": price,
                 "unit_price": self._parse_unit_price(price),
                 "seller_name": seller or "匿名卖家",
-                "item_url": raw_link.replace("fleamarket://", "https://www.goofish.com/"),
+                # Search responses also contain URLs for page assets (for example
+                # DynamicX ZIP bundles).  Never expose those as a product link;
+                # use the item ID to construct the stable Goofish detail URL.
+                "item_url": self._canonical_item_url(item_id),
                 "main_image": f"https:{image_url}" if image_url.startswith("//") else image_url,
                 "publish_time": publish_time,
                 "tags": [fish_tags_content] if fish_tags_content else [],
