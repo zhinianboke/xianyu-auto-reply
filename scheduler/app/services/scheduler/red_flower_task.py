@@ -174,7 +174,7 @@ class RedFlowerTask:
     async def _get_pending_orders(
         self,
         session: AsyncSession,
-        account_id: str,
+        account: XYAccount,
     ) -> List[XYOrder]:
         """
         获取近10天内未求小红花的订单
@@ -185,19 +185,25 @@ class RedFlowerTask:
           避免同步历史订单时 created_at 都是最近导致"全量处理"问题）
         - placed_at 不为 NULL（历史空值数据跳过，防误伤）
         - is_red_flower = False
-        - 排除已取消(cancelled)和待付款(processing)的订单
+        - 开启“仅发货后求小红花”时，状态必须为 shipped（已发货）或 completed（已完成）
+        - 否则排除已取消(cancelled)、待付款(processing)、退款中/已退款的订单
         - 按下单时间升序排列
         """
         now = get_beijing_now_naive()
         ten_days_ago = now - timedelta(days=10)
 
-        stmt = select(XYOrder).where(
-            XYOrder.account_id == account_id,
+        conditions = [
+            XYOrder.account_id == account.account_id,
             XYOrder.is_red_flower == False,
-            XYOrder.status.notin_(self.EXCLUDED_ORDER_STATUSES),
             XYOrder.placed_at.is_not(None),
             XYOrder.placed_at >= ten_days_ago,
-        ).order_by(XYOrder.placed_at)
+        ]
+        if account.red_flower_after_shipment:
+            conditions.append(XYOrder.status.in_(("shipped", "completed")))
+        else:
+            conditions.append(XYOrder.status.notin_(self.EXCLUDED_ORDER_STATUSES))
+
+        stmt = select(XYOrder).where(*conditions).order_by(XYOrder.placed_at)
 
         result = await session.execute(stmt)
         return list(result.scalars().all())
@@ -219,7 +225,7 @@ class RedFlowerTask:
         logger.info(f"[求小红花] 开始处理账号: {account_id}")
 
         # 获取待处理订单
-        orders = await self._get_pending_orders(session, account_id)
+        orders = await self._get_pending_orders(session, account)
 
         if not orders:
             logger.info(f"[求小红花] 账号 {account_id} 没有待求小红花的订单")
