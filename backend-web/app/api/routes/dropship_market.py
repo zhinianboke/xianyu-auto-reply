@@ -25,6 +25,11 @@ class DropshipMarketSearchRequest(BaseModel):
     detail_limit: int = Field(20, ge=0, le=50)
 
 
+class DropshipMarketItemRequest(BaseModel):
+    account_ref: str = Field(..., min_length=1, max_length=128)
+    item_id: str = Field(..., min_length=6, max_length=32, pattern=r"^\d+$")
+
+
 def _account_id_for_ref(account_ref: str) -> str | None:
     """Reverse only the opaque operator-configured pairing map."""
     raw = get_settings().dropship_account_refs_json
@@ -74,4 +79,38 @@ async def search_market(
         return ApiResponse(success=False, message="market collector unavailable", data={"items": []})
     if data.get("error"):
         return ApiResponse(success=False, message=str(data["error"])[:300], data={"items": []})
+    return ApiResponse(success=True, message="ok", data=data)
+
+
+@router.post("/item", response_model=ApiResponse)
+async def get_market_item(
+    request: DropshipMarketItemRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse:
+    """Re-collect one item detail using the account mapped to the hub.
+
+    The endpoint is firewall-only during the HTTP pilot.  It is deliberately
+    bounded to one numeric item ID and invokes no message or listing action.
+    """
+    adapter_account_id = _account_id_for_ref(request.account_ref)
+    if not adapter_account_id:
+        raise HTTPException(404, "unbound account reference")
+    result = await db.execute(select(XYAccount).where(XYAccount.account_id == adapter_account_id))
+    account = result.scalar_one_or_none()
+    if not account or account.status != "active" or not account.cookie:
+        raise HTTPException(409, "mapped adapter account is unavailable")
+    try:
+        from app.services.compass.goofish_compass import GoofishCompassConfig, GoofishCompassService
+        service = GoofishCompassService(
+            user_id=str(account.id), cookie_value=account.cookie,
+            config=GoofishCompassConfig(headless=True, detail_concurrency=1,
+                navigation_timeout_ms=30000, network_idle_timeout_ms=15000,
+                detail_response_timeout_ms=7000),
+        )
+        data = await service.fetch_item_detail(item_id=request.item_id)
+    except Exception:
+        # Credentials and browser internals are intentionally omitted.
+        return ApiResponse(success=False, message="market collector unavailable", data={"item": None})
+    if data.get("error"):
+        return ApiResponse(success=False, message=str(data["error"])[:300], data={"item": None})
     return ApiResponse(success=True, message="ok", data=data)

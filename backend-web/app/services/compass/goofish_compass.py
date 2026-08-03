@@ -312,29 +312,6 @@ class GoofishCompassService:
         return int(num)
 
     @staticmethod
-    def _drop_inconsistent_view_count(item: dict[str, Any]) -> dict[str, Any]:
-        """Suppress a detail-response field that cannot be a listing PV.
-
-        A buyer has to open a listing before marking it as wanted, so a
-        listing-level view count smaller than its wanted count is not a
-        meaningful engagement metric.  Detail payloads include several
-        unrelated cards and counters; treating the first recursively matched
-        ``viewCount`` as authoritative previously allowed such a value to
-        leak into market research.  Keep the independently useful wanted
-        count, but make the unverified view value unavailable to callers.
-        """
-        want_count = GoofishCompassService._parse_cn_number(item.get("want_count"))
-        view_count = GoofishCompassService._parse_cn_number(item.get("view_count"))
-        if want_count is not None:
-            item["want_count"] = want_count
-        if view_count is not None:
-            item["view_count"] = view_count
-        if want_count is not None and view_count is not None and view_count < want_count:
-            item.pop("view_count", None)
-            item["view_count_status"] = "unverified"
-        return item
-
-    @staticmethod
     def _deep_find_first(obj: Any, keys: set[str]) -> Any:
         stack: list[Any] = [obj]
         while stack:
@@ -530,7 +507,7 @@ class GoofishCompassService:
             result["view_count"] = view_count
         if want_count is not None:
             result["want_count"] = want_count
-        return cls._drop_inconsistent_view_count(result)
+        return result
 
     async def _extract_detail_from_dom(self, page: Any) -> dict[str, Any]:
         """
@@ -736,6 +713,46 @@ class GoofishCompassService:
             except Exception:
                 pass
 
+    async def fetch_item_detail(self, *, item_id: str) -> dict[str, Any]:
+        """Collect one public item detail through the mapped account session.
+
+        This is intentionally separate from keyword search so an operator can
+        re-check an already collected listing without relying on ranking or
+        search-result parsing.  It is read-only: no chat, listing, or account
+        mutation is performed here.
+        """
+        normalized_item_id = str(item_id or "").strip()
+        if not re.fullmatch(r"\d{6,32}", normalized_item_id):
+            return {"item": None, "error": "invalid_item_id"}
+        if not PLAYWRIGHT_AVAILABLE:
+            return {"item": None, "error": "Playwright 不可用"}
+
+        try:
+            await self.browser.init_browser(headless=self.config.headless)
+            await self.browser.navigate_to("https://www.goofish.com", timeout=self.config.navigation_timeout_ms)
+            await self.browser.set_cookies(self.cookie_value)
+            if self.browser.page:
+                await self.browser.page.reload()
+            await self.browser.wait_for_network_idle(timeout=self.config.network_idle_timeout_ms)
+
+            detail = await self._fetch_single_detail({"item_id": normalized_item_id})
+            if not detail or detail.get("detail_error"):
+                return {"item": None, "error": str((detail or {}).get("detail_error") or "detail_not_found")}
+            return {
+                "item": {
+                    "item_id": normalized_item_id,
+                    "item_url": self._canonical_item_url(normalized_item_id),
+                    **detail,
+                },
+                "is_real_data": True,
+                "source": "playwright_detail",
+            }
+        except Exception as exc:
+            logger.exception("Goofish item detail probe failed")
+            return {"item": None, "error": type(exc).__name__}
+        finally:
+            await self.browser.close_browser()
+
     async def search(
         self,
         *,
@@ -851,7 +868,6 @@ class GoofishCompassService:
                         item.update(detail)
                     if item.get("unit_price") is None:
                         item["unit_price"] = self._price_number(item.get("price"))
-                    self._drop_inconsistent_view_count(item)
 
             return {
                 "items": items,
