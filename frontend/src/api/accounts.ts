@@ -70,6 +70,7 @@ export const getAccountDetailsPaginated = async (
     confirm_before_send?: boolean
     send_before_confirm?: boolean
     auto_red_flower?: boolean
+    red_flower_after_shipment?: boolean
     ai_reply_block_ordered_users?: boolean
     delivery_disabled?: boolean
     delivery_disabled_reason?: string
@@ -146,6 +147,7 @@ export const getAccountDetailsPaginated = async (
       confirm_before_send: item.confirm_before_send || false,
       send_before_confirm: item.send_before_confirm || false,
       auto_red_flower: item.auto_red_flower || false,
+      red_flower_after_shipment: item.red_flower_after_shipment || false,
       ai_reply_block_ordered_users: item.ai_reply_block_ordered_users || false,
       delivery_disabled: item.delivery_disabled || false,
       delivery_disabled_reason: item.delivery_disabled_reason || '',
@@ -278,6 +280,11 @@ export const updateAccountSendBeforeConfirm = (id: string, sendBeforeConfirm: bo
 // 更新自动求小红花开关
 export const updateAccountAutoRedFlower = (id: string, autoRedFlower: boolean): Promise<ApiResponse> => {
   return put(`${COOKIE_PREFIX}/${id}/auto-red-flower`, { auto_red_flower: autoRedFlower })
+}
+
+// 更新仅发货后求小红花开关
+export const updateAccountRedFlowerAfterShipment = (id: string, redFlowerAfterShipment: boolean): Promise<ApiResponse> => {
+  return put(`${COOKIE_PREFIX}/${id}/red-flower-after-shipment`, { red_flower_after_shipment: redFlowerAfterShipment })
 }
 
 // 更新已下单用户禁止AI回复开关

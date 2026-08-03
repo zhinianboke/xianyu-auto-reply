@@ -87,6 +87,11 @@ class XYAccount(TimestampMixin, Base):
     # 自动求小红花开关
     auto_red_flower: Mapped[bool] = mapped_column(Boolean, default=False, comment="自动求小红花开关")
 
+    # 自动求小红花仅在订单已发货或已完成后执行
+    red_flower_after_shipment: Mapped[bool] = mapped_column(
+        Boolean, default=False, comment="求小红花仅已发货/已完成订单"
+    )
+
     # 禁止发货开关（仅做配置存储，发货逻辑后续接入）
     delivery_disabled: Mapped[bool] = mapped_column(Boolean, default=False, comment="禁止发货开关")
 

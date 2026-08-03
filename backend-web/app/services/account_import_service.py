@@ -284,6 +284,8 @@ class AccountImportService:
             account.auto_polish = _parse_bool(row.get("商品擦亮"))
             account.confirm_before_send = _parse_bool(row.get("发货成功再发卡券"))
             account.auto_red_flower = _parse_bool(row.get("自动求小红花"))
+            if "仅发货后求小红花" in row:
+                account.red_flower_after_shipment = _parse_bool(row.get("仅发货后求小红花"))
             account.delivery_disabled = _parse_bool(row.get("禁止发货"))
             account.delivery_disabled_reason = _parse_str(row.get("禁止发货原因")) or None
             account.auto_close_order = _parse_bool(row.get("主动关闭订单"))

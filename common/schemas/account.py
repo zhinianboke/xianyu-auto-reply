@@ -25,6 +25,7 @@ class AccountDetail(BaseModel):
     confirm_before_send: bool = False
     send_before_confirm: bool = False
     auto_red_flower: bool = False
+    red_flower_after_shipment: bool = False
     ai_reply_block_ordered_users: bool = False
     delivery_disabled: bool = False
     delivery_disabled_reason: str | None = None
@@ -135,6 +136,13 @@ class AccountSendBeforeConfirmUpdate(BaseModel):
 class AccountAutoRedFlowerUpdate(BaseModel):
     """自动求小红花开关更新"""
     auto_red_flower: bool = Field(..., description="自动求小红花开关")
+
+
+class AccountRedFlowerAfterShipmentUpdate(BaseModel):
+    """仅在订单已发货或已完成后求小红花开关更新"""
+    red_flower_after_shipment: bool = Field(
+        ..., description="仅在订单状态为已发货或已完成时求小红花"
+    )
 
 
 class AccountAiReplyBlockOrderedUsersUpdate(BaseModel):
