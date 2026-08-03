@@ -313,17 +313,23 @@ class GoofishCompassService:
 
     @staticmethod
     def _deep_find_first(obj: Any, keys: set[str]) -> Any:
-        stack: list[Any] = [obj]
+        value, _ = GoofishCompassService._deep_find_first_with_path(obj, keys)
+        return value
+
+    @staticmethod
+    def _deep_find_first_with_path(obj: Any, keys: set[str]) -> tuple[Any, str | None]:
+        """Return the first matching value and its non-sensitive payload path."""
+        stack: list[tuple[Any, str]] = [(obj, "data")]
         while stack:
-            cur = stack.pop()
+            cur, path = stack.pop()
             if isinstance(cur, dict):
                 for k, v in cur.items():
                     if k in keys and v not in (None, "", [], {}):
-                        return v
-                    stack.append(v)
+                        return v, f"{path}.{k}"
+                    stack.append((v, f"{path}.{k}"))
             elif isinstance(cur, list):
-                stack.extend(cur)
-        return None
+                stack.extend((value, f"{path}[{index}]") for index, value in enumerate(cur))
+        return None, None
 
     @staticmethod
     def _normalize_price_text(value: Any) -> str | None:
@@ -473,7 +479,7 @@ class GoofishCompassService:
             },
         )
 
-        view_value = cls._deep_find_first(
+        view_value, view_source = cls._deep_find_first_with_path(
             data,
             {
                 "viewCount",
@@ -486,7 +492,7 @@ class GoofishCompassService:
                 "readCount",
             },
         )
-        want_value = cls._deep_find_first(
+        want_value, want_source = cls._deep_find_first_with_path(
             data,
             {"wantCount", "want_count", "wantNum", "want_num", "likeCount", "like_count"},
         )
@@ -507,6 +513,16 @@ class GoofishCompassService:
             result["view_count"] = view_count
         if want_count is not None:
             result["want_count"] = want_count
+        metric_sources = {
+            key: value
+            for key, value in {
+                "view_count": view_source if view_count is not None else None,
+                "want_count": want_source if want_count is not None else None,
+            }.items()
+            if value
+        }
+        if metric_sources:
+            result["metric_sources"] = metric_sources
         return result
 
     async def _extract_detail_from_dom(self, page: Any) -> dict[str, Any]:
