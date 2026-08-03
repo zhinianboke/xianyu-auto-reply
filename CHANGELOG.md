@@ -1,5 +1,10 @@
 # 更新日志
 
+## 0.3.0 - 2026-08-03
+
+- 基于 `zhinianboke/xianyu-auto-reply` 最新主分支同步上游更新，并保留 Gamer520 素材同步、卡券商品标题变量、线程保护与 GitHub Actions 部署能力。
+- 发布镜像标签升级为 `0.3.0`，避免复用此前已发布的 `v0.2.9` 标签。
+
 ## 0.2.9 - 2026-07-31
 
 - 将生产 MySQL root 密码、MySQL 应用密码、Redis 密码和卡券上游 `EXTERNAL_API_KEY` 迁移为 GitHub Repository Secrets；Actions 通过 Base64 编码的 SSH 标准输入写入服务器 `.env`，不会在日志或仓库中输出明文。

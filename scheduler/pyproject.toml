@@ -1,6 +1,6 @@
 [project]
 name = "xianyu-scheduler-service"
-version = "0.2.8"
+version = "0.3.0"
 description = "闲鱼自动回复系统 - Scheduler服务"
 requires-python = ">=3.11"
 
