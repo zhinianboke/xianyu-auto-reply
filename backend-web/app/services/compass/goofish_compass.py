@@ -332,6 +332,30 @@ class GoofishCompassService:
         return None, None
 
     @staticmethod
+    def _payload_mentions_item_id(payload: dict[str, Any], item_id: str) -> bool:
+        """Accept a detail payload only when it explicitly identifies the item.
+
+        Detail pages may request recommendation modules alongside the current
+        listing.  Recursive field lookup is safe only after a payload has a
+        recognized ID field matching the target item.
+        """
+        expected = str(item_id or "").strip()
+        if not expected:
+            return True
+        id_keys = {"id", "itemId", "item_id", "itemid", "auctionId", "auction_id"}
+        stack: list[Any] = [payload]
+        while stack:
+            current = stack.pop()
+            if isinstance(current, dict):
+                for key, value in current.items():
+                    if key in id_keys and str(value or "").strip() == expected:
+                        return True
+                    stack.append(value)
+            elif isinstance(current, list):
+                stack.extend(current)
+        return False
+
+    @staticmethod
     def _normalize_price_text(value: Any) -> str | None:
         if value is None:
             return None
@@ -428,9 +452,22 @@ class GoofishCompassService:
             return None
 
     @classmethod
-    def _extract_detail_from_payloads(cls, payloads: list[dict[str, Any]]) -> dict[str, Any]:
+    def _extract_detail_from_payloads(
+        cls,
+        payloads: list[dict[str, Any]],
+        *,
+        expected_item_id: str | None = None,
+    ) -> dict[str, Any]:
         if not payloads:
             return {}
+
+        if expected_item_id:
+            payloads = [
+                payload for payload in payloads
+                if cls._payload_mentions_item_id(payload, expected_item_id)
+            ]
+            if not payloads:
+                return {}
 
         # pick the "best" payload: prefer having nested data
         best = payloads[-1]
@@ -703,7 +740,10 @@ class GoofishCompassService:
             await collect_detail_responses(timeout_ms=int(self.config.detail_response_timeout_ms))
             await asyncio.sleep(0.5)
 
-            detail = self._extract_detail_from_payloads(detail_payloads)
+            detail = self._extract_detail_from_payloads(
+                detail_payloads,
+                expected_item_id=str(item.get("item_id") or "") or None,
+            )
             dom_detail: dict[str, Any] = {}
             if (
                 not detail
