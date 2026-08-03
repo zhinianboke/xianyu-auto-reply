@@ -55,6 +55,7 @@ export interface Account {
   confirm_before_send?: boolean
   send_before_confirm?: boolean
   auto_red_flower?: boolean
+  red_flower_after_shipment?: boolean
   ai_reply_block_ordered_users?: boolean
   delivery_disabled?: boolean
   delivery_disabled_reason?: string
