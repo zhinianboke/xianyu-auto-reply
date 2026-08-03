@@ -349,9 +349,7 @@ class AutoDeliveryHandler:
             from common.db.session import async_session_maker
             async with async_session_maker() as db_session:
                 order_service = OrderService(db_session)
-                await order_service.update_order_delivery_fail_reason(
-                    order_no, fail_reason, self.cookie_id
-                )
+                await order_service.update_order_delivery_fail_reason(order_no, fail_reason)
                 logger.info(f"【{self.cookie_id}】订单 {order_no} 发货失败原因已记录")
         except Exception as e:
             logger.error(f"【{self.cookie_id}】更新订单发货失败原因失败: {self._safe_str(e)}")
@@ -611,9 +609,7 @@ class AutoDeliveryHandler:
             async with async_session_maker() as db_session:
                 order_service = OrderService(db_session)
                 # 先尝试从数据库获取订单
-                existing_order = await order_service.get_order_by_id(
-                    order_id, self.cookie_id
-                )
+                existing_order = await order_service.get_order_by_id(order_id)
                 
                 result = {}
                 if existing_order:
@@ -837,10 +833,7 @@ class AutoDeliveryHandler:
             receiver_address = order_detail.get('receiver_address', '')
             
             # 查询现有订单
-            stmt = select(XYOrder).where(
-                XYOrder.order_no == order_id,
-                XYOrder.account_id == self.cookie_id,
-            )
+            stmt = select(XYOrder).where(XYOrder.order_no == order_id)
             result = await db_session.execute(stmt)
             existing_order = result.scalars().first()
             
@@ -881,10 +874,7 @@ class AutoDeliveryHandler:
                     update_values['receiver_address'] = receiver_address
                 
                 if update_values:
-                    stmt = update(XYOrder).where(
-                        XYOrder.order_no == order_id,
-                        XYOrder.account_id == self.cookie_id,
-                    ).values(**update_values)
+                    stmt = update(XYOrder).where(XYOrder.order_no == order_id).values(**update_values)
                     await db_session.execute(stmt)
                     await db_session.commit()
                     logger.info(f"【{self.cookie_id}】订单 {order_id} 详情已更新: {list(update_values.keys())}")
@@ -980,7 +970,7 @@ class AutoDeliveryHandler:
             # 检查订单金额，金额为0禁止发货
             try:
                 from common.db.compat import db_manager
-                order_check = db_manager.get_order_by_id(order_id, self.cookie_id)
+                order_check = db_manager.get_order_by_id(order_id)
                 if order_check:
                     order_amount = order_check.get('amount')
                     if order_amount is not None:
@@ -1065,7 +1055,7 @@ class AutoDeliveryHandler:
                 if redis_lock_acquired and order_id:
                     try:
                         from common.db.compat import db_manager
-                        existing_order = db_manager.get_order_by_id(order_id, self.cookie_id)
+                        existing_order = db_manager.get_order_by_id(order_id)
                         if existing_order and existing_order.get('status') == 'shipped':
                             logger.info(f'[{msg_time}] 【{self.cookie_id}】获取锁后检查发现订单 {order_id} 已发货，跳过处理')
                             return
@@ -1190,7 +1180,7 @@ class AutoDeliveryHandler:
                             elif delivery_content is None and i == 0:
                                 # 第一次调用返回None，可能是订单已发货，检查订单状态
                                 from common.db.compat import db_manager
-                                existing_order = db_manager.get_order_by_id(order_id, self.cookie_id)
+                                existing_order = db_manager.get_order_by_id(order_id)
                                 if existing_order and existing_order.get('status') == 'shipped':
                                     logger.info(f"【{self.cookie_id}】订单 {order_id} 已发货，跳过发送卡券")
                                     order_already_shipped = True
@@ -1462,7 +1452,6 @@ class AutoDeliveryHandler:
                                     # card_only：仅记录 delivery_method/content，保留 status='closed' 和 fail_reason
                                     await order_service.record_delivery_for_closed_order(
                                         order_no=order_id,
-                                        account_id=self.cookie_id,
                                         delivery_method="auto",
                                         delivery_content=combined_content,
                                         buyer_fish_nick=local_buyer_fish_nick,
@@ -1474,7 +1463,6 @@ class AutoDeliveryHandler:
                                     # 正常发货：记录发货方式为"自动发货"
                                     await order_service.update_order_delivery_info(
                                         order_no=order_id,
-                                        account_id=self.cookie_id,
                                         status="shipped",
                                         delivery_method="auto",
                                         delivery_content=combined_content,
@@ -1503,7 +1491,7 @@ class AutoDeliveryHandler:
                                 if degraded_warn_msg:
                                     try:
                                         await order_service.update_order_delivery_fail_reason(
-                                            order_id, degraded_warn_msg, self.cookie_id
+                                            order_id, degraded_warn_msg
                                         )
                                         logger.warning(
                                             f"【{self.cookie_id}】订单 {order_id} 退化提示已写入 delivery_fail_reason: {degraded_warn_msg}"
@@ -1520,7 +1508,7 @@ class AutoDeliveryHandler:
                                 if send_before_confirm_fail_msg and not degraded_warn_msg:
                                     try:
                                         await order_service.update_order_delivery_fail_reason(
-                                            order_id, send_before_confirm_fail_msg, self.cookie_id
+                                            order_id, send_before_confirm_fail_msg
                                         )
                                         logger.warning(
                                             f"【{self.cookie_id}】订单 {order_id} 确认发货失败原因已写入: {send_before_confirm_fail_msg}"
@@ -1534,7 +1522,7 @@ class AutoDeliveryHandler:
                                     combined_reason = f"{degraded_warn_msg}；{send_before_confirm_fail_msg}"
                                     try:
                                         await order_service.update_order_delivery_fail_reason(
-                                            order_id, combined_reason, self.cookie_id
+                                            order_id, combined_reason
                                         )
                                         logger.warning(
                                             f"【{self.cookie_id}】订单 {order_id} 合并失败原因已写入: {combined_reason}"
@@ -1960,7 +1948,6 @@ class AutoDeliveryHandler:
                                         # 确认发货成功但不发送卡券，记录发货方式为"自动发货"，内容为空
                                         await order_service.update_order_delivery_info(
                                             order_no=order_id,
-                                            account_id=self.cookie_id,
                                             status="shipped",
                                             delivery_method="auto",
                                             delivery_content="订单已确认发货（闲鱼平台已发货）",
@@ -1996,7 +1983,7 @@ class AutoDeliveryHandler:
                     if not cookie_info:
                         logger.warning(f"Cookie ID {self.cookie_id} 不存在于cookies表中，丢弃订单 {order_id}")
                     else:
-                        existing_order = db_manager.get_order_by_id(order_id, self.cookie_id)
+                        existing_order = db_manager.get_order_by_id(order_id)
                         if not existing_order:
                             # 插入基本订单信息
                             success = db_manager.insert_or_update_order(
@@ -2229,7 +2216,7 @@ class AutoDeliveryHandler:
                 sale_price_str = '0.00'
                 try:
                     from common.db.compat import db_manager
-                    order_info = db_manager.get_order_by_id(order_id, self.cookie_id)
+                    order_info = db_manager.get_order_by_id(order_id)
                     if order_info and order_info.get('amount'):
                         sale_price_str = str(order_info['amount'])
                 except Exception as e:
@@ -2473,7 +2460,7 @@ class AutoDeliveryHandler:
             sale_price = '0.00'
             try:
                 from common.db.compat import db_manager
-                order_info = db_manager.get_order_by_id(order_id, self.cookie_id)
+                order_info = db_manager.get_order_by_id(order_id)
                 if order_info and order_info.get('amount'):
                     sale_price = str(order_info['amount'])
             except Exception as e:
@@ -2762,7 +2749,7 @@ class AutoDeliveryHandler:
                 try:
                     from common.db.compat import db_manager
                     # 尝试从数据库获取订单信息
-                    order_info = db_manager.get_order_by_id(order_id, self.cookie_id)
+                    order_info = db_manager.get_order_by_id(order_id)
                     if not order_info:
                         # 如果数据库中没有，尝试通过API获取
                         order_detail = await self.fetch_order_detail_info(order_id, item_id, buyer_id)

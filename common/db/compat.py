@@ -665,15 +665,11 @@ class DBManagerCompat:
     
     # ==================== 订单相关 ====================
     
-    def get_order_by_id(
-        self, order_id: str, account_id: str | None = None
-    ) -> Optional[Dict[str, Any]]:
-        """获取订单信息；已知账号时按账号隔离。"""
+    def get_order_by_id(self, order_id: str) -> Optional[Dict[str, Any]]:
+        """获取订单信息"""
         async def _query(session_maker):
             async with session_maker() as session:
                 stmt = select(XYOrder).where(XYOrder.order_no == order_id)
-                if account_id:
-                    stmt = stmt.where(XYOrder.account_id == account_id)
                 result = await session.execute(stmt)
                 order = result.scalars().first()
                 if not order:
@@ -713,9 +709,7 @@ class DBManagerCompat:
             logger.error(f"更新订单状态失败: {e}")
             return False
     
-    def update_order_bargain_status(
-        self, order_id: str, is_bargain: bool = True, account_id: str | None = None
-    ) -> bool:
+    def update_order_bargain_status(self, order_id: str, is_bargain: bool = True) -> bool:
         """更新订单小刀状态
         
         Args:
@@ -727,10 +721,7 @@ class DBManagerCompat:
         """
         async def _update(session_maker):
             async with session_maker() as session:
-                stmt = update(XYOrder).where(XYOrder.order_no == order_id)
-                if account_id:
-                    stmt = stmt.where(XYOrder.account_id == account_id)
-                stmt = stmt.values(is_bargain=is_bargain)
+                stmt = update(XYOrder).where(XYOrder.order_no == order_id).values(is_bargain=is_bargain)
                 result = await session.execute(stmt)
                 await session.commit()
                 return result.rowcount > 0
@@ -1474,8 +1465,6 @@ class DBManagerCompat:
             async with session_maker() as session:
                 # 检查订单是否存在
                 stmt = select(XYOrder).where(XYOrder.order_no == order_id)
-                if cookie_id:
-                    stmt = stmt.where(XYOrder.account_id == cookie_id)
                 result = await session.execute(stmt)
                 existing = result.scalars().first()
                 
@@ -1489,10 +1478,7 @@ class DBManagerCompat:
                     if chat_id and not existing.chat_id:
                         update_values['chat_id'] = chat_id
                     if update_values:
-                        stmt = update(XYOrder).where(
-                            XYOrder.order_no == order_id,
-                            XYOrder.account_id == cookie_id,
-                        ).values(**update_values)
+                        stmt = update(XYOrder).where(XYOrder.order_no == order_id).values(**update_values)
                         await session.execute(stmt)
                         await session.commit()
                     return True

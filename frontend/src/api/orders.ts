@@ -99,8 +99,8 @@ export const getOrders = (
 }
 
 // 获取订单详情
-export const getOrderDetail = (orderNo: string, accountId: string, refresh = false): Promise<{ success: boolean; data: OrderDetail }> => {
-  return get(`${ORDER_PREFIX}/${orderNo}?account_id=${encodeURIComponent(accountId)}&refresh=${refresh}`)
+export const getOrderDetail = (orderNo: string, refresh = false): Promise<{ success: boolean; data: OrderDetail }> => {
+  return get(`${ORDER_PREFIX}/${orderNo}?refresh=${refresh}`)
 }
 
 // 删除订单
@@ -109,17 +109,17 @@ export const deleteOrder = (id: string): Promise<ApiResponse> => {
 }
 
 // 手动发货
-export const manualDelivery = (orderNo: string, accountId: string): Promise<ManualDeliveryResponse> => {
-  return post(`${ORDER_PREFIX}/manual-delivery`, { order_no: orderNo, account_id: accountId })
+export const manualDelivery = (orderNo: string): Promise<ManualDeliveryResponse> => {
+  return post(`${ORDER_PREFIX}/manual-delivery`, { order_no: orderNo })
 }
 
 // 获取闲鱼订单并同步到数据库（单独设置10分钟超时）
-export const noLogisticsDelivery = (orderNo: string, accountId: string): Promise<ManualDeliveryResponse> => {
-  return post(`${ORDER_PREFIX}/no-logistics-delivery`, { order_no: orderNo, account_id: accountId })
+export const noLogisticsDelivery = (orderNo: string): Promise<ManualDeliveryResponse> => {
+  return post(`${ORDER_PREFIX}/no-logistics-delivery`, { order_no: orderNo })
 }
 
-export const cancelOrder = (orderNo: string, accountId: string): Promise<ApiResponse> => {
-  return post(`${ORDER_PREFIX}/cancel`, { order_no: orderNo, account_id: accountId })
+export const cancelOrder = (orderNo: string): Promise<ApiResponse> => {
+  return post(`${ORDER_PREFIX}/cancel`, { order_no: orderNo })
 }
 
 export const fetchXianyuOrders = (cookieId?: string): Promise<FetchXianyuOrdersResponse> => {

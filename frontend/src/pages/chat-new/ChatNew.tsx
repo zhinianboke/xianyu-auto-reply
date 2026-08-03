@@ -698,7 +698,7 @@ export function ChatNew() {
     if (!(await requestConfirm({ message: `确认立即发货订单 ${orderNo} 吗？`, confirmText: '发货' }))) return
     setDeliveringOrderNo(orderNo)
     try {
-      const res = await manualDelivery(orderNo, activeAccountId)
+      const res = await manualDelivery(orderNo)
       addToast({ message: res.message || (res.success ? '发货成功' : '发货失败'), type: res.success ? 'success' : 'error' })
       await loadCustomerOrders()
     } catch (e: any) {
@@ -714,7 +714,7 @@ export function ChatNew() {
     if (!(await requestConfirm({ message: `确认将订单 ${orderNo} 标记为无物流发货吗？`, confirmText: '无物流发货' }))) return
     setConfirmingOrderNo(orderNo)
     try {
-      const res = await noLogisticsDelivery(orderNo, activeAccountId)
+      const res = await noLogisticsDelivery(orderNo)
       addToast({ message: res.message || (res.success ? '无物流发货成功' : '无物流发货失败'), type: res.success ? 'success' : 'error' })
       await loadCustomerOrders(true)
     } catch (e: any) {
@@ -728,7 +728,7 @@ export function ChatNew() {
     if (!(await requestConfirm({ message: `确认取消客户订单 ${orderNo} 吗？取消后无法恢复。`, confirmText: '取消订单', type: 'danger' }))) return
     setCancellingOrderNo(orderNo)
     try {
-      const res = await cancelOrder(orderNo, activeAccountId)
+      const res = await cancelOrder(orderNo)
       addToast({ message: res.message || (res.success ? '订单已取消' : '取消订单失败'), type: res.success ? 'success' : 'error' })
       await loadCustomerOrders(true)
     } catch (e: any) {
@@ -741,7 +741,7 @@ export function ChatNew() {
   const handleViewOrderDetail = async (orderNo: string) => {
     setLoadingOrderDetail(true)
     try {
-      const res = await getOrderDetail(orderNo, activeAccountId, true)
+      const res = await getOrderDetail(orderNo, true)
       setOrderDetail(res.data)
       await loadCustomerOrders(true)
     } catch (e: any) {

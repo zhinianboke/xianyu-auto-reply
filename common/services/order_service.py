@@ -16,7 +16,7 @@ import asyncio
 from typing import Optional, Dict
 
 import aiohttp
-from sqlalchemy import and_, delete, func, or_, select, tuple_, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
@@ -188,12 +188,11 @@ class OrderService:
                 logger.warning(f"无效的结束日期格式: {end_date}")
         
         # 关联自动发货消息日志的发送状态筛选
-        # 取每个账号订单最新一条自动发货日志（以 max(id) 近似最新，与发送状态展示口径一致），
+        # 取每个订单号最新一条自动发货日志（以 max(id) 近似最新，与发送状态展示口径一致），
         # 再按发送状态过滤，使列表筛选结果与“发送状态”列显示保持一致。
         if delivery_send_status and delivery_send_status.strip():
             latest_log_subq = (
                 select(
-                    XYAutoReplyMessageLog.account_id.label("account_id"),
                     XYAutoReplyMessageLog.order_no.label("order_no"),
                     func.max(XYAutoReplyMessageLog.id).label("max_id"),
                 )
@@ -201,20 +200,15 @@ class OrderService:
                     XYAutoReplyMessageLog.reply_strategy == "auto_delivery",
                     XYAutoReplyMessageLog.order_no.isnot(None),
                 )
-                .group_by(XYAutoReplyMessageLog.account_id, XYAutoReplyMessageLog.order_no)
+                .group_by(XYAutoReplyMessageLog.order_no)
                 .subquery()
             )
-            matched_order_refs = (
-                select(
-                    XYAutoReplyMessageLog.account_id,
-                    XYAutoReplyMessageLog.order_no,
-                )
+            matched_order_nos = (
+                select(XYAutoReplyMessageLog.order_no)
                 .join(latest_log_subq, XYAutoReplyMessageLog.id == latest_log_subq.c.max_id)
                 .where(XYAutoReplyMessageLog.send_status == delivery_send_status.strip())
             )
-            conditions.append(
-                tuple_(XYOrder.account_id, XYOrder.order_no).in_(matched_order_refs)
-            )
+            conditions.append(XYOrder.order_no.in_(matched_order_nos))
         
         if conditions:
             base_stmt = base_stmt.where(and_(*conditions))
@@ -241,51 +235,41 @@ class OrderService:
         
         return orders, total, item_titles
 
-    async def get_delivery_log_status_map(
-        self, order_refs: list[tuple[str, str]]
-    ) -> Dict[tuple[str, str], Dict[str, str | None]]:
+    async def get_delivery_log_status_map(self, order_nos: list[str]) -> Dict[str, Dict[str, str | None]]:
         """批量查询订单对应的自动发货消息日志发送状态
 
-        以账号与订单号关联自动发货日志（reply_strategy == 'auto_delivery'），取每笔订单
+        以订单号关联自动发货日志（reply_strategy == 'auto_delivery'），取每个订单号
         最新一条日志的发送状态与发送失败原因，供订单列表关联展示。
 
         Args:
-            order_refs: (账号 ID, 订单号) 列表
+            order_nos: 订单号列表
 
         Returns:
-            {(账号 ID, 订单号): {"send_status": ..., "send_fail_reason": ...} }
+            { 订单号: {"send_status": ..., "send_fail_reason": ...} }
             没有对应日志的订单号不会出现在返回结果中。
         """
-        result_map: Dict[tuple[str, str], Dict[str, str | None]] = {}
-        valid_refs = [(account_id, order_no) for account_id, order_no in order_refs if account_id and order_no]
-        if not valid_refs:
+        result_map: Dict[str, Dict[str, str | None]] = {}
+        valid_order_nos = [no for no in order_nos if no]
+        if not valid_order_nos:
             return result_map
 
         try:
-            ref_condition = or_(
-                *(and_(
-                    XYAutoReplyMessageLog.account_id == account_id,
-                    XYAutoReplyMessageLog.order_no == order_no,
-                ) for account_id, order_no in valid_refs)
-            )
-            # 先取每个账号订单最新一条自动发货日志的主键（max(id) 即最新插入），
+            # 先取每个订单号最新一条自动发货日志的主键（max(id) 即最新插入），
             # 再回查该日志的发送状态与失败原因，保证与"发送状态"筛选口径完全一致。
             latest_log_subq = (
                 select(
-                    XYAutoReplyMessageLog.account_id.label("account_id"),
                     XYAutoReplyMessageLog.order_no.label("order_no"),
                     func.max(XYAutoReplyMessageLog.id).label("max_id"),
                 )
                 .where(
-                    ref_condition,
+                    XYAutoReplyMessageLog.order_no.in_(valid_order_nos),
                     XYAutoReplyMessageLog.reply_strategy == "auto_delivery",
                 )
-                .group_by(XYAutoReplyMessageLog.account_id, XYAutoReplyMessageLog.order_no)
+                .group_by(XYAutoReplyMessageLog.order_no)
                 .subquery()
             )
             stmt = (
                 select(
-                    XYAutoReplyMessageLog.account_id,
                     XYAutoReplyMessageLog.order_no,
                     XYAutoReplyMessageLog.send_status,
                     XYAutoReplyMessageLog.send_fail_reason,
@@ -293,8 +277,8 @@ class OrderService:
                 .join(latest_log_subq, XYAutoReplyMessageLog.id == latest_log_subq.c.max_id)
             )
             rows = (await self.session.execute(stmt)).all()
-            for account_id, order_no, send_status, send_fail_reason in rows:
-                result_map[(account_id, order_no)] = {
+            for order_no, send_status, send_fail_reason in rows:
+                result_map[order_no] = {
                     "send_status": send_status,
                     "send_fail_reason": send_fail_reason,
                 }
@@ -303,13 +287,9 @@ class OrderService:
 
         return result_map
 
-    async def get_order_by_id(
-        self, order_no: str, account_id: str | None = None
-    ) -> Optional[XYOrder]:
-        """根据订单号获取订单；已知账号时按账号隔离。"""
+    async def get_order_by_id(self, order_no: str) -> Optional[XYOrder]:
+        """根据订单号获取订单"""
         stmt = select(XYOrder).where(XYOrder.order_no == order_no)
-        if account_id:
-            stmt = stmt.where(XYOrder.account_id == account_id)
         result = await self.session.execute(stmt)
         return result.scalars().first()
 
@@ -330,23 +310,16 @@ class OrderService:
             logger.warning(f"获取商品标题失败: {e}")
             return ""
 
-    async def get_order_by_no(
-        self, order_no: str, account_id: str | None = None
-    ) -> Optional[XYOrder]:
+    async def get_order_by_no(self, order_no: str) -> Optional[XYOrder]:
         """根据订单号获取订单（别名方法）"""
-        return await self.get_order_by_id(order_no, account_id)
+        return await self.get_order_by_id(order_no)
 
-    async def update_order_status(
-        self, order_no: str, status: str, account_id: str
-    ) -> bool:
+    async def update_order_status(self, order_no: str, status: str) -> bool:
         """更新订单状态"""
         try:
             stmt = (
                 update(XYOrder)
-                .where(
-                    XYOrder.order_no == order_no,
-                    XYOrder.account_id == account_id,
-                )
+                .where(XYOrder.order_no == order_no)
                 .values(status=status)
             )
             result = await self.session.execute(stmt)
@@ -357,9 +330,7 @@ class OrderService:
             await self.session.rollback()
             return False
 
-    async def update_order_chat_id(
-        self, order_no: str, chat_id: str, account_id: str
-    ) -> bool:
+    async def update_order_chat_id(self, order_no: str, chat_id: str) -> bool:
         """更新订单的聊天会话ID（chat_id）
         
         场景：订单手动发货时发现 chat_id 为空，
@@ -378,10 +349,7 @@ class OrderService:
         try:
             stmt = (
                 update(XYOrder)
-                .where(
-                    XYOrder.order_no == order_no,
-                    XYOrder.account_id == account_id,
-                )
+                .where(XYOrder.order_no == order_no)
                 .values(chat_id=chat_id)
             )
             result = await self.session.execute(stmt)
@@ -389,25 +357,6 @@ class OrderService:
             return result.rowcount > 0
         except Exception as e:
             logger.error(f"更新订单 chat_id 失败: order_no={order_no}, chat_id={chat_id}, 错误={e}")
-            await self.session.rollback()
-            return False
-
-    async def clear_order_chat_id(self, order_no: str, account_id: str) -> bool:
-        """清除失效的会话ID，供下次按同一账号重新创建会话。"""
-        try:
-            stmt = (
-                update(XYOrder)
-                .where(
-                    XYOrder.order_no == order_no,
-                    XYOrder.account_id == account_id,
-                )
-                .values(chat_id=None)
-            )
-            result = await self.session.execute(stmt)
-            await self.session.commit()
-            return result.rowcount > 0
-        except Exception as e:
-            logger.error(f"清除订单 chat_id 失败: order_no={order_no}, 错误={e}")
             await self.session.rollback()
             return False
 
@@ -458,7 +407,6 @@ class OrderService:
     async def update_order_delivery_info(
         self,
         order_no: str,
-        account_id: str,
         status: str,
         delivery_method: str,
         delivery_content: str | None = None,
@@ -491,10 +439,7 @@ class OrderService:
 
             stmt = (
                 update(XYOrder)
-                .where(
-                    XYOrder.order_no == order_no,
-                    XYOrder.account_id == account_id,
-                )
+                .where(XYOrder.order_no == order_no)
                 .values(**values)
             )
             result = await self.session.execute(stmt)
@@ -508,7 +453,6 @@ class OrderService:
     async def record_delivery_for_closed_order(
         self,
         order_no: str,
-        account_id: str,
         delivery_method: str,
         delivery_content: str | None = None,
         buyer_fish_nick: str | None = None,
@@ -545,10 +489,7 @@ class OrderService:
 
             stmt = (
                 update(XYOrder)
-                .where(
-                    XYOrder.order_no == order_no,
-                    XYOrder.account_id == account_id,
-                )
+                .where(XYOrder.order_no == order_no)
                 .values(**values)
             )
             result = await self.session.execute(stmt)
@@ -562,8 +503,7 @@ class OrderService:
     async def update_order_delivery_fail_reason(
         self,
         order_no: str,
-        fail_reason: str,
-        account_id: str,
+        fail_reason: str
     ) -> bool:
         """更新订单发货失败原因
         
@@ -580,10 +520,7 @@ class OrderService:
             
             stmt = (
                 update(XYOrder)
-                .where(
-                    XYOrder.order_no == order_no,
-                    XYOrder.account_id == account_id,
-                )
+                .where(XYOrder.order_no == order_no)
                 .values(delivery_fail_reason=fail_reason)
             )
             result = await self.session.execute(stmt)
@@ -648,10 +585,7 @@ class OrderService:
                     return False
             
             # 检查订单是否已存在
-            existing_stmt = select(XYOrder).where(
-                XYOrder.order_no == order_no,
-                XYOrder.account_id == account_id,
-            )
+            existing_stmt = select(XYOrder).where(XYOrder.order_no == order_no)
             existing_result = await self.session.execute(existing_stmt)
             existing_order = existing_result.scalars().first()
             
@@ -693,10 +627,7 @@ class OrderService:
                     update_values['chat_id'] = chat_id
                 
                 if update_values:
-                    update_stmt = update(XYOrder).where(
-                        XYOrder.order_no == order_no,
-                        XYOrder.account_id == account_id,
-                    ).values(**update_values)
+                    update_stmt = update(XYOrder).where(XYOrder.order_no == order_no).values(**update_values)
                     await self.session.execute(update_stmt)
                     await self.session.commit()
                     logger.info(f"订单 {order_no} 已存在，更新字段: {update_values}")
@@ -979,15 +910,6 @@ class OrderService:
                 if not parsed or not parsed.get('order_no'):
                     failed += 1
                     page_parse_failed += 1
-                    continue
-                if (
-                    account.unb
-                    and str(parsed.get('buyer_id') or '') == str(account.unb)
-                ):
-                    logger.warning(
-                        f"账号 {account.account_id} 的订单 {parsed['order_no']} 买家身份与当前账号一致，"
-                        "跳过同步，避免错误进入发货流程"
-                    )
                     continue
                 parsed_items.append(parsed)
                 order_no = parsed['order_no']
@@ -1713,10 +1635,7 @@ class OrderDetailService:
             
             async with async_session_maker() as session:
                 # 查询现有订单
-                stmt = select(XYOrder).where(
-                    XYOrder.order_no == order_id,
-                    XYOrder.account_id == self.cookie_id,
-                )
+                stmt = select(XYOrder).where(XYOrder.order_no == order_id)
                 result = await session.execute(stmt)
                 existing_order = result.scalars().first()
                 
@@ -1772,14 +1691,7 @@ class OrderDetailService:
                         update_values['receiver_address'] = detail['receiver_address']
                 
                 if update_values:
-                    stmt = (
-                        update(XYOrder)
-                        .where(
-                            XYOrder.order_no == order_id,
-                            XYOrder.account_id == self.cookie_id,
-                        )
-                        .values(**update_values)
-                    )
+                    stmt = update(XYOrder).where(XYOrder.order_no == order_id).values(**update_values)
                     await session.execute(stmt)
                     await session.commit()
                     if api_failed:
@@ -2411,10 +2323,7 @@ class OrderStatusChecker:
             from common.db.session import async_session_maker
             
             async with async_session_maker() as session:
-                stmt = update(XYOrder).where(
-                    XYOrder.order_no == order_id,
-                    XYOrder.account_id == self.cookie_id,
-                ).values(status="cancelled")
+                stmt = update(XYOrder).where(XYOrder.order_no == order_id).values(status="cancelled")
                 await session.execute(stmt)
                 await session.commit()
                 logger.info(f"订单 {order_id} 状态已更新为 cancelled（交易关闭）")
