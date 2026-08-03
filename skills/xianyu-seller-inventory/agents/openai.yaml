@@ -1,0 +1,4 @@
+interface:
+  display_name: "闲鱼卖家库存与发货时效"
+  short_description: "先确认范围、可修改配置和预期，再批量设置库存、粉丝价与发货"
+  default_prompt: "使用 $xianyu-seller-inventory 先确认范围、可修改配置和预期配置，确认后再执行。"
