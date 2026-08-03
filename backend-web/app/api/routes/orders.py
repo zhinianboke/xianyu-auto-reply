@@ -26,14 +26,17 @@ router = APIRouter(tags=["orders"])
 class ManualDeliveryRequest(BaseModel):
     """手动发货请求"""
     order_no: str  # 订单号
+    account_id: str
 
 
 class NoLogisticsDeliveryRequest(BaseModel):
     order_no: str
+    account_id: str
 
 
 class CancelOrderRequest(BaseModel):
     order_no: str
+    account_id: str
 
 
 class FetchXianyuOrdersRequest(BaseModel):
@@ -107,6 +110,7 @@ async def list_orders(
     from sqlalchemy import select as sa_select
     from common.models.agent_order import AgentOrder
     order_nos = [o.order_no for o in orders if o.order_no]
+    order_refs = [(o.account_id or "", o.order_no) for o in orders if o.account_id and o.order_no]
     agent_order_nos: set[str] = set()
     if order_nos:
         from sqlalchemy import func as sa_func
@@ -115,7 +119,7 @@ async def list_orders(
         agent_order_nos = {row[0] for row in agent_result.all()}
 
     # 关联自动发货消息日志，取每个订单最新发送状态与失败原因
-    delivery_log_map = await order_service.get_delivery_log_status_map(order_nos)
+    delivery_log_map = await order_service.get_delivery_log_status_map(order_refs)
 
     payload = []
     for order in orders:
@@ -123,7 +127,7 @@ async def list_orders(
         sku_info = " / ".join(spec_parts) if spec_parts else None
         # 从关联查询结果获取商品标题
         item_title = item_titles.get(order.item_id, "") if order.item_id else ""
-        delivery_log = delivery_log_map.get(order.order_no) if order.order_no else None
+        delivery_log = delivery_log_map.get((order.account_id or "", order.order_no)) if order.order_no else None
         payload.append(
             OrderOut(
                 id=str(order.id),
@@ -240,12 +244,13 @@ async def fetch_xianyu_orders(
 @router.get("/{order_no}")
 async def get_order_detail(
     order_no: str,
+    account_id: str | None = Query(default=None),
     refresh: bool = Query(default=False),
     current_user: User = Depends(deps.get_current_active_user),
     order_service: OrderService = Depends(deps.get_order_service),
 ):
     """获取订单详情，管理员可查看所有订单"""
-    order = await order_service.get_order_by_id(order_no)
+    order = await order_service.get_order_by_id(order_no, account_id)
     if not order:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="订单不存在")
 
@@ -267,7 +272,7 @@ async def get_order_detail(
                     buyer_id=order.buyer_id,
                 )
                 order_service.session.expire_all()
-                order = await order_service.get_order_by_id(order_no)
+                order = await order_service.get_order_by_id(order_no, order.account_id)
         except Exception as e:
             logger.warning(f"刷新订单详情失败，返回本地数据: order_no={order_no}, error={e}")
 
@@ -285,8 +290,10 @@ async def get_order_detail(
     is_agent_order = (agent_result.scalar() or 0) > 0
 
     # 关联自动发货消息日志，取最新发送状态与失败原因
-    delivery_log_map = await order_service.get_delivery_log_status_map([order.order_no] if order.order_no else [])
-    delivery_log = delivery_log_map.get(order.order_no) if order.order_no else None
+    delivery_log_map = await order_service.get_delivery_log_status_map(
+        [(order.account_id, order.order_no)] if order.account_id and order.order_no else []
+    )
+    delivery_log = delivery_log_map.get((order.account_id, order.order_no)) if order.account_id and order.order_no else None
 
     return {
         "success": True,
@@ -368,7 +375,7 @@ async def no_logistics_delivery(
     account_service: AccountService = Depends(deps.get_account_service),
 ):
     """无物流发货：仅在闲鱼确认发货，不发送任何卡券或聊天内容"""
-    order = await order_service.get_order_by_no(request.order_no)
+    order = await order_service.get_order_by_no(request.order_no, request.account_id)
     if not order:
         return ApiResponse(success=False, message="订单不存在")
 
@@ -408,7 +415,7 @@ async def cancel_order(
     account_service: AccountService = Depends(deps.get_account_service),
 ):
     """卖家关闭（取消）一笔待处理订单"""
-    order = await order_service.get_order_by_no(request.order_no)
+    order = await order_service.get_order_by_no(request.order_no, request.account_id)
     if not order:
         return ApiResponse(success=False, message="订单不存在")
     owner_id, is_admin = resolve_owner_scope(current_user)
@@ -446,7 +453,7 @@ async def manual_delivery(
         logger.info(f"开始手动发货: order_no={request.order_no}")
         
         # 获取订单信息
-        order = await order_service.get_order_by_no(request.order_no)
+        order = await order_service.get_order_by_no(request.order_no, request.account_id)
         if not order:
             logger.warning(f"订单不存在: {request.order_no}")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="订单不存在")
@@ -484,7 +491,7 @@ async def manual_delivery(
                         buyer_id=order.buyer_id
                     )
                     # 重新获取订单（小刀状态可能已更新）
-                    order = await order_service.get_order_by_no(request.order_no)
+                    order = await order_service.get_order_by_no(request.order_no, request.account_id)
                     logger.info(f"订单详情已刷新: order_no={request.order_no}, is_bargain={order.is_bargain}")
                 else:
                     logger.warning(f"账号 {order.account_id} 缺少cookies，跳过订单详情刷新")
@@ -520,7 +527,7 @@ async def manual_delivery(
                 fail_reason = f"创建会话失败：{err_msg}"
                 logger.error(f"自动创建会话失败: order_no={request.order_no}, 错误={err_msg}")
                 recorded = await order_service.update_order_delivery_fail_reason(
-                    request.order_no, fail_reason
+                    request.order_no, fail_reason, order.account_id
                 )
                 if not recorded:
                     logger.warning(
@@ -534,7 +541,7 @@ async def manual_delivery(
             if not new_chat_id:
                 fail_reason = "创建会话响应缺少 chat_id"
                 recorded = await order_service.update_order_delivery_fail_reason(
-                    request.order_no, fail_reason
+                    request.order_no, fail_reason, order.account_id
                 )
                 if not recorded:
                     logger.warning(
@@ -545,7 +552,9 @@ async def manual_delivery(
                     detail=fail_reason,
                 )
             # 持久化到订单表
-            updated = await order_service.update_order_chat_id(request.order_no, new_chat_id)
+            updated = await order_service.update_order_chat_id(
+                request.order_no, new_chat_id, order.account_id
+            )
             if not updated:
                 logger.warning(f"回写订单 chat_id 失败，但本次发货流程继续使用新 chat_id: {new_chat_id}")
             # 同步内存对象属性（session 配置 expire_on_commit=False，
@@ -598,7 +607,7 @@ async def manual_delivery(
                 # 将失败原因记录到订单表
                 try:
                     await order_service.update_order_delivery_fail_reason(
-                        request.order_no, error_msg
+                        request.order_no, error_msg, order.account_id
                     )
                 except Exception as rec_err:
                     logger.warning(f"记录发货失败原因到订单表失败: {rec_err}")
@@ -636,7 +645,9 @@ async def manual_delivery(
 
         if degraded_warn_msg:
             try:
-                await order_service.update_order_delivery_fail_reason(order.order_no, degraded_warn_msg)
+                await order_service.update_order_delivery_fail_reason(
+                    order.order_no, degraded_warn_msg, order.account_id
+                )
                 logger.warning(f"手动发货：订单 {order.order_no} {degraded_warn_msg}")
             except Exception as warn_err:
                 logger.warning(

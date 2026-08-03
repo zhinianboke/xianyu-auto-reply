@@ -56,6 +56,7 @@ class SendMessageRequest(BaseModel):
 
 class DeliverOrderRequest(BaseModel):
     """订单发货请求"""
+    account_id: str
     order_no: str
     item_id: str
     buyer_id: str
@@ -1060,6 +1061,7 @@ async def confirm_no_logistics(request: ConfirmNoLogisticsRequest):
     async with async_session_maker() as session:
         await OrderService(session).update_order_delivery_info(
             request.order_no,
+            request.account_id,
             status="shipped",
             delivery_method="manual",
             delivery_content="无物流发货",
@@ -1086,7 +1088,10 @@ async def cancel_order(request: CancelOrderRequest):
 
     async with async_session_maker() as session:
         await session.execute(
-            update(XYOrder).where(XYOrder.order_no == request.order_no).values(status="cancelled")
+            update(XYOrder).where(
+                XYOrder.order_no == request.order_no,
+                XYOrder.account_id == request.account_id,
+            ).values(status="cancelled")
         )
         await session.commit()
     return {"success": True, "code": 200, "message": "订单已取消", "data": {"order_no": request.order_no}}
@@ -1184,8 +1189,8 @@ async def deliver_order(request: DeliverOrderRequest):
 
         logger.info(f"【内部API】收到订单发货请求: order_no={request.order_no}, 发货方式={request.delivery_method}")
         
-        # 根据订单号获取账号ID
-        order_info = db_manager.get_order_by_id(request.order_no)
+        # 必须按调用方账号定位订单，避免同一订单号在不同账号下串单。
+        order_info = db_manager.get_order_by_id(request.order_no, request.account_id)
         
         if not order_info:
             raise HTTPException(
@@ -1516,7 +1521,8 @@ async def deliver_order(request: DeliverOrderRequest):
                             order_svc = OrderService(fail_session)
                             await order_svc.update_order_delivery_fail_reason(
                                 request.order_no,
-                                fail_reason or "对接卡券发货校验未通过"
+                                fail_reason or "对接卡券发货校验未通过",
+                                account_id,
                             )
                     except Exception as e:
                         logger.warning(f"记录发货失败原因到订单表失败: {e}")
@@ -1922,6 +1928,7 @@ async def deliver_order(request: DeliverOrderRequest):
                 if skip_confirm_for_card_only:
                     await order_service.record_delivery_for_closed_order(
                         order_no=request.order_no,
+                        account_id=account_id,
                         delivery_method=request.delivery_method,
                         delivery_content=combined_content,
                         buyer_fish_nick=xianyu_live.auto_delivery_handler._current_buyer_fish_nick,
@@ -1932,6 +1939,7 @@ async def deliver_order(request: DeliverOrderRequest):
                 else:
                     await order_service.update_order_delivery_info(
                         order_no=request.order_no,
+                        account_id=account_id,
                         status="shipped",
                         delivery_method=request.delivery_method,
                         delivery_content=combined_content,
@@ -1952,7 +1960,7 @@ async def deliver_order(request: DeliverOrderRequest):
                 if combined_fail_reasons:
                     final_fail_reason = "；".join(combined_fail_reasons)
                     await order_service.update_order_delivery_fail_reason(
-                        request.order_no, final_fail_reason
+                        request.order_no, final_fail_reason, account_id
                     )
                     logger.warning(
                         f"【内部API】订单 {request.order_no} 失败原因已写入: {final_fail_reason}"

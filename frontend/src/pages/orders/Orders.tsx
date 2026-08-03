@@ -98,7 +98,7 @@ export function Orders() {
   // 确认弹窗状态
   const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false)
-  const [deliveryConfirm, setDeliveryConfirm] = useState<{ open: boolean; orderNo: string | null }>({ open: false, orderNo: null })
+  const [deliveryConfirm, setDeliveryConfirm] = useState<{ open: boolean; order: Order | null }>({ open: false, order: null })
   const [deleting, setDeleting] = useState(false)
 
   // 筛选面板展开状态
@@ -242,11 +242,11 @@ export function Orders() {
     }
   }
 
-  const handleShowDetail = async (orderNo: string) => {
+  const handleShowDetail = async (order: Order) => {
     setLoadingDetail(true)
     setDetailModalOpen(true)
     try {
-      const result = await getOrderDetail(orderNo)
+      const result = await getOrderDetail(order.order_id, order.cookie_id)
       if (result.success) {
         setOrderDetail(result.data)
       } else {
@@ -261,11 +261,11 @@ export function Orders() {
     }
   }
 
-  const handleManualDelivery = async (orderNo: string) => {
-    setDeliveringOrderId(orderNo)
-    setDeliveryConfirm({ open: false, orderNo: null })
+  const handleManualDelivery = async (order: Order) => {
+    setDeliveringOrderId(order.id)
+    setDeliveryConfirm({ open: false, order: null })
     try {
-      const result = await manualDelivery(orderNo)
+      const result = await manualDelivery(order.order_id, order.cookie_id)
       if (result.success) {
         addToast({ type: 'success', message: `发货成功: ${result.data?.card_name || ''}` })
       } else {
@@ -841,15 +841,15 @@ export function Orders() {
                       <td className="whitespace-nowrap sticky right-0 bg-white dark:bg-slate-900 z-10">
                         <div className="flex items-center gap-1">
                           <button
-                            onClick={() => handleShowDetail(order.order_id)}
+                          onClick={() => handleShowDetail(order)}
                             className="p-2 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
                             title="查看详情"
                           >
                             <Eye className="w-4 h-4 text-blue-500" />
                           </button>
                           <button
-                            onClick={() => setDeliveryConfirm({ open: true, orderNo: order.order_id })}
-                            disabled={deliveringOrderId === order.order_id || order.status === 'shipped' || order.status === 'completed'}
+                            onClick={() => setDeliveryConfirm({ open: true, order })}
+                            disabled={deliveringOrderId === order.id || order.status === 'shipped' || order.status === 'completed'}
                             className={`p-2 rounded-lg transition-colors ${
                               order.status === 'shipped' || order.status === 'completed'
                                 ? 'opacity-50 cursor-not-allowed'
@@ -857,7 +857,7 @@ export function Orders() {
                             }`}
                             title={order.status === 'shipped' || order.status === 'completed' ? '已发货' : '手动发货'}
                           >
-                            {deliveringOrderId === order.order_id ? (
+                            {deliveringOrderId === order.id ? (
                               <Loader2 className="w-4 h-4 text-green-500 animate-spin" />
                             ) : (
                               <Send className="w-4 h-4 text-green-500" />
@@ -1195,8 +1195,8 @@ export function Orders() {
         confirmText="确定发货"
         cancelText="取消"
         type="warning"
-        onConfirm={() => deliveryConfirm.orderNo && handleManualDelivery(deliveryConfirm.orderNo)}
-        onCancel={() => setDeliveryConfirm({ open: false, orderNo: null })}
+        onConfirm={() => deliveryConfirm.order && handleManualDelivery(deliveryConfirm.order)}
+        onCancel={() => setDeliveryConfirm({ open: false, order: null })}
       />
 
       {/* 列设置面板 */}

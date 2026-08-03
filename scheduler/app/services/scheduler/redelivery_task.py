@@ -128,6 +128,7 @@ def should_add_to_cooldown(error_message: str) -> bool:
         'unavailable',
         '无法获取订单状态',  # check_can_ship返回的错误，通常是令牌过期导致
         'api请求失败',  # API调用失败，可能是临时性问题
+        '创建会话',
     ]
     
     for keyword in temp_errors:
@@ -223,7 +224,7 @@ class RedeliveryTask:
     async def _get_pending_orders(
         self,
         session: AsyncSession,
-        account_id: str
+        account: XYAccount,
     ) -> List[XYOrder]:
         """
         获取待发货订单
@@ -240,11 +241,13 @@ class RedeliveryTask:
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         
         stmt = select(XYOrder).where(
-            XYOrder.account_id == account_id,
+            XYOrder.account_id == account.account_id,
             XYOrder.placed_at.is_not(None),
             XYOrder.placed_at >= today_start,
             XYOrder.status.in_(["pending_payment", "processing", "pending_ship"]),
         ).order_by(XYOrder.placed_at)
+        if account.unb:
+            stmt = stmt.where(XYOrder.buyer_id != str(account.unb))
         
         result = await session.execute(stmt)
         return list(result.scalars().all())
@@ -267,7 +270,7 @@ class RedeliveryTask:
         logger.info(f"[定时补发货] 开始处理账号: {account_id}")
         
         # 获取待发货订单
-        orders = await self._get_pending_orders(session, account_id)
+        orders = await self._get_pending_orders(session, account)
         
         if not orders:
             logger.info(f"[定时补发货] 账号 {account_id} 没有待发货订单")
@@ -326,7 +329,7 @@ class RedeliveryTask:
                         from common.services.order_service import OrderService
                         order_svc = OrderService(session)
                         await order_svc.update_order_delivery_fail_reason(
-                            order.order_no, error_message
+                            order.order_no, error_message, account_id
                         )
                     except Exception as rec_err:
                         logger.warning(f"[定时补发货] 记录失败原因到订单表失败: {rec_err}")
@@ -406,7 +409,10 @@ class RedeliveryTask:
         try:
             # 获取锁后检查数据库订单状态，如果已发货则跳过
             if redis_lock_acquired:
-                stmt = select(XYOrder).where(XYOrder.order_no == order_no)
+                stmt = select(XYOrder).where(
+                    XYOrder.order_no == order_no,
+                    XYOrder.account_id == account_id,
+                )
                 result = await session.execute(stmt)
                 current_order = result.scalars().first()
                 if current_order and current_order.status == 'shipped':
@@ -432,7 +438,10 @@ class RedeliveryTask:
 
                 # 如果订单已发货或已交易成功，只更新本地数据库状态，不触发实际发货
                 if '已发货' in reason or '已交易成功' in reason:
-                    stmt = sql_update(XYOrder).where(XYOrder.order_no == order_no).values(status="shipped")
+                    stmt = sql_update(XYOrder).where(
+                        XYOrder.order_no == order_no,
+                        XYOrder.account_id == account_id,
+                    ).values(status="shipped")
                     await session.execute(stmt)
                     await session.commit()
                     logger.info(f"[定时补发货] 订单 {order_no} 闲鱼已发货，本地状态已同步为shipped")
@@ -533,15 +542,23 @@ class RedeliveryTask:
                 return False, "订单缺少商品ID", cookie_string
             if not order.buyer_id:
                 return False, "订单缺少买家ID", cookie_string
+            # 历史版本会把创建失败写成 FAILED_ 占位ID。将其清除后重新按账号创建，
+            # 失败只进入冷却，不再把业务错误伪装成会话ID。
+            if order.chat_id and order.chat_id.startswith("FAILED_"):
+                from common.services.order_service import OrderService
+                order_svc = OrderService(session)
+                cleared = await order_svc.clear_order_chat_id(
+                    order.order_no, order.account_id
+                )
+                if not cleared:
+                    return False, "清除失效会话ID失败", cookie_string
+                order.chat_id = None
+
             # 订单缺少会话ID时，先调用 WebSocket 服务自动创建会话并回写，再继续发货
             if not order.chat_id:
                 chat_ok, chat_error = await self._ensure_chat_id(session, order)
                 if not chat_ok:
                     return False, chat_error or "订单缺少会话ID", cookie_string
-            
-            # 占位chat_id（创建会话失败时写入的）不能用于发货
-            if order.chat_id and order.chat_id.startswith("FAILED_"):
-                return False, "会话创建失败（占位ID），跳过发货", cookie_string
             
             # 检查是否有匹配的卡券
             card = await self._get_matching_card(session, order)
@@ -561,7 +578,10 @@ class RedeliveryTask:
                 # 单独 SELECT 读取，不依赖 ORM 缓存状态。
                 order_quantity = int(order.quantity) if order.quantity and order.quantity > 0 else 1
                 try:
-                    fresh_qty_stmt = select(XYOrder.quantity).where(XYOrder.order_no == order_no)
+                    fresh_qty_stmt = select(XYOrder.quantity).where(
+                        XYOrder.order_no == order_no,
+                        XYOrder.account_id == order.account_id,
+                    )
                     fresh_qty_result = await session.execute(fresh_qty_stmt)
                     fresh_qty = fresh_qty_result.scalar_one_or_none()
                     if fresh_qty is not None and int(fresh_qty) > 0:
@@ -643,7 +663,9 @@ class RedeliveryTask:
                         try:
                             from common.services.order_service import OrderService
                             order_svc = OrderService(session)
-                            await order_svc.update_order_delivery_fail_reason(order_no, degraded_warn_msg)
+                            await order_svc.update_order_delivery_fail_reason(
+                                order_no, degraded_warn_msg, order.account_id
+                            )
                             logger.warning(f"[定时补发货] 订单 {order_no} {degraded_warn_msg}")
                         except Exception as warn_err:
                             logger.warning(
@@ -740,35 +762,23 @@ class RedeliveryTask:
                 error_msg = result.get("message", "创建会话失败")
                 logger.warning(
                     f"[定时补发货] 订单 {order.order_no} 创建会话失败: {error_msg}，"
-                    f"写入占位chat_id避免重复尝试"
+                    "本次进入冷却，稍后重试"
                 )
-                # 写入占位chat_id，避免下次定时任务再次尝试创建
-                placeholder_chat_id = f"FAILED_{order.buyer_id}"
-                from common.services.order_service import OrderService
-                order_svc = OrderService(session)
-                await order_svc.update_order_chat_id(order.order_no, placeholder_chat_id)
-                order.chat_id = placeholder_chat_id
                 return False, f"创建会话失败: {error_msg}"
             
             new_chat_id = (result.get("data") or {}).get("chat_id")
             if not new_chat_id:
                 logger.warning(
                     f"[定时补发货] 订单 {order.order_no} 创建会话响应缺少 chat_id: {result}，"
-                    f"写入占位chat_id避免重复尝试"
+                    "本次进入冷却，稍后重试"
                 )
-                # 写入占位chat_id，避免下次定时任务再次尝试创建
-                placeholder_chat_id = f"FAILED_{order.buyer_id}"
-                from common.services.order_service import OrderService
-                order_svc = OrderService(session)
-                await order_svc.update_order_chat_id(order.order_no, placeholder_chat_id)
-                order.chat_id = placeholder_chat_id
                 return False, "创建会话响应缺少 chat_id"
             
             # 回写订单 chat_id
             from common.services.order_service import OrderService
             order_svc = OrderService(session)
             updated = await order_svc.update_order_chat_id(
-                order.order_no, new_chat_id
+                order.order_no, new_chat_id, order.account_id
             )
             if not updated:
                 logger.warning(

@@ -732,7 +732,7 @@ class XianyuAsync:
                                         logger.info(f"【{self.cookie_id}】✅ 检测到重发货触发: 关键词='{redelivery_keyword}', 订单号={order_no}")
                                         
                                         # 从数据库查询订单信息
-                                        order_info = db_manager.get_order_by_id(order_no)
+                                        order_info = db_manager.get_order_by_id(order_no, self.cookie_id)
                                         if not order_info:
                                             # 订单不在数据库中，先插入基本记录
                                             logger.info(f"【{self.cookie_id}】重发货触发: 订单 {order_no} 不在数据库中，创建基本记录")
@@ -757,7 +757,7 @@ class XianyuAsync:
                                             logger.warning(f"【{self.cookie_id}】重发货触发: API刷新订单 {order_no} 详情失败: {fetch_e}")
                                         
                                         # 重新获取最新的订单信息
-                                        order_info = db_manager.get_order_by_id(order_no)
+                                        order_info = db_manager.get_order_by_id(order_no, self.cookie_id)
                                         logger.info(f"【{self.cookie_id}】重发货触发: 订单 {order_no} get_order_by_id 完整返回结果: {order_info}")
                                         
                                         if order_info:
@@ -822,7 +822,9 @@ class XianyuAsync:
                                                                 from common.db.session import async_session_maker
                                                                 async with async_session_maker() as db_session:
                                                                     order_service = OrderService(db_session)
-                                                                    await order_service.update_order_status(order_no, "shipped")
+                                                                    await order_service.update_order_status(
+                                                                        order_no, "shipped", self.cookie_id
+                                                                    )
                                                             except Exception as e:
                                                                 logger.error(f"【{self.cookie_id}】重发货触发: 更新订单状态失败: {e}")
                                                             self.auto_delivery_handler.mark_delivery_sent(order_no)
@@ -1291,7 +1293,9 @@ class XianyuAsync:
                     else:
                         # 非终态 → 更新为退款中
                         order_service = OrderService(session)
-                        updated = await order_service.update_order_status(order_id, 'refunding')
+                        updated = await order_service.update_order_status(
+                            order_id, 'refunding', self.cookie_id
+                        )
                         if updated:
                             logger.info(
                                 f"【{self.cookie_id}】✅ 收到退款申请，订单 {order_id} 状态 "
@@ -1426,7 +1430,9 @@ class XianyuAsync:
                 if order_id:
                     try:
                         from common.db.compat import db_manager
-                        db_manager.update_order_bargain_status(order_id, True)
+                        db_manager.update_order_bargain_status(
+                            order_id, True, self.cookie_id
+                        )
                         logger.info(f"【{self.cookie_id}】订单 {order_id} 检测到小刀，已更新小刀状态")
                     except Exception as e:
                         logger.error(f"【{self.cookie_id}】更新订单小刀状态失败: {e}")
@@ -1493,7 +1499,9 @@ class XianyuAsync:
                                             from common.db.session import async_session_maker
                                             async with async_session_maker() as db_session:
                                                 order_service = OrderService(db_session)
-                                                await order_service.update_order_status(order_id, "shipped")
+                                                await order_service.update_order_status(
+                                                    order_id, "shipped", self.cookie_id
+                                                )
                                             logger.info(f"【{self.cookie_id}】订单 {order_id} 状态已更新为已发货")
                                         except Exception as e:
                                             logger.error(f"【{self.cookie_id}】更新订单状态失败: {e}")
