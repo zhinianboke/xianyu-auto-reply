@@ -311,6 +311,65 @@ class GoofishCompassService:
             num *= 10000
         return int(num)
 
+    @classmethod
+    def _extract_detail_header_metrics(cls, stat_blocks: Iterable[str]) -> dict[str, Any]:
+        """Extract counters only from the current item's detail-header stat block.
+
+        Goofish recommendation cards also contain labels such as ``12人想要``.
+        Those counters describe the recommended item, not the detail item being
+        collected, so callers must pass only the stat block under the detail
+        header (the block that contains the current item's browse counter).
+        """
+        want_values: set[int] = set()
+        view_values: set[int] = set()
+
+        for block in stat_blocks:
+            if not isinstance(block, str):
+                continue
+            text = re.sub(r"\s+", " ", block).strip()
+            if not text:
+                continue
+
+            want_values.update(
+                value
+                for value in (
+                    cls._parse_cn_number(raw)
+                    for raw in re.findall(r"(\d+(?:\.\d+)?\s*万?)\s*人想要", text)
+                )
+                if value is not None
+            )
+            view_values.update(
+                value
+                for value in (
+                    cls._parse_cn_number(raw)
+                    for raw in re.findall(r"(\d+(?:\.\d+)?\s*万?)\s*(?:浏览量|浏览)", text)
+                )
+                if value is not None
+            )
+
+        # A missing selector or changed page structure must not be interpreted
+        # as an empty metric.  An explicit absence is reliable only when this
+        # detail stat block exposed at least one of its counters.
+        has_detail_stat_label = bool(want_values or view_values)
+        result: dict[str, Any] = {}
+        metric_sources: dict[str, str] = {}
+        metric_status: dict[str, str] = {}
+
+        for field, values in (("want_count", want_values), ("view_count", view_values)):
+            if len(values) == 1:
+                result[field] = next(iter(values))
+                metric_sources[field] = "dom.detail_header_stat_block"
+            elif len(values) > 1:
+                metric_status[field] = "ambiguous_detail_header"
+            elif has_detail_stat_label:
+                metric_status[field] = "not_displayed_in_detail_header"
+
+        if metric_sources:
+            result["metric_sources"] = metric_sources
+        if metric_status:
+            result["metric_capture_status"] = metric_status
+        return result
+
     @staticmethod
     def _deep_find_first(obj: Any, keys: set[str]) -> Any:
         value, _ = GoofishCompassService._deep_find_first_with_path(obj, keys)
@@ -617,7 +676,34 @@ class GoofishCompassService:
         except Exception:
             pass
 
-        # 3) Body text regex
+        # 3) Current-detail metric header.  The ``want--*`` component is
+        # rendered under the price/tips header for the item being viewed.  It
+        # must not be replaced with a body-wide match: the latter includes the
+        # "为你推荐" cards and can assign another item's wanted count here.
+        try:
+            stat_blocks: list[str] = []
+            stat_locator = page.locator('[class*="tips--"] [class*="want--"]')
+            count = await stat_locator.count()
+            for index in range(min(int(count or 0), 4)):
+                text = await stat_locator.nth(index).text_content()
+                if isinstance(text, str) and text.strip():
+                    stat_blocks.append(text)
+
+            header_metrics = self._extract_detail_header_metrics(stat_blocks)
+            for field in ("want_count", "view_count"):
+                if field in header_metrics:
+                    result[field] = header_metrics[field]
+            if header_metrics.get("metric_sources"):
+                result.setdefault("metric_sources", {}).update(header_metrics["metric_sources"])
+            if header_metrics.get("metric_capture_status"):
+                result.setdefault("metric_capture_status", {}).update(
+                    header_metrics["metric_capture_status"]
+                )
+        except Exception:
+            pass
+
+        # 4) Body text may still provide an unstructured title or price, but
+        # never engagement metrics because it includes recommendation cards.
         try:
             body_text = await page.locator("body").inner_text()
             if isinstance(body_text, str) and body_text:
@@ -634,34 +720,6 @@ class GoofishCompassService:
                             result["price"] = price_text
                             result["unit_price"] = self._price_number(price_text)
 
-                # The page body can include recommendation cards.  Do not
-                # accept the first matching counter: it may belong to a
-                # different item.  A body-text fallback is usable only when
-                # every matching label resolves to the same numeric value.
-                def unique_metric(matches: list[str]) -> int | None:
-                    values = {self._parse_cn_number(value) for value in matches}
-                    values.discard(None)
-                    return values.pop() if len(values) == 1 else None
-
-                if "want_count" not in result:
-                    want_matches = re.findall(r"(\d+(?:\.\d+)?\s*万?)\s*人想要", body_text)
-                    want = unique_metric(want_matches)
-                    if want is not None:
-                        result["want_count"] = want
-                        result.setdefault("metric_sources", {})["want_count"] = "dom.unique_people_want_label"
-                    elif want_matches:
-                        result.setdefault("metric_capture_status", {})["want_count"] = "ambiguous_dom"
-
-                if "view_count" not in result:
-                    view_matches = re.findall(r"(?:浏览量|浏览)[:：]?\s*(\d+(?:\.\d+)?\s*万?)", body_text)
-                    if not view_matches:
-                        view_matches = re.findall(r"(\d+(?:\.\d+)?\s*万?)\s*(?:浏览量|浏览)", body_text)
-                    view = unique_metric(view_matches)
-                    if view is not None:
-                        result["view_count"] = view
-                        result.setdefault("metric_sources", {})["view_count"] = "dom.unique_browse_label"
-                    elif view_matches:
-                        result.setdefault("metric_capture_status", {})["view_count"] = "ambiguous_dom"
         except Exception:
             pass
 
@@ -744,23 +802,41 @@ class GoofishCompassService:
                 detail_payloads,
                 expected_item_id=str(item.get("item_id") or "") or None,
             )
-            dom_detail: dict[str, Any] = {}
-            if (
-                not detail
-                or detail.get("description") in (None, "")
-                or detail.get("price") in (None, "")
-                or detail.get("view_count") is None
-                or detail.get("want_count") is None
-            ):
-                dom_detail = await self._extract_detail_from_dom(page)
+            # The current detail header is authoritative for engagement
+            # counters.  Read it even when a detail payload included a generic
+            # count field, because some payload fields belong to another
+            # product/card or use a different metric definition.
+            dom_detail = await self._extract_detail_from_dom(page)
 
             if dom_detail:
                 merged = dict(detail or {})
+                dom_sources = dom_detail.get("metric_sources") or {}
+                dom_status = dom_detail.get("metric_capture_status") or {}
+
+                for metric in ("want_count", "view_count"):
+                    if metric in dom_detail:
+                        # Header counters are tied to the current detail item.
+                        merged[metric] = dom_detail[metric]
+                    elif dom_status.get(metric) == "not_displayed_in_detail_header":
+                        # The header is present but this item has no such
+                        # counter; do not retain a recommendation/payload value.
+                        merged[metric] = None
+
                 for k, v in dom_detail.items():
+                    if k in {"want_count", "view_count", "metric_sources", "metric_capture_status"}:
+                        continue
                     if v in (None, "", [], {}):
                         continue
                     if merged.get(k) in (None, "", 0, [], {}):
                         merged[k] = v
+
+                if dom_sources:
+                    merged.setdefault("metric_sources", {}).update(dom_sources)
+                if dom_status:
+                    merged.setdefault("metric_capture_status", {}).update(dom_status)
+                    for metric, status in dom_status.items():
+                        if status == "not_displayed_in_detail_header":
+                            merged.get("metric_sources", {}).pop(metric, None)
                 detail = merged
 
             if detail:
