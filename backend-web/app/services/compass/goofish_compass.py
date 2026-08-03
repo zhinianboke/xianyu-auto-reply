@@ -597,21 +597,34 @@ class GoofishCompassService:
                             result["price"] = price_text
                             result["unit_price"] = self._price_number(price_text)
 
+                # The page body can include recommendation cards.  Do not
+                # accept the first matching counter: it may belong to a
+                # different item.  A body-text fallback is usable only when
+                # every matching label resolves to the same numeric value.
+                def unique_metric(matches: list[str]) -> int | None:
+                    values = {self._parse_cn_number(value) for value in matches}
+                    values.discard(None)
+                    return values.pop() if len(values) == 1 else None
+
                 if "want_count" not in result:
-                    m = re.search(r"(\d+(?:\.\d+)?\s*万?)\s*人想要", body_text)
-                    if m:
-                        want = self._parse_cn_number(m.group(0))
-                        if want is not None:
-                            result["want_count"] = want
+                    want_matches = re.findall(r"(\d+(?:\.\d+)?\s*万?)\s*人想要", body_text)
+                    want = unique_metric(want_matches)
+                    if want is not None:
+                        result["want_count"] = want
+                        result.setdefault("metric_sources", {})["want_count"] = "dom.unique_people_want_label"
+                    elif want_matches:
+                        result.setdefault("metric_capture_status", {})["want_count"] = "ambiguous_dom"
 
                 if "view_count" not in result:
-                    m = re.search(r"(?:浏览量|浏览)[:：]?\s*(\d+(?:\.\d+)?\s*万?)", body_text)
-                    if not m:
-                        m = re.search(r"(\d+(?:\.\d+)?\s*万?)\s*(?:浏览量|浏览)", body_text)
-                    if m:
-                        view = self._parse_cn_number(m.group(0))
-                        if view is not None:
-                            result["view_count"] = view
+                    view_matches = re.findall(r"(?:浏览量|浏览)[:：]?\s*(\d+(?:\.\d+)?\s*万?)", body_text)
+                    if not view_matches:
+                        view_matches = re.findall(r"(\d+(?:\.\d+)?\s*万?)\s*(?:浏览量|浏览)", body_text)
+                    view = unique_metric(view_matches)
+                    if view is not None:
+                        result["view_count"] = view
+                        result.setdefault("metric_sources", {})["view_count"] = "dom.unique_browse_label"
+                    elif view_matches:
+                        result.setdefault("metric_capture_status", {})["view_count"] = "ambiguous_dom"
         except Exception:
             pass
 
