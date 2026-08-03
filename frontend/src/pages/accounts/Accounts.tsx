@@ -1306,9 +1306,9 @@ export function Accounts() {
     }
   }
 
-  // ==================== 自动求小红花开关 ====================
+  // ==================== 自动求小红花模式 ====================
   const handleToggleAutoRedFlower = async (account: AccountWithKeywordCount) => {
-    const newEnabled = !account.auto_red_flower
+    const newEnabled = !(account.auto_red_flower && !account.red_flower_after_shipment)
     try {
       const result = await updateAccountAutoRedFlower(account.id, newEnabled)
       if (!result.success) {
@@ -1316,7 +1316,9 @@ export function Accounts() {
         return
       }
       setAccounts(prev => prev.map(a =>
-        a.id === account.id ? { ...a, auto_red_flower: newEnabled } : a,
+        a.id === account.id
+          ? { ...a, auto_red_flower: newEnabled, red_flower_after_shipment: false }
+          : a,
       ))
       addToast({ type: 'success', message: `自动求小红花已${newEnabled ? '开启' : '关闭'}` })
     } catch (error) {
@@ -1324,9 +1326,9 @@ export function Accounts() {
     }
   }
 
-  // ==================== 仅发货后求小红花开关 ====================
+  // ==================== 仅发货后求小红花模式 ====================
   const handleToggleRedFlowerAfterShipment = async (account: AccountWithKeywordCount) => {
-    const newEnabled = !account.red_flower_after_shipment
+    const newEnabled = !(account.auto_red_flower && account.red_flower_after_shipment)
     try {
       const result = await updateAccountRedFlowerAfterShipment(account.id, newEnabled)
       if (!result.success) {
@@ -1334,7 +1336,9 @@ export function Accounts() {
         return
       }
       setAccounts(prev => prev.map(a =>
-        a.id === account.id ? { ...a, red_flower_after_shipment: newEnabled } : a,
+        a.id === account.id
+          ? { ...a, auto_red_flower: newEnabled, red_flower_after_shipment: newEnabled }
+          : a,
       ))
       addToast({ type: 'success', message: `仅发货后求小红花已${newEnabled ? '开启' : '关闭'}` })
     } catch (error) {
@@ -2506,27 +2510,27 @@ export function Accounts() {
                         >
                           <Send className="w-3.5 h-3.5" />
                         </button>
-                        {/* 自动求小红花 */}
+                        {/* 自动求小红花模式 */}
                         <button
                           onClick={() => handleToggleAutoRedFlower(account)}
                           className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
-                            account.auto_red_flower
+                            account.auto_red_flower && !account.red_flower_after_shipment
                               ? 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-300 dark:hover:bg-pink-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
                           }`}
-                          title={`自动求小红花：${account.auto_red_flower ? '已开启（点击关闭）' : '已关闭（点击开启）'}`}
+                          title={`自动求小红花：${account.auto_red_flower && !account.red_flower_after_shipment ? '已开启（点击关闭）' : '已关闭（点击开启会切换为普通求小红花）'}`}
                         >
                           <Flower2 className="w-3.5 h-3.5" />
                         </button>
-                        {/* 仅发货后求小红花 */}
+                        {/* 仅发货后求小红花模式 */}
                         <button
                           onClick={() => handleToggleRedFlowerAfterShipment(account)}
                           className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
-                            account.red_flower_after_shipment
+                            account.auto_red_flower && account.red_flower_after_shipment
                               ? 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300 dark:hover:bg-sky-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
                           }`}
-                          title={`仅发货后求小红花：${account.red_flower_after_shipment ? '已开启（仅处理已发货、已完成订单；点击关闭）' : '已关闭（点击开启）'}`}
+                          title={`仅发货后求小红花：${account.auto_red_flower && account.red_flower_after_shipment ? '已开启（仅处理已发货、已完成订单；点击关闭）' : '已关闭（点击开启会自动启用求小红花）'}`}
                         >
                           <Truck className="w-3.5 h-3.5" />
                         </button>

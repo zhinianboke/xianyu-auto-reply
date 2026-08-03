@@ -607,7 +607,7 @@ class AccountService:
         await self.session.commit()
 
     async def update_auto_red_flower(self, account: XYAccount, auto_red_flower: bool) -> None:
-        """更新自动求小红花开关
+        """选择普通自动求小红花模式，或关闭求小红花
         
         使用显式 UPDATE SQL 写入，避开 ORM 脏状态追踪可能的陷阱，
         确保操作一定会发送 UPDATE 语句到数据库。
@@ -615,26 +615,34 @@ class AccountService:
         stmt = (
             update(XYAccount)
             .where(XYAccount.id == account.id)
-            .values(auto_red_flower=auto_red_flower)
+            .values(
+                auto_red_flower=auto_red_flower,
+                red_flower_after_shipment=False,
+            )
         )
         await self.session.execute(stmt)
         await self.session.commit()
         # 同步内存对象属性（expire_on_commit=False 下对象属性不会自动刷新）
         account.auto_red_flower = auto_red_flower
+        account.red_flower_after_shipment = False
 
     async def update_red_flower_after_shipment(
         self,
         account: XYAccount,
         red_flower_after_shipment: bool,
     ) -> None:
-        """更新仅在订单已发货或已完成后求小红花开关"""
+        """选择仅发货后求小红花模式，或关闭求小红花"""
         stmt = (
             update(XYAccount)
             .where(XYAccount.id == account.id)
-            .values(red_flower_after_shipment=red_flower_after_shipment)
+            .values(
+                auto_red_flower=red_flower_after_shipment,
+                red_flower_after_shipment=red_flower_after_shipment,
+            )
         )
         await self.session.execute(stmt)
         await self.session.commit()
+        account.auto_red_flower = red_flower_after_shipment
         account.red_flower_after_shipment = red_flower_after_shipment
 
     async def update_ai_reply_block_ordered_users(self, account: XYAccount, ai_reply_block_ordered_users: bool) -> None:
