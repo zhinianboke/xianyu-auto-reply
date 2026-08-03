@@ -138,4 +138,5 @@ done
 
 curl -fsS http://127.0.0.1:8089/health >/dev/null
 curl -fsS https://xianyu.xyyamsz.cn/health >/dev/null
+docker image prune -a -f >/dev/null || echo "警告：未引用镜像清理失败" >&2
 echo "闲鱼服务 ${image_tag} 部署成功，备份：${backup_path}"
