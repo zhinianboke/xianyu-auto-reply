@@ -707,20 +707,10 @@ class GoofishCompassService:
         # tied to the item currently being viewed.
         try:
             stat_blocks: list[str] = []
-            stat_locator = page.locator(
-                '[class*="tips"], [class*="want"], [class*="browse"], '
-                '[class*="view"], [class*="stat"], [class*="count"]'
-            )
-            count = await stat_locator.count()
-            for index in range(min(int(count or 0), 16)):
-                text = await stat_locator.nth(index).text_content()
-                if isinstance(text, str) and re.search(r"(?:人?想要|浏览量|浏览)", text):
-                    stat_blocks.append(text)
-
             visible_metric_blocks = await page.locator("body").evaluate(
                 """body => {
                     const metric = /(?:\\d+(?:\\.\\d+)?\\s*万?\\s*(?:人?想要|浏览量|浏览)|(?:想要|浏览量|浏览)\\s*[:：]?\\s*\\d+(?:\\.\\d+)?\\s*万?)/;
-                    const viewportBottom = Math.max(window.innerHeight || 0, 900);
+                    const viewportBottom = window.innerHeight || 720;
                     const blocks = [];
                     for (const element of body.querySelectorAll('*')) {
                         const text = (element.innerText || '').replace(/\\s+/g, ' ').trim();
