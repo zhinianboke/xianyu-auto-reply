@@ -338,10 +338,20 @@ class GoofishCompassService:
                 )
                 if value is not None
             )
+            # Remove the wanted-count token before looking for a compact
+            # ``number 浏览`` form.  Otherwise text such as ``想要 1万 浏览
+            # 320`` can incorrectly treat the wanted number as the browse
+            # number simply because it is immediately before the next label.
+            view_text = re.sub(
+                r"(?:\d+(?:\.\d+)?\s*万?)\s*人?想要|"
+                r"想要\s*[:：]?\s*(?:\d+(?:\.\d+)?\s*万?)",
+                " ",
+                text,
+            )
             view_matches = re.findall(
                 r"(\d+(?:\.\d+)?\s*万?)\s*(?:浏览量|浏览)|"
                 r"(?:浏览量|浏览)\s*[:：]?\s*(\d+(?:\.\d+)?\s*万?)",
-                text,
+                view_text,
             )
             view_values.update(
                 value
