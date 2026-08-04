@@ -328,6 +328,13 @@ class GoofishCompassService:
         # valid counter look ambiguous.
         want_values: list[int] = []
         view_values: list[int] = []
+        # The public item page presents the two counters together in the
+        # current listing's summary row, e.g. ``121人想要 1150浏览``.  Keep
+        # those paired values separate from individual counter nodes: a
+        # recommendation card can contain a single ``X人想要`` node, but it
+        # must never supplement a current item which does not display that
+        # counter itself.
+        summary_pairs: list[tuple[int, int]] = []
 
         def append_unique(values: list[int], value: int | None) -> None:
             if value is not None and value not in values:
@@ -340,8 +347,15 @@ class GoofishCompassService:
             if not text:
                 continue
 
-            for raw in re.findall(r"(\d+(?:\.\d+)?\s*万?)\s*人想要", text):
-                append_unique(want_values, cls._parse_cn_number(raw))
+            block_wants: list[int] = []
+            for groups in re.findall(
+                r"(\d+(?:\.\d+)?\s*万?)\s*人?想要|"
+                r"想要\s*[:：]?\s*(\d+(?:\.\d+)?\s*万?)",
+                text,
+            ):
+                parsed = cls._parse_cn_number(next((part for part in groups if part), None))
+                if parsed is not None and parsed not in block_wants:
+                    block_wants.append(parsed)
             # Remove the wanted-count token before looking for a compact
             # ``number 浏览`` form.  Otherwise text such as ``想要 1万 浏览
             # 320`` can incorrectly treat the wanted number as the browse
@@ -352,26 +366,45 @@ class GoofishCompassService:
                 " ",
                 text,
             )
+            block_views: list[int] = []
             view_matches = re.findall(
                 r"(\d+(?:\.\d+)?\s*万?)\s*(?:浏览量|浏览)|"
                 r"(?:浏览量|浏览)\s*[:：]?\s*(\d+(?:\.\d+)?\s*万?)",
                 view_text,
             )
             for groups in view_matches:
-                append_unique(
-                    view_values,
-                    cls._parse_cn_number(next((part for part in groups if part), None)),
-                )
-            want_matches = re.findall(
-                r"(\d+(?:\.\d+)?\s*万?)\s*人?想要|"
-                r"想要\s*[:：]?\s*(\d+(?:\.\d+)?\s*万?)",
-                text,
-            )
-            for groups in want_matches:
-                append_unique(
-                    want_values,
-                    cls._parse_cn_number(next((part for part in groups if part), None)),
-                )
+                parsed = cls._parse_cn_number(next((part for part in groups if part), None))
+                if parsed is not None and parsed not in block_views:
+                    block_views.append(parsed)
+
+            for value in block_wants:
+                append_unique(want_values, value)
+            for value in block_views:
+                append_unique(view_values, value)
+            if block_wants and block_views:
+                pair = (block_wants[0], block_views[0])
+                if pair not in summary_pairs:
+                    summary_pairs.append(pair)
+
+        # A paired current-detail summary is stronger evidence than individual
+        # metric nodes.  Prefer it even when a shorter sibling node has the
+        # same position in the DOM and sorted before the complete summary.
+        if summary_pairs:
+            want_count, view_count = summary_pairs[0]
+            result: dict[str, Any] = {
+                "want_count": want_count,
+                "view_count": view_count,
+                "metric_sources": {
+                    "want_count": "dom.visible_detail_summary_pair",
+                    "view_count": "dom.visible_detail_summary_pair",
+                },
+            }
+            if len(summary_pairs) > 1:
+                result["metric_capture_status"] = {
+                    "want_count": "additional_visible_metric_pairs_ignored",
+                    "view_count": "additional_visible_metric_pairs_ignored",
+                }
+            return result
 
         # A missing selector or changed page structure must not be interpreted
         # as an empty metric.  An explicit absence is reliable only when this
@@ -848,7 +881,37 @@ class GoofishCompassService:
             # counters.  Read it even when a detail payload included a generic
             # count field, because some payload fields belong to another
             # product/card or use a different metric definition.
-            dom_detail = await self._extract_detail_from_dom(page)
+            # The summary row is rendered asynchronously on some item pages.
+            # Retry the DOM-only read briefly; this does not issue additional
+            # platform requests, and avoids persisting an otherwise available
+            # counter as missing merely because its first paint was late.
+            dom_detail: dict[str, Any] = {}
+
+            def capture_score(value: dict[str, Any]) -> int:
+                status = value.get("metric_capture_status") or {}
+                return sum(
+                    metric in value
+                    or status.get(metric) == "not_displayed_in_detail_header"
+                    for metric in ("want_count", "view_count")
+                )
+
+            for attempt in range(3):
+                candidate = await self._extract_detail_from_dom(page)
+                if candidate and (
+                    not dom_detail or capture_score(candidate) >= capture_score(dom_detail)
+                ):
+                    dom_detail = candidate
+                captured_metrics = {
+                    metric
+                    for metric in ("want_count", "view_count")
+                    if metric in dom_detail
+                    or (dom_detail.get("metric_capture_status") or {}).get(metric)
+                    == "not_displayed_in_detail_header"
+                }
+                if captured_metrics == {"want_count", "view_count"}:
+                    break
+                if attempt < 2:
+                    await asyncio.sleep(0.75)
 
             if dom_detail:
                 merged = dict(detail or {})
