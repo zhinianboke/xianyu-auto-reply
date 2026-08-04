@@ -320,8 +320,18 @@ class GoofishCompassService:
         collected, so callers must pass only the stat block under the detail
         header (the block that contains the current item's browse counter).
         """
-        want_values: set[int] = set()
-        view_values: set[int] = set()
+        # ``stat_blocks`` are ordered by their on-screen position.  A detail
+        # page can repeat the same labels in adjacent layout containers (and,
+        # further down, in recommendation cards).  Preserve that order and
+        # trust the first metric shown in the current item's visible header;
+        # a set would lose the only reliable ordering information and make a
+        # valid counter look ambiguous.
+        want_values: list[int] = []
+        view_values: list[int] = []
+
+        def append_unique(values: list[int], value: int | None) -> None:
+            if value is not None and value not in values:
+                values.append(value)
 
         for block in stat_blocks:
             if not isinstance(block, str):
@@ -330,14 +340,8 @@ class GoofishCompassService:
             if not text:
                 continue
 
-            want_values.update(
-                value
-                for value in (
-                    cls._parse_cn_number(raw)
-                    for raw in re.findall(r"(\d+(?:\.\d+)?\s*万?)\s*人想要", text)
-                )
-                if value is not None
-            )
+            for raw in re.findall(r"(\d+(?:\.\d+)?\s*万?)\s*人想要", text):
+                append_unique(want_values, cls._parse_cn_number(raw))
             # Remove the wanted-count token before looking for a compact
             # ``number 浏览`` form.  Otherwise text such as ``想要 1万 浏览
             # 320`` can incorrectly treat the wanted number as the browse
@@ -353,23 +357,21 @@ class GoofishCompassService:
                 r"(?:浏览量|浏览)\s*[:：]?\s*(\d+(?:\.\d+)?\s*万?)",
                 view_text,
             )
-            view_values.update(
-                value
-                for groups in view_matches
-                for value in (cls._parse_cn_number(next((part for part in groups if part), None)),)
-                if value is not None
-            )
+            for groups in view_matches:
+                append_unique(
+                    view_values,
+                    cls._parse_cn_number(next((part for part in groups if part), None)),
+                )
             want_matches = re.findall(
                 r"(\d+(?:\.\d+)?\s*万?)\s*人?想要|"
                 r"想要\s*[:：]?\s*(\d+(?:\.\d+)?\s*万?)",
                 text,
             )
-            want_values.update(
-                value
-                for groups in want_matches
-                for value in (cls._parse_cn_number(next((part for part in groups if part), None)),)
-                if value is not None
-            )
+            for groups in want_matches:
+                append_unique(
+                    want_values,
+                    cls._parse_cn_number(next((part for part in groups if part), None)),
+                )
 
         # A missing selector or changed page structure must not be interpreted
         # as an empty metric.  An explicit absence is reliable only when this
@@ -380,11 +382,11 @@ class GoofishCompassService:
         metric_status: dict[str, str] = {}
 
         for field, values in (("want_count", want_values), ("view_count", view_values)):
-            if len(values) == 1:
-                result[field] = next(iter(values))
-                metric_sources[field] = "dom.detail_header_stat_block"
-            elif len(values) > 1:
-                metric_status[field] = "ambiguous_detail_header"
+            if values:
+                result[field] = values[0]
+                metric_sources[field] = "dom.visible_detail_header"
+                if len(values) > 1:
+                    metric_status[field] = "additional_visible_metrics_ignored"
             elif has_detail_stat_label:
                 metric_status[field] = "not_displayed_in_detail_header"
 
