@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import sys
 import tempfile
 from typing import Any, Dict, List, Optional
@@ -65,6 +66,11 @@ class BrowserManager:
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
+        # A persistent Playwright profile can be opened by only one Chromium
+        # process.  Each collector owns a short-lived profile so concurrent
+        # research, monitoring and item-detail requests never fight for the
+        # same ProcessSingleton lock.  Account cookies are injected for every
+        # run, so this does not discard required login state.
         self._user_data_dir: Optional[str] = None
 
     @property
@@ -73,7 +79,7 @@ class BrowserManager:
         return PLAYWRIGHT_AVAILABLE
 
     async def init_browser(self, headless: bool = True) -> bool:
-        """初始化浏览器（使用持久化上下文）"""
+        """Initialize an isolated persistent context for this collector run."""
         if not PLAYWRIGHT_AVAILABLE:
             raise Exception("Playwright 未安装，无法使用真实搜索功能")
 
@@ -89,19 +95,18 @@ class BrowserManager:
             ensure_playwright_browser_path()
             self.playwright = await async_playwright().start()
 
-            # 设置持久化数据目录
-            self._user_data_dir = os.path.join(
-                tempfile.gettempdir(), 'xianyu_browser_cache'
-            )
-            os.makedirs(self._user_data_dir, exist_ok=True)
-            logger.info(f"使用持久化数据目录: {self._user_data_dir}")
+            # ``launch_persistent_context`` must not share a user-data-dir
+            # between processes.  The previous fixed /tmp path caused one
+            # task to fail whenever another task had Chromium open.
+            self._user_data_dir = tempfile.mkdtemp(prefix="xianyu_browser_")
+            logger.info("Created isolated browser profile for collector run")
 
             # 构建浏览器参数
             browser_args = self.DEFAULT_BROWSER_ARGS.copy()
             if os.getenv('DOCKER_ENV') == 'true':
                 browser_args.extend(self.DOCKER_BROWSER_ARGS)
 
-            logger.info("正在启动浏览器（中文模式，持久化缓存）...")
+            logger.info("Starting browser with isolated collector profile...")
             chromium_path = get_chromium_executable_path()
 
             # 使用持久化上下文
@@ -120,7 +125,7 @@ class BrowserManager:
             )
 
             self.browser = self.context.browser
-            logger.info("浏览器启动成功（持久化上下文已创建）...")
+            logger.info("Browser started with isolated persistent context")
 
             self.page = await self.context.new_page()
             logger.info("浏览器初始化完成")
@@ -133,26 +138,41 @@ class BrowserManager:
             raise
 
     async def close_browser(self):
-        """关闭浏览器"""
-        try:
-            if self.page:
-                await self.page.close()
-                self.page = None
+        """Close browser resources and remove the collector-owned profile."""
+        page, context, playwright, profile_dir = (
+            self.page,
+            self.context,
+            self.playwright,
+            self._user_data_dir,
+        )
+        self.page = None
+        self.context = None
+        self.browser = None
+        self.playwright = None
+        self._user_data_dir = None
 
-            if self.context:
-                await self.context.close()
-                self.context = None
+        for closer in (
+            (page, "page"),
+            (context, "context"),
+            (playwright, "playwright"),
+        ):
+            resource, name = closer
+            if not resource:
+                continue
+            try:
+                if name == "playwright":
+                    await resource.stop()
+                else:
+                    await resource.close()
+            except Exception as exc:
+                logger.warning(f"Failed to close browser {name}: {type(exc).__name__}")
 
-            self.browser = None
-
-            if self.playwright:
-                await self.playwright.stop()
-                self.playwright = None
-
-            logger.debug("浏览器已关闭（缓存已保存）")
-
-        except Exception as e:
-            logger.warning(f"关闭浏览器时出错: {e}")
+        if profile_dir:
+            try:
+                await asyncio.to_thread(shutil.rmtree, profile_dir, ignore_errors=True)
+            except Exception as exc:
+                logger.warning(f"Failed to remove browser profile: {type(exc).__name__}")
+        logger.debug("Browser collector resources closed")
 
     async def set_cookies(self, cookie_value: str) -> bool:
         """设置浏览器cookies"""

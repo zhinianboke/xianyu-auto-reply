@@ -338,12 +338,26 @@ class GoofishCompassService:
                 )
                 if value is not None
             )
+            view_matches = re.findall(
+                r"(\d+(?:\.\d+)?\s*万?)\s*(?:浏览量|浏览)|"
+                r"(?:浏览量|浏览)\s*[:：]?\s*(\d+(?:\.\d+)?\s*万?)",
+                text,
+            )
             view_values.update(
                 value
-                for value in (
-                    cls._parse_cn_number(raw)
-                    for raw in re.findall(r"(\d+(?:\.\d+)?\s*万?)\s*(?:浏览量|浏览)", text)
-                )
+                for groups in view_matches
+                for value in (cls._parse_cn_number(next((part for part in groups if part), None)),)
+                if value is not None
+            )
+            want_matches = re.findall(
+                r"(\d+(?:\.\d+)?\s*万?)\s*人?想要|"
+                r"想要\s*[:：]?\s*(\d+(?:\.\d+)?\s*万?)",
+                text,
+            )
+            want_values.update(
+                value
+                for groups in want_matches
+                for value in (cls._parse_cn_number(next((part for part in groups if part), None)),)
                 if value is not None
             )
 
@@ -676,18 +690,44 @@ class GoofishCompassService:
         except Exception:
             pass
 
-        # 3) Current-detail metric header.  The ``want--*`` component is
-        # rendered under the price/tips header for the item being viewed.  It
-        # must not be replaced with a body-wide match: the latter includes the
-        # "为你推荐" cards and can assign another item's wanted count here.
+        # 3) Current-detail metric header.  Dynamic Goofish CSS class suffixes
+        # have changed more than once, so do not rely on a single ``want--*``
+        # selector.  We only inspect visible metric text in the first detail
+        # viewport, which is above recommendation cards and therefore remains
+        # tied to the item currently being viewed.
         try:
             stat_blocks: list[str] = []
-            stat_locator = page.locator('[class*="tips--"] [class*="want--"]')
+            stat_locator = page.locator(
+                '[class*="tips"], [class*="want"], [class*="browse"], '
+                '[class*="view"], [class*="stat"], [class*="count"]'
+            )
             count = await stat_locator.count()
-            for index in range(min(int(count or 0), 4)):
+            for index in range(min(int(count or 0), 16)):
                 text = await stat_locator.nth(index).text_content()
-                if isinstance(text, str) and text.strip():
+                if isinstance(text, str) and re.search(r"(?:人?想要|浏览量|浏览)", text):
                     stat_blocks.append(text)
+
+            visible_metric_blocks = await page.locator("body").evaluate(
+                """body => {
+                    const metric = /(?:\\d+(?:\\.\\d+)?\\s*万?\\s*(?:人?想要|浏览量|浏览)|(?:想要|浏览量|浏览)\\s*[:：]?\\s*\\d+(?:\\.\\d+)?\\s*万?)/;
+                    const viewportBottom = Math.max(window.innerHeight || 0, 900);
+                    const blocks = [];
+                    for (const element of body.querySelectorAll('*')) {
+                        const text = (element.innerText || '').replace(/\\s+/g, ' ').trim();
+                        if (!text || text.length > 240 || !metric.test(text)) continue;
+                        if (/为你推荐|猜你喜欢/.test(text)) continue;
+                        const rect = element.getBoundingClientRect();
+                        if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.top >= viewportBottom) continue;
+                        blocks.push({ text, top: rect.top });
+                    }
+                    blocks.sort((a, b) => a.top - b.top || a.text.length - b.text.length);
+                    return [...new Set(blocks.map(item => item.text))].slice(0, 12);
+                }"""
+            )
+            if isinstance(visible_metric_blocks, list):
+                stat_blocks.extend(
+                    block for block in visible_metric_blocks if isinstance(block, str)
+                )
 
             header_metrics = self._extract_detail_header_metrics(stat_blocks)
             for field in ("want_count", "view_count"):
