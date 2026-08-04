@@ -113,6 +113,12 @@ class XYAccount(TimestampMixin, Base):
         Boolean, default=False, comment="已下单用户禁止AI回复"
     )
 
+    # 已下单商品禁止AI回复开关
+    # 开启后：仅当买家已下单当前咨询商品时，跳过AI回复
+    ai_reply_block_ordered_items: Mapped[bool] = mapped_column(
+        Boolean, default=False, comment="已下单商品禁止AI回复"
+    )
+
     # 关系定义 - 无外键约束
     owner: Mapped["User"] = relationship(
         "User",
@@ -135,4 +141,3 @@ class XYAccount(TimestampMixin, Base):
         back_populates="account",
         viewonly=True,
     )
-

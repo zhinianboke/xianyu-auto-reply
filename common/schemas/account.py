@@ -26,6 +26,7 @@ class AccountDetail(BaseModel):
     send_before_confirm: bool = False
     auto_red_flower: bool = False
     ai_reply_block_ordered_users: bool = False
+    ai_reply_block_ordered_items: bool = False
     delivery_disabled: bool = False
     delivery_disabled_reason: str | None = None
     auto_close_order: bool = False
@@ -140,6 +141,11 @@ class AccountAutoRedFlowerUpdate(BaseModel):
 class AccountAiReplyBlockOrderedUsersUpdate(BaseModel):
     """已下单用户禁止AI回复开关更新"""
     ai_reply_block_ordered_users: bool = Field(..., description="已下单用户禁止AI回复开关")
+
+
+class AccountAiReplyBlockOrderedItemsUpdate(BaseModel):
+    """已下单商品禁止AI回复开关更新"""
+    ai_reply_block_ordered_items: bool = Field(..., description="已下单商品禁止AI回复开关")
 
 
 class AccountDeliveryDisabledUpdate(BaseModel):

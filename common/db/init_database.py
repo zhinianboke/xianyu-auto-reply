@@ -534,7 +534,8 @@ class DatabaseInitializer:
                 INDEX idx_order_owner_placed (owner_id, placed_at),
                 INDEX idx_order_owner_created (owner_id, created_at),
                 INDEX idx_order_owner_account_placed (owner_id, account_id, placed_at),
-                INDEX idx_order_owner_account_buyer_created (owner_id, account_id, buyer_id, created_at)
+                INDEX idx_order_owner_account_buyer_created (owner_id, account_id, buyer_id, created_at),
+                INDEX idx_order_account_buyer_item (account_id, buyer_id, item_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='订单表';
         """,
 
@@ -1795,7 +1796,8 @@ class DatabaseInitializer:
             ("delivery_only_card_after_close", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '关闭订单后继续发货（只发卡券）'", "auto_close_order"),
             ("delivery_disabled_excluded_items", "JSON DEFAULT NULL COMMENT '禁止发货排除商品列表（item_id 数组，命中后按正常流程发货）'", "delivery_only_card_after_close"),
             ("ai_reply_block_ordered_users", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '已下单用户禁止AI回复'", "delivery_disabled_excluded_items"),
-            ("refund_cancel_enabled", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '退款订单注销开关'", "ai_reply_block_ordered_users"),
+            ("ai_reply_block_ordered_items", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '已下单商品禁止AI回复'", "ai_reply_block_ordered_users"),
+            ("refund_cancel_enabled", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '退款订单注销开关'", "ai_reply_block_ordered_items"),
             ("refund_cancel_url", "VARCHAR(255) DEFAULT NULL COMMENT '退款订单注销请求URL'", "refund_cancel_enabled"),
             ("refund_cancel_timeout", "INT DEFAULT 60 COMMENT '退款订单注销超时时间(秒)'", "refund_cancel_url"),
         ],
@@ -2761,6 +2763,23 @@ class DatabaseInitializer:
                     logger.info("✓ xy_orders: 创建 idx_order_owner_account_buyer_created 复合索引")
             except Exception as e:
                 logger.warning(f"✗ xy_orders idx_order_owner_account_buyer_created 创建失败: {e}")
+
+            # 为“已下单商品禁止AI回复”补建账号、买家、商品复合索引
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_orders'
+                    AND INDEX_NAME = 'idx_order_account_buyer_item'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    await conn.execute(text(
+                        "ALTER TABLE xy_orders ADD INDEX idx_order_account_buyer_item (account_id, buyer_id, item_id)"
+                    ))
+                    logger.info("✓ xy_orders: 创建 idx_order_account_buyer_item 复合索引")
+            except Exception as e:
+                logger.warning(f"✗ xy_orders idx_order_account_buyer_item 创建失败: {e}")
 
             # 为 xy_orders 补建 created_at 索引
             try:
