@@ -225,6 +225,7 @@ test/
 license.dat
 connection.dat
 *.dat
+.agent-ops-token
 
 # ------------------------------------------
 # 网络抓包文件
