@@ -7,11 +7,16 @@ import { X, Loader2, Upload, Trash2 } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import {
   createMaterial, updateMaterial, uploadProductImages,
-  type ProductMaterial, type MaterialCreateParams,
+  type ProductDeliveryMethod, type ProductMaterial, type MaterialCreateParams,
 } from '@/api/productPublish'
 
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
 const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '其他']
+
+function normalizeMoney(value: number | null | undefined): number | undefined {
+  if (value === null || value === undefined || Number.isNaN(value)) return undefined
+  return Math.round(value * 100) / 100
+}
 
 interface Props {
   initial: ProductMaterial | null
@@ -24,6 +29,14 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [previewImage, setPreviewImage] = useState<string | null>(null)
+  const rawInitialDeliveryMethod = initial?.delivery_method as string | undefined
+  const initialDeliveryMethod: ProductDeliveryMethod =
+    rawInitialDeliveryMethod === 'distance_billing' || rawInitialDeliveryMethod === 'fixed_fee' || rawInitialDeliveryMethod === 'no_shipping'
+      ? rawInitialDeliveryMethod
+      : rawInitialDeliveryMethod === 'virtual'
+        ? 'no_shipping'
+        : 'free_shipping'
   const [form, setForm] = useState<MaterialCreateParams>({
     title: initial?.title ?? '',
     description: initial?.description ?? '',
@@ -31,7 +44,8 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
     original_price: initial?.original_price ?? undefined,
     category: initial?.category ?? '',
     images: initial?.images ?? [],
-    delivery_method: initial?.delivery_method ?? 'express',
+    delivery_method: initialDeliveryMethod,
+    support_pickup: initial?.support_pickup ?? false,
     postage: initial?.postage ?? 0,
     address: initial?.address ?? '',
     brand: initial?.brand ?? '',
@@ -64,18 +78,36 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
     setForm(f => ({ ...f, images: (f.images || []).filter((_, i) => i !== idx) }))
   }
 
+  const updateDeliveryMethod = (deliveryMethod: ProductDeliveryMethod) => {
+    setForm(f => ({
+      ...f,
+      delivery_method: deliveryMethod,
+      postage: deliveryMethod === 'fixed_fee' ? f.postage : 0,
+    }))
+  }
+
   const handleSave = async () => {
     if (!form.title.trim()) { addToast({ type: 'warning', message: '请填写商品标题' }); return }
     if (!form.description.trim()) { addToast({ type: 'warning', message: '请填写商品描述' }); return }
-    if (!form.price || form.price <= 0) { addToast({ type: 'warning', message: '请填写有效价格' }); return }
+    const normalizedPrice = normalizeMoney(form.price)
+    const normalizedOriginalPrice = normalizeMoney(form.original_price)
+    if (!normalizedPrice || normalizedPrice < 0.01) { addToast({ type: 'warning', message: '售价最小为0.01' }); return }
+    if (normalizedOriginalPrice !== undefined && normalizedOriginalPrice < 0.01) { addToast({ type: 'warning', message: '原价最小为0.01' }); return }
+    if (!form.images || form.images.length === 0) { addToast({ type: 'warning', message: '请至少上传一张商品图片' }); return }
     setSaving(true)
     try {
+      const payload = {
+        ...form,
+        price: normalizedPrice,
+        original_price: normalizedOriginalPrice,
+        postage: form.delivery_method === 'fixed_fee' ? (normalizeMoney(form.postage) ?? 0) : 0,
+      }
       if (initial) {
-        const res = await updateMaterial(initial.id, form)
+        const res = await updateMaterial(initial.id, payload)
         if (!res.success) { addToast({ type: 'error', message: res.message || '更新失败' }); return }
         addToast({ type: 'success', message: '素材更新成功' })
       } else {
-        const res = await createMaterial(form)
+        const res = await createMaterial(payload)
         if (!res.success) { addToast({ type: 'error', message: res.message || '创建失败' }); return }
         addToast({ type: 'success', message: '素材创建成功' })
       }
@@ -104,12 +136,12 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
               </div>
               <div className="input-group">
                 <label className="input-label">售价（元）<span className="text-red-500">*</span></label>
-                <input type="number" className="input-ios" placeholder="0.00" min="0" step="0.01"
+                <input type="number" className="input-ios" placeholder="0.01" min="0.01" step="0.01"
                   value={form.price || ''} onChange={e => setForm(f => ({ ...f, price: parseFloat(e.target.value) || 0 }))} />
               </div>
               <div className="input-group">
                 <label className="input-label">原价（划线价，选填）</label>
-                <input type="number" className="input-ios" placeholder="0.00" min="0" step="0.01"
+                <input type="number" className="input-ios" placeholder="0.01" min="0.01" step="0.01"
                   value={form.original_price || ''} onChange={e => setForm(f => ({ ...f, original_price: parseFloat(e.target.value) || undefined }))} />
               </div>
               <div className="input-group">
@@ -132,22 +164,35 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
                 <input className="input-ios" placeholder="请输入品牌"
                   value={form.brand} onChange={e => setForm(f => ({ ...f, brand: e.target.value }))} />
               </div>
-              <div className="input-group">
+              <div className="input-group sm:col-span-2">
                 <label className="input-label">发货方式</label>
-                <select className="input-ios" value={form.delivery_method}
-                  onChange={e => setForm(f => ({ ...f, delivery_method: e.target.value as 'express' | 'pickup' }))}>
-                  <option value="express">快递发货</option>
-                  <option value="pickup">自提</option>
-                </select>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <select className="input-ios w-full sm:w-[320px]" value={form.delivery_method}
+                    onChange={e => updateDeliveryMethod(e.target.value as ProductDeliveryMethod)}>
+                    <option value="free_shipping">包邮</option>
+                    <option value="distance_billing">按距离计费</option>
+                    <option value="fixed_fee">一口价</option>
+                    <option value="no_shipping">无需邮寄</option>
+                  </select>
+                  <label className="switch-ios flex-shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(form.support_pickup)}
+                      onChange={e => setForm(f => ({ ...f, support_pickup: e.target.checked }))}
+                    />
+                    <span className="switch-slider"></span>
+                  </label>
+                  <span className="text-sm text-slate-600 dark:text-slate-300 flex-shrink-0">支持自提</span>
+                </div>
               </div>
-              {form.delivery_method === 'express' && (
+              {form.delivery_method === 'fixed_fee' && (
                 <div className="input-group">
-                  <label className="input-label">邮费（元，0=包邮）</label>
-                  <input type="number" className="input-ios" placeholder="0" min="0" step="0.01"
+                  <label className="input-label">运费（元）</label>
+                  <input type="number" className="input-ios w-full sm:w-[320px]" placeholder="0" min="0" step="0.01"
                     value={form.postage || ''} onChange={e => setForm(f => ({ ...f, postage: parseFloat(e.target.value) || 0 }))} />
                 </div>
               )}
-              <div className="input-group">
+              <div className="sm:col-span-2 input-group">
                 <label className="input-label">宝贝所在地</label>
                 <input className="input-ios" placeholder="如：北京市朝阳区；仅做素材记录，发布时统一走随机地址"
                   value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} />
@@ -167,11 +212,13 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
               </div>
             </div>
             <div className="input-group">
-              <label className="input-label">商品图片（最多9张）</label>
+              <label className="input-label">商品图片（最多9张） <span className="text-red-500">*</span></label>
               <div className="flex flex-wrap gap-2 mt-1.5">
                 {(form.images || []).map((url, i) => (
                   <div key={i} className="relative w-20 h-20 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-600 group">
-                    <img src={url} alt="" className="w-full h-full object-cover" />
+                    <button type="button" className="w-full h-full cursor-zoom-in" onClick={() => setPreviewImage(url)}>
+                      <img src={url} alt="" className="w-full h-full object-cover" />
+                    </button>
                     {i === 0 && (
                       <span className="absolute bottom-0 left-0 right-0 bg-blue-500/80 text-white text-[10px] text-center py-0.5">封面</span>
                     )}
@@ -201,6 +248,22 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
           </button>
         </div>
       </div>
+
+      {previewImage && (
+        <div className="modal-overlay" style={{ zIndex: 70 }}>
+          <div className="modal-content max-w-4xl">
+            <div className="modal-header">
+              <h2 className="modal-title">图片预览</h2>
+              <button className="modal-close" onClick={() => setPreviewImage(null)}>
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="modal-body flex items-center justify-center">
+              <img src={previewImage} alt="预览图片" className="max-w-full max-h-[70vh] object-contain rounded-lg" />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
