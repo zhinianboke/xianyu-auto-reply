@@ -475,6 +475,8 @@ export interface AIReplySettings {
   custom_prompts?: string
   ai_time_range_start?: string
   ai_time_range_end?: string
+  manual_reply_ai_pause_enabled?: boolean
+  manual_reply_ai_pause_minutes?: number
   // 兼容旧字段（前端内部使用）
   enabled?: boolean
 }
@@ -511,6 +513,12 @@ export const updateAIReplySettings = (cookieId: string, settings: Partial<AIRepl
   if (settings.custom_prompts !== undefined) payload.custom_prompts = settings.custom_prompts
   if (settings.ai_time_range_start !== undefined) payload.ai_time_range_start = settings.ai_time_range_start
   if (settings.ai_time_range_end !== undefined) payload.ai_time_range_end = settings.ai_time_range_end
+  if (settings.manual_reply_ai_pause_enabled !== undefined) {
+    payload.manual_reply_ai_pause_enabled = settings.manual_reply_ai_pause_enabled
+  }
+  if (settings.manual_reply_ai_pause_minutes !== undefined) {
+    payload.manual_reply_ai_pause_minutes = settings.manual_reply_ai_pause_minutes
+  }
   return put(`${AI_SETTINGS_PREFIX}/${cookieId}`, payload)
 }
 

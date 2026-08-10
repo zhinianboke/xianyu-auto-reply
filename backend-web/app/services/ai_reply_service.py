@@ -33,6 +33,8 @@ DEFAULT_AI_SETTINGS = {
     "custom_prompts": "",
     "ai_time_range_start": "",
     "ai_time_range_end": "",
+    "manual_reply_ai_pause_enabled": False,
+    "manual_reply_ai_pause_minutes": 10,
 }
 
 
@@ -61,6 +63,12 @@ class AIReplySettingsService:
         payload["custom_prompts"] = payload.get("custom_prompts") or ""
         payload["ai_time_range_start"] = payload.get("ai_time_range_start") or ""
         payload["ai_time_range_end"] = payload.get("ai_time_range_end") or ""
+        payload["manual_reply_ai_pause_enabled"] = bool(
+            payload.get("manual_reply_ai_pause_enabled", False)
+        )
+        payload["manual_reply_ai_pause_minutes"] = max(
+            1, min(1440, int(payload.get("manual_reply_ai_pause_minutes", 10) or 10))
+        )
         return payload
 
     async def get_settings(self, account: XYAccount) -> dict:
@@ -100,6 +108,14 @@ class AIReplySettingsService:
             merged["ai_time_range_start"] = payload.get("ai_time_range_start") or ""
         if "ai_time_range_end" in payload:
             merged["ai_time_range_end"] = payload.get("ai_time_range_end") or ""
+        if "manual_reply_ai_pause_enabled" in payload:
+            merged["manual_reply_ai_pause_enabled"] = bool(
+                payload.get("manual_reply_ai_pause_enabled")
+            )
+        if "manual_reply_ai_pause_minutes" in payload:
+            merged["manual_reply_ai_pause_minutes"] = int(
+                payload.get("manual_reply_ai_pause_minutes") or 10
+            )
         merged["provider_type"] = normalize_ai_provider_type(
             merged.get("provider_type"),
             merged.get("base_url"),
