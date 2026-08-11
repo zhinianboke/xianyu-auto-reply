@@ -15,6 +15,7 @@ import os
 import time
 import hashlib
 import aiohttp
+from decimal import Decimal, InvalidOperation
 from loguru import logger
 
 from app.services.xianyu.delivery_utils import (
@@ -23,14 +24,21 @@ from app.services.xianyu.delivery_utils import (
     recursive_replace_params
 )
 from app.services.xianyu.yifan_api_handler import YifanApiHandler
+from common.db.compat import db_manager
+from common.services.order_service import OrderDetailService
 from common.utils.fish_nick_utils import get_buyer_fish_nick
 from common.utils.response_field import extract_card_api_response_content
+from common.utils.xianyu_utils import trans_cookies
 
 
 # “卡券发送成功再确认发货”开关开启时，确认发货前同步等待服务端回执的最长超时（秒）。
 # 闲鱼对违规内容会快速返回带 reason 的拦截响应；正常消息服务端通常不回带相同 mid 的响应，
 # 故超时按“未拦截、视为已送达”处理，可通过环境变量 SEND_BEFORE_CONFIRM_WAIT_TIMEOUT 调整。
 SEND_BEFORE_CONFIRM_WAIT_TIMEOUT = float(os.getenv('SEND_BEFORE_CONFIRM_WAIT_TIMEOUT', '8'))
+
+# 发货前金额刷新必须为后续预检查和发货流程留出时间，
+# 避免调用方 HTTP 超时（当前为 30 秒）后重试同一订单。
+DELIVERY_AMOUNT_REFRESH_TIMEOUT = 15.0
 
 
 class AutoDeliveryHandler:
@@ -353,6 +361,122 @@ class AutoDeliveryHandler:
                 logger.info(f"【{self.cookie_id}】订单 {order_no} 发货失败原因已记录")
         except Exception as e:
             logger.error(f"【{self.cookie_id}】更新订单发货失败原因失败: {self._safe_str(e)}")
+
+    async def _refresh_order_amount_before_delivery(
+        self,
+        order_id: str,
+        item_id: str = None,
+        buyer_id: str = None,
+    ) -> bool:
+        """发货前刷新订单详情并确认金额为正数。
+
+        订单状态消息的详情拉取是异步的，自动发货可能在金额写入数据库前开始。
+        该方法只由实际发货入口调用，用订单详情接口完成一次带令牌重试的刷新，
+        随后重新读取数据库，避免用过期的 0 元缓存拦截正常订单。
+
+        Args:
+            order_id: 订单号
+            item_id: 商品ID
+            buyer_id: 买家ID
+
+        Returns:
+            刷新后订单金额大于 0 返回 True，否则返回 False。
+        """
+        try:
+            detail_service = OrderDetailService(self.cookie_id, self.cookies_str)
+            refreshed = await asyncio.wait_for(
+                detail_service.fetch_and_update_order_detail(
+                    order_id=order_id,
+                    item_id=item_id,
+                    buyer_id=buyer_id,
+                ),
+                timeout=DELIVERY_AMOUNT_REFRESH_TIMEOUT,
+            )
+            # 详情接口令牌过期重试后可能拿到新Cookie，立即同步到当前实例，
+            # 确保后续免拼/确认发货使用新令牌，而不是继续使用旧Cookie。
+            if detail_service.cookies_str and detail_service.cookies_str != self.cookies_str:
+                self.cookies_str = detail_service.cookies_str
+                self.cookies = trans_cookies(detail_service.cookies_str)
+                logger.info(f"【{self.cookie_id}】订单 {order_id} 发货前刷新已同步最新Cookie")
+            if not refreshed:
+                logger.warning(f"【{self.cookie_id}】订单 {order_id} 发货前刷新订单详情未成功")
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"【{self.cookie_id}】订单 {order_id} 发货前刷新订单详情超时"
+            )
+        except Exception as e:
+            logger.warning(
+                f"【{self.cookie_id}】订单 {order_id} 发货前刷新订单详情异常: {self._safe_str(e)}"
+            )
+
+        try:
+            latest_order = db_manager.get_order_by_id(order_id)
+            latest_amount = latest_order.get("amount") if latest_order else None
+            if latest_amount is not None and Decimal(str(latest_amount)) > 0:
+                logger.info(
+                    f"【{self.cookie_id}】订单 {order_id} 发货前刷新金额成功: {latest_amount}"
+                )
+                return True
+        except (InvalidOperation, TypeError, ValueError) as e:
+            logger.warning(
+                f"【{self.cookie_id}】订单 {order_id} 发货前刷新金额解析失败: {self._safe_str(e)}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"【{self.cookie_id}】订单 {order_id} 发货前读取最新金额异常: {self._safe_str(e)}"
+            )
+
+        return False
+
+    async def _ensure_order_amount_before_delivery(
+        self,
+        order_id: str,
+        item_id: str = None,
+        buyer_id: str = None,
+    ) -> bool:
+        """发货前检查订单金额，必要时刷新订单详情。
+
+        正常金额不会调用详情接口；只有数据库金额明确为 0 或负数时才刷新。
+        订单不存在或金额为空时沿用原有流程，避免影响尚未完成建档的消息场景。
+
+        Args:
+            order_id: 订单号
+            item_id: 商品ID
+            buyer_id: 买家ID
+
+        Returns:
+            金额有效或无需执行金额校验返回 True，否则返回 False。
+        """
+        try:
+            order_info = db_manager.get_order_by_id(order_id)
+            if not order_info:
+                return True
+
+            order_amount = order_info.get('amount')
+            if order_amount is None:
+                return True
+
+            if Decimal(str(order_amount)) > 0:
+                return True
+        except (InvalidOperation, TypeError, ValueError) as e:
+            logger.warning(
+                f"【{self.cookie_id}】订单 {order_id} 金额解析失败，拦截发货: {self._safe_str(e)}"
+            )
+            return False
+        except Exception as e:
+            logger.warning(
+                f"【{self.cookie_id}】订单 {order_id} 发货前读取金额异常，拦截发货: {self._safe_str(e)}"
+            )
+            return False
+
+        logger.warning(
+            f"【{self.cookie_id}】订单 {order_id} 当前金额为 {order_amount}，发货前刷新订单详情"
+        )
+        return await self._refresh_order_amount_before_delivery(
+            order_id=order_id,
+            item_id=item_id,
+            buyer_id=buyer_id,
+        )
 
     async def send_delivery_failure_notification(self, send_user_name, send_user_id, item_id, error_message, chat_id):
         """发送发货通知 - 直接调用NotificationManager"""
@@ -967,21 +1091,19 @@ class AutoDeliveryHandler:
             # 订单ID已提取，将在自动发货时进行确认发货处理
             logger.info(f'[{msg_time}] 【{self.cookie_id}】提取到订单ID: {order_id}，将在自动发货时处理确认发货')
 
-            # 检查订单金额，金额为0禁止发货
-            try:
-                from common.db.compat import db_manager
-                order_check = db_manager.get_order_by_id(order_id)
-                if order_check:
-                    order_amount = order_check.get('amount')
-                    if order_amount is not None:
-                        from decimal import Decimal
-                        if Decimal(str(order_amount)) <= 0:
-                            logger.warning(f'[{msg_time}] 【{self.cookie_id}】❌ 订单 {order_id} 金额为 {order_amount}，禁止自动发货')
-                            # 记录失败原因（对外展示统一提示为账号掉线，便于运营快速定位真实原因）
-                            await self._update_delivery_fail_reason(order_id, "账号已掉线，请重新登录")
-                            return
-            except Exception as e:
-                logger.warning(f'[{msg_time}] 【{self.cookie_id}】检查订单金额异常: {self._safe_str(e)}')
+            # 检查订单金额，金额为0时仅在实际发货入口刷新一次
+            if not await self._ensure_order_amount_before_delivery(
+                order_id=order_id,
+                item_id=item_id,
+                buyer_id=send_user_id,
+            ):
+                fail_reason = "订单金额为0，发货前刷新订单详情失败，请稍后重试"
+                logger.warning(
+                    f'[{msg_time}] 【{self.cookie_id}】❌ 订单 {order_id} {fail_reason}'
+                )
+                # 记录真实失败原因，避免将金额/API问题误报为账号掉线。
+                await self._update_delivery_fail_reason(order_id, fail_reason)
+                return
 
             # 禁止发货统一拦截：调用 pre_delivery_check_and_close 完成"取设置→评价
             # 检查→命中后发消息+写 fail_reason+按开关关闭订单"全部链路。

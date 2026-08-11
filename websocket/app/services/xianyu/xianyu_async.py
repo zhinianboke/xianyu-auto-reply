@@ -33,6 +33,9 @@ HEARTBEAT_TIMEOUT = int(os.getenv('HEARTBEAT_TIMEOUT', '30'))
 TOKEN_REFRESH_INTERVAL = int(os.getenv('TOKEN_REFRESH_INTERVAL', '72000'))
 TOKEN_RETRY_INTERVAL = int(os.getenv('TOKEN_RETRY_INTERVAL', '7200'))
 
+# 自动发货被账号开关拦截时写入订单的说明，便于在订单管理中定位原因。
+AUTO_CONFIRM_DISABLED_REASON = "自动确认发货开关未开启，未执行自动发货，请手动发货"
+
 DEFAULT_HEADERS = {
     'accept': 'application/json',
     'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
@@ -809,6 +812,20 @@ class XianyuAsync:
                                                 # 小刀订单 + allow：先免拼再走自动发货流程（参照_handle_card_message的处理）
                                                 # card_only 时订单已被关闭，调免拼无意义
                                                 if order_info.get('is_bargain') and order_buyer_id and pre_action == 'allow':
+                                                    amount_ok = await self.auto_delivery_handler._ensure_order_amount_before_delivery(
+                                                        order_id=order_no,
+                                                        item_id=order_item_id,
+                                                        buyer_id=order_buyer_id,
+                                                    )
+                                                    if not amount_ok:
+                                                        fail_reason = "订单金额为0，发货前刷新订单详情失败，请稍后重试"
+                                                        logger.warning(
+                                                            f"【{self.cookie_id}】重发货触发：订单 {order_no} {fail_reason}"
+                                                        )
+                                                        await self.auto_delivery_handler._update_delivery_fail_reason(
+                                                            order_no, fail_reason
+                                                        )
+                                                        return
                                                     logger.info(f"【{self.cookie_id}】重发货触发: 检测到小刀订单，先调用免拼接口: order_id={order_no}, buyer_id={order_buyer_id}")
                                                     freeshipping_result = await self.auto_delivery_handler.auto_freeshipping(
                                                         order_no, order_item_id, order_buyer_id
@@ -885,6 +902,9 @@ class XianyuAsync:
                             await self._handle_auto_delivery_from_message(parsed_message, ws)
                         else:
                             logger.info(f"【{self.cookie_id}】⚠️ 自动确认发货已关闭，跳过自动发货")
+                            await self._record_auto_confirm_disabled_reason(
+                                self._extract_order_id(raw_message)
+                            )
                         # 自动发货消息不进行自动回复，但仍然发送通知
                         # auto_reply_service.handle_chat_message 中已经处理了通知发送
                         return
@@ -928,6 +948,9 @@ class XianyuAsync:
                             await self._handle_auto_delivery_from_message(parsed_message, ws)
                         else:
                             logger.info(f"【{self.cookie_id}】⚠️ 自动确认发货已关闭，跳过自动发货")
+                            await self._record_auto_confirm_disabled_reason(
+                                self._extract_order_id(raw_message)
+                            )
                     else:
                         # 非发货触发的卡片更新消息（如"买家已拍下，待付款"等），交给auto_reply_service处理自动回复
                         logger.info(f"【{self.cookie_id}】卡片更新消息触发自动回复: {send_message}")
@@ -1068,6 +1091,25 @@ class XianyuAsync:
         except Exception as e:
             logger.error(f"【{self.cookie_id}】获取自动确认设置失败: {e}")
             return False
+
+    async def _record_auto_confirm_disabled_reason(self, order_id: str) -> None:
+        """记录自动确认发货开关关闭导致的跳过原因。
+
+        Args:
+            order_id: 闲鱼订单号。
+        """
+        if not order_id:
+            logger.warning(f"【{self.cookie_id}】自动发货被开关拦截，但未提取到订单号，无法记录订单原因")
+            return
+
+        if not getattr(self, "auto_delivery_handler", None):
+            logger.warning(f"【{self.cookie_id}】自动发货处理器未初始化，无法记录订单 {order_id} 的失败原因")
+            return
+
+        await self.auto_delivery_handler._update_delivery_fail_reason(
+            order_id,
+            AUTO_CONFIRM_DISABLED_REASON,
+        )
     
     def is_confirm_before_send_enabled(self) -> bool:
         """检查是否开启发货成功再发卡券开关"""
@@ -1477,6 +1519,20 @@ class XianyuAsync:
 
                             # 仅 allow 时才调用免拼接口；card_only 时订单已被关闭，调免拼无意义
                             if pre_action == 'allow':
+                                amount_ok = await self.auto_delivery_handler._ensure_order_amount_before_delivery(
+                                    order_id=order_id,
+                                    item_id=item_id,
+                                    buyer_id=send_user_id,
+                                )
+                                if not amount_ok:
+                                    fail_reason = "订单金额为0，发货前刷新订单详情失败，请稍后重试"
+                                    logger.warning(
+                                        f"【{self.cookie_id}】小刀卡片：订单 {order_id} {fail_reason}"
+                                    )
+                                    await self.auto_delivery_handler._update_delivery_fail_reason(
+                                        order_id, fail_reason
+                                    )
+                                    return
                                 freeshipping_result = await self.auto_delivery_handler.auto_freeshipping(
                                     order_id, item_id, send_user_id
                                 )
@@ -1515,6 +1571,9 @@ class XianyuAsync:
                             )
                         else:
                             logger.warning(f"【{self.cookie_id}】auto_delivery_handler未初始化，跳过小刀处理")
+                else:
+                    logger.info(f"【{self.cookie_id}】⚠️ 自动确认发货已关闭，跳过小刀订单自动发货")
+                    await self._record_auto_confirm_disabled_reason(order_id)
             else:
                 logger.debug(f"【{self.cookie_id}】收到卡片消息: {card_title}")
                 
