@@ -1227,8 +1227,13 @@ class CookieTokenManager:
                 logger.warning(f"【{self.cookie_id}】Token刷新成功，已重置消息接收时间标识")
                 logger.info(f"【{self.cookie_id}】Token刷新成功，新Token: {new_token}")
                 self.last_token_refresh_status = "success"
-                # 缓存token和device_id到数据库
+                # 必须在 _set_cached_token 覆盖 _cached_token_in_use 前捕获，否则永远为 False
+                token_changed = new_token != self._cached_token_in_use
                 await self._set_cached_token(new_token, self.device_id)
+                # Token 变化后旧连接的 Token 已失效，不重连会进入"心跳正常但收不到消息"的僵尸状态
+                if token_changed:
+                    logger.info(f"【{self.cookie_id}】Token已变化，触发WebSocket重连以使用新Token")
+                    await self._reconnect_websocket_for_renewed_token()
                 return new_token
 
             # Session过期先于滑块判断：Cookie 已失效时滑块验证结果同样无效，
