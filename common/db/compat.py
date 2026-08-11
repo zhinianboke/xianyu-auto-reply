@@ -659,6 +659,8 @@ class DBManagerCompat:
                     'order_id': order.order_no,
                     'account_id': order.account_id,
                     'item_id': order.item_id,
+                    'buyer_nick': order.buyer_nick,
+                    'buyer_fish_nick': order.buyer_fish_nick,
                     'buyer_id': order.buyer_id,
                     'chat_id': order.chat_id,
                     'status': order.status,

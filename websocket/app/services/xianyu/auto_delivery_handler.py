@@ -478,12 +478,20 @@ class AutoDeliveryHandler:
             buyer_id=buyer_id,
         )
 
-    async def send_delivery_failure_notification(self, send_user_name, send_user_id, item_id, error_message, chat_id):
+    async def send_delivery_failure_notification(self, send_user_name, send_user_id, item_id, error_message,
+                                                 chat_id, order_id=None):
         """发送发货通知 - 直接调用NotificationManager"""
         try:
             from app.services.xianyu.notification_manager import NotificationManager
             notification_manager = NotificationManager(self.cookie_id)
-            return await notification_manager.send_delivery_failure_notification(send_user_name, send_user_id, item_id, error_message, chat_id)
+            return await notification_manager.send_delivery_failure_notification(
+                send_user_name,
+                send_user_id,
+                item_id,
+                error_message,
+                chat_id,
+                order_id=order_id,
+            )
         except Exception as e:
             logger.error(f"【{self.cookie_id}】发送发货通知失败: {self._safe_str(e)}")
     
@@ -1508,6 +1516,7 @@ class AutoDeliveryHandler:
                                         send_user_name, send_user_id, item_id,
                                         send_before_confirm_fail_msg,
                                         chat_id,
+                                        order_id=order_id,
                                     )
                             else:
                                 send_before_confirm_fail_msg = "⚠️ 卡券已发送成功，但自动确认发货已关闭，请手动确认发货"
@@ -1519,6 +1528,7 @@ class AutoDeliveryHandler:
                                 send_user_name, send_user_id, item_id,
                                 send_before_confirm_fail_msg,
                                 chat_id,
+                                order_id=order_id,
                             )
                         elif send_before_confirm_active and any_send_failed:
                             send_before_confirm_fail_msg = "⚠️ 卡券发送存在失败，已跳过确认发货，请检查买家是否收到完整内容后手动确认发货"
@@ -1527,13 +1537,17 @@ class AutoDeliveryHandler:
                                 send_user_name, send_user_id, item_id,
                                 send_before_confirm_fail_msg,
                                 chat_id,
+                                order_id=order_id,
                             )
 
                         # 如果有消息发送失败，额外发通知告知（不影响订单状态）
                         if any_send_failed:
                             fail_notify_msg = "部分发货消息发送失败（WebSocket连接断开），请检查买家是否收到完整内容"
                             logger.error(f'[{msg_time}] 【{self.cookie_id}】订单 {order_id} {fail_notify_msg}')
-                            await self.send_delivery_failure_notification(send_user_name, send_user_id, item_id, fail_notify_msg, chat_id)
+                            await self.send_delivery_failure_notification(
+                                send_user_name, send_user_id, item_id, fail_notify_msg, chat_id,
+                                order_id=order_id,
+                            )
 
                         # 发送成功通知（仅 IM 通知，fail_reason 写库延后到 update_order_delivery_info 之后，
                         # 否则会被 update_order_delivery_info 内部的 delivery_fail_reason=None 清空）
@@ -1545,6 +1559,7 @@ class AutoDeliveryHandler:
                                 f"⚠️ 对接卡券暂不支持多数量发货：订单数量 {quantity_to_send} 张，"
                                 f"已自动发送 {len(delivery_contents)} 张，剩余 {remaining} 张请手动补发或改用自有卡券",
                                 chat_id,
+                                order_id=order_id,
                             )
                         elif quantity_degraded_for_fixed_content:
                             # text/image 固定内容卡券退化场景：商家应改用 data/api 类型卡券支持多数量
@@ -1555,11 +1570,19 @@ class AutoDeliveryHandler:
                                 f"订单数量 {quantity_to_send} 张，仅发送 1 张固定内容（剩余 {remaining} 张未发）。"
                                 f"如需多数量发送不同卡密，请改用 data 或 api 类型卡券",
                                 chat_id,
+                                order_id=order_id,
                             )
                         elif len(delivery_contents) > 1:
-                            await self.send_delivery_failure_notification(send_user_name, send_user_id, item_id, f"多数量发货成功，共发送 {len(delivery_contents)} 个卡券", chat_id)
+                            await self.send_delivery_failure_notification(
+                                send_user_name, send_user_id, item_id,
+                                f"多数量发货成功，共发送 {len(delivery_contents)} 个卡券", chat_id,
+                                order_id=order_id,
+                            )
                         else:
-                            await self.send_delivery_failure_notification(send_user_name, send_user_id, item_id, "发货成功", chat_id)
+                            await self.send_delivery_failure_notification(
+                                send_user_name, send_user_id, item_id, "发货成功", chat_id,
+                                order_id=order_id,
+                            )
                         
                         # 更新订单状态和发货信息（不受消息发送结果影响）
                         # card_only 场景：订单已被关闭，仅记录补发卡券内容，不动 status / fail_reason
@@ -1670,7 +1693,10 @@ class AutoDeliveryHandler:
                             # 更新订单发货失败原因
                             await self._update_delivery_fail_reason(order_id, fail_msg)
                             # 发送自动发货失败通知
-                            await self.send_delivery_failure_notification(send_user_name, send_user_id, item_id, fail_msg, chat_id)
+                            await self.send_delivery_failure_notification(
+                                send_user_name, send_user_id, item_id, fail_msg, chat_id,
+                                order_id=order_id,
+                            )
 
                 except Exception as e:
                     fail_msg = f"自动发货处理异常: {str(e)}"
@@ -1686,7 +1712,10 @@ class AutoDeliveryHandler:
                         # 更新订单发货失败原因
                         await self._update_delivery_fail_reason(order_id, fail_msg)
                         # 发送自动发货异常通知
-                        await self.send_delivery_failure_notification(send_user_name, send_user_id, item_id, fail_msg, chat_id)
+                        await self.send_delivery_failure_notification(
+                            send_user_name, send_user_id, item_id, fail_msg, chat_id,
+                            order_id=order_id,
+                        )
 
                 logger.info(f'[{msg_time}] 【{self.cookie_id}】自动发货处理完成: {lock_key}')
             
