@@ -23,7 +23,8 @@ from app.services.item_service import ItemService
 from common.models.publish_log import PublishLog
 from common.models.xy_account import XYAccount
 from common.services.publish_execution_service import execute_single_publish
-from common.services.xianyu_publish_service import create_xianyu_publisher
+from common.services.xianyu_publish_service import publish_single_item
+from common.utils.xianyu_utils import canonical_goofish_item_url
 
 
 from common.utils.time_utils import safe_isoformat
@@ -230,7 +231,7 @@ class PublishExecutorService:
         materials: List[dict],
         batch_id: str = None,
     ) -> Dict[str, Any]:
-        """批量发布（多账号×多商品，每账号复用同一浏览器实例）"""
+        """批量发布（多账号×多商品，逐条调用闲鱼发布接口）。"""
         if not batch_id:
             batch_id = str(uuid.uuid4())
         log_svc = PublishLogService(self.session)
@@ -246,9 +247,11 @@ class PublishExecutorService:
         account_map = await self._get_account_map(account_ids, user_id)
 
         for account_id in account_ids:
+            # 批量发布的账号列表也是明确选择结果，每个商品只能发布到当前遍历的账号。
             account = account_map.get(account_id)
             cookies_str = account.cookie if account and account.cookie else ""
-            if not cookies_str:
+            account_status = (account.status or "").strip().lower() if account else ""
+            if not account or account_status != "active" or not cookies_str.strip():
                 await PublishBatchStatusService.mark_account_sync_skipped(
                     batch_id=batch_id,
                     account_id=account_id,
@@ -273,28 +276,11 @@ class PublishExecutorService:
 
             account_success_count = 0
             queue_state = await address_svc.build_queue_state(account_id)
-            publisher = create_xianyu_publisher(static_root=STATIC_ROOT)
-            try:
-                for idx, material in enumerate(materials):
-                    try:
-                        resolved_address = await address_svc.resolve_publish_address(account_id, material, queue_state)
-                    except ValueError as address_error:
-                        failed_count += 1
-                        log = await log_svc.create_log(
-                            user_id=user_id,
-                            account_id=account_id,
-                            title=material.get("title", ""),
-                            description=material.get("description", ""),
-                            price=str(material.get("price", "")),
-                            material_id=material.get("id"),
-                            batch_id=batch_id,
-                            status="failed",
-                            error_message=str(address_error),
-                        )
-                        log_ids.append(log.id)
-                        continue
-
-                    publish_material = resolved_address.apply_to_item_data(material)
+            for idx, material in enumerate(materials):
+                try:
+                    resolved_address = await address_svc.resolve_publish_address(account_id, material, queue_state)
+                except ValueError as address_error:
+                    failed_count += 1
                     log = await log_svc.create_log(
                         user_id=user_id,
                         account_id=account_id,
@@ -303,50 +289,66 @@ class PublishExecutorService:
                         price=str(material.get("price", "")),
                         material_id=material.get("id"),
                         batch_id=batch_id,
-                        status="publishing",
-                        **resolved_address.to_log_fields(),
+                        status="failed",
+                        error_message=str(address_error),
                     )
                     log_ids.append(log.id)
+                    continue
 
-                    try:
-                        reuse = idx > 0
-                        result = await publisher.publish_item(
-                            item_data=publish_material,
-                            cookie_data={"cookie": cookies_str},
-                            reuse_browser=reuse,
-                            should_close=False,
+                publish_material = resolved_address.apply_to_item_data(material)
+                log = await log_svc.create_log(
+                    user_id=user_id,
+                    account_id=account_id,
+                    title=material.get("title", ""),
+                    description=material.get("description", ""),
+                    price=str(material.get("price", "")),
+                    material_id=material.get("id"),
+                    batch_id=batch_id,
+                    status="publishing",
+                    **resolved_address.to_log_fields(),
+                )
+                log_ids.append(log.id)
+
+                try:
+                    result = await publish_single_item(
+                        item_data=publish_material,
+                        cookie=cookies_str,
+                        account_id=account.account_id,
+                        owner_id=user_id,
+                        static_root=STATIC_ROOT,
+                    )
+                    cookies_str = result.get("cookies_str") or cookies_str
+                    account.cookie = cookies_str
+
+                    if result.get("success"):
+                        success_count += 1
+                        account_success_count += 1
+                        await log_svc.update_log(
+                            log_id=log.id,
+                            status="success",
+                            item_url=result.get("item_url"),
+                            item_id=result.get("item_id"),
+                        )
+                    else:
+                        failed_count += 1
+                        await log_svc.update_log(
+                            log_id=log.id,
+                            status="failed",
+                            error_message=result.get("message"),
                         )
 
-                        if result.get("success"):
-                            success_count += 1
-                            account_success_count += 1
-                            await log_svc.update_log(
-                                log_id=log.id,
-                                status="success",
-                                item_url=result.get("item_url"),
-                                item_id=result.get("item_id"),
-                            )
-                        else:
-                            failed_count += 1
-                            await log_svc.update_log(
-                                log_id=log.id,
-                                status="failed",
-                                error_message=result.get("message"),
-                            )
+                    if idx < len(materials) - 1:
+                        await asyncio.sleep(3)
 
-                        if idx < len(materials) - 1:
-                            await asyncio.sleep(3)
-
-                    except Exception as exc:
-                        failed_count += 1
-                        logger.error(f"批量发布单品异常: account={account_id}, title={material.get('title')}: {exc}")
-                        await log_svc.update_log(log_id=log.id, status="failed", error_message=str(exc))
-
-            finally:
-                await publisher.close()
+                except Exception as exc:
+                    failed_count += 1
+                    logger.error(f"批量接口发布单品异常: account={account_id}, title={material.get('title')}: {exc}")
+                    await log_svc.update_log(log_id=log.id, status="failed", error_message=str(exc))
 
             if account_success_count > 0 and account is not None:
                 try:
+                    # 接口调用可能刷新令牌，使用最新 Cookie 执行发布后的商品同步。
+                    account.cookie = cookies_str
                     await PublishBatchStatusService.mark_account_sync_running(
                         batch_id=batch_id,
                         account_id=account_id,
@@ -388,6 +390,9 @@ class PublishExecutorService:
 
 def _log_to_dict(log: PublishLog) -> dict:
     """将发布日志模型转为字典"""
+    item_url = log.item_url
+    if log.item_id:
+        item_url = canonical_goofish_item_url(log.item_id)
     return {
         "id": log.id,
         "user_id": log.user_id,
@@ -398,7 +403,7 @@ def _log_to_dict(log: PublishLog) -> dict:
         "material_id": log.material_id,
         "batch_id": log.batch_id,
         "status": log.status,
-        "item_url": log.item_url,
+        "item_url": item_url,
         "item_id": log.item_id,
         "error_message": log.error_message,
         "resolved_address_id": log.resolved_address_id,

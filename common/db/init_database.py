@@ -1256,13 +1256,31 @@ class DatabaseInitializer:
                 price DECIMAL(12,2) NOT NULL COMMENT '价格',
                 original_price DECIMAL(12,2) DEFAULT NULL COMMENT '原价（划线价）',
                 category VARCHAR(100) DEFAULT NULL COMMENT '商品分类',
+                platform_category_id VARCHAR(64) DEFAULT NULL COMMENT '平台末级分类ID（catId）',
+                platform_category_name VARCHAR(100) DEFAULT NULL COMMENT '平台末级分类名称（catName）',
+                platform_channel_category_id VARCHAR(64) DEFAULT NULL COMMENT '平台频道分类ID（channelCatId）',
+                platform_channel_category_name VARCHAR(100) DEFAULT NULL COMMENT '平台频道分类名称（channelCatName）',
+                platform_leaf_id VARCHAR(64) DEFAULT NULL COMMENT '平台叶子分类ID（leafId）',
+                platform_tb_category_id VARCHAR(64) DEFAULT NULL COMMENT '淘宝分类ID（tbCatId）',
+                platform_category_path JSON DEFAULT NULL COMMENT '平台多级分类路径（各级ID和名称）',
+                platform_attributes JSON DEFAULT NULL COMMENT '平台属性标签列表（itemLabelExtList）',
+                category_source VARCHAR(20) NOT NULL DEFAULT 'manual' COMMENT '分类来源：manual-手动，recommendation-推荐',
+                category_confidence DECIMAL(8,6) DEFAULT NULL COMMENT '分类推荐置信度',
                 images JSON DEFAULT NULL COMMENT '图片URL列表（最多9张）',
+                videos JSON DEFAULT NULL COMMENT '视频素材列表（URL、文件ID、尺寸等）',
+                specifications JSON DEFAULT NULL COMMENT '商品规格列表',
+                sku_rows JSON DEFAULT NULL COMMENT '规格组合价格和库存列表',
+                quantity INT NOT NULL DEFAULT 1 COMMENT '发布数量',
                 delivery_method VARCHAR(20) DEFAULT 'express' COMMENT '发货方式：express-快递, pickup-自提',
+                shipping_method VARCHAR(20) DEFAULT 'free' COMMENT '运费方式：free/distance/fixed/template/none',
+                support_pickup TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否支持自提',
                 postage DECIMAL(8,2) DEFAULT 0 COMMENT '邮费，0表示包邮',
                 address VARCHAR(200) DEFAULT NULL COMMENT '宝贝所在地',
+                address_expected_text VARCHAR(200) DEFAULT NULL COMMENT '所在地选择时的期望文本',
                 brand VARCHAR(100) DEFAULT NULL COMMENT '品牌',
                 `condition` VARCHAR(20) DEFAULT '全新' COMMENT '成色',
                 remark VARCHAR(500) DEFAULT NULL COMMENT '备注（仅内部使用）',
+                is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_user_id (user_id),
@@ -1717,6 +1735,26 @@ class DatabaseInitializer:
     COLUMN_MIGRATIONS = {
         "xy_token_cache": [
             ("renew_expire_at", "DATETIME DEFAULT NULL COMMENT '续期Token过期时间'", "expire_at"),
+        ],
+        "xy_product_materials": [
+            ("platform_category_id", "VARCHAR(64) DEFAULT NULL COMMENT '平台末级分类ID（catId）'", "category"),
+            ("platform_category_name", "VARCHAR(100) DEFAULT NULL COMMENT '平台末级分类名称（catName）'", "platform_category_id"),
+            ("platform_channel_category_id", "VARCHAR(64) DEFAULT NULL COMMENT '平台频道分类ID（channelCatId）'", "platform_category_name"),
+            ("platform_channel_category_name", "VARCHAR(100) DEFAULT NULL COMMENT '平台频道分类名称（channelCatName）'", "platform_channel_category_id"),
+            ("platform_leaf_id", "VARCHAR(64) DEFAULT NULL COMMENT '平台叶子分类ID（leafId）'", "platform_channel_category_name"),
+            ("platform_tb_category_id", "VARCHAR(64) DEFAULT NULL COMMENT '淘宝分类ID（tbCatId）'", "platform_leaf_id"),
+            ("platform_category_path", "JSON DEFAULT NULL COMMENT '平台多级分类路径（各级ID和名称）'", "platform_tb_category_id"),
+            ("platform_attributes", "JSON DEFAULT NULL COMMENT '平台属性标签列表（itemLabelExtList）'", "platform_category_path"),
+            ("category_source", "VARCHAR(20) NOT NULL DEFAULT 'manual' COMMENT '分类来源：manual-手动，recommendation-推荐'", "platform_attributes"),
+            ("category_confidence", "DECIMAL(8,6) DEFAULT NULL COMMENT '分类推荐置信度'", "category_source"),
+            ("videos", "JSON DEFAULT NULL COMMENT '视频素材列表（URL、文件ID、尺寸等）'", "images"),
+            ("specifications", "JSON DEFAULT NULL COMMENT '商品规格列表'", "videos"),
+            ("sku_rows", "JSON DEFAULT NULL COMMENT '规格组合价格和库存列表'", "specifications"),
+            ("quantity", "INT NOT NULL DEFAULT 1 COMMENT '发布数量'", "sku_rows"),
+            ("shipping_method", "VARCHAR(20) DEFAULT 'free' COMMENT '运费方式：free/distance/fixed/template/none'", "delivery_method"),
+            ("support_pickup", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否支持自提'", "shipping_method"),
+            ("address_expected_text", "VARCHAR(200) DEFAULT NULL COMMENT '所在地选择时的期望文本'", "address"),
+            ("is_deleted", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）'", "remark"),
         ],
         "xy_listing_monitor_tasks": [
             ("monitor_type", "VARCHAR(20) NOT NULL DEFAULT 'listing' COMMENT '监控类型：listing-上新监控，price_drop-降价监控'", "owner_id"),
@@ -2863,6 +2901,23 @@ class DatabaseInitializer:
                     logger.info("✓ xy_product_materials: 创建 idx_pm_user_created 复合索引")
             except Exception as e:
                 logger.warning(f"✗ xy_product_materials idx_pm_user_created 创建失败: {e}")
+
+            # 为 xy_product_materials 补建平台分类索引
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_product_materials'
+                    AND INDEX_NAME = 'idx_pm_platform_category'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    await conn.execute(text(
+                        "ALTER TABLE xy_product_materials ADD INDEX idx_pm_platform_category (platform_category_id)"
+                    ))
+                    logger.info("✓ xy_product_materials: 创建 idx_pm_platform_category 索引")
+            except Exception as e:
+                logger.warning(f"✗ xy_product_materials idx_pm_platform_category 创建失败: {e}")
 
             # 为 xy_publish_logs 补建 (user_id, created_at) 复合索引
             try:

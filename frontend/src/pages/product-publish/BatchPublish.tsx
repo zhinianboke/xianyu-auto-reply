@@ -41,6 +41,7 @@ export function BatchPublish() {
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [materialSearch, setMaterialSearch] = useState('')
   const accountNameMap = new Map(accounts.map((account: any) => [account.id, account.note || account.id]))
+  const availableAccounts = accounts.filter((account: any) => account.enabled !== false)
 
   const getSyncStatusLabel = (status: BatchAccountStatus['sync_status']) => {
     if (status === 'success') return '已成功'
@@ -186,7 +187,7 @@ export function BatchPublish() {
 
   const toggleAccount = (id: string) => setSelectedAccounts(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
   const toggleMaterial = (id: number) => setSelectedMaterials(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
-  const toggleAllAccounts = () => selectedAccounts.size === accounts.length ? setSelectedAccounts(new Set()) : setSelectedAccounts(new Set(accounts.map((a: any) => a.id)))
+  const toggleAllAccounts = () => selectedAccounts.size === availableAccounts.length ? setSelectedAccounts(new Set()) : setSelectedAccounts(new Set(availableAccounts.map((a: any) => a.id)))
   const toggleAllMaterials = () => {
     const ids = filteredMaterials.map(m => m.id)
     const allSelected = ids.length > 0 && ids.every(id => selectedMaterials.has(id))
@@ -227,7 +228,7 @@ export function BatchPublish() {
           <div className="vben-card-header">
             <h2 className="vben-card-title">选择账号</h2>
             <button className="text-sm text-blue-500 hover:underline" onClick={toggleAllAccounts}>
-              {selectedAccounts.size === accounts.length && accounts.length > 0 ? '取消全选' : '全选'}
+              {selectedAccounts.size === availableAccounts.length && availableAccounts.length > 0 ? '取消全选' : '全选'}
             </button>
           </div>
           <div className="vben-card-body">
@@ -239,17 +240,18 @@ export function BatchPublish() {
               <div className="space-y-1 max-h-72 overflow-y-auto">
                 {accounts.map((a: any) => {
                   const checked = selectedAccounts.has(a.id)
+                  const unavailable = a.enabled === false
                   return (
-                    <label key={a.id} className={`flex items-center gap-3 p-2.5 rounded-lg cursor-pointer transition-colors ${checked ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
+                    <label key={a.id} className={`flex items-center gap-3 p-2.5 rounded-lg transition-colors ${unavailable ? 'cursor-not-allowed opacity-50' : `cursor-pointer ${checked ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-700'}`}`}>
                       <input type="checkbox" className="w-4 h-4 text-blue-600 rounded accent-blue-500"
-                        checked={checked} onChange={() => toggleAccount(a.id)} />
+                        checked={checked} disabled={unavailable} onChange={() => toggleAccount(a.id)} />
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium truncate text-slate-800 dark:text-slate-100">
                           {a.note || a.id}
                         </p>
                         {a.note && <p className="text-xs text-slate-400 truncate">{a.id}</p>}
                       </div>
-                      {a.enabled !== false && <span className="badge-success flex-shrink-0">启用</span>}
+                      <span className={`${unavailable ? 'badge-secondary' : 'badge-success'} flex-shrink-0`}>{unavailable ? '未启动' : '已启动'}</span>
                     </label>
                   )
                 })}

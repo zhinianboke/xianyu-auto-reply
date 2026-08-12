@@ -47,6 +47,25 @@ export interface PublishAddressListData {
   total_pages: number
 }
 
+export interface AmapInputTip {
+  id: string
+  name: string
+  district: string
+  adcode: string
+  location: string
+  address: string
+  typecode: string
+  city: string
+  search_keyword: string
+  expected_text: string
+}
+
+export interface AmapInputTipsData {
+  tips: AmapInputTip[]
+  count: number
+  keywords: string
+}
+
 export interface PublishAddressSaveParams {
   address: string
 }
@@ -77,6 +96,14 @@ export const getPublishAddresses = (
 
 export const getPublishAddressAccountOptions = async (): Promise<ApiResponse<{ list: PublishAddressAccountOption[] }>> => {
   return get(`${PREFIX}/account-options`)
+}
+
+export const searchAmapInputTips = async (
+  keywords: string,
+  city = '全国'
+): Promise<ApiResponse<AmapInputTipsData>> => {
+  const params = new URLSearchParams({ keywords, city })
+  return get(`${PREFIX}/input-tips?${params.toString()}`)
 }
 
 export const createPublishAddress = async (params: PublishAddressSaveParams): Promise<ApiResponse<{ address: PublishAddress }>> => {

@@ -88,9 +88,15 @@ async def execute_single_publish(
     log_svc = PublishLogService(session)
     address_svc = PublishAddressService(session)
 
+    # 单品发布严格使用前端选择的账号。账号不可用时直接失败，不能把商品发布到其他账号。
     account = await _get_account(session=session, account_id=account_id, user_id=user_id)
     cookies_str = account.cookie if account and account.cookie else ""
-    if not cookies_str:
+    account_status = (account.status or "").strip().lower() if account else ""
+    if (
+        not account
+        or account_status != "active"
+        or not cookies_str.strip()
+    ):
         log = await log_svc.create_log(
             user_id=user_id,
             account_id=account_id,
@@ -99,9 +105,13 @@ async def execute_single_publish(
             price=str(item_data.get("price", "")),
             material_id=item_data.get("id"),
             status="failed",
-            error_message="账号不存在或无权使用",
+            error_message="选择的闲鱼账号不存在、未启动或缺少Cookie",
         )
-        return {"success": False, "message": "账号不存在或无权使用", "log_id": log.id}
+        return {
+            "success": False,
+            "message": "选择的闲鱼账号不存在、未启动或缺少Cookie",
+            "log_id": log.id,
+        }
 
     try:
         resolved_address = await address_svc.resolve_publish_address(account_id, item_data)
@@ -136,8 +146,19 @@ async def execute_single_publish(
         result = await publish_single_item(
             item_data=publish_item_data,
             cookie=cookies_str,
+            account_id=account.account_id,
+            owner_id=user_id,
             static_root=static_root,
         )
+        if result.get("account_invalid"):
+            logger.warning(
+                f"单品发布选定账号不可用，按要求不切换账号: account_id={account.account_id}, "
+                f"error={result.get('message') or '账号失效'}"
+            )
+        # mtop 令牌刷新可能返回合并后的 Cookie，后续发布后的同步必须继续使用该账号的新 Cookie。
+        refreshed_cookies = result.get("cookies_str")
+        if refreshed_cookies:
+            account.cookie = refreshed_cookies
     except Exception as exc:
         pub_error = exc
         logger.error(f"单品发布异常: {exc}")

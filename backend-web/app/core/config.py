@@ -68,7 +68,7 @@ class BackendWebConfig(BaseConfig):
         default="http://localhost:8089",
         alias="BACKEND_WEB_PUBLIC_URL"
     )
-    
+
     # 启动时是否自动启动Goofish定时采集任务
     auto_start_crawl_jobs: bool = Field(default=True, alias="AUTO_START_CRAWL_JOBS")
 

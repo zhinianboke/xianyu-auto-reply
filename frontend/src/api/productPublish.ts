@@ -13,6 +13,103 @@ const PREFIX = '/api/v1/product-publish'
 
 // ==================== 类型定义 ====================
 
+export interface PlatformMaterialAttribute {
+  property_id?: string | null
+  property_name?: string | null
+  value_id?: string | null
+  value_name?: string | null
+  text?: string | null
+  properties?: string | null
+}
+
+export interface PlatformCategoryPathItem {
+  id: string
+  name: string
+}
+
+export interface PlatformCategoryCandidate {
+  cat_id?: string | null
+  cat_name?: string | null
+  channel_cat_id?: string | null
+  channel_cat_name?: string | null
+  leaf_id?: string | null
+  tb_cat_id?: string | null
+  path: PlatformCategoryPathItem[]
+  score?: number | null
+  is_selected?: boolean
+}
+
+export interface PlatformCategoryPropertyOption {
+  property_id: string
+  property_name: string
+  value_id?: string | null
+  value_name: string
+  channel_cat_id?: string | null
+  tb_cat_id?: string | null
+}
+
+export interface PlatformCategoryProperty {
+  property_id: string
+  property_name: string
+  input_word?: string | null
+  is_multiple?: boolean
+  is_decisive_property?: boolean
+  options: PlatformCategoryPropertyOption[]
+}
+
+export interface PlatformCategoryCardValue {
+  catId?: string | null
+  catName?: string | null
+  channelCatId?: string | null
+  channelCatName?: string | null
+  tbCatId?: string | null
+  isClicked?: string | null
+  isUserClick?: string | null
+  [key: string]: unknown
+}
+
+export interface PlatformCategoryCardData {
+  propertyId?: string | null
+  propertyName?: string | null
+  valuesList?: PlatformCategoryCardValue[]
+  [key: string]: unknown
+}
+
+export interface PlatformCategoryRecommendData {
+  candidates: PlatformCategoryCandidate[]
+  properties: PlatformCategoryProperty[]
+  card_list?: PlatformCategoryCardData[]
+  account_id?: string
+}
+
+export interface MaterialVideo {
+  url: string
+  path?: string | null
+  name?: string | null
+  size?: number | null
+  file_id?: string | null
+  width?: number | null
+  height?: number | null
+  duration_ms?: number | null
+}
+
+export interface PublishSpecificationValue {
+  name: string
+  image?: string | null
+}
+
+export interface PublishSpecification {
+  name: string
+  values: PublishSpecificationValue[]
+  support_image?: boolean
+}
+
+export interface PublishSkuRow {
+  specs: Record<string, string>
+  price: number
+  stock: number
+}
+
 export interface ProductMaterial {
   id: number
   user_id: number
@@ -22,10 +119,27 @@ export interface ProductMaterial {
   price: number
   original_price?: number | null
   category?: string | null
+  platform_category_id?: string | null
+  platform_category_name?: string | null
+  platform_channel_category_id?: string | null
+  platform_channel_category_name?: string | null
+  platform_leaf_id?: string | null
+  platform_tb_category_id?: string | null
+  platform_category_path: PlatformCategoryPathItem[]
+  platform_attributes: PlatformMaterialAttribute[]
+  category_source: 'manual' | 'recommendation'
+  category_confidence?: number | null
   images: string[]
+  videos: MaterialVideo[]
+  specifications: PublishSpecification[]
+  sku_rows: PublishSkuRow[]
+  quantity: number
   delivery_method: 'express' | 'pickup'
+  shipping_method: 'free' | 'distance' | 'fixed' | 'template' | 'none'
+  support_pickup: boolean
   postage: number
   address?: string | null
+  address_expected_text?: string | null
   brand?: string | null
   condition: string
   remark?: string | null
@@ -38,14 +152,31 @@ export interface MaterialCreateParams {
   description: string
   price: number
   original_price?: number | null
-  category?: string
+  category?: string | null
+  platform_category_id?: string | null
+  platform_category_name?: string | null
+  platform_channel_category_id?: string | null
+  platform_channel_category_name?: string | null
+  platform_leaf_id?: string | null
+  platform_tb_category_id?: string | null
+  platform_category_path?: PlatformCategoryPathItem[]
+  platform_attributes?: PlatformMaterialAttribute[]
+  category_source?: 'manual' | 'recommendation'
+  category_confidence?: number | null
   images: string[]
+  videos?: MaterialVideo[]
+  specifications?: PublishSpecification[]
+  sku_rows?: PublishSkuRow[]
+  quantity?: number
   delivery_method?: 'express' | 'pickup'
+  shipping_method?: 'free' | 'distance' | 'fixed' | 'template' | 'none'
+  support_pickup?: boolean
   postage?: number
-  address?: string
-  brand?: string
+  address?: string | null
+  address_expected_text?: string | null
+  brand?: string | null
   condition?: string
-  remark?: string
+  remark?: string | null
 }
 
 export interface MaterialListResponse {
@@ -140,6 +271,19 @@ export interface PublishBatchResponseData {
 
 export type PublishBatchResponse = ApiResponse<PublishBatchResponseData>
 
+/** 根据商品标题和描述推荐闲鱼平台分类。 */
+export const recommendPlatformCategory = (params: {
+  title: string
+  description: string
+  account_id?: string
+  current_card_list?: PlatformCategoryCardData[]
+  selected_list?: Record<string, unknown>[]
+  cat_id?: string
+  cat_name?: string
+  channel_cat_id?: string
+}): Promise<ApiResponse<PlatformCategoryRecommendData>> =>
+  post(`${PREFIX}/category/recommend`, params)
+
 // ==================== 素材库接口 ====================
 
 /** 创建素材 */
@@ -150,7 +294,7 @@ export const createMaterial = (params: MaterialCreateParams): Promise<ApiRespons
 export const getMaterials = (
   page = 1,
   pageSize = 20,
-  filters?: { title?: string; category?: string; condition?: string }
+  filters?: { title?: string; category?: string; condition?: string; platform_category_id?: string }
 ): Promise<MaterialListResponse> => {
   const params = new URLSearchParams({
     page: String(page),
@@ -159,6 +303,7 @@ export const getMaterials = (
   if (filters?.title) params.append('title', filters.title)
   if (filters?.category) params.append('category', filters.category)
   if (filters?.condition) params.append('condition', filters.condition)
+  if (filters?.platform_category_id) params.append('platform_category_id', filters.platform_category_id)
   return get(`${PREFIX}/materials?${params}`)
 }
 
@@ -182,7 +327,7 @@ export const batchDeleteMaterials = (ids: number[]): Promise<ApiResponse> =>
 
 // ==================== 发布接口 ====================
 
-/** 单品发布（同步，超时时间需设长） */
+/** 单品发布（同步调用闲鱼发布接口） */
 export const publishSingle = (params: {
   account_id: string
   title: string
@@ -190,14 +335,32 @@ export const publishSingle = (params: {
   price: number
   original_price?: number | null
   category?: string
+  platform_category_id?: string | null
+  platform_category_name?: string | null
+  platform_channel_category_id?: string | null
+  platform_channel_category_name?: string | null
+  platform_leaf_id?: string | null
+  platform_tb_category_id?: string | null
+  platform_category_path?: PlatformCategoryPathItem[]
+  platform_attributes?: PlatformMaterialAttribute[]
+  category_source?: 'manual' | 'recommendation'
+  category_confidence?: number | null
   images: string[]        // 本地绝对路径，由 uploadProductImages 返回
+  videos?: MaterialVideo[]
+  quantity?: number
+  specifications?: PublishSpecification[]
+  sku_rows?: PublishSkuRow[]
+  stock?: number
   address?: string
+  address_expected_text?: string
   delivery_method?: string
+  shipping_method?: 'free' | 'distance' | 'fixed' | 'template' | 'none'
+  support_pickup?: boolean
   postage?: number
   brand?: string
   condition?: string
 }): Promise<PublishSingleResponse> =>
-  post(`${PREFIX}/publish/single`, params, { timeout: 600000 }) // 10分钟超时
+  post(`${PREFIX}/publish/single`, params, { timeout: 90000 })
 
 /** 批量发布（异步，立即返回 batch_id） */
 export const publishBatch = (params: {
@@ -222,6 +385,17 @@ export const uploadProductImages = async (files: File[]): Promise<{
   const formData = new FormData()
   files.forEach(f => formData.append('files', f))
   return post(`${PREFIX}/upload/images`, formData)
+}
+
+/** 上传商品视频，返回本地路径和预览地址。 */
+export const uploadProductVideos = async (files: File[]): Promise<{
+  success: boolean
+  message: string
+  data?: { videos: MaterialVideo[]; paths: string[]; urls: string[] }
+}> => {
+  const formData = new FormData()
+  files.forEach((file) => formData.append('files', file))
+  return post(`${PREFIX}/upload/videos`, formData)
 }
 
 /** 分页查询发布日志 */

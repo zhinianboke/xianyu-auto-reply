@@ -18,8 +18,17 @@ import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { MaterialFormModal } from './MaterialFormModal'
 
-const CATEGORIES = ['数码家电', '服饰鞋包', '家居日用', '图书音像', '美妆个护', '母婴用品', '运动户外', '食品生鲜', '虚拟商品', '其他']
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
+
+function getPlatformSummary(material: ProductMaterial): string[] {
+  return [
+    material.platform_category_path?.length ? `路径：${material.platform_category_path.map(item => item.name).filter(Boolean).join(' / ')}` : '',
+    material.platform_category_name && `分类：${material.platform_category_name}`,
+    material.platform_channel_category_name && `频道：${material.platform_channel_category_name}`,
+    material.platform_leaf_id && `叶子ID：${material.platform_leaf_id}`,
+    material.platform_tb_category_id && `淘宝ID：${material.platform_tb_category_id}`,
+  ].filter((value): value is string => Boolean(value))
+}
 
 export function ProductMaterials() {
   const { addToast } = useUIStore()
@@ -41,6 +50,7 @@ export function ProductMaterials() {
   const [filterTitle, setFilterTitle] = useState('')
   const [filterCategory, setFilterCategory] = useState('')
   const [filterCondition, setFilterCondition] = useState('')
+  const [filterPlatformCategoryId, setFilterPlatformCategoryId] = useState('')
 
   // 批量选择状态
   const [selectedIds, setSelectedIds] = useState<number[]>([])
@@ -51,10 +61,11 @@ export function ProductMaterials() {
   const load = async (p = page, size = pageSize) => {
     setTableLoading(true)
     try {
-      const filters: { title?: string; category?: string; condition?: string } = {}
+      const filters: { title?: string; category?: string; condition?: string; platform_category_id?: string } = {}
       if (filterTitle.trim()) filters.title = filterTitle.trim()
       if (filterCategory) filters.category = filterCategory
       if (filterCondition) filters.condition = filterCondition
+      if (filterPlatformCategoryId.trim()) filters.platform_category_id = filterPlatformCategoryId.trim()
       const res = await getMaterials(p, size, Object.keys(filters).length > 0 ? filters : undefined)
       if (res.success) {
         setMaterials(res.data.list)
@@ -88,6 +99,7 @@ export function ProductMaterials() {
     setFilterTitle('')
     setFilterCategory('')
     setFilterCondition('')
+    setFilterPlatformCategoryId('')
     setPage(1)
     setSelectedIds([])
     // 直接用空筛选加载
@@ -114,7 +126,7 @@ export function ProductMaterials() {
     try {
       const res = await deleteMaterial(deleteConfirm.item.id)
       if (res.success) {
-        addToast({ type: 'success', message: '删除成功' })
+        addToast({ type: 'success', message: '素材已移出素材库' })
         setDeleteConfirm({ open: false, item: null })
         setSelectedIds(prev => prev.filter(id => id !== deleteConfirm.item!.id))
         load(page, pageSize)
@@ -135,7 +147,7 @@ export function ProductMaterials() {
     try {
       const res = await batchDeleteMaterials(selectedIds)
       if (res.success) {
-        addToast({ type: 'success', message: res.message || `成功删除 ${selectedIds.length} 条素材` })
+        addToast({ type: 'success', message: res.message || `已移出 ${selectedIds.length} 条素材` })
         setBatchDeleteConfirm(false)
         setSelectedIds([])
         load(page, pageSize)
@@ -210,14 +222,8 @@ export function ProductMaterials() {
                 onKeyDown={e => e.key === 'Enter' && handleFilter()}
               />
             </div>
-            <select
-              className="input-ios w-32"
-              value={filterCategory}
-              onChange={e => { setFilterCategory(e.target.value); }}
-            >
-              <option value="">全部分类</option>
-              {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
+            <input className="input-ios w-40" placeholder="本地分类..." value={filterCategory} onChange={e => setFilterCategory(e.target.value)} />
+            <input className="input-ios w-40" placeholder="平台分类ID..." value={filterPlatformCategoryId} onChange={e => setFilterPlatformCategoryId(e.target.value)} />
             <select
               className="input-ios w-28"
               value={filterCondition}
@@ -227,9 +233,9 @@ export function ProductMaterials() {
               {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
             <button className="btn-ios-primary btn-sm" onClick={handleFilter}>
-              <Search className="w-3.5 h-3.5" />筛选
+              <Search className="w-3.5 h-3.5" />查询
             </button>
-            {(filterTitle || filterCategory || filterCondition) && (
+            {(filterTitle || filterCategory || filterCondition || filterPlatformCategoryId) && (
               <button className="btn-ios-secondary btn-sm" onClick={handleResetFilter}>
                 <X className="w-3.5 h-3.5" />重置
               </button>
@@ -248,7 +254,7 @@ export function ProductMaterials() {
           <h2 className="vben-card-title"><Image className="w-4 h-4" />素材列表</h2>
           <span className="badge-primary">共 {total} 条</span>
         </div>
-        <div className="flex-1 overflow-x-auto overflow-y-auto">
+        <div className="table-scroll flex-1">
           <table className="table-ios">
             <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
               <tr>
@@ -264,19 +270,20 @@ export function ProductMaterials() {
                 <th>标题</th>
                 <th>价格</th>
                 <th>分类</th>
+                <th>平台分类</th>
                 <th>成色</th>
-                <th>图片</th>
+                <th>媒体</th>
                 <th>创建时间</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody>
               {tableLoading ? (
-                <tr><td colSpan={isAdmin ? 9 : 8} className="text-center py-12">
+                <tr><td colSpan={isAdmin ? 10 : 9} className="text-center py-12">
                   <RefreshCw className="w-6 h-6 animate-spin text-blue-500 mx-auto" />
                 </td></tr>
               ) : materials.length === 0 ? (
-                <tr><td colSpan={isAdmin ? 9 : 8} className="text-center py-12 text-slate-400">
+                <tr><td colSpan={isAdmin ? 10 : 9} className="text-center py-12 text-slate-400">
                   <div className="flex flex-col items-center gap-2">
                     <Image className="w-12 h-12 text-slate-300" />
                     <p>暂无素材，点击「新建素材」添加</p>
@@ -307,8 +314,12 @@ export function ProductMaterials() {
                     )}
                   </td>
                   <td className="text-slate-500">{m.category || '-'}</td>
+                  <td className="max-w-[180px]">
+                    {getPlatformSummary(m).length > 0 ? getPlatformSummary(m).map((item) => <span key={item} className="block truncate text-slate-700 dark:text-slate-200" title={item}>{item}</span>) : <span className="text-slate-400">-</span>}
+                    {m.platform_category_id && <span className="block text-xs text-slate-400 truncate" title={m.platform_category_id}>分类ID：{m.platform_category_id}</span>}
+                  </td>
                   <td><span className="badge-gray">{m.condition}</span></td>
-                  <td><span className="badge-info">{(m.images || []).length} 张</span></td>
+                  <td><span className="badge-info">{(m.images || []).length} 图 / {(m.videos || []).length} 视频</span></td>
                   <td className="text-sm text-slate-500 whitespace-nowrap">
                     {m.created_at ? new Date(m.created_at).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-'}
                   </td>
@@ -372,8 +383,8 @@ export function ProductMaterials() {
       <ConfirmModal
         isOpen={deleteConfirm.open}
         title="确认删除"
-        message={`确认删除素材「${deleteConfirm.item?.title ?? ''}」？此操作不可撤销。`}
-        confirmText="删除"
+        message={`确认将素材「${deleteConfirm.item?.title ?? ''}」移出素材库吗？历史发布日志不会受影响。`}
+        confirmText="移出素材库"
         type="danger"
         loading={deleting}
         onConfirm={handleConfirmDelete}
@@ -383,9 +394,9 @@ export function ProductMaterials() {
       {/* 批量删除确认弹窗 */}
       <ConfirmModal
         isOpen={batchDeleteConfirm}
-        title="确认批量删除"
-        message={`确认删除选中的 ${selectedIds.length} 条素材？此操作不可撤销。`}
-        confirmText={`删除 ${selectedIds.length} 条`}
+        title="确认批量移出"
+        message={`确认将选中的 ${selectedIds.length} 条素材移出素材库吗？历史发布日志不会受影响。`}
+        confirmText={`移出 ${selectedIds.length} 条`}
         type="danger"
         loading={batchDeleting}
         onConfirm={handleBatchDelete}

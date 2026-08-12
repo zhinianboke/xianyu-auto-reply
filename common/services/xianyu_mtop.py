@@ -115,11 +115,18 @@ async def mtop_call(
     owner_id: Optional[int] = None,
     extra_params: Optional[Dict[str, str]] = None,
     proxy: Optional[str] = None,
+    app_key: str = "34839810",
+    origin: str = "https://www.goofish.com",
+    referer: str = "https://www.goofish.com/",
+    extra_headers: Optional[Dict[str, str]] = None,
+    form_field: str = "data",
+    request_method: str = "POST",
 ) -> Dict[str, Any]:
     """调用闲鱼 mtop 接口，统一处理令牌过期/Session过期/风控。
 
     Args:
         proxy: 代理地址URL（http://host:port 或 socks5://user:pass@host:port），空则直连。
+        request_method: mtop 请求方法，默认 POST；视频初始化等抓包为 GET 的接口可指定 GET。
 
     Returns:
         {
@@ -145,13 +152,14 @@ async def mtop_call(
             }
 
         token = cookies.get("_m_h5_tk", "").split("_")[0] if cookies.get("_m_h5_tk") else ""
-        t = str(int(time.time()) * 1000)
+        # mtop 抓包使用当前毫秒时间戳参与签名，不能先截断到秒。
+        t = str(int(time.time() * 1000))
         data_val = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
-        sign = generate_sign(t, token, data_val)
+        sign = generate_sign(t, token, data_val, app_key=app_key)
 
         params = {
             "jsv": "2.7.2",
-            "appKey": "34839810",
+            "appKey": app_key,
             "t": t,
             "sign": sign,
             "v": version,
@@ -169,22 +177,43 @@ async def mtop_call(
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/x-www-form-urlencoded",
-            "Origin": "https://www.goofish.com",
-            "Referer": "https://www.goofish.com/",
+            "Origin": origin,
+            "Referer": referer,
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             ),
             "Cookie": current_cookies,
         }
+        if extra_headers:
+            headers.update(extra_headers)
 
         try:
             timeout = aiohttp.ClientTimeout(total=30)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 # 代理为 HTTP 代理（来自代理API的 http://host:port），aiohttp 原生支持，无需额外依赖
-                async with session.post(
-                    url, params=params, data={"data": data_val}, headers=headers, proxy=proxy or None
-                ) as resp:
+                method = request_method.upper()
+                if method == "GET":
+                    request = session.get(
+                        url,
+                        params={**params, form_field: data_val},
+                        headers=headers,
+                        proxy=proxy or None,
+                    )
+                elif method == "POST":
+                    request = session.post(
+                        url,
+                        params=params,
+                        data={form_field: data_val},
+                        headers=headers,
+                        proxy=proxy or None,
+                    )
+                else:
+                    return {
+                        "success": False, "account_invalid": False, "res": None,
+                        "error": f"不支持的 mtop 请求方法: {request_method}", "cookies_str": current_cookies,
+                    }
+                async with request as resp:
                     res_json = await resp.json(content_type=None)
                     set_cookies = extract_cookies_from_response(resp)
         except Exception as exc:  # noqa: BLE001

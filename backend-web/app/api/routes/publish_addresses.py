@@ -15,10 +15,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_user, get_current_admin_user, get_db_session
+from app.services.amap_inputtips_service import AmapInputTipsError, AmapInputTipsService
+from app.services.publish_address_service import PublishAddressService, _address_to_dict
 from common.models.user import User
 from common.schemas.common import ApiResponse
 from common.utils.auth_scope import resolve_owner_scope
-from app.services.publish_address_service import PublishAddressService, _address_to_dict
 
 router = APIRouter(prefix="/product-publish/addresses", tags=["商品发布随机地址池"])
 
@@ -81,6 +82,21 @@ async def list_publish_address_account_options(
     svc = PublishAddressService(session)
     data = await svc.list_account_options(owner_id=owner_id)
     return ApiResponse(success=True, message="查询成功", data={"list": data})
+
+
+@router.get("/input-tips", response_model=ApiResponse)
+async def search_amap_input_tips(
+    keywords: str = Query(..., min_length=1, max_length=100, description="所在地搜索关键词"),
+    city: str = Query("全国", min_length=1, max_length=80, description="搜索城市"),
+    current_user: User = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    """按闲鱼卖家工作台抓包参数调用高德 inputtips 接口。"""
+    del current_user
+    try:
+        data = await AmapInputTipsService().search(keywords=keywords, city=city)
+    except AmapInputTipsError as exc:
+        return ApiResponse(success=False, message=str(exc), data=None)
+    return ApiResponse(success=True, message="所在地搜索成功", data=data)
 
 
 @router.post("", response_model=ApiResponse)

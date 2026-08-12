@@ -3,8 +3,8 @@
 
 功能：
 1. 素材库管理（CRUD）
-2. 单品发布（触发 Playwright 自动化）
-3. 批量发布（后台任务异步执行）
+2. 单品发布（调用闲鱼卖家工作台接口）
+3. 批量发布（后台任务异步执行，逐条调用闲鱼发布接口）
 4. 发布日志查询（分页+过滤）
 """
 from __future__ import annotations
@@ -14,16 +14,21 @@ from typing import Any, Dict, List, Optional
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile
+from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_user, get_db_session
 from app.services.product_publish_service import ProductMaterialService
+from app.services.account_service import AccountService
+from app.services.platform_category_service import CategoryRecommendationError, PlatformCategoryService
 from app.services.publish_batch_status_service import PublishBatchStatusService
 from app.services.publish_execution_service import PublishExecutorService, PublishLogService
 from common.models.user import User, UserRole
 from common.schemas.common import ApiResponse
 from common.utils.local_image_upload import ImageUploadError, save_uploaded_image
+from common.utils.local_video_upload import VideoUploadError, save_uploaded_video
+from app.core.paths import get_upload_path
 from common.utils.time_utils import get_beijing_now_naive
 
 def _is_admin(user: User) -> bool:
@@ -35,17 +40,84 @@ router = APIRouter(prefix="/product-publish", tags=["商品发布"])
 
 # ==================== Pydantic 请求 / 响应模型 ====================
 
+class PlatformAttributeRequest(BaseModel):
+    """闲鱼平台属性标签，来源于抓包中的 itemLabelExtList。"""
+    property_id: Optional[str] = Field(None, max_length=64)
+    property_name: Optional[str] = Field(None, max_length=100)
+    value_id: Optional[str] = Field(None, max_length=64)
+    value_name: Optional[str] = Field(None, max_length=200)
+    text: Optional[str] = Field(None, max_length=200)
+    properties: Optional[str] = Field(None, max_length=500)
+
+
+class PlatformCategoryPathItemRequest(BaseModel):
+    """平台分类路径中的一级分类。"""
+    id: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=100)
+
+
+class VideoMaterialRequest(BaseModel):
+    """视频素材元数据，不保存抓包中的临时上传授权。"""
+    url: str = Field(..., min_length=1, max_length=2000)
+    path: Optional[str] = Field(None, max_length=1000)
+    name: Optional[str] = Field(None, max_length=255)
+    size: Optional[int] = Field(None, ge=0, le=200 * 1024 * 1024)
+    file_id: Optional[str] = Field(None, max_length=128)
+    width: Optional[int] = Field(None, ge=1, le=10000)
+    height: Optional[int] = Field(None, ge=1, le=10000)
+    duration_ms: Optional[int] = Field(None, ge=1, le=86400000)
+
+
+class SpecificationValueRequest(BaseModel):
+    """单个商品规格值。"""
+
+    name: str = Field(..., min_length=1, max_length=100)
+    image: Optional[str] = Field(None, max_length=2000)
+
+
+class ProductSpecificationRequest(BaseModel):
+    """商品规格类型及其可选值。"""
+
+    name: str = Field(..., min_length=1, max_length=100)
+    values: List[SpecificationValueRequest] = Field(default_factory=list, max_length=50)
+    support_image: bool = False
+
+
+class PublishSkuRowRequest(BaseModel):
+    """规格组合对应的价格和库存。"""
+
+    specs: Dict[str, str] = Field(default_factory=dict, max_length=4)
+    price: float = Field(..., gt=0)
+    stock: int = Field(0, ge=0, le=999999)
+
 class MaterialCreateRequest(BaseModel):
     """创建素材请求"""
     title: str = Field(..., min_length=1, max_length=200, description="商品标题")
-    description: str = Field(..., min_length=1, description="商品描述")
+    description: str = Field(..., min_length=1, max_length=1500, description="商品描述")
     price: float = Field(..., gt=0, description="售价")
     original_price: Optional[float] = Field(None, description="原价（划线价）")
     category: Optional[str] = Field(None, max_length=100, description="商品分类")
-    images: List[str] = Field(default=[], description="图片URL列表（最多9张）")
+    platform_category_id: Optional[str] = Field(None, max_length=64, description="平台末级分类ID（catId）")
+    platform_category_name: Optional[str] = Field(None, max_length=100, description="平台末级分类名称（catName）")
+    platform_channel_category_id: Optional[str] = Field(None, max_length=64, description="平台频道分类ID（channelCatId）")
+    platform_channel_category_name: Optional[str] = Field(None, max_length=100, description="平台频道分类名称（channelCatName）")
+    platform_leaf_id: Optional[str] = Field(None, max_length=64, description="平台叶子分类ID（leafId）")
+    platform_tb_category_id: Optional[str] = Field(None, max_length=64, description="淘宝分类ID（tbCatId）")
+    platform_category_path: List[PlatformCategoryPathItemRequest] = Field(default_factory=list)
+    platform_attributes: List[PlatformAttributeRequest] = Field(default_factory=list, max_length=30)
+    category_source: str = Field("manual", pattern="^(manual|recommendation)$")
+    category_confidence: Optional[float] = Field(None, ge=0, le=1)
+    images: List[str] = Field(..., min_length=1, max_length=9, description="图片URL列表（至少1张，最多9张）")
+    videos: List[VideoMaterialRequest] = Field(default_factory=list, max_length=3)
+    specifications: List[ProductSpecificationRequest] = Field(default_factory=list, max_length=2)
+    sku_rows: List[PublishSkuRowRequest] = Field(default_factory=list, max_length=200)
+    quantity: int = Field(1, ge=1, le=999999, description="发布数量")
     delivery_method: str = Field("express", description="发货方式：express/pickup")
+    shipping_method: str = Field("free", pattern="^(free|distance|fixed|template|none)$")
+    support_pickup: bool = False
     postage: float = Field(0, ge=0, description="邮费，0表示包邮")
     address: Optional[str] = Field(None, max_length=200, description="宝贝所在地")
+    address_expected_text: Optional[str] = Field(None, max_length=200)
     brand: Optional[str] = Field(None, max_length=100, description="品牌")
     condition: str = Field("全新", description="成色")
     remark: Optional[str] = Field(None, max_length=500, description="备注（内部使用）")
@@ -54,30 +126,65 @@ class MaterialCreateRequest(BaseModel):
 class MaterialUpdateRequest(BaseModel):
     """更新素材请求（所有字段均可选）"""
     title: Optional[str] = Field(None, max_length=200)
-    description: Optional[str] = None
+    description: Optional[str] = Field(None, max_length=1500)
     price: Optional[float] = Field(None, gt=0)
     original_price: Optional[float] = None
-    category: Optional[str] = None
-    images: Optional[List[str]] = None
-    delivery_method: Optional[str] = None
+    category: Optional[str] = Field(None, max_length=100)
+    platform_category_id: Optional[str] = Field(None, max_length=64)
+    platform_category_name: Optional[str] = Field(None, max_length=100)
+    platform_channel_category_id: Optional[str] = Field(None, max_length=64)
+    platform_channel_category_name: Optional[str] = Field(None, max_length=100)
+    platform_leaf_id: Optional[str] = Field(None, max_length=64)
+    platform_tb_category_id: Optional[str] = Field(None, max_length=64)
+    platform_category_path: Optional[List[PlatformCategoryPathItemRequest]] = Field(None)
+    platform_attributes: Optional[List[PlatformAttributeRequest]] = Field(None, max_length=30)
+    category_source: Optional[str] = Field(None, pattern="^(manual|recommendation)$")
+    category_confidence: Optional[float] = Field(None, ge=0, le=1)
+    images: Optional[List[str]] = Field(None, min_length=1, max_length=9)
+    videos: Optional[List[VideoMaterialRequest]] = Field(None, max_length=3)
+    specifications: Optional[List[ProductSpecificationRequest]] = Field(None, max_length=2)
+    sku_rows: Optional[List[PublishSkuRowRequest]] = Field(None, max_length=200)
+    quantity: Optional[int] = Field(None, ge=1, le=999999)
+    delivery_method: Optional[str] = Field(None, pattern="^(express|pickup)$")
+    shipping_method: Optional[str] = Field(None, pattern="^(free|distance|fixed|template|none)$")
+    support_pickup: Optional[bool] = None
     postage: Optional[float] = Field(None, ge=0)
-    address: Optional[str] = None
-    brand: Optional[str] = None
-    condition: Optional[str] = None
-    remark: Optional[str] = None
+    address: Optional[str] = Field(None, max_length=200)
+    address_expected_text: Optional[str] = Field(None, max_length=200)
+    brand: Optional[str] = Field(None, max_length=100)
+    condition: Optional[str] = Field(None, max_length=20)
+    remark: Optional[str] = Field(None, max_length=500)
 
 
 class PublishSingleRequest(BaseModel):
     """单品发布请求"""
     account_id: str = Field(..., description="闲鱼账号ID（cookie_id）")
     title: str = Field(..., min_length=1, max_length=200)
-    description: str = Field(...)
+    description: str = Field(..., min_length=1, max_length=1500)
     price: float = Field(..., gt=0)
     original_price: Optional[float] = None
     category: Optional[str] = Field(None, description="商品分类")
     images: List[str] = Field(..., min_length=1, description="图片本地路径列表（至少1张）")
+    platform_category_id: Optional[str] = Field(None, max_length=64)
+    platform_category_name: Optional[str] = Field(None, max_length=100)
+    platform_channel_category_id: Optional[str] = Field(None, max_length=64)
+    platform_channel_category_name: Optional[str] = Field(None, max_length=100)
+    platform_leaf_id: Optional[str] = Field(None, max_length=64)
+    platform_tb_category_id: Optional[str] = Field(None, max_length=64)
+    platform_category_path: List[PlatformCategoryPathItemRequest] = Field(default_factory=list)
+    platform_attributes: List[PlatformAttributeRequest] = Field(default_factory=list, max_length=30)
+    category_source: str = Field("manual", pattern="^(manual|recommendation)$")
+    category_confidence: Optional[float] = Field(None, ge=0, le=1)
+    videos: List[VideoMaterialRequest] = Field(default_factory=list, max_length=3)
+    quantity: int = Field(1, ge=1, le=999999)
+    stock: Optional[int] = Field(None, ge=0, le=999999)
+    specifications: List[ProductSpecificationRequest] = Field(default_factory=list, max_length=2)
+    sku_rows: List[PublishSkuRowRequest] = Field(default_factory=list, max_length=200)
     address: Optional[str] = None
+    address_expected_text: Optional[str] = Field(None, max_length=200)
     delivery_method: str = Field("express", description="发货方式：express/pickup")
+    shipping_method: str = Field("free", pattern="^(free|distance|fixed|template|none)$")
+    support_pickup: bool = False
     postage: float = Field(0, ge=0, description="邮费，0表示包邮")
     brand: Optional[str] = Field(None, description="品牌")
     condition: str = Field("全新", description="成色")
@@ -87,6 +194,110 @@ class BatchPublishRequest(BaseModel):
     """批量发布请求"""
     account_ids: List[str] = Field(..., min_length=1, description="账号ID列表")
     material_ids: List[int] = Field(..., min_length=1, description="素材ID列表")
+
+
+class CategoryRecommendRequest(BaseModel):
+    """根据商品标题和描述请求平台分类推荐。"""
+
+    title: str = Field("", max_length=200)
+    description: str = Field("", max_length=1500)
+    account_id: Optional[str] = Field(None, max_length=80, description="可选，指定用于请求的闲鱼账号")
+    current_card_list: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="分类切换时沿用上一次推荐接口返回的完整属性卡",
+    )
+    selected_list: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="当前已选分类的属性标签列表",
+    )
+    cat_id: str = Field("", max_length=80, description="当前已选闲鱼末级分类ID")
+    cat_name: str = Field("", max_length=200, description="当前已选分类名称")
+    channel_cat_id: str = Field("", max_length=80, description="当前已选频道分类ID")
+
+
+@router.post("/category/recommend", response_model=ApiResponse)
+async def recommend_category(
+    req: CategoryRecommendRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """按商品标题和描述调用闲鱼分类推荐接口，素材库自动轮换当前用户已启动账号。"""
+    title = req.title.strip()
+    description = req.description.strip()
+    if not title and not description:
+        return ApiResponse(success=False, message="请先填写商品标题或商品描述")
+
+    account_service = AccountService(session)
+    requested_account_id = (req.account_id or "").strip()
+    if requested_account_id:
+        owner_scope = None if _is_admin(current_user) else current_user.id
+        account = await account_service.get_account_for_user(owner_scope, requested_account_id)
+        if not account:
+            return ApiResponse(success=False, message="指定的闲鱼账号不存在或无权使用")
+        candidate_accounts = [account] if account.cookie else []
+    else:
+        # 素材库不指定账号，只能使用当前登录用户自己的已启动账号，管理员也不跨用户取账号。
+        current_user_accounts = await account_service.list_accounts(current_user.id)
+        started_accounts = [
+            item
+            for item in current_user_accounts
+            if (item.status or "").strip().lower() == "active"
+        ]
+        if not started_accounts:
+            return ApiResponse(success=False, message="当前用户没有已启动的闲鱼账号，请先启动账号")
+        candidate_accounts = [item for item in started_accounts if item.cookie and item.cookie.strip()]
+
+    if not candidate_accounts:
+        message = (
+            "指定的闲鱼账号缺少Cookie，请重新登录账号"
+            if requested_account_id
+            else "当前用户已启动的闲鱼账号均缺少Cookie，请重新登录账号"
+        )
+        return ApiResponse(success=False, message=message)
+
+    category_service = PlatformCategoryService()
+    last_error = "分类推荐失败，请稍后重试"
+    for account_index, account in enumerate(candidate_accounts):
+        try:
+            data = await category_service.recommend(
+                # 闲鱼接口要求两个字段都有值，单独填写描述时用描述作为标题，反之亦然。
+                title=title or description[:200],
+                description=description or title,
+                cookie=account.cookie,
+                account_id=account.account_id,
+                owner_id=account.owner_id,
+                current_card_list=req.current_card_list or None,
+                selected_list=req.selected_list or None,
+                cat_id=req.cat_id,
+                cat_name=req.cat_name,
+                channel_cat_id=req.channel_cat_id,
+            )
+            return ApiResponse(success=True, message="分类推荐成功", data=data)
+        except CategoryRecommendationError as exc:
+            last_error = str(exc)
+            logger.warning(
+                f"分类推荐账号不可用: user_id={current_user.id}, "
+                f"account_id={account.account_id}, error={last_error}"
+            )
+        except Exception as exc:
+            last_error = "分类推荐失败，请稍后重试"
+            logger.error(
+                f"分类推荐接口异常: user_id={current_user.id}, "
+                f"account_id={account.account_id}, error={exc}"
+            )
+
+        if account_index < len(candidate_accounts) - 1:
+            logger.info(
+                f"分类推荐自动切换下一个已启动账号: user_id={current_user.id}, "
+                f"failed_account_id={account.account_id}"
+            )
+
+    if requested_account_id:
+        return ApiResponse(success=False, message=last_error)
+    return ApiResponse(
+        success=False,
+        message=f"当前用户已启动的闲鱼账号均不可用：{last_error}",
+    )
 
 
 # ==================== 素材库接口 ====================
@@ -110,6 +321,7 @@ async def list_materials(
     title: str = Query(None, description="标题模糊搜索"),
     category: str = Query(None, description="分类筛选"),
     condition: str = Query(None, description="成色筛选"),
+    platform_category_id: str = Query(None, description="平台分类ID筛选"),
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
@@ -120,6 +332,7 @@ async def list_materials(
     data = await svc.list_materials(
         query_user_id, page=page, page_size=page_size,
         title=title, category=category, condition=condition,
+        platform_category_id=platform_category_id,
     )
     # 管理员场景：批量补充用户名
     if _is_admin(current_user) and data.get("list"):
@@ -148,7 +361,7 @@ async def batch_delete_materials(
     svc = ProductMaterialService(session)
     query_user_id = None if _is_admin(current_user) else current_user.id
     count = await svc.batch_delete(req.ids, query_user_id)
-    return ApiResponse(success=True, message=f"成功删除 {count} 条素材", data={"deleted_count": count})
+    return ApiResponse(success=True, message=f"成功移出 {count} 条素材", data={"deleted_count": count})
 
 
 @router.get("/materials/{material_id}", response_model=ApiResponse)
@@ -180,7 +393,9 @@ async def update_material(
     updated = await svc.update(
         material_id,
         query_user_id,
-        {k: v for k, v in req.model_dump().items() if v is not None},
+        # 只忽略请求中未出现的字段；显式传入的空数组、False 或 null 都要保存，
+        # 否则编辑素材时清空规格/属性会被旧值覆盖。
+        req.model_dump(exclude_unset=True),
     )
     if not updated:
         return ApiResponse(success=False, message="素材不存在或无权修改")
@@ -199,7 +414,7 @@ async def delete_material(
     deleted = await svc.delete(material_id, query_user_id)
     if not deleted:
         return ApiResponse(success=False, message="素材不存在或无权删除")
-    return ApiResponse(success=True, message="素材删除成功")
+    return ApiResponse(success=True, message="素材已移出素材库")
 
 
 # ==================== 发布接口 ====================
@@ -210,10 +425,7 @@ async def publish_single(
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
-    """单品发布（同步执行，等待 Playwright 完成后返回结果）
-    
-    注意：发布操作会启动无头浏览器，耗时约 30-60 秒，请前端设置合适的超时时间。
-    """
+    """单品发布（同步调用闲鱼卖家工作台接口并返回结果）。"""
     svc = PublishExecutorService(session)
     result = await svc.publish_single(
         user_id=current_user.id,
@@ -245,7 +457,7 @@ async def publish_batch(
     """批量发布（后台异步执行，立即返回 batch_id）
     
     前端通过 GET /publish/batch/{batch_id}/status 查询进度。
-    后台会按账号循环，每个账号依次发布所有素材，复用同一浏览器实例。
+    后台会按账号循环，每个账号依次通过闲鱼接口发布所有素材。
     """
     mat_svc = ProductMaterialService(session)
     from app.services.product_publish_service import _material_to_dict
@@ -486,8 +698,6 @@ async def upload_product_images(
 
     返回本地文件路径列表，这些路径将直接传给 Playwright 的 set_input_files。
     """
-    from app.core.paths import get_upload_path
-
     upload_dir = get_upload_path("products")
 
     if len(files) > 9:
@@ -516,6 +726,41 @@ async def upload_product_images(
         success=True,
         message=f"成功上传 {len(saved_paths)} 张图片",
         data={"paths": saved_paths, "urls": saved_urls},
+    )
+
+
+@router.post("/upload/videos", response_model=ApiResponse)
+async def upload_product_videos(
+    files: List[UploadFile] = File(...),
+    current_user: User = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    """上传商品视频（最多3个，每个最大100MB）。"""
+    del current_user
+    if len(files) > 3:
+        return ApiResponse(success=False, message="最多上传3个视频")
+
+    upload_dir = get_upload_path("products")
+    videos: List[dict] = []
+    for file in files:
+        try:
+            filepath, filename, size = await save_uploaded_video(file, upload_dir)
+        except VideoUploadError as exc:
+            return ApiResponse(success=False, message=f"文件 {file.filename}: {exc.message}")
+        videos.append({
+            "path": str(filepath),
+            "url": f"/static/uploads/products/{filename}",
+            "name": file.filename or filename,
+            "size": size,
+        })
+
+    return ApiResponse(
+        success=True,
+        message=f"成功上传 {len(videos)} 个视频",
+        data={
+            "videos": videos,
+            "paths": [item["path"] for item in videos],
+            "urls": [item["url"] for item in videos],
+        },
     )
 
 

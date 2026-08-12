@@ -232,6 +232,15 @@ class PublishAddressService:
         queue_state: PublishAddressQueueState | None = None,
     ) -> ResolvedPublishAddress:
         """解析单个商品本次发布要使用的最终地址。"""
+        manual_address = str(item_data.get("address") or "").strip()
+        if manual_address:
+            return ResolvedPublishAddress(
+                resolved_address_id=None,
+                resolved_address_text=manual_address,
+                address_source="material",
+                address_expected_text=str(item_data.get("address_expected_text") or manual_address).strip(),
+            )
+
         current_queue_state = queue_state or await self.build_queue_state(account_id)
         if not current_queue_state.addresses:
             raise ValueError("随机地址库中没有可用地址，无法自动分配宝贝所在地")
