@@ -26,6 +26,32 @@ export interface SkuRow {
   stock: string
 }
 
+export interface DuplicateSpecificationValue {
+  specificationName: string
+  valueName: string
+}
+
+/** 查找同一规格类型下重复的规格值，供素材保存和单品发布共同校验。 */
+export function findDuplicateSpecificationValue(
+  specifications: ProductSpecification[],
+): DuplicateSpecificationValue | null {
+  for (const specification of specifications) {
+    const values = new Set<string>()
+    for (const value of specification.values) {
+      const valueName = value.name.trim()
+      if (!valueName) continue
+      if (values.has(valueName)) {
+        return {
+          specificationName: specification.name.trim() || '未命名规格',
+          valueName,
+        }
+      }
+      values.add(valueName)
+    }
+  }
+  return null
+}
+
 /** 按规格定义顺序生成稳定的 SKU key，确保素材库导入后能匹配原价格和库存。 */
 export function buildSkuKey(specifications: ProductSpecification[], specs: Record<string, string>): string {
   return specifications

@@ -20,6 +20,10 @@ from common.models.product_material import ProductMaterial
 from common.utils.time_utils import safe_isoformat
 
 
+class MaterialSpecificationError(ValueError):
+    """商品素材规格不符合保存规则。"""
+
+
 def _normalize_specifications(value: Any) -> list[dict]:
     """规范化规格 JSON，确保规格值名称和图片字段完整保存。"""
     if not isinstance(value, list):
@@ -32,12 +36,16 @@ def _normalize_specifications(value: Any) -> list[dict]:
         if not name:
             continue
         values: list[dict] = []
+        seen_values: set[str] = set()
         for item in specification.get("values") or []:
             if not isinstance(item, dict):
                 continue
             value_name = str(item.get("name") or "").strip()
             if not value_name:
                 continue
+            if value_name in seen_values:
+                raise MaterialSpecificationError(f"规格“{name}”存在重复规格值：{value_name}")
+            seen_values.add(value_name)
             values.append({"name": value_name, "image": item.get("image") or None})
         normalized.append({
             "name": name,

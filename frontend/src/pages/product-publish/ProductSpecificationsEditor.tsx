@@ -4,6 +4,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ImagePlus, Plus, Trash2, Upload, X } from 'lucide-react'
+import { useUIStore } from '@/store/uiStore'
 import { buildSkuKey, type ProductSpecification, type SkuRow, type SpecificationValue } from './publishTypes'
 
 const PRESET_TYPES = ['颜色', '尺码', '容量', '份数', '大小', '高度', '总量']
@@ -28,6 +29,7 @@ export function ProductSpecificationsEditor({
   onChange,
   onUploadImage,
 }: ProductSpecificationsEditorProps) {
+  const { addToast } = useUIStore()
   const [customTypeIndex, setCustomTypeIndex] = useState<number | null>(null)
   const [customType, setCustomType] = useState('')
   const [customTypes, setCustomTypes] = useState<string[]>(() => specifications
@@ -98,7 +100,11 @@ export function ProductSpecificationsEditor({
 
   const addValue = (spec: ProductSpecification, rawName: string) => {
     const name = rawName.trim()
-    if (!name || spec.values.some((value) => value.name === name)) return
+    if (!name) return
+    if (spec.values.some((value) => value.name.trim() === name)) {
+      addToast({ type: 'warning', message: `规格“${spec.name || '未命名规格'}”不能添加重复规格值：${name}` })
+      return
+    }
     updateSpec(spec.id, { values: [...spec.values, { id: createId('value'), name, image: null }] })
   }
 
@@ -122,6 +128,18 @@ export function ProductSpecificationsEditor({
     updateSpec(spec.id, {
       values: spec.values.map((value) => (value.id === valueId ? { ...value, ...patch } : value)),
     })
+  }
+
+  const finishValueEdit = (spec: ProductSpecification, value: SpecificationValue, input: HTMLInputElement) => {
+    const name = input.value.trim()
+    const previousName = input.dataset.previousValue || ''
+    const duplicated = name && spec.values.some((item) => item.id !== value.id && item.name.trim() === name)
+    if (duplicated) {
+      updateValue(spec, value.id, { name: previousName })
+      addToast({ type: 'warning', message: `规格“${spec.name || '未命名规格'}”不能添加重复规格值：${name}` })
+      return
+    }
+    updateValue(spec, value.id, { name })
   }
 
   const updateSku = (key: string, field: 'price' | 'stock', value: string) => {
@@ -214,6 +232,8 @@ export function ProductSpecificationsEditor({
                     value={value.name}
                     placeholder="输入规格值"
                     onChange={(event) => updateValue(spec, value.id, { name: event.target.value })}
+                    onFocus={(event) => { event.currentTarget.dataset.previousValue = value.name }}
+                    onBlur={(event) => finishValueEdit(spec, value, event.currentTarget)}
                   />
                   {(spec.supportImage || Boolean(value.image)) && (
                     <>

@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_user, get_db_session
-from app.services.product_publish_service import ProductMaterialService
+from app.services.product_publish_service import MaterialSpecificationError, ProductMaterialService
 from app.services.account_service import AccountService
 from app.services.platform_category_service import CategoryRecommendationError, PlatformCategoryService
 from app.services.publish_batch_status_service import PublishBatchStatusService
@@ -310,7 +310,10 @@ async def create_material(
 ) -> Dict[str, Any]:
     """创建商品素材"""
     svc = ProductMaterialService(session)
-    material = await svc.create(current_user.id, req.model_dump())
+    try:
+        material = await svc.create(current_user.id, req.model_dump())
+    except MaterialSpecificationError as exc:
+        return ApiResponse(success=False, message=str(exc))
     return ApiResponse(success=True, message="素材创建成功", data={"id": material.id})
 
 
@@ -390,13 +393,16 @@ async def update_material(
     """更新素材信息（管理员可修改任意素材）"""
     svc = ProductMaterialService(session)
     query_user_id = None if _is_admin(current_user) else current_user.id
-    updated = await svc.update(
-        material_id,
-        query_user_id,
-        # 只忽略请求中未出现的字段；显式传入的空数组、False 或 null 都要保存，
-        # 否则编辑素材时清空规格/属性会被旧值覆盖。
-        req.model_dump(exclude_unset=True),
-    )
+    try:
+        updated = await svc.update(
+            material_id,
+            query_user_id,
+            # 只忽略请求中未出现的字段；显式传入的空数组、False 或 null 都要保存，
+            # 否则编辑素材时清空规格/属性会被旧值覆盖。
+            req.model_dump(exclude_unset=True),
+        )
+    except MaterialSpecificationError as exc:
+        return ApiResponse(success=False, message=str(exc))
     if not updated:
         return ApiResponse(success=False, message="素材不存在或无权修改")
     return ApiResponse(success=True, message="素材更新成功")

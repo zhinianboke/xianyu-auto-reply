@@ -11,7 +11,7 @@ import { PageLoading } from '@/components/common/Loading'
 import { useUIStore } from '@/store/uiStore'
 import ProductPublishForm from './ProductPublishForm'
 import ProductVideoUploader from './ProductVideoUploader'
-import { buildSkuKey, type ProductSpecification, type PublishForm, type SkuRow } from './publishTypes'
+import { buildSkuKey, findDuplicateSpecificationValue, type ProductSpecification, type PublishForm, type SkuRow } from './publishTypes'
 
 function materialSpecifications(material: ProductMaterial): { specifications: ProductSpecification[]; skuRows: SkuRow[] } {
   const specifications = (material.specifications || []).map((spec, specIndex) => ({
@@ -145,6 +145,8 @@ export function ProductPublish() {
     if (imagePaths.length === 0) return addToast({ type: 'warning', message: '请至少上传一张商品图片' })
     const invalidSpec = form.specifications.find((spec) => !spec.name.trim() || !spec.values.some((value) => value.name.trim()))
     if (invalidSpec) return addToast({ type: 'warning', message: '请完善商品规格类型和规格值' })
+    const duplicateSpecValue = findDuplicateSpecificationValue(form.specifications)
+    if (duplicateSpecValue) return addToast({ type: 'warning', message: `规格“${duplicateSpecValue.specificationName}”存在重复规格值：${duplicateSpecValue.valueName}` })
     if (form.specifications.length > 0 && form.sku_rows.length === 0) return addToast({ type: 'warning', message: '请等待规格组合生成后再发布' })
     const invalidSku = form.sku_rows.find((row) => !row.price || parseFloat(row.price) <= 0 || !row.stock.trim() || Number(row.stock) < 0)
     if (invalidSku) return addToast({ type: 'warning', message: '请完善所有规格的价格和库存' })
