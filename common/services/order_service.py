@@ -1728,6 +1728,20 @@ class OrderDetailService:
         if '*' in old_value and '*' not in new_value:
             return True
         return False
+
+    @staticmethod
+    def _is_rate_limited_error(ret_list: list[str]) -> bool:
+        """判断订单详情接口是否因平台限流或繁忙被拒绝。"""
+        error_text = ' '.join(str(ret) for ret in ret_list).lower()
+        rate_limit_markers = (
+            'fail_biz_common_system_error2',
+            '闲鱼太累了',
+            '限流',
+            '频繁',
+            'traffic_limit',
+            'rate limit',
+        )
+        return any(marker in error_text for marker in rate_limit_markers)
     
     async def _fetch_order_detail(self, order_id: str, retry_count: int = 0) -> Optional[Dict]:
         """通过API获取订单详情
@@ -1809,12 +1823,19 @@ class OrderDetailService:
                         ret_str = ', '.join(ret_list) if ret_list else '无返回信息'
                         logger.warning(f"【{self.cookie_id}】订单 {order_id} API调用失败: {ret_str}")
                         
-                        # 令牌过期时，用更新后的cookie重试
+                        # 令牌过期或平台限流时，退避后重试。
                         from common.utils.cookie_refresh import is_token_expired_error
-                        if is_token_expired_error(ret_list):
+                        token_expired = is_token_expired_error(ret_list)
+                        rate_limited = self._is_rate_limited_error(ret_list)
+                        if token_expired or rate_limited:
                             if retry_count < max_retry - 1:
-                                logger.info(f"【{self.cookie_id}】订单 {order_id} 令牌过期，已更新Cookie，准备重试({retry_count + 1}/{max_retry - 1})...")
-                                await asyncio.sleep(0.5)
+                                retry_delay = 0.5 if token_expired else 5 * (retry_count + 1)
+                                retry_reason = '令牌过期，已更新Cookie' if token_expired else '平台限流/繁忙'
+                                logger.info(
+                                    f"【{self.cookie_id}】订单 {order_id} {retry_reason}，"
+                                    f"{retry_delay}秒后重试({retry_count + 1}/{max_retry - 1})..."
+                                )
+                                await asyncio.sleep(retry_delay)
                                 return await self._fetch_order_detail(order_id, retry_count + 1)
                         
                         return None
