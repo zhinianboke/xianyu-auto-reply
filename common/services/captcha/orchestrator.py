@@ -1,12 +1,8 @@
 """
-滑块验证编排：主引擎 + DrissionPage 兜底
+滑块验证编排：远程/真实鼠标/Playwright 主流程。
 
-对外提供与 run_slider_verification 一致的返回契约 (是否成功, cookies 字典 | None)：
-1. 先用 Playwright 主引擎（run_slider_verification）；
-2. 主引擎成功且取得 x5sec cookie → 直接返回；
-3. 否则（失败或无 x5sec）且兜底开关开启 → 调用 DrissionPage 兜底引擎重试一次。
-
-调用方只需把目标函数从 run_slider_verification 换成本函数即可，无需关心引擎细节。
+对外提供与 run_slider_verification 一致的返回契约 (是否成功, cookies 字典 | None)。
+Playwright 主引擎失败后直接返回，不再调用 DrissionPage 兜底引擎。
 """
 from __future__ import annotations
 
@@ -17,10 +13,6 @@ from loguru import logger
 from common.services.captcha.slider_stealth import run_slider_verification, CAPTCHA_NOT_REQUIRED, URL_EXPIRED
 from common.services.captcha.remote_timeout import get_remote_solve_timeout
 from common.services.captcha.slider_mode import is_real_mouse_slider_mode
-from common.services.captcha.drissionpage_slider import (
-    run_drissionpage_verification,
-    DRISSIONPAGE_AVAILABLE,
-)
 
 
 def _has_x5sec(cookies: Optional[Dict[str, str]]) -> bool:
@@ -32,29 +24,6 @@ def _has_x5sec(cookies: Optional[Dict[str, str]]) -> bool:
         if name_lower.startswith("x5") or "x5sec" in name_lower:
             return True
     return False
-
-
-def _load_fallback_config() -> Tuple[bool, bool, int]:
-    """读取兜底配置 (是否启用, 是否无头, 超时秒)。
-
-    兼容从 websocket 的 app.core.config 或 common.core.config 读取。
-    """
-    enabled, headless, timeout = True, True, 25
-    settings = None
-    try:
-        from app.core.config import get_settings
-        settings = get_settings()
-    except Exception:
-        try:
-            from common.core.config import get_settings
-            settings = get_settings()
-        except Exception:
-            settings = None
-    if settings is not None:
-        enabled = bool(getattr(settings, "captcha_drissionpage_fallback_enabled", True))
-        headless = bool(getattr(settings, "captcha_drissionpage_headless", True))
-        timeout = int(getattr(settings, "captcha_drissionpage_timeout", 25))
-    return enabled, headless, timeout
 
 
 def _real_mouse_enabled() -> bool:
@@ -147,7 +116,7 @@ def run_slider_verification_with_fallback(
     weight_class: str = "local",
     slider_mode: Optional[str] = None,
 ) -> Tuple[bool, Optional[Dict[str, str]], Optional[str]]:
-    """主引擎 + DrissionPage 兜底的滑块验证编排。
+    """执行滑块验证编排，主引擎失败后不再启用 DrissionPage 兜底。
 
     Args:
         user_id: 用户/账号 ID
@@ -166,10 +135,10 @@ def run_slider_verification_with_fallback(
 
     Returns:
         (是否成功, cookies 字典 | None, 通过引擎 | None)
-        通过引擎取值：'playwright'（主引擎）/ 'drissionpage'（兜底引擎）/ 'real_mouse'（真实鼠标）/ 'remote'（远程接口）/ None（未成功）
+        通过引擎取值：'playwright'（主引擎）/ 'real_mouse'（真实鼠标）/ 'remote'（远程接口）/ None（未成功）
     """
     # -1. 远程过滑块（可选，由全局配置 remote_config 触发）：
-    #     已配置则优先调远程接口求解；超时/网络不可用 → 回退本机逻辑；
+    #     已配置则优先调远程接口求解；超时/网络不可用 → 继续本机主流程；
     #     非超时（远程有返回，无论成败）→ 直接采用远程结果，不回退。
     #     注意：远程接口自身（/internal/captcha/solve）调用本函数时不传 remote_config，
     #     从而避免“远程地址指回本机”造成的无限递归。
@@ -220,7 +189,7 @@ def run_slider_verification_with_fallback(
                 reason = remote_message or "远程过滑块未通过"
                 logger.info(f"【{user_id}】远程过滑块未通过（非超时），按配置不回退本机，返回失败: {reason}")
                 return False, None, f"remote:{reason}"
-            # status == 'fallback' → 落到下面的本机逻辑
+            # status == 'fallback' → 继续下面的本机主流程
 
     # 0. 真实鼠标模式（在系统设置中选择）：
     #    用物理光标回放真人轨迹，成功率高但会占用桌面鼠标，仅限有桌面的 Windows。
@@ -276,45 +245,13 @@ def run_slider_verification_with_fallback(
     if ok and _has_x5sec(cookies):
         return True, cookies, "playwright"
 
-    # 验证链接已过期且无法自助重取：上报 url_expired，供远程调用方刷新URL后重试
-    # （过期页无需再走兜底引擎，兜底同样会命中过期页，直接返回让调用方刷新链接更高效）
+    # 验证链接已过期且无法自助重取：上报 url_expired，供调用方刷新URL后重试。
     if cookies == URL_EXPIRED:
         logger.info(f"【{user_id}】主引擎检测到验证链接已过期，返回 url_expired")
         return False, None, "url_expired"
 
-    # 2. 判断是否需要兜底
-    fallback_enabled, fb_headless, fb_timeout = _load_fallback_config()
-    if not fallback_enabled or not DRISSIONPAGE_AVAILABLE:
-        if not fallback_enabled:
-            logger.info(f"【{user_id}】DrissionPage 兜底未启用，返回主引擎结果")
-        return ok, cookies, ("playwright" if (ok and cookies) else None)
-
-    # 3. DrissionPage 兜底
-    # 兜底前同样尝试刷新链接，避免主引擎耗时后链接再次过期
-    fb_url = url
-    if url_provider is not None:
-        try:
-            fresh = url_provider()
-            if fresh == CAPTCHA_NOT_REQUIRED:
-                # token 已可用、风控已解除，无需滑块，跳过兜底引擎（由上层采用新 token）
-                logger.info(f"【{user_id}】检测到 token 已可用，跳过 DrissionPage 兜底引擎")
-                return ok, cookies, ("playwright" if (ok and cookies) else None)
-            if fresh and isinstance(fresh, str):
-                fb_url = fresh
-                logger.info(f"【{user_id}】兜底引擎使用刷新后的验证链接")
-        except Exception as up_e:
-            logger.warning(f"【{user_id}】兜底前刷新验证链接失败，沿用原链接: {up_e}")
-
-    logger.info(f"【{user_id}】主引擎滑块未通过，启用 DrissionPage 兜底引擎重试")
-    ok2, cookies2 = run_drissionpage_verification(
-        user_id, fb_url, existing_cookies_str=existing_cookies_str,
-        headless=fb_headless, browser_timeout=fb_timeout,
-    )
-    if ok2 and _has_x5sec(cookies2):
-        return True, cookies2, "drissionpage"
-
-    # 4. 兜底也未取得 x5sec：优先保留主引擎"成功但无 x5sec"的结果，
-    #    以维持上层原有的"无 x5sec 不计入禁用"语义。
+    # 主引擎失败直接返回，不再启动 DrissionPage 第二套浏览器引擎。
+    logger.info(f"【{user_id}】Playwright主引擎滑块未通过，DrissionPage兜底已关闭")
     if ok and cookies:
         return ok, cookies, "playwright"
-    return ok2, cookies2, None
+    return ok, cookies, None

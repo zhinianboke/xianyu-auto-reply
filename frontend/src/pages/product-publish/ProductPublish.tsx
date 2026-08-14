@@ -4,13 +4,14 @@
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { CheckCircle, ExternalLink, FolderOpen, Loader2, Send, Trash2, Upload, X, XCircle } from 'lucide-react'
+import { CheckCircle, ExternalLink, FolderOpen, Loader2, Send, Trash2, Upload, XCircle } from 'lucide-react'
 import { getAccountDetails } from '@/api/accounts'
-import { getMaterials, publishSingle, type MaterialVideo, type ProductMaterial, uploadProductImages, uploadProductVideos } from '@/api/productPublish'
+import { publishSingle, type MaterialVideo, type ProductMaterial, uploadProductImages, uploadProductVideos } from '@/api/productPublish'
 import { PageLoading } from '@/components/common/Loading'
 import { useUIStore } from '@/store/uiStore'
 import ProductPublishForm from './ProductPublishForm'
 import ProductVideoUploader from './ProductVideoUploader'
+import MaterialPickerModal from './MaterialPickerModal'
 import { buildSkuKey, findDuplicateSpecificationValue, type ProductSpecification, type PublishForm, type SkuRow } from './publishTypes'
 
 function materialSpecifications(material: ProductMaterial): { specifications: ProductSpecification[]; skuRows: SkuRow[] } {
@@ -31,26 +32,6 @@ function materialSpecifications(material: ProductMaterial): { specifications: Pr
     stock: row.stock == null ? '' : String(row.stock),
   }))
   return { specifications, skuRows }
-}
-
-function MaterialPickerModal({ onSelect, onClose }: { onSelect: (material: ProductMaterial) => void; onClose: () => void }) {
-  const [materials, setMaterials] = useState<ProductMaterial[]>([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    getMaterials(1, 1000).then((result) => { if (result.success && result.data) setMaterials(result.data.list); setLoading(false) }).catch(() => setLoading(false))
-  }, [])
-
-  return (
-    <div className="modal-overlay z-50">
-      <div className="modal-content max-w-lg">
-        <div className="modal-header"><h2 className="modal-title">从素材库选择</h2><button type="button" className="modal-close" title="关闭" onClick={onClose}><X className="w-5 h-5" /></button></div>
-        <div className="modal-body">
-          {loading ? <div className="flex justify-center py-10"><Loader2 className="w-8 h-8 animate-spin text-blue-500" /></div> : materials.length === 0 ? <p className="text-center text-slate-400 py-10">素材库为空，请先添加素材</p> : <div className="space-y-1">{materials.map((material) => <button type="button" key={material.id} className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 text-left transition-colors" onClick={() => onSelect(material)}>{material.images?.[0] ? <img src={material.images[0]} alt={material.title} className="w-12 h-12 object-cover rounded-lg flex-shrink-0" /> : <div className="w-12 h-12 bg-slate-100 dark:bg-slate-700 rounded-lg flex items-center justify-center text-slate-400 text-xs flex-shrink-0">无图</div>}<span className="flex-1 min-w-0"><span className="block font-medium text-slate-800 dark:text-slate-100 truncate">{material.title}</span><span className="block text-sm text-amber-600">¥{material.price}</span></span><span className="badge-gray flex-shrink-0">{material.condition}</span></button>)}</div>}
-        </div>
-      </div>
-    </div>
-  )
 }
 
 export function ProductPublish() {

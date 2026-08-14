@@ -36,10 +36,9 @@ class WebSocketConfig(BaseConfig):
     max_captcha_concurrent: int = Field(default=3, alias="MAX_CAPTCHA_CONCURRENT")
     browser_headless: bool = Field(default=True, alias="BROWSER_HEADLESS")
 
-    # DrissionPage 滑块兜底引擎配置
-    # 当 Playwright 主引擎滑块验证失败后，再用 DrissionPage 引擎重试一次
+    # DrissionPage 滑块兜底引擎配置（代码链路已关闭，字段仅为兼容旧配置）
     captcha_drissionpage_fallback_enabled: bool = Field(
-        default=True, alias="CAPTCHA_DRISSIONPAGE_FALLBACK_ENABLED"
+        default=False, alias="CAPTCHA_DRISSIONPAGE_FALLBACK_ENABLED"
     )
     # DrissionPage 单次验证超时（秒）
     captcha_drissionpage_timeout: int = Field(

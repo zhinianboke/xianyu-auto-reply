@@ -368,14 +368,22 @@ class PlatformCategoryService:
                         headers=headers,
                     ) as response:
                         response_text = await response.text()
-                        logger.info(
-                            f"分类推荐接口完整返回: account_id={account_id}, "
-                            f"retry_count={retry_count}, http_status={response.status}, "
-                            f"response={response_text}"
-                        )
-                        body = json.loads(response_text)
+                        try:
+                            body = json.loads(response_text)
+                        except json.JSONDecodeError:
+                            logger.warning(
+                                f"分类推荐接口返回JSON解析失败: account_id={account_id}, "
+                                f"retry_count={retry_count}, http_status={response.status}, "
+                                f"response={response_text}"
+                            )
+                            raise
                         ret = (body.get("ret") or []) if isinstance(body, dict) else []
                         if is_token_expired_error(ret):
+                            logger.warning(
+                                f"分类推荐接口返回令牌错误: account_id={account_id}, "
+                                f"retry_count={retry_count}, http_status={response.status}, "
+                                f"ret={ret}, response={response_text}"
+                            )
                             if retry_count >= 1:
                                 logger.error(
                                     f"分类推荐令牌过期重试已达上限: account_id={account_id}, ret={ret}"
@@ -409,7 +417,9 @@ class PlatformCategoryService:
                         if not any("SUCCESS" in str(item) for item in ret):
                             message = str(ret[0]) if ret else "闲鱼接口未返回成功状态"
                             logger.warning(
-                                f"分类推荐接口业务失败: account_id={account_id}, ret={message}"
+                                f"分类推荐接口业务失败: account_id={account_id}, "
+                                f"retry_count={retry_count}, http_status={response.status}, "
+                                f"ret={message}, response={response_text}"
                             )
                             raise CategoryRecommendationError(
                                 "分类推荐失败，请检查账号登录状态后重试"
@@ -420,6 +430,11 @@ class PlatformCategoryService:
                         current_card_list = _parse_current_card_list(body)
                         if not candidates:
                             raise CategoryRecommendationError("接口未返回可用的商品分类")
+                        logger.info(
+                            f"分类推荐接口调用成功: account_id={account_id}, "
+                            f"retry_count={retry_count}, candidates={len(candidates)}, "
+                            f"properties={len(properties)}, card_list={len(current_card_list)}"
+                        )
                         return {
                             "candidates": candidates,
                             "properties": properties,

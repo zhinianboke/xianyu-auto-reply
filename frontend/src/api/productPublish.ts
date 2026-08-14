@@ -308,7 +308,7 @@ export const getMaterials = (
 }
 
 /** 获取单条素材详情 */
-export const getMaterial = (id: number): Promise<ApiResponse> =>
+export const getMaterial = (id: number): Promise<ApiResponse<ProductMaterial>> =>
   get(`${PREFIX}/materials/${id}`)
 
 /** 更新素材 */

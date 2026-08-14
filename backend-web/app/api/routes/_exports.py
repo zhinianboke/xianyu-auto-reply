@@ -58,6 +58,9 @@ from . import (
     collect_fallback_account,
     order_fallback_account,
     external_cookie,
+    external_accounts,
+    external_category,
+    external_publish,
     proxy,
     refund_cancel,
     qr_login,
@@ -110,6 +113,9 @@ api_router.include_router(listing_monitor.router, tags=["商品上新监控"])  
 api_router.include_router(collect_fallback_account.router, tags=["兜底采集账号"])  # 已定义prefix="/product-monitor/collect-fallback-accounts"
 api_router.include_router(order_fallback_account.router, tags=["兜底下单账号"])  # 已定义prefix="/product-monitor/order-fallback-accounts"
 api_router.include_router(external_cookie.router, tags=["外部Cookie同步"])  # 已定义prefix="/external/account-cookie"
+api_router.include_router(external_accounts.router, tags=["公开账号查询"])  # 已定义prefix="/external/enabled-accounts"
+api_router.include_router(external_category.router, tags=["公开分类推荐"])  # 已定义prefix="/external/category"
+api_router.include_router(external_publish.router, tags=["公开商品发布"])  # 已定义prefix="/external/publish"
 api_router.include_router(keywords.router, prefix="/keywords-with-item-id", tags=["关键词管理"])
 api_router.include_router(cards.router, prefix="/cards", tags=["卡券管理"])
 api_router.include_router(distribution.router, prefix="/distribution", tags=["分销管理"])
