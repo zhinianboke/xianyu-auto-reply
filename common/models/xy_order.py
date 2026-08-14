@@ -28,6 +28,7 @@ class XYOrder(TimestampMixin, Base):
         Index("idx_order_owner_created", "owner_id", "created_at"),
         Index("idx_order_owner_account_placed", "owner_id", "account_id", "placed_at"),
         Index("idx_order_owner_account_buyer_created", "owner_id", "account_id", "buyer_id", "created_at"),
+        Index("idx_order_account_buyer_item", "account_id", "buyer_id", "item_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="订单ID")
@@ -64,4 +65,3 @@ class XYOrder(TimestampMixin, Base):
     source: Mapped[str | None] = mapped_column(String(32), comment="数据来源：fetch_xianyu-获取闲鱼订单按钮")
     placed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="下单时间")
     synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="同步时间")
-

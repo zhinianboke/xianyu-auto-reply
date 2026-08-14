@@ -641,6 +641,17 @@ class AccountService:
         # 同步内存对象属性（expire_on_commit=False 下对象属性不会自动刷新）
         account.ai_reply_block_ordered_users = ai_reply_block_ordered_users
 
+    async def update_ai_reply_block_ordered_items(self, account: XYAccount, ai_reply_block_ordered_items: bool) -> None:
+        """更新已下单商品禁止AI回复开关。"""
+        stmt = (
+            update(XYAccount)
+            .where(XYAccount.id == account.id)
+            .values(ai_reply_block_ordered_items=ai_reply_block_ordered_items)
+        )
+        await self.session.execute(stmt)
+        await self.session.commit()
+        account.ai_reply_block_ordered_items = ai_reply_block_ordered_items
+
     async def update_delivery_disabled(
         self,
         account: XYAccount,
