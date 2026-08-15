@@ -23,6 +23,7 @@ from common.schemas.account import (
     AccountBatchIdsUpdate,
     AccountBatchStatusUpdate,
     AccountAutoRedFlowerUpdate,
+    AccountRedFlowerAfterShipmentUpdate,
     AccountAiReplyBlockOrderedUsersUpdate,
     AccountConfirmBeforeSendUpdate,
     AccountCookieUpdate,
@@ -202,6 +203,7 @@ async def list_cookie_details(
                 confirm_before_send=bool(account.confirm_before_send),
                 send_before_confirm=bool(account.send_before_confirm),
                 auto_red_flower=bool(account.auto_red_flower),
+                red_flower_after_shipment=bool(account.red_flower_after_shipment),
                 ai_reply_block_ordered_users=bool(account.ai_reply_block_ordered_users),
                 delivery_disabled=bool(account.delivery_disabled),
                 delivery_disabled_reason=account.delivery_disabled_reason or "",
@@ -346,6 +348,7 @@ async def list_cookie_details_paginated(
             "confirm_before_send": bool(account.confirm_before_send),
             "send_before_confirm": bool(account.send_before_confirm),
             "auto_red_flower": bool(account.auto_red_flower),
+            "red_flower_after_shipment": bool(account.red_flower_after_shipment),
             "ai_reply_block_ordered_users": bool(account.ai_reply_block_ordered_users),
             "delivery_disabled": bool(account.delivery_disabled),
             "delivery_disabled_reason": account.delivery_disabled_reason or "",
@@ -825,6 +828,22 @@ async def update_account_auto_red_flower(
     account = await _get_account_or_404(current_user, account_id, account_service)
     await account_service.update_auto_red_flower(account, payload.auto_red_flower)
     return ApiResponse(success=True, message="自动求小红花设置已更新")
+
+
+@router.put("/{account_id}/red-flower-after-shipment", response_model=ApiResponse)
+async def update_account_red_flower_after_shipment(
+    account_id: str,
+    payload: AccountRedFlowerAfterShipmentUpdate,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+) -> ApiResponse:
+    """更新仅在订单已发货或已完成后求小红花开关"""
+    account = await _get_account_or_404(current_user, account_id, account_service)
+    await account_service.update_red_flower_after_shipment(
+        account,
+        payload.red_flower_after_shipment,
+    )
+    return ApiResponse(success=True, message="仅发货后求小红花设置已更新")
 
 
 @router.put("/{account_id}/ai-reply-block-ordered-users", response_model=ApiResponse)
