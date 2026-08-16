@@ -277,6 +277,16 @@ class DBManagerCompat:
                 return bool(send_before_confirm) if send_before_confirm is not None else False
         return self._run_async(_query)
 
+    def get_only_send_card(self, cookie_id: str) -> bool:
+        """获取只发卡券、不确认发货开关设置"""
+        async def _query(session_maker):
+            async with session_maker() as session:
+                stmt = select(XYAccount.only_send_card).where(XYAccount.account_id == cookie_id)
+                result = await session.execute(stmt)
+                value = result.scalar_one_or_none()
+                return bool(value) if value is not None else False
+        return self._run_async(_query)
+
     def get_cookie_status(self, cookie_id: str) -> bool:
         """获取账号是否启用"""
         async def _query(session_maker):
@@ -665,6 +675,9 @@ class DBManagerCompat:
                     'amount': str(order.amount) if order.amount else '0',
                     'quantity': order.quantity,
                     'is_bargain': order.is_bargain,
+                    'card_only_delivered': order.card_only_delivered,
+                    'delivery_method': order.delivery_method,
+                    'delivery_content': order.delivery_content,
                 }
         return self._run_async(_query)
     

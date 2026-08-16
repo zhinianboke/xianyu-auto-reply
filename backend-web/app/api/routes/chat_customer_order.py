@@ -67,6 +67,7 @@ async def get_customer_orders(
             "status": order.status or "unknown",
             "delivery_method": order.delivery_method or "",
             "delivery_fail_reason": order.delivery_fail_reason or "",
+            "card_only_delivered": bool(order.card_only_delivered),
             "placed_at": order.placed_at.isoformat() if order.placed_at else "",
         })
     return ApiResponse(success=True, data=data)

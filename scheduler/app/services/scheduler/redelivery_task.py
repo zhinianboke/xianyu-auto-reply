@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from loguru import logger
-from sqlalchemy import delete as sql_delete, select, update as sql_update
+from sqlalchemy import delete as sql_delete, or_, select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.db.session import async_session_maker
@@ -209,12 +209,12 @@ class RedeliveryTask:
         
         条件：
         - status = 'active'（启用）
-        - auto_confirm = True（自动确认发货开启）
+        - auto_confirm = True 或 only_send_card = True
         - scheduled_redelivery = True（定时补发货开启）
         """
         stmt = select(XYAccount).where(
             XYAccount.status == "active",
-            XYAccount.auto_confirm == True,
+            or_(XYAccount.auto_confirm == True, XYAccount.only_send_card == True),
             XYAccount.scheduled_redelivery == True,
         )
         result = await session.execute(stmt)
@@ -244,6 +244,7 @@ class RedeliveryTask:
             XYOrder.placed_at.is_not(None),
             XYOrder.placed_at >= today_start,
             XYOrder.status.in_(["pending_payment", "processing", "pending_ship"]),
+            XYOrder.card_only_delivered.is_(False),
         ).order_by(XYOrder.placed_at)
         
         result = await session.execute(stmt)
@@ -404,14 +405,15 @@ class RedeliveryTask:
             logger.warning(f"[定时补发货] Redis分布式锁异常: {order_no}, error={e}，继续执行")
         
         try:
-            # 获取锁后检查数据库订单状态，如果已发货则跳过
-            if redis_lock_acquired:
-                stmt = select(XYOrder).where(XYOrder.order_no == order_no)
-                result = await session.execute(stmt)
-                current_order = result.scalars().first()
-                if current_order and current_order.status == 'shipped':
-                    logger.info(f"[定时补发货] 获取锁后检查发现订单 {order_no} 已发货，跳过处理")
-                    return True, "订单已发货，无需处理", cookie_string
+            # 即使 Redis 降级，也先复查持久化状态，避免已发卡订单被重复处理。
+            stmt = select(XYOrder).where(XYOrder.order_no == order_no)
+            result = await session.execute(stmt)
+            current_order = result.scalars().first()
+            if current_order and (
+                current_order.status == 'shipped' or current_order.card_only_delivered
+            ):
+                logger.info(f"[定时补发货] 处理前检查发现订单 {order_no} 已处理，跳过重复发货")
+                return True, "订单已处理，无需重复发货", cookie_string
             
             # 调用check_can_ship检查订单是否可以发货（传入account_id支持令牌过期自动刷新Cookie）
             from common.services.order_service import check_can_ship
@@ -612,11 +614,22 @@ class RedeliveryTask:
                         # 仍返回 True，避免任务重复触发；视为本次处理完成
                         return True, None, cookie_string
 
-                    # 更新订单状态为已发货
-                    order.status = "shipped"
-                    order.delivery_method = "scheduled"
-                    order.delivery_content = result_data.get('content', '')
-                    await session.commit()
+                    if result_data.get('only_send_card'):
+                        # 平台订单仍是待发货，不能伪装成 shipped；写持久化标记防止下轮重复发券。
+                        order.card_only_delivered = True
+                        order.delivery_method = "scheduled"
+                        order.delivery_content = result_data.get('content', '')
+                        await session.commit()
+                        logger.info(
+                            f"[定时补发货] 订单 {order_no} 只发卡券完成，"
+                            f"平台状态保持 {order.status}，已写入防重复标记"
+                        )
+                    else:
+                        # 正常确认发货流程才更新本地平台状态
+                        order.status = "shipped"
+                        order.delivery_method = "scheduled"
+                        order.delivery_content = result_data.get('content', '')
+                        await session.commit()
 
                     # 多数量退化提示：订单 quantity>1 但因卡券类型限制只发了 1 张，
                     # 把提示写入 delivery_fail_reason 让商家在订单列表看到原因

@@ -24,6 +24,7 @@ class AccountDetail(BaseModel):
     auto_polish: bool = False
     confirm_before_send: bool = False
     send_before_confirm: bool = False
+    only_send_card: bool = False
     auto_red_flower: bool = False
     ai_reply_block_ordered_users: bool = False
     delivery_disabled: bool = False
@@ -130,6 +131,11 @@ class AccountConfirmBeforeSendUpdate(BaseModel):
 class AccountSendBeforeConfirmUpdate(BaseModel):
     """卡券发送成功再确认发货开关更新"""
     send_before_confirm: bool = Field(..., description="卡券发送成功再确认发货开关")
+
+
+class AccountOnlySendCardUpdate(BaseModel):
+    """只发卡券、不确认发货开关更新"""
+    only_send_card: bool = Field(..., description="只发卡券不确认发货开关")
 
 
 class AccountAutoRedFlowerUpdate(BaseModel):

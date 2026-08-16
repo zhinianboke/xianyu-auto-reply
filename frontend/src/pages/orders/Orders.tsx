@@ -849,13 +849,13 @@ export function Orders() {
                           </button>
                           <button
                             onClick={() => setDeliveryConfirm({ open: true, orderNo: order.order_id })}
-                            disabled={deliveringOrderId === order.order_id || order.status === 'shipped' || order.status === 'completed'}
+                            disabled={deliveringOrderId === order.order_id || order.status === 'shipped' || order.status === 'completed' || order.card_only_delivered}
                             className={`p-2 rounded-lg transition-colors ${
-                              order.status === 'shipped' || order.status === 'completed'
+                              order.status === 'shipped' || order.status === 'completed' || order.card_only_delivered
                                 ? 'opacity-50 cursor-not-allowed'
                                 : 'hover:bg-green-50 dark:hover:bg-green-900/20'
                             }`}
-                            title={order.status === 'shipped' || order.status === 'completed' ? '已发货' : '手动发货'}
+                            title={order.card_only_delivered ? '卡券已发送' : (order.status === 'shipped' || order.status === 'completed' ? '已发货' : '手动发货')}
                           >
                             {deliveringOrderId === order.order_id ? (
                               <Loader2 className="w-4 h-4 text-green-500 animate-spin" />

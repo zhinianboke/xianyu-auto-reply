@@ -236,7 +236,8 @@ class AccountExportService:
     def _write_account_switches(self, wb: Workbook, accounts: list[XYAccount]) -> None:
         headers = [
             "账号ID", "自动确认收货", "定时补发货", "定时补评价", "商品擦亮",
-            "发货成功再发卡券", "自动求小红花", "禁止发货", "禁止发货原因",
+            "发货成功再发卡券", "卡券发送成功再确认发货", "只发卡券不确认发货",
+            "自动求小红花", "禁止发货", "禁止发货原因",
             "主动关闭订单", "关闭后发卡券", "禁止发货排除商品",
         ]
         rows = []
@@ -244,6 +245,7 @@ class AccountExportService:
             rows.append([
                 acc.account_id, acc.auto_confirm, acc.scheduled_redelivery,
                 acc.scheduled_rate, acc.auto_polish, acc.confirm_before_send,
+                acc.send_before_confirm, acc.only_send_card,
                 acc.auto_red_flower, acc.delivery_disabled, acc.delivery_disabled_reason,
                 acc.auto_close_order, acc.delivery_only_card_after_close,
                 acc.delivery_disabled_excluded_items,
