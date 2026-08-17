@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, RefreshCw, QrCode, Key, Edit2, Trash2, Power, PowerOff, X, Loader2, Clock, CheckCircle, MessageSquare, Bot, Globe, Timer, ScanFace, ChevronLeft, ChevronRight, ChevronDown, ImagePlus, Filter, Repeat, MoreHorizontal, PackageCheck, Star, ShieldCheck, Flower2, Eye, EyeOff, Ban, Download, Upload, Send, AlertCircle } from 'lucide-react'
-import { getAccountDetailsPaginated, deleteAccount, updateAccountCookie, updateAccountStatus, updateAccountsStatusBatch, closeAccountsNoticeBatch, clearTokenCacheBatch, updateAccountRemark, addAccount, generateQRLogin, checkQRLoginStatus, passwordLogin, checkPasswordLoginStatus, cancelPasswordLogin, updateAccountAutoConfirm, updateAccountPauseDuration, updateAccountMessageExpireTime, updateAccountReplyDelay, updateAccountLoginInfo, updateAccountScheduledRedelivery, updateAccountScheduledRate, updateAccountAutoPolish, updateAccountConfirmBeforeSend, updateAccountSendBeforeConfirm, updateAccountAutoRedFlower, updateAccountAiReplyBlockOrderedUsers, getAIReplySettings, updateAIReplySettings, testAIConnection, fetchAIModels, AI_PROVIDER_OPTIONS, AI_PROVIDER_DEFAULT_BASE_URLS, getProxyConfig, updateProxyConfig, getFaceVerificationScreenshot, deleteFaceVerificationScreenshot, getConfirmReceiptMessage, updateConfirmReceiptMessage, uploadConfirmReceiptImage, exportAccountsExcel, importAccountsExcel, type AIProviderType, type AIModelOption, type ProxyConfig, type FaceVerificationScreenshot, type AccountFilterParams } from '@/api/accounts'
+import { Plus, RefreshCw, QrCode, Key, Edit2, Trash2, Power, PowerOff, X, Loader2, Clock, CheckCircle, MessageSquare, Bot, Globe, Timer, ScanFace, ChevronLeft, ChevronRight, ChevronDown, ImagePlus, Filter, Repeat, MoreHorizontal, PackageCheck, Star, ShieldCheck, Flower2, Eye, EyeOff, Ban, Download, Upload, Send, Ticket, AlertCircle } from 'lucide-react'
+import { getAccountDetailsPaginated, deleteAccount, updateAccountCookie, updateAccountStatus, updateAccountsStatusBatch, closeAccountsNoticeBatch, clearTokenCacheBatch, updateAccountRemark, addAccount, generateQRLogin, checkQRLoginStatus, passwordLogin, checkPasswordLoginStatus, cancelPasswordLogin, updateAccountAutoConfirm, updateAccountPauseDuration, updateAccountMessageExpireTime, updateAccountReplyDelay, updateAccountLoginInfo, updateAccountScheduledRedelivery, updateAccountScheduledRate, updateAccountAutoPolish, updateAccountConfirmBeforeSend, updateAccountSendBeforeConfirm, updateAccountOnlySendCard, updateAccountAutoRedFlower, updateAccountAiReplyBlockOrderedUsers, getAIReplySettings, updateAIReplySettings, testAIConnection, fetchAIModels, AI_PROVIDER_OPTIONS, AI_PROVIDER_DEFAULT_BASE_URLS, getProxyConfig, updateProxyConfig, getFaceVerificationScreenshot, deleteFaceVerificationScreenshot, getConfirmReceiptMessage, updateConfirmReceiptMessage, uploadConfirmReceiptImage, exportAccountsExcel, importAccountsExcel, type AIProviderType, type AIModelOption, type ProxyConfig, type FaceVerificationScreenshot, type AccountFilterParams } from '@/api/accounts'
 import { getDefaultReply, updateDefaultReply, uploadDefaultReplyImage } from '@/api/keywords'
 import { getAutoRateConfig, updateAutoRateConfig } from '@/api/autoRate'
 import { checkAdminDefaultPassword } from '@/api/auth'
@@ -1284,7 +1284,7 @@ export function Accounts() {
     try {
       await updateAccountConfirmBeforeSend(account.id, newEnabled)
       setAccounts(prev => prev.map(a =>
-        a.id === account.id ? { ...a, confirm_before_send: newEnabled, ...(newEnabled ? { send_before_confirm: false } : {}) } : a,
+        a.id === account.id ? { ...a, confirm_before_send: newEnabled, ...(newEnabled ? { send_before_confirm: false, only_send_card: false } : {}) } : a,
       ))
       addToast({ type: 'success', message: `发货成功再发卡券已${newEnabled ? '开启' : '关闭'}` })
     } catch {
@@ -1298,11 +1298,27 @@ export function Accounts() {
     try {
       await updateAccountSendBeforeConfirm(account.id, newEnabled)
       setAccounts(prev => prev.map(a =>
-        a.id === account.id ? { ...a, send_before_confirm: newEnabled, ...(newEnabled ? { confirm_before_send: false } : {}) } : a,
+        a.id === account.id ? { ...a, send_before_confirm: newEnabled, ...(newEnabled ? { confirm_before_send: false, only_send_card: false } : {}) } : a,
       ))
       addToast({ type: 'success', message: `卡券发送成功再确认发货已${newEnabled ? '开启' : '关闭'}` })
     } catch {
       addToast({ type: 'error', message: '更新卡券发送成功再确认发货开关失败' })
+    }
+  }
+
+  // ==================== 只发卡券不确认发货开关 ====================
+  const handleToggleOnlySendCard = async (account: AccountWithKeywordCount) => {
+    const newEnabled = !account.only_send_card
+    try {
+      await updateAccountOnlySendCard(account.id, newEnabled)
+      setAccounts(prev => prev.map(a =>
+        a.id === account.id
+          ? { ...a, only_send_card: newEnabled, ...(newEnabled ? { auto_confirm: false, confirm_before_send: false, send_before_confirm: false } : {}) }
+          : a,
+      ))
+      addToast({ type: 'success', message: `只发卡券不确认发货已${newEnabled ? '开启' : '关闭'}` })
+    } catch {
+      addToast({ type: 'error', message: '更新只发卡券不确认发货开关失败' })
     }
   }
 
@@ -1348,7 +1364,7 @@ export function Accounts() {
     try {
       await updateAccountAutoConfirm(account.id, newEnabled)
       setAccounts(prev => prev.map(a =>
-        a.id === account.id ? { ...a, auto_confirm: newEnabled } : a,
+        a.id === account.id ? { ...a, auto_confirm: newEnabled, ...(newEnabled ? { only_send_card: false } : {}) } : a,
       ))
       addToast({ type: 'success', message: `自动确认发货已${newEnabled ? '开启' : '关闭'}` })
     } catch {
@@ -2401,7 +2417,7 @@ export function Accounts() {
                         {(account.username && account.login_password) ? '已配置' : '未配置'}
                       </span>
                     </td>
-                    {/* 功能开关组：7 个开关合并为紧凑图标组，点击切换，hover 查看说明 */}
+                    {/* 功能开关组：图标按钮点击切换，hover 查看说明 */}
                     <td>
                       <div className="flex items-center gap-1 [&>button]:shrink-0">
                         {/* AI回复 */}
@@ -2460,7 +2476,7 @@ export function Accounts() {
                               ? 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300 dark:hover:bg-green-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
                           }`}
-                          title={`自动确认发货：${account.auto_confirm ? '已开启（点击关闭）' : '已关闭（点击开启）'}`}
+                          title={`自动确认发货：${account.auto_confirm ? '已开启（点击关闭）' : '已关闭（点击开启，开启后会关闭“只发卡券不确认发货”）'}`}
                         >
                           <PackageCheck className="w-3.5 h-3.5" />
                         </button>
@@ -2487,6 +2503,18 @@ export function Accounts() {
                           title={`卡券发送成功再确认发货：${account.send_before_confirm ? '已开启（点击关闭）' : '已关闭（点击开启，开启后先发卡券，发送成功后再确认发货）'}`}
                         >
                           <Send className="w-3.5 h-3.5" />
+                        </button>
+                        {/* 只发卡券不确认发货 */}
+                        <button
+                          onClick={() => handleToggleOnlySendCard(account)}
+                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
+                            account.only_send_card
+                              ? 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:hover:bg-orange-900/50'
+                              : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
+                          }`}
+                          title={`只发卡券不确认发货：${account.only_send_card ? '已开启（点击关闭，当前所有发货仅发送卡券）' : '已关闭（点击开启，开启后会关闭自动确认发货，并跳过确认发货和免拼接口）'}`}
+                        >
+                          <Ticket className="w-3.5 h-3.5" />
                         </button>
                         {/* 自动求小红花 */}
                         <button

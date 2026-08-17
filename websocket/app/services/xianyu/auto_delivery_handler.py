@@ -1018,6 +1018,10 @@ class AutoDeliveryHandler:
     def is_send_before_confirm_enabled(self) -> bool:
         """检查是否开启卡券发送成功再确认发货开关"""
         return self.parent.is_send_before_confirm_enabled()
+
+    def is_only_send_card_enabled(self) -> bool:
+        """检查是否开启只发卡券、不确认发货开关"""
+        return self.parent.is_only_send_card_enabled()
     
     # ==================== 发货冷却检查 ====================
     
@@ -1132,8 +1136,11 @@ class AutoDeliveryHandler:
             pre_check_action = pre_check.get('action', 'allow')
             if pre_check_action == 'block':
                 return
-            # card_only 下需跳过 confirm 接口，仅发卡券
-            skip_confirm_for_card_only = (pre_check_action == 'card_only')
+            # 两类只发卡券场景都跳过平台发货接口，但订单落库语义不同：
+            # 关闭后补卡券保留 closed；账号级只发卡券保留平台待发货状态并写防重复标记。
+            closed_order_card_only = (pre_check_action == 'card_only')
+            only_send_card_mode = self.is_only_send_card_enabled()
+            skip_shipping_confirm = closed_order_card_only or only_send_card_mode
 
             # 将 buyer_fish_nick 保存为局部变量，避免并发场景下
             # self._current_buyer_fish_nick 被其他协程重置导致写入数据库时为空
@@ -1157,6 +1164,8 @@ class AutoDeliveryHandler:
             
             lock_result = None
             redis_lock_acquired = False
+            local_order_lock = None
+            local_lock_acquired = False
             try:
                 lock_result = await try_acquire_delivery_lock(order_id, expire=120, holder_info=self.cookie_id, wait_timeout=5)
                 if lock_result.success:
@@ -1173,13 +1182,27 @@ class AutoDeliveryHandler:
                 logger.warning(f'[{msg_time}] 【{self.cookie_id}】Redis分布式锁异常，降级为本地锁控制: {order_id}, error={e}')
             
             try:
+                # Redis正常时作为同进程第二层保护；Redis异常时作为手动/定时/自动发货的降级锁。
+                local_order_lock = self.parent._order_locks[order_id]
+                try:
+                    await asyncio.wait_for(local_order_lock.acquire(), timeout=5)
+                    local_lock_acquired = True
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f'[{msg_time}] 【{self.cookie_id}】订单 {order_id} 本地发货锁被占用，跳过重复处理'
+                    )
+                    return
+
                 # 获取锁后检查数据库订单状态，如果已发货则跳过
-                if redis_lock_acquired and order_id:
+                if order_id:
                     try:
                         from common.db.compat import db_manager
                         existing_order = db_manager.get_order_by_id(order_id)
-                        if existing_order and existing_order.get('status') == 'shipped':
-                            logger.info(f'[{msg_time}] 【{self.cookie_id}】获取锁后检查发现订单 {order_id} 已发货，跳过处理')
+                        if existing_order and (
+                            existing_order.get('status') == 'shipped'
+                            or existing_order.get('card_only_delivered')
+                        ):
+                            logger.info(f'[{msg_time}] 【{self.cookie_id}】获取锁后检查发现订单 {order_id} 已处理，跳过重复发货')
                             return
                     except Exception as e:
                         logger.warning(f'[{msg_time}] 【{self.cookie_id}】获取锁后检查订单状态异常: {self._safe_str(e)}')
@@ -1240,7 +1263,7 @@ class AutoDeliveryHandler:
                     # card_only 多数量退化保护：订单已被关闭 + 仅补发卡券是商家"礼貌性安抚"语义，
                     # 业务上就是补 1 张固定卡券；多数量场景下 N 倍补发会让货主额外亏 N-1 张卡密成本
                     # （特别是 data/api 实际卡密会扣库存/调 API），强制退化为 1 张。
-                    if quantity_to_send > 1 and skip_confirm_for_card_only:
+                    if quantity_to_send > 1 and closed_order_card_only:
                         logger.warning(
                             f"【{self.cookie_id}】订单 {order_id} card_only 模式仅补发 1 张固定卡券，"
                             f"已退化为 1 张（原数量 {quantity_to_send}）"
@@ -1257,6 +1280,8 @@ class AutoDeliveryHandler:
                     # 固定内容类型（text/image）退化标记：循环 N 次只是把同一段话/同一张图重复发 N 次，
                     # 业务上无意义且会打扰买家。商家若需要多数量真正发不同内容，应使用 data 或 api 类型卡券
                     quantity_degraded_for_fixed_content = False
+                    # 账号开关可能在发货过程中变化；最终必须以平台接口是否已经成功为准落库。
+                    platform_shipping_confirmed = bool(pre_check.get('platform_shipping_confirmed'))
 
                     # 在循环开始前清空上次的卡券来源/类型记录，避免跨订单残留
                     self._last_delivery_card_source = None
@@ -1265,11 +1290,23 @@ class AutoDeliveryHandler:
                     for i in range(quantity_to_send):
                         try:
                             # 每次调用都可能获取不同的内容（API卡券、批量数据等）
-                            # skip_confirm=True：禁止发货 + 关闭订单后继续发货场景，跳过确认发货接口
-                            delivery_content = await self._auto_delivery(
+                            # 两类只发卡券场景均跳过确认接口；closed_order_card_only 仅控制关单后的对接卡券保护。
+                            delivery_result = await self._auto_delivery(
                                 item_id, item_title, order_id, send_user_id, chat_id, send_user_name,
-                                skip_confirm=skip_confirm_for_card_only,
+                                skip_confirm=skip_shipping_confirm,
+                                closed_order_card_only=closed_order_card_only,
                             )
+                            if isinstance(delivery_result, dict):
+                                delivery_content = delivery_result.get('content')
+                                platform_shipping_confirmed = (
+                                    platform_shipping_confirmed
+                                    or bool(delivery_result.get('platform_shipping_confirmed'))
+                                )
+                                if delivery_result.get('skipped_only_send_card'):
+                                    only_send_card_mode = True
+                                    skip_shipping_confirm = True
+                            else:
+                                delivery_content = delivery_result
                             if delivery_content:
                                 delivery_contents.append(delivery_content)
                                 success_count += 1
@@ -1461,11 +1498,30 @@ class AutoDeliveryHandler:
                                 any_send_failed = True
                                 logger.error(f"发送第 {i+1} 条消息失败: {self._safe_str(e)}")
 
+                        # 请求处理中若账号刚切换到只发卡券，后续也必须禁止确认发货，
+                        # 并按只发卡券语义写入持久化防重复标记。
+                        if (
+                            not only_send_card_mode
+                            and not platform_shipping_confirmed
+                            and self.is_only_send_card_enabled()
+                        ):
+                            only_send_card_mode = True
+                            skip_shipping_confirm = True
+                            logger.info(
+                                f"【{self.cookie_id}】订单 {order_id} 处理期间开启了只发卡券，"
+                                f"后续跳过确认发货并按只发卡券结果落库"
+                            )
+
                         # “卡券发送成功再确认发货”开关：开启时需在确认发货前同步等待服务端回执
                         send_before_confirm_active = (
-                            not skip_confirm_for_card_only
+                            not skip_shipping_confirm
                             and self.is_send_before_confirm_enabled()
                             and bool(order_id)
+                        )
+                        only_send_card_result = only_send_card_mode and not platform_shipping_confirmed
+                        wait_card_receipt = (
+                            (send_before_confirm_active or only_send_card_result)
+                            and not any_send_failed
                         )
 
                         # 写入消息日志，记录真实发送结果
@@ -1481,7 +1537,7 @@ class AutoDeliveryHandler:
                             delivery_contents=delivery_contents,
                             send_results=send_results,
                             any_send_failed=any_send_failed,
-                            defer_send_status_writeback=(send_before_confirm_active and not any_send_failed),
+                            defer_send_status_writeback=wait_card_receipt,
                         )
 
                         # "卡券发送成功再确认发货"模式：卡券已发送，现在执行确认发货
@@ -1489,7 +1545,7 @@ class AutoDeliveryHandler:
                         # 开关开启时：确认发货前等待服务端回执，确认卡券真实送达（未被平台拦截）再确认发货
                         # 以 send_results 中的 future 为准，不因日志写入失败而跳过等待
                         card_intercept_reason = None
-                        if send_before_confirm_active and not any_send_failed:
+                        if wait_card_receipt:
                             card_intercept_reason = await self._wait_card_delivery_confirmed(
                                 send_results, delivery_log_ctx, msg_time, order_id
                             )
@@ -1498,7 +1554,15 @@ class AutoDeliveryHandler:
                             logger.info(f'[{msg_time}] 【{self.cookie_id}】卡券发送成功，开始执行确认发货: order_id={order_id}')
                             if self.is_auto_confirm_enabled():
                                 confirm_result = await self.auto_confirm(order_id, item_id)
-                                if confirm_result.get('success'):
+                                if confirm_result.get('skipped_only_send_card'):
+                                    only_send_card_mode = True
+                                    skip_shipping_confirm = True
+                                    logger.info(
+                                        f'[{msg_time}] 【{self.cookie_id}】订单 {order_id} 后置确认发货已被只发卡券开关拦截，'
+                                        f'按只发卡券结果落库'
+                                    )
+                                elif confirm_result.get('success'):
+                                    platform_shipping_confirmed = True
                                     logger.info(f'[{msg_time}] 【{self.cookie_id}】🎉 卡券发送后确认发货成功: order_id={order_id}')
                                 else:
                                     confirm_error = confirm_result.get('error', '未知错误')
@@ -1529,6 +1593,38 @@ class AutoDeliveryHandler:
                                 chat_id,
                             )
 
+                        # 后置确认流程结束后再做一次终态复查，覆盖开关在最后几步才开启的窗口。
+                        if (
+                            not only_send_card_mode
+                            and not platform_shipping_confirmed
+                            and self.is_only_send_card_enabled()
+                        ):
+                            only_send_card_mode = True
+                            skip_shipping_confirm = True
+
+                        # 后置确认流程可能在执行期间才发现账号已切换到只发卡券，
+                        # 或确认接口已经实际成功。这里必须以最终平台调用结果重新计算，
+                        # 否则会把“只发卡券”订单错误更新为 shipped。
+                        only_send_card_result = only_send_card_mode and not platform_shipping_confirmed
+                        card_only_send_fail_msg = None
+                        if only_send_card_result:
+                            if card_intercept_reason:
+                                card_only_send_fail_msg = (
+                                    f"卡券疑似被平台拦截未送达（{card_intercept_reason}），"
+                                    "已记录卡券内容，请人工核实买家是否收到"
+                                )
+                            elif any_send_failed:
+                                card_only_send_fail_msg = (
+                                    "部分卡券消息发送失败，已记录卡券内容；"
+                                    "请检查买家是否收到并手动补发失败内容"
+                                )
+                            if card_only_send_fail_msg:
+                                await self.send_delivery_failure_notification(
+                                    send_user_name, send_user_id, item_id,
+                                    card_only_send_fail_msg,
+                                    chat_id,
+                                )
+
                         # 如果有消息发送失败，额外发通知告知（不影响订单状态）
                         if any_send_failed:
                             fail_notify_msg = "部分发货消息发送失败（WebSocket连接断开），请检查买家是否收到完整内容"
@@ -1556,6 +1652,21 @@ class AutoDeliveryHandler:
                                 f"如需多数量发送不同卡密，请改用 data 或 api 类型卡券",
                                 chat_id,
                             )
+                        elif only_send_card_result:
+                            if not card_only_send_fail_msg:
+                                card_only_success_msg = "卡券发送成功（平台订单保持待发货）"
+                                if len(delivery_contents) > 1:
+                                    card_only_success_msg = (
+                                        f"卡券发送成功，共发送 {len(delivery_contents)} 个卡券"
+                                        f"（平台订单保持待发货）"
+                                    )
+                                await self.send_delivery_failure_notification(
+                                    send_user_name,
+                                    send_user_id,
+                                    item_id,
+                                    card_only_success_msg,
+                                    chat_id,
+                                )
                         elif len(delivery_contents) > 1:
                             await self.send_delivery_failure_notification(send_user_name, send_user_id, item_id, f"多数量发货成功，共发送 {len(delivery_contents)} 个卡券", chat_id)
                         else:
@@ -1570,7 +1681,7 @@ class AutoDeliveryHandler:
                                 order_service = OrderService(db_session)
                                 # 合并所有发货内容
                                 combined_content = "\n---\n".join(delivery_contents) if len(delivery_contents) > 1 else delivery_contents[0]
-                                if skip_confirm_for_card_only:
+                                if closed_order_card_only:
                                     # card_only：仅记录 delivery_method/content，保留 status='closed' 和 fail_reason
                                     await order_service.record_delivery_for_closed_order(
                                         order_no=order_id,
@@ -1580,6 +1691,17 @@ class AutoDeliveryHandler:
                                     )
                                     logger.info(
                                         f"【{self.cookie_id}】订单 {order_id} card_only 模式：已记录补发卡券内容（订单状态保持已关闭）"
+                                    )
+                                elif only_send_card_result:
+                                    await order_service.record_card_only_delivery(
+                                        order_no=order_id,
+                                        delivery_method="auto",
+                                        delivery_content=combined_content,
+                                        buyer_fish_nick=local_buyer_fish_nick,
+                                    )
+                                    logger.info(
+                                        f"【{self.cookie_id}】订单 {order_id} 只发卡券完成，"
+                                        f"已写入防重复标记，平台订单状态保持不变"
                                     )
                                 else:
                                     # 正常发货：记录发货方式为"自动发货"
@@ -1623,25 +1745,24 @@ class AutoDeliveryHandler:
                                             f"【{self.cookie_id}】订单 {order_id} 写入退化提示失败: {self._safe_str(_warn_err)}"
                                         )
 
-                                # "卡券发送成功再确认发货"模式下确认失败/发送失败的原因写入
+                                # 记录确认发货或只发卡券流程中的异常原因
                                 # 必须在 update_order_delivery_info 之后，否则会被其内部 delivery_fail_reason=None 清空
-                                # 注意：degraded_warn_msg 和 send_before_confirm_fail_msg 不会同时出现
-                                # （退化场景 quantity 被强制为 1，不会触发 any_send_failed 的多张失败逻辑）
-                                if send_before_confirm_fail_msg and not degraded_warn_msg:
+                                delivery_fail_msg = card_only_send_fail_msg or send_before_confirm_fail_msg
+                                if delivery_fail_msg and not degraded_warn_msg:
                                     try:
                                         await order_service.update_order_delivery_fail_reason(
-                                            order_id, send_before_confirm_fail_msg
+                                            order_id, delivery_fail_msg
                                         )
                                         logger.warning(
-                                            f"【{self.cookie_id}】订单 {order_id} 确认发货失败原因已写入: {send_before_confirm_fail_msg}"
+                                            f"【{self.cookie_id}】订单 {order_id} 发货异常原因已写入: {delivery_fail_msg}"
                                         )
                                     except Exception as _sbc_err:
                                         logger.warning(
-                                            f"【{self.cookie_id}】订单 {order_id} 写入确认发货失败原因失败: {self._safe_str(_sbc_err)}"
+                                            f"【{self.cookie_id}】订单 {order_id} 写入发货异常原因失败: {self._safe_str(_sbc_err)}"
                                         )
-                                elif send_before_confirm_fail_msg and degraded_warn_msg:
+                                elif delivery_fail_msg and degraded_warn_msg:
                                     # 两者都有时合并写入
-                                    combined_reason = f"{degraded_warn_msg}；{send_before_confirm_fail_msg}"
+                                    combined_reason = f"{degraded_warn_msg}；{delivery_fail_msg}"
                                     try:
                                         await order_service.update_order_delivery_fail_reason(
                                             order_id, combined_reason
@@ -1661,7 +1782,7 @@ class AutoDeliveryHandler:
                         # card_only 模式：pre_check 已写入"禁止发货原因"且已向买家发送过拦截消息，
                         # 这里若再覆盖 fail_reason 会丢失更精确的禁止发货原因，
                         # 再次给买家发通知则造成重复打扰，故跳过这两步
-                        if skip_confirm_for_card_only:
+                        if closed_order_card_only:
                             logger.info(
                                 f'[{msg_time}] 【{self.cookie_id}】card_only 模式且卡券获取失败：'
                                 f'保留 pre_check 写入的禁止发货原因，不重复通知买家。order_id={order_id}'
@@ -1677,7 +1798,7 @@ class AutoDeliveryHandler:
                     # 记录完整堆栈，便于定位真实报错位置（fail_msg 仍用简短消息通知买家，不泄露堆栈）
                     logger.exception(f"【{self.cookie_id}】{fail_msg}")
                     # card_only 模式同上：避免覆盖禁止发货原因 + 重复通知买家
-                    if skip_confirm_for_card_only:
+                    if closed_order_card_only:
                         logger.info(
                             f'[{msg_time}] 【{self.cookie_id}】card_only 模式发生异常：'
                             f'保留 pre_check 写入的禁止发货原因，不重复通知买家。order_id={order_id}'
@@ -1691,6 +1812,8 @@ class AutoDeliveryHandler:
                 logger.info(f'[{msg_time}] 【{self.cookie_id}】自动发货处理完成: {lock_key}')
             
             finally:
+                if local_lock_acquired and local_order_lock and local_order_lock.locked():
+                    local_order_lock.release()
                 # 处理完成后主动释放Redis分布式锁
                 if redis_lock_acquired and lock_result:
                     try:
@@ -1713,6 +1836,16 @@ class AutoDeliveryHandler:
     async def auto_confirm(self, order_id, item_id=None, retry_count=0):
         """自动确认发货 - 使用重构后的确认发货服务"""
         try:
+            if self.is_only_send_card_enabled():
+                logger.warning(
+                    f"【{self.cookie_id}】只发卡券模式已开启，拒绝调用确认发货接口: order_id={order_id}"
+                )
+                return {
+                    "success": False,
+                    "skipped_only_send_card": True,
+                    "error": "账号已开启只发卡券不确认发货",
+                    "order_id": order_id,
+                }
             logger.warning(f"【{self.cookie_id}】开始确认发货，订单ID: {order_id}")
 
             from common.db.session import async_session_maker
@@ -1748,6 +1881,16 @@ class AutoDeliveryHandler:
     async def auto_freeshipping(self, order_id, item_id, buyer_id, retry_count=0):
         """自动免拼发货 - 使用重构后的免拼发货服务"""
         try:
+            if self.is_only_send_card_enabled():
+                logger.warning(
+                    f"【{self.cookie_id}】只发卡券模式已开启，拒绝调用免拼发货接口: order_id={order_id}"
+                )
+                return {
+                    "success": False,
+                    "skipped_only_send_card": True,
+                    "error": "账号已开启只发卡券不确认发货",
+                    "order_id": order_id,
+                }
             logger.warning(f"【{self.cookie_id}】开始免拼发货，订单ID: {order_id}")
 
             from common.db.session import async_session_maker
@@ -1864,16 +2007,33 @@ class AutoDeliveryHandler:
         cleaned = name.strip().strip('[]【】')
         return cleaned in self._SYSTEM_PLACEHOLDER_NAMES
 
-    async def _auto_delivery(self, item_id: str, item_title: str = None, order_id: str = None, send_user_id: str = None, chat_id: str = None, send_user_name: str = None, skip_confirm: bool = False):
+    async def _auto_delivery(
+        self,
+        item_id: str,
+        item_title: str = None,
+        order_id: str = None,
+        send_user_id: str = None,
+        chat_id: str = None,
+        send_user_name: str = None,
+        skip_confirm: bool = False,
+        closed_order_card_only: bool = False,
+    ):
         """自动发货功能 - 根据商品ID获取卡券，执行延时，确认发货，发送内容
 
         Args:
-            skip_confirm: 跳过确认发货接口（auto_confirm）。用于"禁止发货 + 关闭订单后只发卡券"
-                场景——订单已经被卖家主动关闭，此时不能再调用确认发货接口，但仍需要把卡券内容
-                发送给买家作为"补偿"。该参数为 True 时，"发货成功再发卡券"开关会被忽略。
+            skip_confirm: 跳过确认发货接口（auto_confirm）。
+            closed_order_card_only: 是否属于"禁止发货 + 关闭订单后只发卡券"场景。
+                该场景下对接卡券不发送，避免订单关闭后的额外财务损失；账号级只发卡券模式
+                虽然同样跳过确认接口，但仍按正常规则发送对接卡券。
         """
         try:
             from common.db.compat import db_manager
+
+            # 处理过程中刚开启账号级开关时，也必须立即停止后续确认发货调用。
+            account_only_send_card = self.is_only_send_card_enabled()
+            skip_confirm = skip_confirm or account_only_send_card
+            platform_shipping_confirmed = False
+            skipped_only_send_card = account_only_send_card
 
             logger.info(f"开始自动发货检查: 商品ID={item_id}")
 
@@ -1955,7 +2115,7 @@ class AutoDeliveryHandler:
             #   - 但 _create_agent_order 仍会扣货主对接账户余额并分润给上下级代理
             # 为避免这种意外财务损失，对接卡券一律不走 card_only 流程，等同于 block：
             # 订单已被关闭，但卡券不发送。
-            if skip_confirm and card_source in ('dock_l1', 'dock_l2'):
+            if closed_order_card_only and card_source in ('dock_l1', 'dock_l2'):
                 self._last_delivery_fail_reason = (
                     f"card_only 模式不适用于对接卡券（card_source={card_source}），"
                     f"为避免货主财务损失，跳过卡券发送（订单已被关闭）"
@@ -2052,7 +2212,15 @@ class AutoDeliveryHandler:
                     if should_confirm:
                         logger.info(f"开始自动确认发货: 订单ID={order_id}, 商品ID={item_id}")
                         confirm_result = await self.auto_confirm(order_id, item_id)
-                        if confirm_result.get('success'):
+                        if confirm_result.get('skipped_only_send_card'):
+                            skipped_only_send_card = True
+                            skip_confirm = True
+                            logger.info(
+                                f"【{self.cookie_id}】确认发货过程中切换为只发卡券，"
+                                f"跳过平台发货并继续发送卡券: order_id={order_id}"
+                            )
+                        elif confirm_result.get('success'):
+                            platform_shipping_confirmed = True
                             self.confirmed_orders[order_id] = current_time
                             
                             # 检查是否是"已发货成功"的响应
@@ -2267,7 +2435,11 @@ class AutoDeliveryHandler:
                         except Exception as agent_err:
                             logger.error(f"创建代理订单失败（不影响发货）: {self._safe_str(agent_err)}")
                     
-                    return delivery_content
+                    return {
+                        'content': delivery_content,
+                        'platform_shipping_confirmed': platform_shipping_confirmed,
+                        'skipped_only_send_card': skipped_only_send_card,
+                    }
                 else:
                     self._last_delivery_fail_reason = f"获取发货内容失败: 卡券ID={rule['card_id']}, 卡券名称={rule.get('card_name')}, 类型={rule.get('card_type')}"
                     logger.warning(f"获取发货内容失败: 卡券ID={rule['card_id']}")

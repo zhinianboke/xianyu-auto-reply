@@ -500,6 +500,44 @@ class OrderService:
             await self.session.rollback()
             return False
 
+    async def record_card_only_delivery(
+        self,
+        order_no: str,
+        delivery_method: str,
+        delivery_content: str | None = None,
+        buyer_fish_nick: str | None = None,
+    ) -> bool:
+        """记录账号级“只发卡券”已处理结果，不伪造闲鱼平台订单状态。
+
+        卡券内容在调用本方法前可能已经从库存/API 中取出，因此即使消息发送失败也要
+        持久化防重标记和内容，避免定时任务再次消费一张新卡券。失败原因由调用方随后写入。
+        """
+        try:
+            if delivery_content and len(delivery_content) > 2000:
+                delivery_content = delivery_content[:1997] + "..."
+
+            values = {
+                "card_only_delivered": True,
+                "delivery_method": delivery_method,
+                "delivery_content": delivery_content,
+                "delivery_fail_reason": None,
+            }
+            if buyer_fish_nick:
+                values["buyer_fish_nick"] = buyer_fish_nick
+
+            stmt = (
+                update(XYOrder)
+                .where(XYOrder.order_no == order_no)
+                .values(**values)
+            )
+            result = await self.session.execute(stmt)
+            await self.session.commit()
+            return result.rowcount > 0
+        except Exception as e:
+            logger.error(f"记录只发卡券结果失败: {e}")
+            await self.session.rollback()
+            return False
+
     async def update_order_delivery_fail_reason(
         self,
         order_no: str,

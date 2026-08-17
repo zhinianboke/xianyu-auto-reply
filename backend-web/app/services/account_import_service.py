@@ -283,6 +283,16 @@ class AccountImportService:
             account.scheduled_rate = _parse_bool(row.get("定时补评价"))
             account.auto_polish = _parse_bool(row.get("商品擦亮"))
             account.confirm_before_send = _parse_bool(row.get("发货成功再发卡券"))
+            account.send_before_confirm = _parse_bool(row.get("卡券发送成功再确认发货"))
+            account.only_send_card = _parse_bool(row.get("只发卡券不确认发货"))
+            # 只发卡券与自动确认、两种确认顺序互斥，兼容手工编辑导致的冲突配置。
+            # 只发卡券优先；否则保留“发货成功再发卡券”优先级，清掉冲突的后置确认。
+            if account.only_send_card:
+                account.auto_confirm = False
+                account.confirm_before_send = False
+                account.send_before_confirm = False
+            elif account.confirm_before_send:
+                account.send_before_confirm = False
             account.auto_red_flower = _parse_bool(row.get("自动求小红花"))
             account.delivery_disabled = _parse_bool(row.get("禁止发货"))
             account.delivery_disabled_reason = _parse_str(row.get("禁止发货原因")) or None

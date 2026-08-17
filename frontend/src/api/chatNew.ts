@@ -32,6 +32,7 @@ export interface CustomerOrder {
   status: string
   delivery_method: string
   delivery_fail_reason: string
+  card_only_delivered: boolean
   placed_at: string
 }
 

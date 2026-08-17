@@ -54,6 +54,7 @@ export interface Account {
   auto_polish?: boolean
   confirm_before_send?: boolean
   send_before_confirm?: boolean
+  only_send_card?: boolean
   auto_red_flower?: boolean
   ai_reply_block_ordered_users?: boolean
   delivery_disabled?: boolean
@@ -152,6 +153,7 @@ export interface Order {
   delivery_method?: 'manual' | 'auto' | 'scheduled'  // 发货方式：manual-手动发货, auto-自动发货, scheduled-定时发货
   delivery_content?: string  // 发货内容（卡券内容）
   delivery_fail_reason?: string  // 发货失败原因
+  card_only_delivered?: boolean  // 只发卡券流程已处理，禁止重复耗卡
   delivery_send_status?: 'success' | 'failed' | 'unknown' | 'timeout' | null  // 关联消息日志：发送状态
   delivery_send_fail_reason?: string | null  // 关联消息日志：发送失败原因
   is_agent_order?: boolean  // 是否是代销订单

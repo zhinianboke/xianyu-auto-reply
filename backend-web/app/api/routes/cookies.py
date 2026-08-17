@@ -38,6 +38,7 @@ from common.schemas.account import (
     AccountScheduledRedeliveryUpdate,
     AccountScheduledRateUpdate,
     AccountSendBeforeConfirmUpdate,
+    AccountOnlySendCardUpdate,
     AccountStatusUpdate,
     DeliveryBlockRulesUpdate,
 )
@@ -201,6 +202,7 @@ async def list_cookie_details(
                 auto_polish=bool(account.auto_polish),
                 confirm_before_send=bool(account.confirm_before_send),
                 send_before_confirm=bool(account.send_before_confirm),
+                only_send_card=bool(account.only_send_card),
                 auto_red_flower=bool(account.auto_red_flower),
                 ai_reply_block_ordered_users=bool(account.ai_reply_block_ordered_users),
                 delivery_disabled=bool(account.delivery_disabled),
@@ -345,6 +347,7 @@ async def list_cookie_details_paginated(
             "auto_polish": bool(account.auto_polish),
             "confirm_before_send": bool(account.confirm_before_send),
             "send_before_confirm": bool(account.send_before_confirm),
+            "only_send_card": bool(account.only_send_card),
             "auto_red_flower": bool(account.auto_red_flower),
             "ai_reply_block_ordered_users": bool(account.ai_reply_block_ordered_users),
             "delivery_disabled": bool(account.delivery_disabled),
@@ -812,6 +815,19 @@ async def update_account_send_before_confirm(
     account = await _get_account_or_404(current_user, account_id, account_service)
     await account_service.update_send_before_confirm(account, payload.send_before_confirm)
     return ApiResponse(success=True, message="卡券发送成功再确认发货设置已更新")
+
+
+@router.put("/{account_id}/only-send-card", response_model=ApiResponse)
+async def update_account_only_send_card(
+    account_id: str,
+    payload: AccountOnlySendCardUpdate,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+) -> ApiResponse:
+    """更新只发卡券、不确认发货开关"""
+    account = await _get_account_or_404(current_user, account_id, account_service)
+    await account_service.update_only_send_card(account, payload.only_send_card)
+    return ApiResponse(success=True, message="只发卡券不确认发货设置已更新")
 
 
 @router.put("/{account_id}/auto-red-flower", response_model=ApiResponse)

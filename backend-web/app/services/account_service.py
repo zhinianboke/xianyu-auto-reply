@@ -383,9 +383,15 @@ class AccountService:
         await self.session.commit()
 
     async def update_auto_confirm(self, account: XYAccount, auto_confirm: bool) -> None:
-        account.auto_confirm = auto_confirm
-        self.session.add(account)
+        values = {"auto_confirm": auto_confirm}
+        if auto_confirm:
+            values["only_send_card"] = False
+        stmt = update(XYAccount).where(XYAccount.id == account.id).values(**values)
+        await self.session.execute(stmt)
         await self.session.commit()
+        account.auto_confirm = auto_confirm
+        if auto_confirm:
+            account.only_send_card = False
 
     async def update_pause_duration(self, account: XYAccount, duration: int) -> None:
         account.pause_duration = duration
@@ -592,19 +598,47 @@ class AccountService:
 
     async def update_confirm_before_send(self, account: XYAccount, confirm_before_send: bool) -> None:
         """更新发货成功再发卡券开关（与send_before_confirm互斥）"""
+        values = {"confirm_before_send": confirm_before_send}
+        if confirm_before_send:
+            values.update(send_before_confirm=False, only_send_card=False)
+        stmt = update(XYAccount).where(XYAccount.id == account.id).values(**values)
+        await self.session.execute(stmt)
+        await self.session.commit()
         account.confirm_before_send = confirm_before_send
         if confirm_before_send:
             account.send_before_confirm = False
-        self.session.add(account)
-        await self.session.commit()
+            account.only_send_card = False
 
     async def update_send_before_confirm(self, account: XYAccount, send_before_confirm: bool) -> None:
         """更新卡券发送成功再确认发货开关（与confirm_before_send互斥）"""
+        values = {"send_before_confirm": send_before_confirm}
+        if send_before_confirm:
+            values.update(confirm_before_send=False, only_send_card=False)
+        stmt = update(XYAccount).where(XYAccount.id == account.id).values(**values)
+        await self.session.execute(stmt)
+        await self.session.commit()
         account.send_before_confirm = send_before_confirm
         if send_before_confirm:
             account.confirm_before_send = False
-        self.session.add(account)
+            account.only_send_card = False
+
+    async def update_only_send_card(self, account: XYAccount, only_send_card: bool) -> None:
+        """更新只发卡券开关。开启后关闭自动确认及其它确认顺序设置。"""
+        values = {"only_send_card": only_send_card}
+        if only_send_card:
+            values.update(
+                auto_confirm=False,
+                confirm_before_send=False,
+                send_before_confirm=False,
+            )
+        stmt = update(XYAccount).where(XYAccount.id == account.id).values(**values)
+        await self.session.execute(stmt)
         await self.session.commit()
+        account.only_send_card = only_send_card
+        if only_send_card:
+            account.auto_confirm = False
+            account.confirm_before_send = False
+            account.send_before_confirm = False
 
     async def update_auto_red_flower(self, account: XYAccount, auto_red_flower: bool) -> None:
         """更新自动求小红花开关
