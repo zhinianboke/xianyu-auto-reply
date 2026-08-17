@@ -3,10 +3,12 @@
 
 功能：
 1. 根据个人设置中的分销秘钥定位所属用户。
-2. 返回该用户账号管理中所有已启用账号的账号 ID 和备注。
-3. 校验公开接口指定的账号是否属于该用户且处于启用状态。
+2. 返回该用户账号管理中全部账号的账号 ID、备注和启用状态（含禁用账号）。
+3. 校验公开接口指定的账号是否属于该秘钥用户，不限制账号启用状态。
 """
 from __future__ import annotations
+
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +27,7 @@ class ExternalAccountAccessError(RuntimeError):
 
 
 class ExternalAccountService:
-    """使用分销秘钥查询用户已启用的闲鱼账号。"""
+    """使用分销秘钥查询用户名下的闲鱼账号。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -33,12 +35,14 @@ class ExternalAccountService:
     @staticmethod
     def _is_account_enabled(account: XYAccount) -> bool:
         """
-        判断账号是否符合账号管理中的启用口径。
+        判断账号是否处于启用状态，仅用于账号列表的状态标识。
+
+        公开接口不用该结果拦截调用，禁用账号同样允许调用分类和发布接口。
 
         Args:
             account: 闲鱼账号记录。
         Returns:
-        账号发布链路实际可用时返回 True。
+            状态为 active 时返回 True，其余状态一律视为禁用。
         """
         return (account.status or "").strip().lower() == "active"
 
@@ -57,14 +61,16 @@ class ExternalAccountService:
             )
         ).scalar_one_or_none()
 
-    async def list_enabled_accounts_by_secret(self, secret_key: str) -> list[dict[str, str]] | None:
+    async def list_accounts_by_secret(self, secret_key: str) -> list[dict[str, Any]] | None:
         """
-        根据分销秘钥查询所属用户的已启用账号。
+        根据分销秘钥查询所属用户的全部账号（含禁用账号）。
 
         Args:
             secret_key: 个人设置-分销管理中的分销秘钥。
         Returns:
-            秘钥不存在时返回 None；匹配时返回账号 ID 和备注列表。
+            秘钥不存在时返回 None；匹配时返回账号列表，每项含账号 ID、备注、
+            enabled 启用标识、status 原始状态和 disable_reason 禁用原因。
+            enabled 仅作状态展示，禁用账号同样可以调用公开分类和发布接口。
         """
         owner_id = await self._get_owner_id_by_secret(secret_key)
         if owner_id is None:
@@ -81,26 +87,33 @@ class ExternalAccountService:
             {
                 "account_id": str(account.account_id),
                 "remark": (account.remark or "").strip(),
+                # 仅供调用方展示账号状态，不影响公开分类和发布接口的放行
+                "enabled": self._is_account_enabled(account),
+                "status": (account.status or "").strip(),
+                "status_name": "启用" if self._is_account_enabled(account) else "禁用",
+                "disable_reason": (account.disable_reason or "").strip(),
             }
             for account in accounts
-            if self._is_account_enabled(account)
         ]
 
-    async def get_enabled_account_by_secret(
+    async def get_account_by_secret(
         self,
         secret_key: str,
         account_id: str,
     ) -> XYAccount:
         """
-        获取分销秘钥所属用户的指定启用账号。
+        获取分销秘钥所属用户的指定账号，不校验启用状态。
+
+        公开接口只做归属校验：禁用账号也允许调用分类和发布接口，
+        Cookie 失效等问题由平台调用结果如实返回给调用方。
 
         Args:
             secret_key: 个人设置-分销管理中的分销秘钥。
             account_id: 上一个公开账号列表接口返回的闲鱼账号 ID。
         Returns:
-            已确认归属且处于启用状态的账号记录。
+            已确认归属该秘钥用户的账号记录。
         Raises:
-            ExternalAccountAccessError: 秘钥、账号归属或启用状态校验失败。
+            ExternalAccountAccessError: 秘钥不存在或账号不属于该用户。
         """
         owner_id = await self._get_owner_id_by_secret(secret_key)
         if owner_id is None:
@@ -118,8 +131,6 @@ class ExternalAccountService:
         ).scalar_one_or_none()
         if account is None:
             raise ExternalAccountAccessError(40002, "闲鱼账号不存在或不属于该秘钥用户")
-        if not self._is_account_enabled(account):
-            raise ExternalAccountAccessError(40003, "闲鱼账号未启用")
         return account
 
 

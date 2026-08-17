@@ -13,6 +13,11 @@
 - 业务失败（商品不可买/缺地址/权限受限等）：换下一个候选账号继续尝试（不全局停用，可能仅该商品不可买）；
   所有候选账号都尝试过仍未成功，才累计下单尝试次数(order_attempts)并记录失败原因
 
+取数规则（见 auto_order_queue）：
+- 仅处理最近 ORDER_ITEM_LOOKBACK_DAYS+1 天内采集入库的商品（无可用账号的商品不累加尝试次数，
+  无时间窗口会永久堆积在队列头部，最终导致所有用户都下不了单）；
+- 本轮额度按归属用户分配、按用户轮转交错处理，单个用户的存量数据不会饿死其他用户。
+
 安全说明：
 - 仅做到"创建订单（拍下）"，不自动付款（mtop.order.dopay 会真实扣款）。
 - 拍下会生成真实未付款订单，请在业务侧确认风险。
@@ -24,8 +29,13 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
-from sqlalchemy import and_, select
+from sqlalchemy import select
 
+from app.services.scheduler.auto_order_queue import (
+    ORDER_ITEM_LOOKBACK_DAYS,
+    OrderQueueRow,
+    fetch_items_to_order,
+)
 from common.db.session import async_session_maker
 from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_task import ListingMonitorTask
@@ -38,11 +48,6 @@ from common.services.order_account_loader import (
 from common.services.xianyu_order_client import XianyuOrderClient
 from common.utils.time_utils import get_beijing_now_naive
 
-# 单次任务最多扫描的待下单商品数（全局安全上限；每个监控任务实际处理条数由任务自身的 order_batch_size 控制）
-_MAX_ITEMS_SCAN_PER_RUN = 500
-# 下单失败最大重试次数（达到后不再重试）
-_MAX_ORDER_ATTEMPTS = 3
-
 
 class AutoOrderTaskService:
     """采集商品自动下单任务服务"""
@@ -50,6 +55,8 @@ class AutoOrderTaskService:
     def __init__(self, task_name: str = "采集商品自动下单"):
         self.task_name = task_name
         self._lock = asyncio.Lock()
+        # 取数轮次：用于每轮旋转用户处理起点，避免用户数多于本轮额度时后面的用户被永久饿死
+        self._scan_round = 0
 
     async def execute(self):
         """执行自动下单任务。"""
@@ -70,7 +77,10 @@ class AutoOrderTaskService:
                 logger.info(f"【{self.task_name}】没有待下单的采集商品，结束")
                 return
 
-            logger.info(f"【{self.task_name}】查询到 {len(items)} 条待下单商品")
+            logger.info(
+                f"【{self.task_name}】查询到 {len(items)} 条待下单商品"
+                f"（仅取最近{ORDER_ITEM_LOOKBACK_DAYS + 1}天采集入库的数据，本轮额度按用户分配）"
+            )
 
             # 监控任务ID -> 下单账号字典 {account_id: XYAccount}（缓存，仅含可用账号）
             task_accounts_cache: Dict[int, Dict[str, XYAccount]] = {}
@@ -104,12 +114,15 @@ class AutoOrderTaskService:
             skipped_batch_full = 0
             skipped_duplicate = 0
             failed = 0
-            # 本轮已下单成功的商品ID集合，避免同一批次内多任务同商品重复下单
-            ordered_item_ids: set[str] = set()
+            # 本轮已下单成功的商品集合，键为 (归属用户ID, 商品ID)：
+            # 仅避免"同一用户"在同一批次内多任务采到同商品的重复下单；
+            # 不同用户各自独立下单，绝不能因为别人下过同一商品就把本用户的记录标成重复跳过
+            ordered_item_keys: set[tuple[Optional[int], str]] = set()
 
             for pk, item_id, task_id, dm_account_id, owner_id in items:
                 # 去重：同一用户该商品已下单成功（历史已下单 或 本轮已下单），跳过重复下单
-                if item_id in ordered_item_ids or await self._owner_already_ordered(owner_id, item_id):
+                dedup_key = (owner_id, item_id)
+                if dedup_key in ordered_item_keys or await self._owner_already_ordered(owner_id, item_id):
                     await self._mark_duplicate(pk)
                     skipped_duplicate += 1
                     continue
@@ -185,7 +198,7 @@ class AutoOrderTaskService:
                 result = await self._order_for_item(pk, item_id, order_candidates, disabled_accounts)
                 if result == "ordered":
                     ordered += 1
-                    ordered_item_ids.add(item_id)
+                    ordered_item_keys.add(dedup_key)
                     task_done[task_id] = task_done.get(task_id, 0) + 1
                 elif result == "no_account":
                     # 候选账号（含兜底）在实际下单调用中全部失效：记录原因，不累加尝试次数
@@ -210,31 +223,15 @@ class AutoOrderTaskService:
         except Exception as exc:  # noqa: BLE001
             logger.error(f"【{self.task_name}】执行异常: {exc}")
 
-    async def _get_items_to_order(self) -> List[Tuple[int, str, int, Optional[str], Optional[int]]]:
-        """查询未下单的采集商品（不再要求已私信）。
+    async def _get_items_to_order(self) -> List[OrderQueueRow]:
+        """查询本轮待下单的采集商品（不再要求已私信）。
+
+        取数细节（时间窗口 + 按用户配额公平取数）见 auto_order_queue.fetch_items_to_order。
 
         Returns: (主键id, item_id, monitor_task_id, dm_account_id, owner_id) 列表
         """
-        async with async_session_maker() as session:
-            stmt = (
-                select(
-                    ListingMonitorItem.id,
-                    ListingMonitorItem.item_id,
-                    ListingMonitorItem.monitor_task_id,
-                    ListingMonitorItem.dm_account_id,
-                    ListingMonitorItem.owner_id,
-                )
-                .where(
-                    and_(
-                        ListingMonitorItem.is_ordered.is_(False),
-                        ListingMonitorItem.order_attempts < _MAX_ORDER_ATTEMPTS,
-                    )
-                )
-                .order_by(ListingMonitorItem.id.asc())
-                .limit(_MAX_ITEMS_SCAN_PER_RUN)
-            )
-            rows = (await session.execute(stmt)).all()
-            return [(r[0], r[1], r[2], r[3], r[4]) for r in rows]
+        self._scan_round += 1
+        return await fetch_items_to_order(owner_rotation=self._scan_round)
 
     async def _owner_already_ordered(self, owner_id: Optional[int], item_id: str) -> bool:
         """判断同一用户下该商品是否已有下单成功记录（避免多任务采到同商品重复下单）。"""
@@ -264,6 +261,10 @@ class AutoOrderTaskService:
 
         说明：账号不可用属于"环境问题"而非"商品问题"，故不累加 order_attempts，
         待账号恢复后下次任务可继续重试；仅更新 order_status/order_fail_reason 供前端查看。
+        超出取数时间窗口后该商品自然退出待下单队列，不会无限重试（见 auto_order_queue）。
+
+        幂等：状态与原因都没变化时不再写库——账号长期不可用时该商品每轮都会被扫到，
+        重复 UPDATE 既浪费写入，也会把 updated_at 一直刷成"刚刚"，掩盖真实变更时间。
         """
         try:
             async with async_session_maker() as session:
@@ -274,8 +275,11 @@ class AutoOrderTaskService:
                 ).scalar_one_or_none()
                 if not item:
                     return
+                new_reason = str(reason)[:500] if reason else None
+                if item.order_status == "no_account" and item.order_fail_reason == new_reason:
+                    return
                 item.order_status = "no_account"
-                item.order_fail_reason = str(reason)[:500] if reason else None
+                item.order_fail_reason = new_reason
                 await session.commit()
         except Exception as exc:  # noqa: BLE001
             logger.error(f"【{self.task_name}】更新无可用账号状态失败 采集商品id={pk}：{exc}")

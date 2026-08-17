@@ -1570,7 +1570,9 @@ class DatabaseInitializer:
                 INDEX idx_lmi_dm_send (order_status, is_dm_sent, ordered_at),
                 INDEX idx_lmi_order_pending (is_ordered, order_attempts),
                 INDEX idx_lmi_item_ordered (item_id, is_ordered),
-                INDEX idx_lmi_owner_publish (owner_id, publish_time)
+                INDEX idx_lmi_owner_publish (owner_id, publish_time),
+                INDEX idx_lmi_owner_order_pending (owner_id, is_ordered, created_at, order_attempts),
+                INDEX idx_lmi_owner_task_created (owner_id, monitor_task_id, created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品监控采集商品信息表';
         """,
 
@@ -3185,6 +3187,13 @@ class DatabaseInitializer:
                 ("idx_lmi_item_ordered", "(item_id, is_ordered)"),
                 # 前端列表分页：owner_id 过滤 + 按 publish_time 排序
                 ("idx_lmi_owner_publish", "(owner_id, publish_time)"),
+                # 「采集商品自动下单」按用户配额取数：owner_id + is_ordered=0 + created_at>=窗口 + order_attempts<上限
+                (
+                    "idx_lmi_owner_order_pending",
+                    "(owner_id, is_ordered, created_at, order_attempts)",
+                ),
+                # 「采集商品卖家ID补全」按用户/任务两级配额取数：owner_id + monitor_task_id 分组统计 + created_at>=窗口
+                ("idx_lmi_owner_task_created", "(owner_id, monitor_task_id, created_at)"),
             ]
             for idx_name, idx_cols in lmi_query_indexes:
                 try:

@@ -24,6 +24,7 @@ from common.models.listing_monitor_category import ListingMonitorCategory
 from common.models.order_fallback_account import OrderFallbackAccount
 from common.models.user import User, UserRole
 from common.models.xy_account import XYAccount
+from common.services.listing_monitor_category_access import ensure_category_accessible
 from common.utils.time_utils import safe_isoformat
 
 
@@ -54,7 +55,9 @@ class OrderFallbackAccountService:
             )
         )
         records = (await self.session.execute(stmt)).scalars().all()
-        name_map = await self._category_name_map([r.category_id for r in records])
+        name_map = await self._category_name_map(
+            [r.category_id for r in records], owner_id=None if is_admin else owner_id
+        )
         # 管理员查看全量时展示配置所属用户名
         owner_name_map = (
             await self._owner_username_map([r.owner_id for r in records]) if is_admin else {}
@@ -74,7 +77,9 @@ class OrderFallbackAccountService:
     ) -> Dict[str, Any]:
         """查询某个分类的兜底下单账号配置（含账号有效性）。"""
         record = await self._get_record(owner_id, category_id)
-        name_map = await self._category_name_map([category_id])
+        name_map = await self._category_name_map(
+            [category_id], owner_id=None if is_admin else owner_id
+        )
         data = self._to_dict(record, name_map, category_id=category_id)
         data["accounts"] = await self._resolve_accounts(owner_id, data["account_ids"], is_admin)
         return data
@@ -91,12 +96,11 @@ class OrderFallbackAccountService:
         """新建或修改某个分类的兜底下单账号配置。
 
         - 同一用户同一分类仅一条；无分类（category_id=NULL）仅一条；
-        - 复用软删除记录（重复新建即恢复并覆盖）。
+        - 复用软删除记录（重复新建即恢复并覆盖）；
+        - 分类必须存在且有权引用：普通用户仅限本人创建的分类，管理员不受限
+          （"管理员·本分类"兜底层就是按用户的分类ID配置的）。
         """
-        if category_id is not None:
-            category = await self.session.get(ListingMonitorCategory, category_id)
-            if not category or category.is_deleted:
-                raise ValueError("所选分类不存在")
+        await ensure_category_accessible(self.session, category_id, owner_id, is_admin)
 
         cleaned = self._clean_account_ids(account_ids)
         if cleaned:
@@ -209,13 +213,23 @@ class OrderFallbackAccountService:
                     result.append(aid)
         return result
 
-    async def _category_name_map(self, category_ids: List[Optional[int]]) -> Dict[int, str]:
+    async def _category_name_map(
+        self, category_ids: List[Optional[int]], owner_id: Optional[int] = None
+    ) -> Dict[int, str]:
+        """批量查询分类ID -> 分类名称。
+
+        Args:
+            category_ids: 待查询的分类ID列表
+            owner_id: 限定分类归属；非 None 时只返回该用户自己的分类名称，
+                避免历史遗留的跨用户配置把他人分类名回显给普通用户（管理员传 None 不限制）
+        """
         ids = [cid for cid in set(category_ids) if cid is not None]
         if not ids:
             return {}
-        stmt = select(ListingMonitorCategory.id, ListingMonitorCategory.name).where(
-            ListingMonitorCategory.id.in_(ids)
-        )
+        conditions = [ListingMonitorCategory.id.in_(ids)]
+        if owner_id is not None:
+            conditions.append(ListingMonitorCategory.owner_id == owner_id)
+        stmt = select(ListingMonitorCategory.id, ListingMonitorCategory.name).where(*conditions)
         return {row[0]: row[1] for row in (await self.session.execute(stmt)).all()}
 
     def _to_dict(

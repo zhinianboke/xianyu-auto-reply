@@ -221,7 +221,7 @@ async def recommend_category(
     current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
-    """按商品标题和描述调用闲鱼分类推荐接口，素材库自动轮换当前用户已启动账号。"""
+    """按商品标题和描述调用闲鱼分类推荐接口，素材库自动轮换当前用户的账号。"""
     title = req.title.strip()
     description = req.description.strip()
     if not title and not description:
@@ -236,22 +236,19 @@ async def recommend_category(
             return ApiResponse(success=False, message="指定的闲鱼账号不存在或无权使用")
         candidate_accounts = [account] if account.cookie else []
     else:
-        # 素材库不指定账号，只能使用当前登录用户自己的已启动账号，管理员也不跨用户取账号。
+        # 素材库不指定账号，与单品发布一致不校验启用状态，只要求账号有 Cookie；
+        # 管理员也不跨用户取账号。已启用账号排在前面，减少无效的平台请求。
         current_user_accounts = await account_service.list_accounts(current_user.id)
-        started_accounts = [
-            item
-            for item in current_user_accounts
-            if (item.status or "").strip().lower() == "active"
-        ]
-        if not started_accounts:
-            return ApiResponse(success=False, message="当前用户没有已启动的闲鱼账号，请先启动账号")
-        candidate_accounts = [item for item in started_accounts if item.cookie and item.cookie.strip()]
+        candidate_accounts = sorted(
+            (item for item in current_user_accounts if item.cookie and item.cookie.strip()),
+            key=lambda item: (item.status or "").strip().lower() != "active",
+        )
 
     if not candidate_accounts:
         message = (
             "指定的闲鱼账号缺少Cookie，请重新登录账号"
             if requested_account_id
-            else "当前用户已启动的闲鱼账号均缺少Cookie，请重新登录账号"
+            else "当前用户的闲鱼账号均缺少Cookie，请先添加账号或重新登录账号"
         )
         return ApiResponse(success=False, message=message)
 
@@ -288,7 +285,7 @@ async def recommend_category(
 
         if account_index < len(candidate_accounts) - 1:
             logger.info(
-                f"分类推荐自动切换下一个已启动账号: user_id={current_user.id}, "
+                f"分类推荐自动切换下一个账号: user_id={current_user.id}, "
                 f"failed_account_id={account.account_id}"
             )
 
@@ -296,7 +293,7 @@ async def recommend_category(
         return ApiResponse(success=False, message=last_error)
     return ApiResponse(
         success=False,
-        message=f"当前用户已启动的闲鱼账号均不可用：{last_error}",
+        message=f"当前用户的闲鱼账号均不可用：{last_error}",
     )
 
 

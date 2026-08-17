@@ -34,6 +34,16 @@ class ListingMonitorItem(TimestampMixin, Base):
         Index("idx_lmi_item_ordered", "item_id", "is_ordered"),
         # 前端列表分页：owner_id 过滤 + 按 publish_time 排序
         Index("idx_lmi_owner_publish", "owner_id", "publish_time"),
+        # 「采集商品自动下单」按用户配额取数：owner_id + is_ordered=0 + created_at>=窗口 + order_attempts<上限
+        Index(
+            "idx_lmi_owner_order_pending",
+            "owner_id",
+            "is_ordered",
+            "created_at",
+            "order_attempts",
+        ),
+        # 「采集商品卖家ID补全」按用户/任务两级配额取数：owner_id + monitor_task_id 分组统计 + created_at>=窗口
+        Index("idx_lmi_owner_task_created", "owner_id", "monitor_task_id", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")

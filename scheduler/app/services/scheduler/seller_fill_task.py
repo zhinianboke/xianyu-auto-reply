@@ -16,17 +16,25 @@
 说明：
 - 当天+昨天窗口：提供约24小时容错窗口，避免定时任务短期故障导致商品永久卡在未补全状态；
   早于昨天的遗留数据不再处理，防止历史脏数据持续占用补全配额。
+- 取数配额（见 seller_fill_queue）：本轮额度先按归属用户分配，再在用户内部按监控任务分配，
+  最后按用户/任务轮转交错处理——避免采集量大的用户（或大任务）吃满每轮全部名额，
+  导致其他用户的商品补不上卖家ID、私信与下单跟着卡住。
 """
 from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
-from sqlalchemy import and_, or_, select
+from sqlalchemy import select
 
+from app.services.scheduler.seller_fill_queue import (
+    SELLER_FILL_LOOKBACK_DAYS,
+    SellerFillQueueRow,
+    fetch_items_to_fill,
+)
 from common.db.session import async_session_maker
 from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_log import ListingMonitorLog
@@ -36,11 +44,8 @@ from common.services.account_cooldown import DEFAULT_COOLDOWN_SECONDS, account_c
 from common.services.collect_account_loader import merge_task_and_fallback_account_ids
 from common.services.xianyu_detail_client import XianyuItemDetailClient
 from common.services.xianyu_mtop import fetch_proxy_from_api
-from common.utils.time_utils import get_beijing_now_naive
 
 _INACTIVE_STATUSES = {"inactive", "disabled", "suspended", "deleted"}
-# 单次任务最多处理的待补全商品数，避免单次运行过久
-_MAX_ITEMS_PER_RUN = 300
 # detail_json 最大存储字节数（MEDIUMTEXT 上限 16MB，留足余量）
 _MAX_DETAIL_BYTES = 10 * 1024 * 1024
 
@@ -50,6 +55,8 @@ class SellerFillTaskService:
 
     def __init__(self, task_name: str = "采集商品卖家ID补全"):
         self.task_name = task_name
+        # 取数轮次：用于每轮旋转用户/任务的处理起点，避免分组数多于额度时后面的分组被永久饿死
+        self._scan_round = 0
 
     async def execute(self):
         """执行卖家ID补全任务。"""
@@ -62,7 +69,10 @@ class SellerFillTaskService:
                 logger.info(f"【{self.task_name}】没有待补全卖家ID的商品，结束")
                 return
 
-            logger.info(f"【{self.task_name}】查询到 {len(items)} 条待补全商品")
+            logger.info(
+                f"【{self.task_name}】查询到 {len(items)} 条待补全商品"
+                f"（仅取最近{SELLER_FILL_LOOKBACK_DAYS + 1}天采集入库的数据，本轮额度按用户/任务分配）"
+            )
 
             # 任务ID -> 该任务可用账号列表（缓存，避免重复查询）
             task_accounts_cache: Dict[int, List[XYAccount]] = {}
@@ -140,52 +150,16 @@ class SellerFillTaskService:
         except Exception as exc:  # noqa: BLE001
             logger.error(f"【{self.task_name}】执行异常: {exc}")
 
-    async def _get_items_to_fill(self) -> List[Tuple[int, str, int, Optional[int]]]:
-        """查询卖家真实ID为空的采集商品（当天和昨天入库的），返回 (主键id, item_id, monitor_task_id, owner_id) 列表。
+    async def _get_items_to_fill(self) -> List[SellerFillQueueRow]:
+        """查询本轮待补全卖家真实ID的采集商品。
 
-        说明：只补全当天和昨天采集入库（created_at >= 北京时间昨天 00:00）的商品，
-        提供约 24 小时容错窗口，避免定时任务短期故障导致商品永久卡在未补全状态；
-        早于昨天的遗留数据不再处理，防止历史脏数据持续占用补全配额。
+        筛选条件与取数配额（时间窗口、用户/任务两级配额、轮转交错）见
+        seller_fill_queue.fetch_items_to_fill。
 
-        下单状态过滤：仅补全下单状态为「未下单(NULL)/已下单(success)/下单失败(failed)/
-        无可用账号(no_account)」的商品；排除「重复(duplicate)」——重复商品已被同用户其他
-        监控任务下单，无需再补全卖家详情。
+        Returns: (主键id, item_id, monitor_task_id, owner_id) 列表
         """
-        # 北京时间今天 00:00 前推 1 天作为下限（即昨天 00:00，覆盖当天和昨天）
-        cutoff_time = get_beijing_now_naive().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
-        async with async_session_maker() as session:
-            stmt = (
-                select(
-                    ListingMonitorItem.id,
-                    ListingMonitorItem.item_id,
-                    ListingMonitorItem.monitor_task_id,
-                    ListingMonitorItem.owner_id,
-                )
-                .where(
-                    and_(
-                        # 仅处理当天和昨天入库的商品
-                        ListingMonitorItem.created_at >= cutoff_time,
-                        or_(
-                            ListingMonitorItem.seller_user_id.is_(None),
-                            ListingMonitorItem.seller_user_id == "",
-                        ),
-                        # 排除已明确失败、不再补全的商品（如跨境商品/已下架）
-                        or_(
-                            ListingMonitorItem.seller_fill_status.is_(None),
-                            ListingMonitorItem.seller_fill_status != "failed",
-                        ),
-                        # 仅补全下单状态为 未下单(NULL)/已下单/下单失败/无可用账号 的商品，排除重复(duplicate)
-                        or_(
-                            ListingMonitorItem.order_status.is_(None),
-                            ListingMonitorItem.order_status.in_(["success", "failed", "no_account"]),
-                        ),
-                    )
-                )
-                .order_by(ListingMonitorItem.id.asc())
-                .limit(_MAX_ITEMS_PER_RUN)
-            )
-            rows = (await session.execute(stmt)).all()
-            return [(r[0], r[1], r[2], r[3]) for r in rows]
+        self._scan_round += 1
+        return await fetch_items_to_fill(owner_rotation=self._scan_round)
 
     async def _load_task_accounts(
         self, task_id: int, item_owner_id: Optional[int]

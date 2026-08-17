@@ -23,6 +23,7 @@ from common.models.listing_monitor_log import ListingMonitorLog
 from common.models.listing_monitor_category import ListingMonitorCategory
 from common.models.xy_account import XYAccount
 from common.models.user import User
+from common.services.listing_monitor_category_access import ensure_category_accessible
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 
 # 合法分页大小
@@ -180,6 +181,7 @@ class ListingMonitorService:
 
         普通用户只能使用自己创建的分类；管理员（owner_id=None）可使用任意分类。
         与分类列表的隔离规则保持一致，防止普通用户通过构造请求挂用他人分类。
+        具体校验逻辑与兜底账号配置共用 ensure_category_accessible，避免多处各写一套。
 
         Args:
             owner_id: 数据隔离范围。None=管理员（不限制归属）；非 None 仅限本人创建的分类
@@ -191,12 +193,12 @@ class ListingMonitorService:
         Raises:
             ValueError: 分类不存在、已删除或无权限使用
         """
-        category = await self.session.get(ListingMonitorCategory, category_id)
-        if not category or category.is_deleted:
-            raise ValueError("所选分类不存在")
-        # 普通用户只能使用自己创建的分类；管理员不受限
-        if owner_id is not None and category.owner_id != owner_id:
-            raise ValueError("所选分类不存在或无权限使用")
+        category = await ensure_category_accessible(
+            self.session, category_id, owner_id, is_admin=owner_id is None
+        )
+        if category is None:
+            # category_id 非空时正常不会走到这里（为空由上层校验拦截），兜底给出明确提示
+            raise ValueError("请选择分类")
         return category
 
     async def _normalize_payload(self, owner_id: Optional[int], data: dict, partial: bool) -> Dict[str, Any]:

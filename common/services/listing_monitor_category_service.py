@@ -4,13 +4,14 @@
 功能：
 1. 分类的增删改查
 2. 名称唯一性校验（分类名称全局唯一，跨用户不可重名）
-3. 删除前检查关联数据（监控任务、兜底账号配置）
+3. 删除前检查关联数据（监控任务、兜底账号配置）：普通用户仅校验本人数据，管理员校验全量
 4. 支持多用户数据隔离与管理员权限：普通用户仅可见/操作自己的分类，管理员可见/操作全部
 """
 from __future__ import annotations
 
 from typing import Dict, List, Optional
 
+from loguru import logger
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -229,7 +230,14 @@ class ListingMonitorCategoryService:
 
         删除前检查是否有关联数据：
         - 该分类下是否有监控任务（未删除）
-        - 该分类是否有兜底账号配置
+        - 该分类是否有兜底账号配置（采集/下单）
+
+        关联数据的校验范围按角色区分：
+        - 普通用户：只校验本人的关联数据。他人（含管理员）在该分类上的配置不应阻塞本人
+          删除自己创建的分类——否则用户会收到"该分类下还有兜底账号配置"却在界面上
+          找不到任何自己的配置。这些他人配置删除后变成悬空引用，其兜底层自然失效，
+          故记录一条 warning 便于排查；
+        - 管理员：校验全部用户的关联数据（管理员是全量视角，避免误删他人还在用的分类）。
 
         Args:
             category_id: 分类ID
@@ -252,14 +260,18 @@ class ListingMonitorCategoryService:
         if not is_admin and category.owner_id != owner_id:
             raise ValueError("无权限删除该分类（仅创建人或管理员可操作）")
 
+        # 关联数据校验范围：管理员校验全量，普通用户仅校验本人数据
+        scope_owner_id = None if is_admin else owner_id
+
         # 检查是否有关联的监控任务（未删除）
+        task_conditions = [
+            ListingMonitorTask.category_id == category_id,
+            ListingMonitorTask.is_deleted.is_(False),
+        ]
+        if scope_owner_id is not None:
+            task_conditions.append(ListingMonitorTask.owner_id == scope_owner_id)
         task_count_stmt = (
-            select(func.count())
-            .select_from(ListingMonitorTask)
-            .where(
-                ListingMonitorTask.category_id == category_id,
-                ListingMonitorTask.is_deleted.is_(False),
-            )
+            select(func.count()).select_from(ListingMonitorTask).where(*task_conditions)
         )
         task_count_result = await self.session.execute(task_count_stmt)
         task_count = task_count_result.scalar()
@@ -267,13 +279,14 @@ class ListingMonitorCategoryService:
             raise ValueError(f"该分类下还有 {task_count} 个监控任务，请先删除或迁移任务后再删除分类")
 
         # 检查是否有兜底采集账号配置（仅统计未软删除的，避免历史软删配置永久挡删分类）
+        collect_conditions = [
+            CollectFallbackAccount.category_id == category_id,
+            CollectFallbackAccount.is_deleted.is_(False),
+        ]
+        if scope_owner_id is not None:
+            collect_conditions.append(CollectFallbackAccount.owner_id == scope_owner_id)
         collect_fallback_stmt = (
-            select(func.count())
-            .select_from(CollectFallbackAccount)
-            .where(
-                CollectFallbackAccount.category_id == category_id,
-                CollectFallbackAccount.is_deleted.is_(False),
-            )
+            select(func.count()).select_from(CollectFallbackAccount).where(*collect_conditions)
         )
         collect_count_result = await self.session.execute(collect_fallback_stmt)
         collect_count = collect_count_result.scalar()
@@ -281,19 +294,75 @@ class ListingMonitorCategoryService:
             raise ValueError("该分类下还有兜底采集账号配置，请先删除配置后再删除分类")
 
         # 检查是否有兜底下单账号配置（仅统计未软删除的，避免历史软删配置永久挡删分类）
+        order_conditions = [
+            OrderFallbackAccount.category_id == category_id,
+            OrderFallbackAccount.is_deleted.is_(False),
+        ]
+        if scope_owner_id is not None:
+            order_conditions.append(OrderFallbackAccount.owner_id == scope_owner_id)
         order_fallback_stmt = (
-            select(func.count())
-            .select_from(OrderFallbackAccount)
-            .where(
-                OrderFallbackAccount.category_id == category_id,
-                OrderFallbackAccount.is_deleted.is_(False),
-            )
+            select(func.count()).select_from(OrderFallbackAccount).where(*order_conditions)
         )
         order_count_result = await self.session.execute(order_fallback_stmt)
         order_count = order_count_result.scalar()
         if order_count > 0:
             raise ValueError("该分类下还有兜底下单账号配置，请先删除配置后再删除分类")
 
+        # 普通用户删除自己的分类时，他人（含管理员）在该分类上的配置会变成悬空引用、
+        # 其"本分类"兜底层失效，记录 warning 便于后续排查兜底为何不生效
+        if scope_owner_id is not None:
+            await self._warn_orphaned_references(category_id, category.name, owner_id)
+
         # 软删除
         category.is_deleted = True
         await self.session.flush()
+
+    async def _warn_orphaned_references(
+        self, category_id: int, category_name: str, operator_id: int
+    ) -> None:
+        """删除分类前，若存在他人的关联数据，记录一条 warning（不阻塞删除）。
+
+        Args:
+            category_id: 待删除的分类ID
+            category_name: 分类名称（便于日志排查）
+            operator_id: 操作人用户ID（其本人数据已在前面校验过）
+        """
+        others: List[str] = []
+
+        task_owners = (
+            await self.session.execute(
+                select(ListingMonitorTask.owner_id)
+                .where(
+                    ListingMonitorTask.category_id == category_id,
+                    ListingMonitorTask.is_deleted.is_(False),
+                    ListingMonitorTask.owner_id != operator_id,
+                )
+                .distinct()
+            )
+        ).scalars().all()
+        if task_owners:
+            others.append(f"监控任务所属用户{sorted({oid for oid in task_owners if oid})}")
+
+        for model, label in (
+            (CollectFallbackAccount, "兜底采集账号配置"),
+            (OrderFallbackAccount, "兜底下单账号配置"),
+        ):
+            owners = (
+                await self.session.execute(
+                    select(model.owner_id)
+                    .where(
+                        model.category_id == category_id,
+                        model.is_deleted.is_(False),
+                        model.owner_id != operator_id,
+                    )
+                    .distinct()
+                )
+            ).scalars().all()
+            if owners:
+                others.append(f"{label}所属用户{sorted(set(owners))}")
+
+        if others:
+            logger.warning(
+                f"[商品监控分类] 用户{operator_id}删除分类「{category_name}」(id={category_id})，"
+                f"以下他人数据将变成悬空引用（其「本分类」兜底层失效）：{'；'.join(others)}"
+            )
