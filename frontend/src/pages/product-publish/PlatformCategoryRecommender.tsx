@@ -417,11 +417,10 @@ export function PlatformCategoryRecommender({ form, onChange, categoryLocked = f
               options={candidates.map((candidate, index) => ({
                 value: String(index),
                 label: candidateLabel(candidate),
-                disabled: !candidate.channel_cat_id || !candidate.tb_cat_id,
               }))}
               onSelect={(value) => {
                 const candidate = candidates[Number(value)]
-                if (!categoryLocked && candidate?.channel_cat_id && candidate.tb_cat_id) void selectCandidate(candidate)
+                if (!categoryLocked && candidate) void selectCandidate(candidate)
               }}
             />
             <PlatformAttributesEditor
