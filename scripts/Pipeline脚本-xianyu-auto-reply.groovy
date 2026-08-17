@@ -119,6 +119,8 @@ EOF
                                 # 构建并推送前端镜像（Dockerfile在docker/frontend/，构建上下文为项目根目录）
                                 docker buildx build \\
                                     --platform ${PLATFORMS} \\
+                                    --provenance=false \\
+                                    --sbom=false \\
                                     -t ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${FRONTEND_IMAGE_NAME}:latest \\
                                     -f docker/frontend/Dockerfile \\
                                     --push \\
@@ -151,6 +153,8 @@ EOF
                                 # 构建并推送WebSocket镜像（含Playwright）
                                 docker buildx build \\
                                     --platform ${PLATFORMS} \\
+                                    --provenance=false \\
+                                    --sbom=false \\
                                     -t ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${WEBSOCKET_IMAGE_NAME}:latest \\
                                     -f websocket/Dockerfile \\
                                     --push \\
@@ -183,6 +187,8 @@ EOF
                                 # 构建并推送Backend-Web镜像
                                 docker buildx build \\
                                     --platform ${PLATFORMS} \\
+                                    --provenance=false \\
+                                    --sbom=false \\
                                     -t ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${BACKEND_WEB_IMAGE_NAME}:latest \\
                                     -f backend-web/Dockerfile \\
                                     --push \\
@@ -215,6 +221,8 @@ EOF
                                 # 构建并推送Scheduler镜像（含Playwright）
                                 docker buildx build \\
                                     --platform ${PLATFORMS} \\
+                                    --provenance=false \\
+                                    --sbom=false \\
                                     -t ${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${SCHEDULER_IMAGE_NAME}:latest \\
                                     -f scheduler/Dockerfile \\
                                     --push \\

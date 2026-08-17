@@ -58,6 +58,7 @@ if [ ! -f "$ENV_FILE" ]; then
 # ========== 远程 MySQL 配置（必填，请改成你的远程数据库地址） ==========
 # 注意：不要填 localhost / 127.0.0.1（容器内会指向容器自身）
 # 远程库需提前创建好 MYSQL_DATABASE，并授权 MYSQL_USER 可从部署机 IP 远程访问
+# 建议远程 MySQL 持久设置 max_connect_errors=100000；出现 1129 时需由管理员执行 FLUSH HOSTS
 MYSQL_HOST=your-remote-mysql-host
 MYSQL_PORT=3306
 MYSQL_DATABASE=xianyu_data

@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from app.core.config import get_settings
+from common.db.error_messages import get_public_database_error_message
 from common.utils.logging_utils import setup_logging
 from common.utils.network_utils import resolve_listen_host
 
@@ -300,13 +301,16 @@ async def global_exception_handler(request, exc):
             },
         )
     
+    # 已知基础设施异常转换为清晰提示，避免向用户暴露驱动堆栈和数据库地址。
+    public_error_message = get_public_database_error_message(exc)
+
     # 其他异常
     return JSONResponse(
         status_code=200,  # 统一返回200
         content={
             "success": False,
             "code": 500,
-            "message": f"服务器内部错误: {str(exc)}",
+            "message": public_error_message or f"服务器内部错误: {str(exc)}",
             "data": None,
         },
     )

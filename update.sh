@@ -114,6 +114,7 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
       - --max-connections=300
+      - --max-connect-errors=100000
       - --max-allowed-packet=256M
       - --default-time-zone=+08:00
     volumes:
