@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from common.services.account_cookie_service import merge_account_cookie_fields
 from common.services.captcha.concurrency import run_browser_task
+from common.services.captcha.routing_settings import load_captcha_routing_settings
 from common.services.captcha.slider_mode import (
     SLIDER_MODE_REAL_MOUSE,
     refresh_slider_mode_from_database,
@@ -685,14 +686,53 @@ async def solve_captcha(request: SolveCaptchaRequest):
             url_provider = _remote_url_provider
             logger.info(f"【过滑块接口】account_id={safe_id} 已携带 Cookie，启用链接过期自动重取")
 
+        # 本系统内部发起的任务必须与 WebSocket 账号刷新共用同一份远程配置。
+        # 外部调用由 backend-web 标记为 remote；此处不能再次转发，否则配置指向
+        # 另一个完整服务时可能形成远程调用环。
+        remote_config = None
+        if call_type == "local":
+            routing = await load_captcha_routing_settings(
+                device_id=device_id,
+                log_tag=safe_id,
+            )
+            if routing is None:
+                message = "滑块路由配置读取失败，为避免误用本机鼠标，本次未执行"
+                _update_log("failed", message, error=message)
+                return {
+                    "success": False,
+                    "code": 200,
+                    "message": message,
+                    "data": {"engine": None},
+                }
+            remote_config = routing.remote_config
+            if remote_config is None and routing.local_slider_disabled:
+                message = "本机滑块不处理已开启，且未配置可用的远程滑块服务"
+                _update_log("failed", message, error=message)
+                return {
+                    "success": False,
+                    "code": 200,
+                    "message": message,
+                    "data": {"engine": None},
+                }
+
         # 被调用接口不信任请求体中的 call_type，所有请求固定进入远程桶，避免伪装成本地权重。
         # 远程内部默认无 Cookie 优先；任一队首等待满70秒后按最早入队优先。
         weight_class = "remote_cookie" if existing_cookies_str else "remote"
         slider_args = (
-            safe_id, url, True, False, timeout, existing_cookies_str, url_provider,
+            safe_id,
+            url,
+            True,
+            False,
+            timeout,
+            existing_cookies_str,
+            url_provider,
+            remote_config,
         )
         selected_slider_mode = await refresh_slider_mode_from_database()
-        if selected_slider_mode == SLIDER_MODE_REAL_MOUSE:
+        if (
+            remote_config is None
+            and selected_slider_mode == SLIDER_MODE_REAL_MOUSE
+        ):
             # 被调用方请求在线程池之前参与本地/远程实时加权排队。
             success, cookies, engine = await real_mouse_weighted_runner.submit(
                 weight_class,

@@ -250,6 +250,9 @@ bash build_scheduler.sh     # 重建 Scheduler
 
 ### 方式五：源码本地开发
 
+需要把 Token / 真实鼠标滑块部署到另一台 Windows 机器时，使用单独发布的
+`xianyu-remote-worker` 工程；两者没有源码或数据库依赖，本仓库通过 HTTP 客户端接入。
+
 #### 1. 准备基础服务
 
 可以使用本机 MySQL / Redis，也可以仅用 Docker 启动基础设施：

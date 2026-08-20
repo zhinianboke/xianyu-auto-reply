@@ -37,6 +37,7 @@ from common.services.token_api_mode import (
     load_token_api_mode,
 )
 from common.services.captcha.concurrency import run_browser_task
+from common.services.captcha.routing_settings import load_captcha_routing_settings
 from common.services.captcha.slider_mode import (
     SLIDER_MODE_REAL_MOUSE,
     refresh_slider_mode_from_database,
@@ -45,6 +46,8 @@ from common.services.captcha.token_refetch import request_fresh_captcha_url
 from common.services.captcha.token_response import (
     get_token_captcha_reason,
     is_token_expired_response,
+    safe_url_for_log,
+    summarize_token_response_for_log,
 )
 from common.services.captcha.weighted_runner import real_mouse_weighted_runner
 from common.utils.cookie_refresh import get_account_by_identity, update_account_cookies_in_db
@@ -372,8 +375,6 @@ class CookieTokenManager:
         self.last_token_refresh_status = "success_from_cache"
         self.parent._using_expired_startup_token = False
         logger.info(f"【{self.cookie_id}】使用数据库缓存的Token和Device ID")
-        logger.info(f"【{self.cookie_id}】缓存Token: {cached_token}")
-        logger.info(f"【{self.cookie_id}】缓存Device ID: {cached_device_id}")
         if cached.get("expired_fallback"):
             reason = cached.get("expired_fallback_reason")
             if reason == "websocket_startup":
@@ -480,9 +481,11 @@ class CookieTokenManager:
                     if hasattr(self.parent, 'user_id') and self.parent.user_id:
                         current_user_id = self.parent.user_id
 
-                    # 打印要保存的x5sec值
                     cookies_dict = trans_cookies(self.cookies_str)
-                    logger.warning(f"【{self.cookie_id}】update_config_cookies保存的x5sec: {cookies_dict.get('x5sec', '无')[:80]}...")
+                    logger.info(
+                        f"【{self.cookie_id}】准备保存Cookie，"
+                        f"字段数={len(cookies_dict)}，含x5sec={bool(cookies_dict.get('x5sec'))}"
+                    )
                     
                     # 使用 update_cookie_account_info 避免覆盖其他字段
                     success = await update_account_cookies_in_db(
@@ -601,38 +604,11 @@ class CookieTokenManager:
             - pass_cookies 为 True 时表示"调用远程接口时传递账号 Cookie"（默认关闭）；
             - device_id 仅在 pass_cookies 开启时一并下发，供远程端在链接过期时重取新链接。
         """
-        try:
-            from common.db.session import async_session_maker
-            from common.models.system_setting import SystemSetting
-            from sqlalchemy import select
-
-            async with async_session_maker() as session:
-                rows = (await session.execute(
-                    select(SystemSetting).where(
-                        SystemSetting.key.in_(
-                            [
-                                "captcha.remote_service_url",
-                                "captcha.remote_secret_key",
-                                "captcha.remote_pass_cookies",
-                            ]
-                        )
-                    )
-                )).scalars().all()
-            m = {r.key: (r.value or "") for r in rows}
-            url = (m.get("captcha.remote_service_url") or "").strip()
-            secret = (m.get("captcha.remote_secret_key") or "").strip()
-            pass_cookies = (m.get("captcha.remote_pass_cookies") or "").strip().lower() == "true"
-            if url and secret:
-                return {
-                    "url": url,
-                    "secret": secret,
-                    "pass_cookies": pass_cookies,
-                    # 仅开启开关时下发 device_id，未开启则不携带任何账号信息
-                    "device_id": (self.device_id or "") if pass_cookies else "",
-                }
-        except Exception as e:
-            logger.warning(f"【{self.cookie_id}】读取远程过滑块配置失败（走本机逻辑）: {self._safe_str(e)}")
-        return None
+        routing = await load_captcha_routing_settings(
+            device_id=self.device_id or "",
+            log_tag=str(self.cookie_id),
+        )
+        return routing.remote_config if routing is not None else None
 
     async def handle_captcha_verification(self, res_json: dict) -> str:
         """处理滑块验证，返回新的cookies字符串"""
@@ -661,7 +637,8 @@ class CookieTokenManager:
                 logger.info(f"【{self.cookie_id}】未找到验证URL，认为不需要滑块验证")
                 return None
 
-            logger.info(f"【{self.cookie_id}】验证URL: {verification_url}")
+            safe_verification_url = safe_url_for_log(verification_url)
+            logger.info(f"【{self.cookie_id}】验证URL: {safe_verification_url}")
             
             # 同账号的“检查处理中状态 + 创建日志”使用同一临界区，避免并发重复滑块。
             log_id = None
@@ -677,7 +654,9 @@ class CookieTokenManager:
                     log_id = db_manager.add_risk_control_log(
                         cookie_id=self.cookie_id,
                         event_type='slider_captcha',
-                        event_description=f'触发场景: Token刷新, URL: {verification_url}',
+                        event_description=(
+                            f"触发场景: Token刷新, URL: {safe_verification_url}"
+                        ),
                         processing_status='processing'
                     )
                     if log_id:
@@ -731,7 +710,7 @@ class CookieTokenManager:
                 self._refetch_new_cookies = {}
 
                 # 读取全局"远程过滑块"配置（system_settings，仅管理员可配）。
-                # 配置了则优先走远程接口；远程超时/不可用时回退本机逻辑。
+                # 配置了则固定走远程接口；远程不可用时不静默抢本机鼠标。
                 remote_config = await self._load_remote_captcha_config()
 
                 # 真实鼠标任务先按权重排队，其他模式保持使用原浏览器任务专用线程池；
@@ -790,8 +769,10 @@ class CookieTokenManager:
 
                 if success and cookies:
                     logger.info(f"【{self.cookie_id}】滑块验证成功，获取到新的cookies")
-                    # 打印滑块验证返回的全部cookies
-                    logger.warning(f"【{self.cookie_id}】滑块验证返回的全部cookies: {cookies}")
+                    logger.info(
+                        f"【{self.cookie_id}】滑块验证返回Cookie字段: "
+                        f"{', '.join(sorted(str(name) for name in cookies))}"
+                    )
                     
                     # 更新风控日志为成功状态
                     captcha_duration = time.time() - captcha_start_time
@@ -873,8 +854,10 @@ class CookieTokenManager:
                         self.cookies_str = cookies_str
                         self.cookies = updated_cookies
                         
-                        # 打印更新后的x5sec值
-                        logger.warning(f"【{self.cookie_id}】准备保存到数据库的x5sec: {updated_cookies.get('x5sec', '无')}")
+                        logger.info(
+                            f"【{self.cookie_id}】准备保存滑块Cookie，"
+                            f"含x5sec={bool(updated_cookies.get('x5sec'))}"
+                        )
 
                         if not await self.update_config_cookies():
                             raise RuntimeError("滑块Cookie写回数据库失败")
@@ -1204,7 +1187,10 @@ class CookieTokenManager:
                 f"状态码={api_result.status_code}, 耗时={api_result.duration_seconds:.2f}秒"
             )
             res_json = api_result.response_json
-            logger.info(f"【{self.cookie_id}】Token刷新响应: {json.dumps(res_json, ensure_ascii=False)[:500]}")
+            logger.info(
+                f"【{self.cookie_id}】Token刷新响应: "
+                f"{summarize_token_response_for_log(res_json)}"
+            )
 
             # 检查并更新Cookie
             new_cookies = api_result.response_cookies
@@ -1225,7 +1211,7 @@ class CookieTokenManager:
                 self.last_token_refresh_time = time.time()
                 self.parent.last_message_received_time = 0
                 logger.warning(f"【{self.cookie_id}】Token刷新成功，已重置消息接收时间标识")
-                logger.info(f"【{self.cookie_id}】Token刷新成功，新Token: {new_token}")
+                logger.info(f"【{self.cookie_id}】Token刷新成功，已取得新Token")
                 self.last_token_refresh_status = "success"
                 # 缓存token和device_id到数据库
                 await self._set_cached_token(new_token, self.device_id)
@@ -1332,13 +1318,19 @@ class CookieTokenManager:
             except Exception as retry_e:
                 logger.warning(f"【{self.cookie_id}】令牌过期重试判断异常: {self._safe_str(retry_e)}")
 
-            logger.error(f"【{self.cookie_id}】Token刷新失败: {res_json}")
+            safe_response_summary = summarize_token_response_for_log(res_json)
+            logger.error(
+                f"【{self.cookie_id}】Token刷新失败: {safe_response_summary}"
+            )
             self.current_token = None
             self.last_token_refresh_status = "failed_api"
             await self._delete_cached_token()
 
             if not notification_sent:
-                await self.send_token_refresh_notification(f"Token刷新失败: {res_json}", "token_refresh_failed")
+                await self.send_token_refresh_notification(
+                    f"Token刷新失败: {safe_response_summary}",
+                    "token_refresh_failed",
+                )
             return None
 
         except asyncio.TimeoutError:
@@ -1450,8 +1442,9 @@ class CookieTokenManager:
             try:
                 from common.services.cookie_renew_api_service import cookie_renew_api_service
                 logger.info(f"【{self.cookie_id}】先尝试接口续期（silentHasLogin + setLoginSettings）...")
-                # 记录续期前的全量cookies
-                logger.info(f"【{self.cookie_id}】[续期前全量Cookies] {self.cookies_str}")
+                logger.info(
+                    f"【{self.cookie_id}】续期前Cookie字段数: {len(self.cookies)}"
+                )
                 renew_result = await cookie_renew_api_service.renew(self.cookies_str, self.cookie_id)
 
                 # 不管续期是否成功，只要有Cookie字段更新就先写入数据库
@@ -1466,8 +1459,9 @@ class CookieTokenManager:
                         f"{', '.join(renew_result.updated_cookie_names)}"
                     )
 
-                # 记录续期后的全量cookies（不管成功失败都打印）
-                logger.info(f"【{self.cookie_id}】[续期后全量Cookies] {self.cookies_str}")
+                logger.info(
+                    f"【{self.cookie_id}】续期后Cookie字段数: {len(self.cookies)}"
+                )
 
                 if renew_result.success:
                     # 续期成功（可能是接口续期或浏览器续期），跳过密码登录
@@ -1592,8 +1586,10 @@ class CookieTokenManager:
                 await self._delete_cached_token()
                 
                 new_cookies_str = '; '.join([f"{k}={v}" for k, v in result.items()])
-                # 记录密码登录获取到的新cookies
-                logger.info(f"【{self.cookie_id}】[密码登录获取的新Cookies] {new_cookies_str}")
+                logger.info(
+                    f"【{self.cookie_id}】密码登录获取Cookie字段: "
+                    f"{', '.join(sorted(str(name) for name in result))}"
+                )
                 
                 # 记录密码登录时间
                 if hasattr(self.parent, '_last_password_login_time'):
