@@ -23,6 +23,7 @@ from common.utils.security import generate_secret_key as _generate_secret_key
 from app.services.card_service import CardService
 from app.services.dock_record_service import DockRecordService
 from app.services.fund_flow_service import FundFlowService
+from app.services.order_delivery_query_service import OrderDeliveryQueryService
 from app.services.pickup_service import PickupService
 
 from common.utils.time_utils import safe_isoformat
@@ -271,6 +272,50 @@ async def pickup(
     service = PickupService(session)
     result = await service.pickup(key.strip(), dock_id)
     return PlainTextResponse(content=result.content, status_code=200)
+
+
+# ========== 订单发货内容查询（公开接口，免认证，支持 GET/POST） ==========
+
+class OrderDeliveryQueryRequest(BaseModel):
+    """查询订单发货内容请求（POST 使用）"""
+    order_no: str  # 闲鱼订单号
+    key: str  # 分销秘钥（个人设置-分销管理-秘钥）
+
+
+async def _query_order_delivery(order_no: str, key: str, session: AsyncSession) -> ApiResponse:
+    """查询订单发货内容的公共逻辑，供 GET/POST 复用。
+
+    校验秘钥是否存在、订单是否归属该秘钥用户，均满足后返回发货内容。
+    """
+    service = OrderDeliveryQueryService(session)
+    success, message, data = await service.query_delivery_content(order_no, key)
+    return ApiResponse(success=success, message=message, data=data)
+
+
+@router.get("/order-delivery", response_model=ApiResponse)
+async def get_order_delivery(
+    order_no: str = Query(default="", description="闲鱼订单号"),
+    key: str = Query(default="", description="分销秘钥（个人设置-分销管理-秘钥）"),
+    session: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """查询订单发货内容（公开接口，免认证，GET）
+
+    通过 分销秘钥 + 闲鱼订单号 查询订单发货内容：
+    先校验秘钥是否存在，再校验订单是否归属该秘钥对应的用户，都满足后返回发货内容。
+    """
+    return await _query_order_delivery(order_no, key, session)
+
+
+@router.post("/order-delivery", response_model=ApiResponse)
+async def post_order_delivery(
+    data: OrderDeliveryQueryRequest,
+    session: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """查询订单发货内容（公开接口，免认证，POST）
+
+    参数通过 JSON 请求体传递，校验逻辑与 GET 一致。
+    """
+    return await _query_order_delivery(data.order_no, data.key, session)
 
 
 # ========== 分销商管理 ==========
