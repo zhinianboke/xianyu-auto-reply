@@ -3,7 +3,7 @@
 
 功能：
 1. 在调用远程 Token 接口后写入 xy_risk_control_logs
-2. 记录远程取 Token 成功或失败状态
+2. 区分记录远程取 Token 成功、需要滑块验证和真实失败状态
 3. 避免在各业务流程中重复拼装风控日志字段
 """
 from __future__ import annotations
@@ -18,9 +18,11 @@ from common.models.xy_account import XYAccount
 
 
 REMOTE_TOKEN_EVENT_TYPE = "remote_token"
+REMOTE_TOKEN_STATUS_CAPTCHA_REQUIRED = "captcha_required"
 
 # 远程回退场景下，风控日志事件描述使用的远程接口结果文案
 REMOTE_OUTCOME_SUCCESS = "远程接口获取Token成功"
+REMOTE_OUTCOME_CAPTCHA_REQUIRED = "远程接口需要滑块验证"
 REMOTE_OUTCOME_FAILED = "远程接口获取Token失败"
 
 
@@ -51,6 +53,7 @@ def build_remote_fallback_event_description(
 def build_remote_token_log_result(
     *,
     success: bool,
+    captcha_required: bool = False,
     message: str,
     api_mode: str = "",
     status_code: int = 0,
@@ -63,7 +66,8 @@ def build_remote_token_log_result(
     便于排查究竟是本地慢还是远程慢；两段都有时额外给出总耗时。
 
     Args:
-        success: 远程接口业务是否成功。
+        success: 远程接口是否返回有效 Token。
+        captcha_required: 远程接口是否成功返回滑块挑战上下文。
         message: 远程接口返回或本地解析出的结果说明。
         api_mode: 远程接口返回的实际 Token 接口。
         status_code: HTTP 状态码。
@@ -72,8 +76,13 @@ def build_remote_token_log_result(
     Returns:
         用于风控日志 processing_result 的中文结果文案。
     """
-    status_text = "成功" if success else "失败"
-    parts = [f"远程接口获取Token{status_text}"]
+    if success:
+        outcome_text = "远程接口获取Token成功"
+    elif captcha_required:
+        outcome_text = "远程接口需要滑块验证"
+    else:
+        outcome_text = "远程接口获取Token失败"
+    parts = [outcome_text]
     if message:
         parts.append(f"说明：{message}")
     if api_mode:
@@ -93,6 +102,7 @@ async def record_remote_token_risk_log(
     *,
     account_identifier: str,
     success: bool,
+    captcha_required: bool = False,
     message: str,
     api_mode: str = "",
     status_code: int = 0,
@@ -106,7 +116,8 @@ async def record_remote_token_risk_log(
 
     Args:
         account_identifier: 账号标识；系统测试场景可传入固定说明。
-        success: 是否成功。
+        success: 是否成功返回有效 Token。
+        captcha_required: 是否已返回滑块挑战上下文；该状态不属于失败。
         message: 结果说明。
         api_mode: 实际 Token 接口。
         status_code: HTTP 状态码。
@@ -121,6 +132,7 @@ async def record_remote_token_risk_log(
     safe_account_identifier = str(account_identifier or "").strip()[:80] or "remote_token"
     processing_result = build_remote_token_log_result(
         success=success,
+        captcha_required=captcha_required,
         message=message,
         api_mode=api_mode,
         status_code=status_code,
@@ -145,11 +157,21 @@ async def record_remote_token_risk_log(
                 account_identifier=safe_account_identifier,
                 event_type=REMOTE_TOKEN_EVENT_TYPE,
                 event_description=event_description,
-                processing_status="success" if success else "failed",
+                processing_status=(
+                    "success"
+                    if success
+                    else REMOTE_TOKEN_STATUS_CAPTCHA_REQUIRED
+                    if captcha_required
+                    else "failed"
+                ),
                 processing_result=processing_result,
                 call_type="remote",
                 call_user=call_user,
-                error_message=None if success else (message or "远程接口获取Token失败"),
+                error_message=(
+                    None
+                    if success or captcha_required
+                    else (message or "远程接口获取Token失败")
+                ),
             )
             session.add(log)
             await session.commit()
@@ -164,6 +186,7 @@ def record_remote_token_risk_log_sync(
     *,
     account_identifier: str,
     success: bool,
+    captcha_required: bool = False,
     message: str,
     api_mode: str = "",
     status_code: int = 0,
@@ -175,7 +198,8 @@ def record_remote_token_risk_log_sync(
 
     Args:
         account_identifier: 账号标识。
-        success: 是否成功。
+        success: 是否成功返回有效 Token。
+        captcha_required: 是否已返回滑块挑战上下文；该状态不属于失败。
         message: 结果说明。
         api_mode: 实际 Token 接口。
         status_code: HTTP 状态码。
@@ -188,6 +212,7 @@ def record_remote_token_risk_log_sync(
     safe_account_identifier = str(account_identifier or "").strip()[:80] or "remote_token"
     processing_result = build_remote_token_log_result(
         success=success,
+        captcha_required=captcha_required,
         message=message,
         api_mode=api_mode,
         status_code=status_code,
@@ -199,14 +224,24 @@ def record_remote_token_risk_log_sync(
             cookie_id=safe_account_identifier,
             event_type=REMOTE_TOKEN_EVENT_TYPE,
             event_description=event_description,
-            processing_status="success" if success else "failed",
+            processing_status=(
+                "success"
+                if success
+                else REMOTE_TOKEN_STATUS_CAPTCHA_REQUIRED
+                if captcha_required
+                else "failed"
+            ),
             call_type="remote",
         )
         if log_id:
             db_manager.update_risk_control_log(
                 log_id=log_id,
                 processing_result=processing_result,
-                error_message=None if success else (message or "远程接口获取Token失败"),
+                error_message=(
+                    None
+                    if success or captcha_required
+                    else (message or "远程接口获取Token失败")
+                ),
             )
     except Exception as exc:
         logger.error(

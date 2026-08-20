@@ -36,6 +36,7 @@ from common.services.remote_token_api import (
     validate_remote_token_settings,
 )
 from common.services.remote_token_risk_log_service import (
+    REMOTE_OUTCOME_CAPTCHA_REQUIRED,
     REMOTE_OUTCOME_FAILED,
     REMOTE_OUTCOME_SUCCESS,
     build_remote_fallback_event_description,
@@ -384,10 +385,17 @@ async def _request_remote_token_from_settings(
             )
             raise
 
+    captcha_required = bool(
+        not remote_result.success and remote_result.captcha_url
+    )
     if remote_result.success:
         logger.info(
             f"{prefix}远程接口取Token成功，实际接口="
             f"{remote_result.api_mode or '未返回'}，耗时={remote_result.duration_seconds:.2f}秒"
+        )
+    elif captcha_required:
+        logger.info(
+            f"{prefix}远程接口已返回滑块验证上下文，将进入滑块处理"
         )
     else:
         logger.warning(
@@ -396,6 +404,7 @@ async def _request_remote_token_from_settings(
     await record_remote_token_risk_log(
         account_identifier=log_tag,
         success=remote_result.success,
+        captcha_required=captcha_required,
         message=remote_result.message,
         api_mode=remote_result.api_mode,
         status_code=remote_result.status_code,
@@ -404,7 +413,11 @@ async def _request_remote_token_from_settings(
         event_description=build_remote_fallback_event_description(
             local_failure_reason=local_failure_reason,
             remote_outcome=(
-                REMOTE_OUTCOME_SUCCESS if remote_result.success else REMOTE_OUTCOME_FAILED
+                REMOTE_OUTCOME_SUCCESS
+                if remote_result.success
+                else REMOTE_OUTCOME_CAPTCHA_REQUIRED
+                if captcha_required
+                else REMOTE_OUTCOME_FAILED
             ),
         ),
     )

@@ -8,14 +8,63 @@ from common.services.captcha.token_refetch import request_fresh_captcha_url
 from common.services.im_token_api import (
     ImTokenApiResult,
     _attach_remote_failure,
+    _request_remote_token_from_settings,
     _remote_result_to_im_token_result,
     request_im_token_with_fallback,
 )
-from common.services.remote_token_api import _parse_remote_token_response
+from common.services.remote_token_api import RemoteTokenResult, _parse_remote_token_response
+from common.services.remote_token_risk_log_service import (
+    REMOTE_OUTCOME_CAPTCHA_REQUIRED,
+    REMOTE_TOKEN_STATUS_CAPTCHA_REQUIRED,
+    build_remote_fallback_event_description,
+    build_remote_token_log_result,
+    record_remote_token_risk_log_sync,
+)
 from common.services.token_api_mode import TOKEN_API_MODE_REMOTE
 
 
 class RemoteTokenClientCompatibilityTests(unittest.TestCase):
+    def test_captcha_challenge_is_not_described_as_token_failure(self):
+        description = build_remote_fallback_event_description(
+            local_failure_reason="未返回有效Token",
+            remote_outcome=REMOTE_OUTCOME_CAPTCHA_REQUIRED,
+        )
+        result = build_remote_token_log_result(
+            success=False,
+            captcha_required=True,
+            message="远程节点触发滑块验证",
+            api_mode="web",
+            status_code=200,
+        )
+
+        self.assertIn("远程接口需要滑块验证", description)
+        self.assertNotIn("远程接口获取Token失败", description)
+        self.assertTrue(result.startswith("远程接口需要滑块验证"))
+
+    def test_sync_risk_log_uses_captcha_required_status_without_error(self):
+        with (
+            patch(
+                "common.services.remote_token_risk_log_service.db_manager.add_risk_control_log",
+                return_value=123,
+            ) as add_log,
+            patch(
+                "common.services.remote_token_risk_log_service.db_manager.update_risk_control_log",
+                return_value=True,
+            ) as update_log,
+        ):
+            record_remote_token_risk_log_sync(
+                account_identifier="account-1",
+                success=False,
+                captcha_required=True,
+                message="远程节点触发滑块验证",
+            )
+
+        self.assertEqual(
+            add_log.call_args.kwargs["processing_status"],
+            REMOTE_TOKEN_STATUS_CAPTCHA_REQUIRED,
+        )
+        self.assertIsNone(update_log.call_args.kwargs["error_message"])
+
     def test_token_log_summary_redacts_credentials(self):
         summary = summarize_token_response_for_log(
             {
@@ -144,6 +193,42 @@ class RemoteTokenClientCompatibilityTests(unittest.TestCase):
 
 
 class RemoteTokenAsyncFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_remote_captcha_response_is_logged_as_required_not_failed(self):
+        remote_result = RemoteTokenResult(
+            success=False,
+            message="远程节点触发滑块验证",
+            response_json={},
+            status_code=200,
+            duration_seconds=0.2,
+            device_id="remote-device",
+            api_mode="web",
+            captcha_url="https://h5api.m.goofish.com/punish?x5secdata=secret",
+        )
+        with (
+            patch(
+                "common.services.im_token_api.request_remote_xianyu_token_from_settings",
+                new=AsyncMock(return_value=remote_result),
+            ),
+            patch(
+                "common.services.im_token_api.record_remote_token_risk_log",
+                new=AsyncMock(),
+            ) as record_log,
+        ):
+            result = await _request_remote_token_from_settings(
+                "local-device",
+                cookies="unb=123",
+                timeout_seconds=5,
+                log_tag="account-1",
+                local_failure_reason="未返回有效Token",
+            )
+
+        self.assertIn("FAIL_SYS_USER_VALIDATE", result.response_json["ret"][0])
+        self.assertTrue(record_log.call_args.kwargs["captcha_required"])
+        self.assertIn(
+            "远程接口需要滑块验证",
+            record_log.call_args.kwargs["event_description"],
+        )
+
     async def test_local_exception_keeps_remote_captcha_context(self):
         remote = ImTokenApiResult(
             response_json={

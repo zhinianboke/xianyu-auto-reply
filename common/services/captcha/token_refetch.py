@@ -31,6 +31,7 @@ from common.services.remote_token_api import (
     validate_remote_token_settings,
 )
 from common.services.remote_token_risk_log_service import (
+    REMOTE_OUTCOME_CAPTCHA_REQUIRED,
     REMOTE_OUTCOME_FAILED,
     REMOTE_OUTCOME_SUCCESS,
     build_remote_fallback_event_description,
@@ -300,9 +301,13 @@ def _try_remote_token_fallback(
         )
         return False
 
+    captcha_required = bool(
+        not remote_result.success and remote_result.captcha_url
+    )
     record_remote_token_risk_log_sync(
         account_identifier=cookie_id,
         success=remote_result.success,
+        captcha_required=captcha_required,
         message=remote_result.message,
         api_mode=remote_result.api_mode,
         status_code=remote_result.status_code,
@@ -311,7 +316,11 @@ def _try_remote_token_fallback(
         event_description=build_remote_fallback_event_description(
             local_failure_reason=local_failure_reason,
             remote_outcome=(
-                REMOTE_OUTCOME_SUCCESS if remote_result.success else REMOTE_OUTCOME_FAILED
+                REMOTE_OUTCOME_SUCCESS
+                if remote_result.success
+                else REMOTE_OUTCOME_CAPTCHA_REQUIRED
+                if captcha_required
+                else REMOTE_OUTCOME_FAILED
             ),
             scene=_REMOTE_FALLBACK_EVENT_SCENE,
         ),
@@ -329,10 +338,11 @@ def _try_remote_token_fallback(
             logger.info(
                 f"【{cookie_id}】远程节点返回新鲜验证链接，将交给远程滑块节点"
             )
-        logger.warning(
-            f"【{cookie_id}】本地网页接口获取Token失败后的远程回退失败: "
-            f"{remote_result.message or '未返回错误说明'}"
-        )
+        else:
+            logger.warning(
+                f"【{cookie_id}】本地网页接口获取Token失败后的远程回退失败: "
+                f"{remote_result.message or '未返回错误说明'}"
+            )
         return False
 
     result["token_ok"] = True
