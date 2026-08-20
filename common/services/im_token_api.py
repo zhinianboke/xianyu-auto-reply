@@ -18,7 +18,10 @@ from typing import Any
 import aiohttp
 from loguru import logger
 
-from common.services.captcha.token_response import is_token_expired_response
+from common.services.captcha.token_response import (
+    extract_token_captcha_url,
+    is_token_expired_response,
+)
 from common.services.token_api_mode import (
     DEFAULT_TOKEN_API_MODE,
     TOKEN_API_MODE_REMOTE,
@@ -33,6 +36,7 @@ from common.services.remote_token_api import (
     validate_remote_token_settings,
 )
 from common.services.remote_token_risk_log_service import (
+    REMOTE_OUTCOME_CAPTCHA_REQUIRED,
     REMOTE_OUTCOME_FAILED,
     REMOTE_OUTCOME_SUCCESS,
     build_remote_fallback_event_description,
@@ -267,7 +271,7 @@ def _remote_result_to_im_token_result(
         }
         return ImTokenApiResult(
             response_json=response_json,
-            response_cookies={},
+            response_cookies=dict(result.cookies),
             status_code=result.status_code,
             duration_seconds=result.duration_seconds,
             api_mode=TOKEN_API_MODE_REMOTE,
@@ -275,16 +279,23 @@ def _remote_result_to_im_token_result(
         )
 
     failure_message = result.message or "远程接口取Token失败"
-    return ImTokenApiResult(
-        response_json={
+    if result.captcha_url:
+        failure_response = {
+            "ret": [f"FAIL_SYS_USER_VALIDATE::{failure_message}"],
+            "data": {"url": result.captcha_url},
+        }
+    else:
+        failure_response = {
             "ret": [f"FAIL::{failure_message}"],
             "data": result.response_json,
-        },
-        response_cookies={},
+        }
+    return ImTokenApiResult(
+        response_json=failure_response,
+        response_cookies=dict(result.cookies),
         status_code=result.status_code,
         duration_seconds=result.duration_seconds,
         api_mode=TOKEN_API_MODE_REMOTE,
-        device_id=current_device_id,
+        device_id=result.device_id or current_device_id,
         # 远程失败原因单独留一份，供上层在回退失败、只剩本地响应时判断 Session 过期
         remote_failure_message=failure_message,
     )
@@ -374,10 +385,17 @@ async def _request_remote_token_from_settings(
             )
             raise
 
+    captcha_required = bool(
+        not remote_result.success and remote_result.captcha_url
+    )
     if remote_result.success:
         logger.info(
             f"{prefix}远程接口取Token成功，实际接口="
             f"{remote_result.api_mode or '未返回'}，耗时={remote_result.duration_seconds:.2f}秒"
+        )
+    elif captcha_required:
+        logger.info(
+            f"{prefix}远程接口已返回滑块验证上下文，将进入滑块处理"
         )
     else:
         logger.warning(
@@ -386,6 +404,7 @@ async def _request_remote_token_from_settings(
     await record_remote_token_risk_log(
         account_identifier=log_tag,
         success=remote_result.success,
+        captcha_required=captcha_required,
         message=remote_result.message,
         api_mode=remote_result.api_mode,
         status_code=remote_result.status_code,
@@ -394,7 +413,11 @@ async def _request_remote_token_from_settings(
         event_description=build_remote_fallback_event_description(
             local_failure_reason=local_failure_reason,
             remote_outcome=(
-                REMOTE_OUTCOME_SUCCESS if remote_result.success else REMOTE_OUTCOME_FAILED
+                REMOTE_OUTCOME_SUCCESS
+                if remote_result.success
+                else REMOTE_OUTCOME_CAPTCHA_REQUIRED
+                if captcha_required
+                else REMOTE_OUTCOME_FAILED
             ),
         ),
     )
@@ -480,12 +503,28 @@ def _attach_remote_failure(
     Returns:
         带上远程失败原因的本地结果；无远程失败信息时原样返回。
     """
-    if not remote_result or not remote_result.remote_failure_message:
+    if not remote_result:
+        return local_result
+    if extract_token_captcha_url(remote_result.response_json):
+        response_cookies = dict(local_result.response_cookies)
+        response_cookies.update(remote_result.response_cookies)
+        return replace(remote_result, response_cookies=response_cookies)
+    if not remote_result.remote_failure_message:
         return local_result
     return replace(
         local_result,
         remote_failure_message=remote_result.remote_failure_message,
     )
+
+
+def _merge_local_and_remote_cookies(
+    local_result: ImTokenApiResult,
+    remote_result: ImTokenApiResult,
+) -> ImTokenApiResult:
+    """保留两端增量 Cookie；同名字段以远程工作节点的响应为准。"""
+    response_cookies = dict(local_result.response_cookies)
+    response_cookies.update(remote_result.response_cookies)
+    return replace(remote_result, response_cookies=response_cookies)
 
 
 async def request_im_token_with_fallback(
@@ -539,7 +578,12 @@ async def request_im_token_with_fallback(
             local_failure_reason=f"请求异常：{type(local_error).__name__}: {local_error}",
             local_duration_seconds=time.monotonic() - local_started_at,
         )
-        if remote_result and extract_im_access_token(remote_result.response_json):
+        if remote_result and (
+            extract_im_access_token(remote_result.response_json)
+            or extract_token_captcha_url(remote_result.response_json)
+        ):
+            # 本地请求异常时，远程节点返回的验证链接仍然有效；必须直接交给
+            # 同一远程节点继续处理，不能抛回本地异常并丢失远程上下文。
             return remote_result
         # 本地请求本身已异常，没有可返回的响应体，远程失败原因只能记日志留痕
         if remote_result and remote_result.remote_failure_message:
@@ -590,10 +634,7 @@ async def request_im_token_with_fallback(
                 local_duration_seconds=time.monotonic() - local_started_at,
             )
             if remote_result and extract_im_access_token(remote_result.response_json):
-                return replace(
-                    remote_result,
-                    response_cookies=local_result.response_cookies,
-                )
+                return _merge_local_and_remote_cookies(local_result, remote_result)
             return _attach_remote_failure(local_result, remote_result)
 
         cumulative_response_cookies = dict(local_result.response_cookies)
@@ -616,8 +657,5 @@ async def request_im_token_with_fallback(
     )
     if remote_result and extract_im_access_token(remote_result.response_json):
         # 保留本地接口下发的 Cookie，避免本地响应更新的 _m_h5_tk 丢失。
-        return replace(
-            remote_result,
-            response_cookies=local_result.response_cookies,
-        )
+        return _merge_local_and_remote_cookies(local_result, remote_result)
     return _attach_remote_failure(local_result, remote_result)
