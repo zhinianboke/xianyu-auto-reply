@@ -185,6 +185,8 @@ export function Accounts() {
   const [aiCustomPrompts, setAiCustomPrompts] = useState('')
   const [aiTimeRangeStart, setAiTimeRangeStart] = useState('')
   const [aiTimeRangeEnd, setAiTimeRangeEnd] = useState('')
+  const [aiManualReplyPauseEnabled, setAiManualReplyPauseEnabled] = useState(false)
+  const [aiManualReplyPauseMinutes, setAiManualReplyPauseMinutes] = useState(10)
   const [aiSettingsSaving, setAiSettingsSaving] = useState(false)
   const [aiSettingsLoading, setAiSettingsLoading] = useState(false)
   const [aiTesting, setAiTesting] = useState(false)
@@ -494,6 +496,8 @@ export function Accounts() {
     setEditPasswordVisible(false)
     setAiTimeRangeStart('')
     setAiTimeRangeEnd('')
+    setAiManualReplyPauseEnabled(false)
+    setAiManualReplyPauseMinutes(10)
   }, [activeModal, cancelPwdSession, clearPwdCheck, clearPwdSuccessCloseTimer, clearQrCheck, pwdSessionId, pwdStatus])
 
   // ==================== 管理员默认密码检查 ====================
@@ -1397,6 +1401,8 @@ export function Accounts() {
       }
       setAiTimeRangeStart(formatTime(settings.ai_time_range_start))
       setAiTimeRangeEnd(formatTime(settings.ai_time_range_end))
+      setAiManualReplyPauseEnabled(settings.manual_reply_ai_pause_enabled ?? false)
+      setAiManualReplyPauseMinutes(settings.manual_reply_ai_pause_minutes ?? 10)
     } catch (error) {
       const detail = getApiErrorMessage(error, '加载AI设置失败')
       addToast({ type: 'error', message: detail })
@@ -1503,6 +1509,8 @@ export function Accounts() {
         custom_prompts: aiCustomPrompts,
         ai_time_range_start: aiTimeRangeStart,
         ai_time_range_end: aiTimeRangeEnd,
+        manual_reply_ai_pause_enabled: aiManualReplyPauseEnabled,
+        manual_reply_ai_pause_minutes: aiManualReplyPauseMinutes,
       })
       if (!result.success) {
         addToast({ type: 'warning', message: result.message || 'AI配置未填写完整，无法开启AI回复' })
@@ -1546,6 +1554,8 @@ export function Accounts() {
         custom_prompts: aiCustomPrompts,
         ai_time_range_start: aiTimeRangeStart,
         ai_time_range_end: aiTimeRangeEnd,
+        manual_reply_ai_pause_enabled: aiManualReplyPauseEnabled,
+        manual_reply_ai_pause_minutes: aiManualReplyPauseMinutes,
       })
       if (!saveResult.success) {
         addToast({ type: 'warning', message: saveResult.message || 'AI配置未填写完整，无法测试AI连接' })
@@ -3528,6 +3538,45 @@ export function Accounts() {
                           </span>
                         )}
                       </p>
+                    </div>
+                  )}
+
+                  {aiEnabled && (
+                    <div className="bg-slate-50 dark:bg-slate-800/40 rounded-xl p-3.5 border border-slate-100 dark:border-slate-800 space-y-3">
+                      <div className="flex items-center justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-medium text-slate-900 dark:text-slate-100">人工回复后暂停 AI</p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">仅暂停相同商品 ID 和买家 ID 的 AI 回复，关键词和默认回复仍正常执行。</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setAiManualReplyPauseEnabled(value => !value)}
+                          className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                            aiManualReplyPauseEnabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'
+                          }`}
+                          aria-label="切换人工回复后暂停 AI"
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                              aiManualReplyPauseEnabled ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                      {aiManualReplyPauseEnabled && (
+                        <div className="flex items-center gap-3">
+                          <label className="input-label mb-0 shrink-0">暂停时长</label>
+                          <input
+                            type="number"
+                            value={aiManualReplyPauseMinutes}
+                            onChange={(e) => setAiManualReplyPauseMinutes(Number(e.target.value))}
+                            className="input-ios w-28"
+                            min="1"
+                            max="1440"
+                          />
+                          <span className="text-sm text-slate-500 dark:text-slate-400">分钟（1–1440）</span>
+                        </div>
+                      )}
                     </div>
                   )}
 

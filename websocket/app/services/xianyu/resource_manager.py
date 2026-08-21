@@ -30,6 +30,70 @@ class AutoReplyPauseManager:
         # key: (cookie_id, chat_id) 元组，value: pause_until_timestamp
         # 设计要点：暂停必须按账号隔离，避免账号A对某个chat手动回复后账号B在相同chat上也被误暂停
         self.paused_chats: dict[tuple[str, str], float] = {}
+        # 最近一次买家消息上下文：用于将人工回复精确关联到买家和商品。
+        # key: (cookie_id, chat_id), value: (buyer_id, item_id, recorded_at)
+        self.buyer_contexts: dict[tuple[str, str], tuple[str, str, float]] = {}
+        # AI 专用暂停：不影响关键词和默认回复。
+        # key: (cookie_id, buyer_id, item_id), value: pause_until_timestamp
+        self.paused_ai_contexts: dict[tuple[str, str, str], float] = {}
+
+    def remember_buyer_context(
+        self, chat_id: str, cookie_id: str, buyer_id: str, item_id: str
+    ) -> None:
+        """记录买家发来的消息上下文，供随后人工回复建立精确 AI 暂停。"""
+        normalized_chat_id = str(chat_id or "").strip()
+        normalized_buyer_id = str(buyer_id or "").strip()
+        normalized_item_id = str(item_id or "").strip()
+        if not normalized_chat_id or not normalized_buyer_id or not normalized_item_id:
+            return
+        self.buyer_contexts[(cookie_id, normalized_chat_id)] = (
+            normalized_buyer_id,
+            normalized_item_id,
+            time.time(),
+        )
+
+    def pause_ai_reply_for_manual_message(
+        self, chat_id: str, cookie_id: str, item_id: str, pause_minutes: int
+    ) -> tuple[str, str] | None:
+        """按当前会话的买家和商品，暂停该精确维度的 AI 回复。"""
+        normalized_chat_id = str(chat_id or "").strip()
+        context = self.buyer_contexts.get((cookie_id, normalized_chat_id))
+        if not context:
+            logger.info(
+                f"【{cookie_id}】人工回复 AI 暂停未生效：未找到会话 {normalized_chat_id} 的买家上下文"
+            )
+            return None
+
+        buyer_id, remembered_item_id, _ = context
+        target_item_id = str(item_id or remembered_item_id).strip()
+        if not buyer_id or not target_item_id or pause_minutes <= 0:
+            return None
+
+        pause_until = time.time() + pause_minutes * 60
+        self.paused_ai_contexts[(cookie_id, buyer_id, target_item_id)] = pause_until
+        end_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(pause_until))
+        logger.info(
+            f"【{cookie_id}】人工回复后暂停 AI：buyer_id={buyer_id}, item_id={target_item_id}, "
+            f"时长={pause_minutes}分钟，恢复时间: {end_time}"
+        )
+        return buyer_id, target_item_id
+
+    def get_remaining_ai_pause_time(
+        self, cookie_id: str, buyer_id: str, item_id: str
+    ) -> int:
+        """获取指定买家和商品的 AI 暂停剩余秒数。"""
+        key = (str(cookie_id or ""), str(buyer_id or ""), str(item_id or ""))
+        pause_until = self.paused_ai_contexts.get(key)
+        if not pause_until:
+            return 0
+        remaining = max(0, int(pause_until - time.time()))
+        if remaining == 0:
+            self.paused_ai_contexts.pop(key, None)
+        return remaining
+
+    def is_ai_reply_paused(self, cookie_id: str, buyer_id: str, item_id: str) -> bool:
+        """检查指定买家和商品是否仍在 AI 专用暂停期内。"""
+        return self.get_remaining_ai_pause_time(cookie_id, buyer_id, item_id) > 0
 
     def pause_chat(self, chat_id: str, cookie_id: str):
         """暂停指定chat_id的自动回复,使用账号特定的暂停时间
@@ -113,6 +177,20 @@ class AutoReplyPauseManager:
 
         for key in expired_keys:
             del self.paused_chats[key]
+
+        expired_ai_keys = [
+            key for key, pause_until in self.paused_ai_contexts.items()
+            if current_time >= pause_until
+        ]
+        for key in expired_ai_keys:
+            del self.paused_ai_contexts[key]
+
+        stale_context_keys = [
+            key for key, (_, _, recorded_at) in self.buyer_contexts.items()
+            if current_time - recorded_at >= 24 * 60 * 60
+        ]
+        for key in stale_context_keys:
+            del self.buyer_contexts[key]
 
 
 # 全局暂停管理器实例
