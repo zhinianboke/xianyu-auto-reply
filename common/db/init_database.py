@@ -1291,6 +1291,59 @@ class DatabaseInitializer:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品素材库表';
         """,
 
+        # 37.1 商品售罄自动续售规则
+        "xy_auto_relist_rules": """
+            CREATE TABLE IF NOT EXISTS xy_auto_relist_rules (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                user_id BIGINT NOT NULL,
+                material_id BIGINT NOT NULL,
+                account_id VARCHAR(80) NOT NULL,
+                current_item_id VARCHAR(64) NOT NULL,
+                card_id BIGINT NOT NULL,
+                enabled TINYINT(1) NOT NULL DEFAULT 0,
+                delay_seconds INT NOT NULL DEFAULT 60,
+                status VARCHAR(20) NOT NULL DEFAULT 'disabled',
+                retry_count INT NOT NULL DEFAULT 0,
+                next_retry_at DATETIME DEFAULT NULL,
+                last_order_no VARCHAR(64) DEFAULT NULL,
+                last_old_item_id VARCHAR(64) DEFAULT NULL,
+                last_new_item_id VARCHAR(64) DEFAULT NULL,
+                last_error TEXT DEFAULT NULL,
+                last_relisted_at DATETIME DEFAULT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_auto_relist_material (material_id),
+                INDEX idx_auto_relist_user (user_id),
+                INDEX idx_auto_relist_account (account_id),
+                INDEX idx_auto_relist_item (current_item_id),
+                INDEX idx_auto_relist_enabled_due (enabled, next_retry_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品售罄自动续售规则';
+        """,
+
+        # 37.2 商品自动续售执行记录
+        "xy_auto_relist_events": """
+            CREATE TABLE IF NOT EXISTS xy_auto_relist_events (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                user_id BIGINT NOT NULL,
+                rule_id BIGINT NOT NULL,
+                material_id BIGINT NOT NULL,
+                account_id VARCHAR(80) NOT NULL,
+                order_no VARCHAR(64) NOT NULL,
+                old_item_id VARCHAR(64) NOT NULL,
+                new_item_id VARCHAR(64) DEFAULT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                attempt_count INT NOT NULL DEFAULT 0,
+                next_retry_at DATETIME DEFAULT NULL,
+                error_message TEXT DEFAULT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_auto_relist_rule_order (rule_id, order_no),
+                INDEX idx_auto_relist_event_due (status, next_retry_at),
+                INDEX idx_auto_relist_event_user (user_id, created_at),
+                INDEX idx_auto_relist_event_rule (rule_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品自动续售执行记录';
+        """,
+
         # 38.1 定时求小红花执行日志表
         "xy_scheduled_red_flower_log": """
             CREATE TABLE IF NOT EXISTS `xy_scheduled_red_flower_log` (

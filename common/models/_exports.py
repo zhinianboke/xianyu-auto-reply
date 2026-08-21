@@ -63,6 +63,8 @@ from common.models.xy_delivery_block_rule import XYDeliveryBlockRule
 from common.models.xy_personal_blacklist import XYPersonalBlacklist
 from common.models.xy_platform_blacklist import XYPlatformBlacklist
 from common.models.chat_quick_phrase import ChatQuickPhrase
+from common.models.auto_relist_rule import AutoRelistRule
+from common.models.auto_relist_event import AutoRelistEvent
 
 __all__ = [
     "User",
@@ -131,4 +133,6 @@ __all__ = [
     "XYPersonalBlacklist",
     "XYPlatformBlacklist",
     "ChatQuickPhrase",
+    "AutoRelistRule",
+    "AutoRelistEvent",
 ]
