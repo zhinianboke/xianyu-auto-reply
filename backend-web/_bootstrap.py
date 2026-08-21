@@ -64,6 +64,25 @@ async def check_database_connection():
         return False
 
 
+async def run_auto_relist_loop() -> None:
+    """每 30 秒扫描一次已成交并自动发货的续售规则。"""
+    from common.services.auto_relist_task import auto_relist_task_service
+
+    logger.info("[自动续售] 后端扫描循环开始")
+    try:
+        await asyncio.sleep(5)
+        while True:
+            try:
+                await auto_relist_task_service.execute()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error("[自动续售] 扫描任务执行异常: {}", exc)
+            await asyncio.sleep(30)
+    except asyncio.CancelledError:
+        logger.info("[自动续售] 后端扫描循环停止")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -94,6 +113,7 @@ async def lifespan(app: FastAPI):
     from common.utils.logging_utils import apply_db_log_retention, run_db_log_retention_sync
     await apply_db_log_retention()
     log_retention_sync_task = asyncio.create_task(run_db_log_retention_sync())
+    auto_relist_task_handle = asyncio.create_task(run_auto_relist_loop())
     
     # 确保上传目录存在
     static_path = Path(settings.static_dir)
@@ -125,6 +145,12 @@ async def lifespan(app: FastAPI):
     yield
     
     logger.info(f"{settings.project_name} 关闭中...")
+
+    auto_relist_task_handle.cancel()
+    try:
+        await auto_relist_task_handle
+    except asyncio.CancelledError:
+        pass
     
     # 停止所有在线聊天IM会话
     try:

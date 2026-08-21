@@ -110,6 +110,39 @@ export interface PublishSkuRow {
   stock: number
 }
 
+export interface AutoRelistRule {
+  id: number
+  material_id: number
+  account_id: string
+  current_item_id: string
+  card_id: number
+  enabled: boolean
+  delay_seconds: number
+  status: 'active' | 'disabled' | 'waiting' | 'retrying' | 'error'
+  retry_count: number
+  next_retry_at?: string | null
+  last_order_no?: string | null
+  last_old_item_id?: string | null
+  last_new_item_id?: string | null
+  last_error?: string | null
+  last_relisted_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface AutoRelistEvent {
+  id: number
+  order_no: string
+  old_item_id: string
+  new_item_id?: string | null
+  status: 'pending' | 'publishing' | 'retry' | 'success' | 'failed' | 'skipped'
+  attempt_count: number
+  error_message?: string | null
+  next_retry_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
 export interface ProductMaterial {
   id: number
   user_id: number
@@ -145,6 +178,7 @@ export interface ProductMaterial {
   remark?: string | null
   created_at: string
   updated_at: string
+  auto_relist?: AutoRelistRule | null
 }
 
 export interface MaterialCreateParams {
@@ -340,6 +374,30 @@ export const deleteMaterial = (id: number): Promise<ApiResponse> =>
 /** 批量删除素材 */
 export const batchDeleteMaterials = (ids: number[]): Promise<ApiResponse> =>
   post(`${PREFIX}/materials/batch-delete`, { ids })
+
+/** 查询素材的自动续售规则。 */
+export const getAutoRelistRule = (materialId: number): Promise<ApiResponse<AutoRelistRule | null>> =>
+  get(`${PREFIX}/materials/${materialId}/auto-relist`)
+
+/** 保存素材的自动续售规则。 */
+export const saveAutoRelistRule = (
+  materialId: number,
+  params: {
+    account_id: string
+    current_item_id: string
+    card_id: number
+    enabled: boolean
+    delay_seconds: number
+  },
+): Promise<ApiResponse<AutoRelistRule>> =>
+  put(`${PREFIX}/materials/${materialId}/auto-relist`, params)
+
+/** 查询素材最近的自动续售记录。 */
+export const getAutoRelistEvents = (
+  materialId: number,
+  limit = 10,
+): Promise<ApiResponse<AutoRelistEvent[]>> =>
+  get(`${PREFIX}/materials/${materialId}/auto-relist/events?limit=${limit}`)
 
 // ==================== 发布接口 ====================
 

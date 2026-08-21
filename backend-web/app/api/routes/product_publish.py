@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_user, get_db_session
 from app.services.product_publish_service import MaterialSpecificationError, ProductMaterialService
+from app.services.auto_relist_rule_service import AutoRelistRuleService, serialize_auto_relist_rule
 from app.services.account_service import AccountService
 from app.services.platform_category_service import CategoryRecommendationError, PlatformCategoryService
 from app.services.publish_batch_status_service import PublishBatchStatusService
@@ -351,6 +352,16 @@ class BatchDeleteRequest(BaseModel):
     ids: List[int] = Field(..., min_length=1, description="素材ID列表")
 
 
+class AutoRelistRuleRequest(BaseModel):
+    """保存素材的售罄自动续售配置。"""
+
+    account_id: str = Field(..., min_length=1, max_length=80)
+    current_item_id: str = Field(..., min_length=1, max_length=64)
+    card_id: int = Field(..., gt=0)
+    enabled: bool = True
+    delay_seconds: int = Field(60, ge=30, le=3600)
+
+
 @router.post("/materials/batch-delete", response_model=ApiResponse)
 async def batch_delete_materials(
     req: BatchDeleteRequest,
@@ -362,6 +373,55 @@ async def batch_delete_materials(
     query_user_id = None if _is_admin(current_user) else current_user.id
     count = await svc.batch_delete(req.ids, query_user_id)
     return ApiResponse(success=True, message=f"成功移出 {count} 条素材", data={"deleted_count": count})
+
+
+@router.get("/materials/{material_id}/auto-relist", response_model=ApiResponse)
+async def get_auto_relist_rule(
+    material_id: int,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """查询一份素材的自动续售配置。"""
+    svc = AutoRelistRuleService(session)
+    rule = await svc.get(material_id, current_user.id)
+    return ApiResponse(success=True, message="查询成功", data=serialize_auto_relist_rule(rule))
+
+
+@router.put("/materials/{material_id}/auto-relist", response_model=ApiResponse)
+async def save_auto_relist_rule(
+    material_id: int,
+    req: AutoRelistRuleRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """创建或更新一份素材的自动续售配置。"""
+    svc = AutoRelistRuleService(session)
+    try:
+        rule = await svc.save(
+            material_id=material_id,
+            user_id=current_user.id,
+            **req.model_dump(),
+        )
+    except ValueError as exc:
+        return ApiResponse(success=False, message=str(exc))
+    return ApiResponse(
+        success=True,
+        message="自动续售已启用" if rule.enabled else "自动续售已关闭",
+        data=serialize_auto_relist_rule(rule),
+    )
+
+
+@router.get("/materials/{material_id}/auto-relist/events", response_model=ApiResponse)
+async def list_auto_relist_events(
+    material_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """查询最近的自动续售执行记录。"""
+    svc = AutoRelistRuleService(session)
+    events = await svc.list_events(material_id, current_user.id, limit)
+    return ApiResponse(success=True, message="查询成功", data=events)
 
 
 @router.get("/materials/{material_id}", response_model=ApiResponse)
