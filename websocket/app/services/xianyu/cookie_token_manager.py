@@ -395,18 +395,29 @@ class CookieTokenManager:
                 self.last_token_refresh_status = "success_from_expired_cache"
         elif cached.get("renewal_promoted"):
             self.last_token_refresh_status = "success_from_renewal"
-            await self._reconnect_websocket_for_renewed_token()
+            await self._reconnect_websocket_for_renewed_token(reason="续期Token已生效")
         return cached_token
 
-    async def _reconnect_websocket_for_renewed_token(self) -> None:
-        """续期 Token 生效后关闭现有连接，由主循环携带新 Token 重连。"""
+    async def _reconnect_websocket_for_renewed_token(
+        self, reason: str = "Token续期生效"
+    ) -> None:
+        """Token 变化后关闭现有连接，由主循环携带新 Token 重连。
+
+        闲鱼 IM 的 WebSocket 在建连时一次性认证，不支持中途换 Token。Token 变化后
+        旧连接的认证已失效，必须关闭旧连接触发重连，否则会进入"心跳正常但收不到
+        业务消息"的僵尸状态。
+
+        Args:
+            reason: 触发重连的原因，用于日志与关闭帧说明，便于线上排查区分
+                续期生效与普通刷新两种场景。
+        """
         connection_manager = getattr(self.parent, "connection_manager", None)
         websocket = getattr(connection_manager, "ws", None)
         if websocket is None or getattr(websocket, "closed", True):
             return
 
-        logger.info(f"【{self.cookie_id}】续期Token已生效，准备重连WebSocket")
-        await websocket.close(code=1000, reason="Token续期生效")
+        logger.info(f"【{self.cookie_id}】{reason}，准备重连WebSocket")
+        await websocket.close(code=1000, reason=reason)
 
     async def _set_cached_token(self, token: str, device_id: str):
         """将token和device_id缓存到数据库
@@ -1232,8 +1243,9 @@ class CookieTokenManager:
                 await self._set_cached_token(new_token, self.device_id)
                 # Token 变化后旧连接的 Token 已失效，不重连会进入"心跳正常但收不到消息"的僵尸状态
                 if token_changed:
-                    logger.info(f"【{self.cookie_id}】Token已变化，触发WebSocket重连以使用新Token")
-                    await self._reconnect_websocket_for_renewed_token()
+                    await self._reconnect_websocket_for_renewed_token(
+                        reason="Token刷新后已变化"
+                    )
                 return new_token
 
             # Session过期先于滑块判断：Cookie 已失效时滑块验证结果同样无效，
