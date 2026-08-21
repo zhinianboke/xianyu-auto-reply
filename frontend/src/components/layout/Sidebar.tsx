@@ -32,6 +32,7 @@ import {
 import { useMenuVisibilityStore } from '@/store/menuVisibilityStore'
 import { useUIStore } from '@/store/uiStore'
 import { cn } from '@/utils/cn'
+import packageJson from '../../../package.json'
 
 interface SidebarProps {
   systemName?: string
@@ -278,14 +279,22 @@ export function Sidebar({ systemName = '闲鱼管理系统' }: SidebarProps) {
             !showLabel ? 'justify-center px-2' : 'justify-between px-4'
           )}
         >
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-8 h-8 rounded-lg bg-blue-500 flex items-center justify-center flex-shrink-0">
               <MessageSquare className="w-4 h-4 text-white" />
             </div>
             {showLabel && (
-              <span className="font-semibold text-sm text-slate-900 dark:text-white truncate max-w-[140px]">
-                {systemName}
-              </span>
+              <>
+                <span className="font-semibold text-sm text-slate-900 dark:text-white truncate max-w-[96px]">
+                  {systemName}
+                </span>
+                <span
+                  className="text-[11px] text-slate-500 dark:text-slate-400 whitespace-nowrap"
+                  title={`当前版本 v${packageJson.version}`}
+                >
+                  v{packageJson.version}
+                </span>
+              </>
             )}
           </div>
           {sidebarMobileOpen && (
@@ -390,4 +399,3 @@ export function Sidebar({ systemName = '闲鱼管理系统' }: SidebarProps) {
     </>
   )
 }
-
