@@ -2792,6 +2792,21 @@ class XianyuAsync:
                                 )
                                 await self._interruptible_sleep(self.token_retry_interval)
                                 continue
+
+                            # 闲鱼以正常关闭码断开时，async for 不会抛异常。
+                            # 若直接离开外层循环，该账号的自动回复任务会永久退出。
+                            # 复用网络断开的退避策略，保持自动回复长连接常驻。
+                            self.connection_manager.set_connection_state(
+                                ConnectionState.RECONNECTING,
+                                "WebSocket正常关闭",
+                            )
+                            retry_delay = self.connection_manager.calculate_network_retry_delay()
+                            logger.warning(
+                                f"【{self.cookie_id}】WebSocket正常关闭（已连接{connected_duration:.1f}秒），"
+                                f"将在 {retry_delay} 秒后重连"
+                            )
+                            await self._interruptible_sleep(retry_delay)
+                            continue
                         
                         finally:
                             # 清理WebSocket引用
