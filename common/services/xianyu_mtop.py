@@ -62,6 +62,25 @@ _VALIDATE_MARKERS = (
 _MAX_ATTEMPTS = 3
 
 
+def extract_punish_url(res_json: Optional[Dict[str, Any]]) -> str:
+    """从 mtop 返回中提取风控验证（punish）链接。
+
+    触发验证类风控时，闲鱼在 data.url 下发 punish?x5secdata=... 验证链接，
+    调用方可凭该链接走远程过风控服务求解，拿到 x5sec 后重试。
+
+    Args:
+        res_json: mtop 接口原始返回 JSON
+    Returns:
+        punish 验证链接；无则返回空字符串
+    """
+    if not isinstance(res_json, dict):
+        return ""
+    data_node = res_json.get("data")
+    if not isinstance(data_node, dict):
+        return ""
+    return str(data_node.get("url") or "").strip()
+
+
 async def fetch_proxy_from_api(api_url: str, account_id: str = "") -> Optional[str]:
     """调用代理 API 获取一个 HTTP 代理，返回 'http://host:port'，失败返回 None（直连）。
 
@@ -135,6 +154,7 @@ async def mtop_call(
           res: dict|None,          # 接口原始返回 JSON
           error: str,
           cookies_str: str,        # 可能因令牌刷新而更新，调用方应回写实例并用于后续请求
+          punish_url: str,         # 仅风控验证类失败时有值：punish 验证链接（可走远程过风控）
         }
     """
     current_cookies = cookies_str
@@ -253,11 +273,12 @@ async def mtop_call(
                 "error": ret_msg or "Session过期", "cookies_str": current_cookies,
             }
 
-        # 触发验证/被挤爆等风控：切换账号
+        # 触发验证/被挤爆等风控：切换账号（同时回传 punish 验证链接，供远程过风控使用）
         if any(marker in ret_msg for marker in _VALIDATE_MARKERS):
             return {
                 "success": False, "account_invalid": True, "res": res_json,
                 "error": ret_msg or "触发验证/风控", "cookies_str": current_cookies,
+                "punish_url": extract_punish_url(res_json),
             }
 
         # 其他业务失败（商品下架/不可买等），不影响账号
@@ -273,4 +294,4 @@ async def mtop_call(
     }
 
 
-__all__ = ["mtop_call", "fetch_proxy_from_api"]
+__all__ = ["mtop_call", "fetch_proxy_from_api", "extract_punish_url"]

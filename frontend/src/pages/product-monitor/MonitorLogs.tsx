@@ -4,14 +4,17 @@
  * 功能：
  * 1. 分页查看监控执行日志
  * 2. 支持按监控任务筛选
+ * 3. 配置「远程过风控」远程服务URL与秘钥（保存到个人设置，每个用户单独一份）
  */
 import { useEffect, useState } from 'react'
-import { CheckSquare, ChevronLeft, ChevronRight, Copy, Loader2, RefreshCw, RotateCcw, ScrollText, Search, Square, Trash2 } from 'lucide-react'
+import { CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Copy, Info, Loader2, RefreshCw, RotateCcw, ScrollText, Search, Settings, Square, Trash2 } from 'lucide-react'
 import {
   getListingMonitorLogs,
   getListingMonitorTaskOptions,
   copyListingMonitorLogCookies,
   clearListingMonitorLogs,
+  getMonitorRemoteRiskConfig,
+  saveMonitorRemoteRiskConfig,
   MONITOR_TYPE_LABELS,
   MONITOR_TYPE_OPTIONS,
   type ListingMonitorLog,
@@ -19,6 +22,7 @@ import {
   type MonitorType,
 } from '@/api/listingMonitor'
 import { PageLoading } from '@/components/common/Loading'
+import { PasswordInput } from '@/components/common/PasswordInput'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { copyToClipboard } from '@/utils/clipboard'
@@ -47,6 +51,55 @@ export function MonitorLogs() {
   const [copying, setCopying] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [clearing, setClearing] = useState(false)
+
+  // 远程过风控配置（保存在个人设置中，每个用户单独一份）
+  const [configExpanded, setConfigExpanded] = useState(false)
+  const [remoteUrl, setRemoteUrl] = useState('')
+  const [remoteSecret, setRemoteSecret] = useState('')
+  const [configLoading, setConfigLoading] = useState(true)
+  const [savingConfig, setSavingConfig] = useState(false)
+
+  const loadRemoteRiskConfig = async () => {
+    try {
+      setConfigLoading(true)
+      const result = await getMonitorRemoteRiskConfig()
+      if (!result.success || !result.data) {
+        addToast({ type: 'error', message: result.message || '加载远程过风控配置失败' })
+        return
+      }
+      setRemoteUrl(result.data.url || '')
+      setRemoteSecret(result.data.secret_key || '')
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '加载远程过风控配置失败') })
+    } finally {
+      setConfigLoading(false)
+    }
+  }
+
+  const handleSaveRemoteRiskConfig = async () => {
+    const url = remoteUrl.trim()
+    const secret = remoteSecret.trim()
+    // 只填一项时远程过风控无法生效，先提示用户补全（两项都留空表示不启用）
+    if ((url && !secret) || (!url && secret)) {
+      addToast({ type: 'warning', message: '远程服务URL与秘钥需要同时填写，或同时留空表示不启用' })
+      return
+    }
+    try {
+      setSavingConfig(true)
+      const result = await saveMonitorRemoteRiskConfig(url, secret)
+      if (!result.success) {
+        addToast({ type: 'error', message: result.message || '保存远程过风控配置失败' })
+        return
+      }
+      setRemoteUrl(result.data?.url || '')
+      setRemoteSecret(result.data?.secret_key || '')
+      addToast({ type: 'success', message: result.message || '远程过风控配置已保存' })
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '保存远程过风控配置失败') })
+    } finally {
+      setSavingConfig(false)
+    }
+  }
 
   const loadTaskOptions = async () => {
     try {
@@ -97,6 +150,7 @@ export function MonitorLogs() {
 
   useEffect(() => {
     void loadTaskOptions()
+    void loadRemoteRiskConfig()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -241,6 +295,83 @@ export function MonitorLogs() {
             <Trash2 className="w-4 h-4" />
             清空日志
           </button>
+        </div>
+      </div>
+
+      {/* 远程过风控配置（个人设置，每个用户单独一份；两项都填写后采集触发风控时自动调用远程服务） */}
+      <div className="vben-card">
+        <div className="vben-card-body !py-3">
+          <button
+            type="button"
+            onClick={() => setConfigExpanded((v) => !v)}
+            aria-expanded={configExpanded}
+            className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+          >
+            <Settings className="w-4 h-4 text-blue-500 dark:text-blue-400" />
+            远程过风控配置
+            {configExpanded ? (
+              <ChevronUp className="w-4 h-4 text-slate-400 dark:text-slate-500" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-slate-400 dark:text-slate-500" />
+            )}
+            <span className="text-xs font-normal text-slate-400 dark:text-slate-500">
+              {configExpanded ? '收起' : '展开'}
+            </span>
+            {!configLoading && (
+              <span
+                className={`text-xs px-2 py-0.5 rounded-full ${
+                  remoteUrl && remoteSecret
+                    ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                    : 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400'
+                }`}
+              >
+                {remoteUrl && remoteSecret ? '已启用' : '未配置'}
+              </span>
+            )}
+          </button>
+
+          {configExpanded && (
+            <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700/60">
+              <div className="flex items-start gap-2 mb-4 px-3 py-2.5 rounded-lg bg-blue-50 dark:bg-blue-500/10 border border-blue-100 dark:border-blue-500/20">
+                <Info className="w-4 h-4 mt-0.5 shrink-0 text-blue-500 dark:text-blue-400" />
+                <div className="text-xs leading-relaxed text-blue-700 dark:text-blue-300 space-y-0.5">
+                  <p>填写后，商品监控采集触发风控（验证/被挤爆）时会调用远程服务过风控，取回的校验值会合并到账号 Cookie 并更新到数据库，再自动用同一账号重试采集，减少换号与冷却等待。</p>
+                  <p>秘钥填写远程服务为当前用户生成的 32 位秘钥（以请求头方式提交）；配置保存在您的个人设置中，仅对本人的监控任务生效，两项都留空表示不启用。</p>
+                  <p>为控制远程调用量，每个监控任务单次执行最多调用远程 3 次，超出后按原有「冷却并切换账号」处理，实际调用情况会记录在下方日志的「说明」列。</p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-end gap-4">
+                <div className="input-group flex-1 min-w-[260px]">
+                  <label className="input-label">远程服务URL</label>
+                  <input
+                    type="text"
+                    value={remoteUrl}
+                    onChange={(e) => setRemoteUrl(e.target.value)}
+                    disabled={configLoading}
+                    placeholder="例如：https://your-host/api/v1/risk/pass"
+                    className="input-ios"
+                  />
+                </div>
+                <div className="input-group flex-1 min-w-[260px]">
+                  <label className="input-label">秘钥</label>
+                  <PasswordInput
+                    value={remoteSecret}
+                    onChange={setRemoteSecret}
+                    disabled={configLoading}
+                    placeholder="远程服务生成的 32 位秘钥"
+                  />
+                </div>
+                <button
+                  className="btn-ios-primary"
+                  onClick={() => void handleSaveRemoteRiskConfig()}
+                  disabled={configLoading || savingConfig}
+                >
+                  {savingConfig ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  保存
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

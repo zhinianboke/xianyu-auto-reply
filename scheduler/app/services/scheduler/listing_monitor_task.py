@@ -27,10 +27,16 @@ from common.models.xy_account import XYAccount
 from common.services.account_cooldown import DEFAULT_COOLDOWN_SECONDS, account_cooldown_manager
 from common.services.listing_monitor_dedup import has_owner_ordered_item
 from common.services.collect_account_loader import merge_task_and_fallback_account_ids
+from common.services.monitor_remote_risk_client import solve_remote_risk
+from common.services.monitor_remote_risk_config import (
+    get_remote_risk_config,
+    is_remote_risk_enabled,
+)
 from common.services.order_account_loader import load_fallback_accounts
 from common.services.xianyu_mtop import fetch_proxy_from_api
 from common.services.xianyu_order_client import XianyuOrderClient
 from common.services.xianyu_search_client import XianyuSearchClient, parse_search_item
+from common.utils.cookie_refresh import merge_cookies, update_account_cookies_in_db
 from common.utils.time_utils import BEIJING_TZ, get_beijing_now_naive
 
 # 监控类型 -> (sortField, sortValue)
@@ -41,6 +47,11 @@ _MONITOR_SORT_MAP = {
 
 _INACTIVE_STATUSES = {"inactive", "disabled", "suspended", "deleted"}
 _ROWS_PER_PAGE = 30
+
+# 单次监控任务执行内允许调用远程过风控的最大次数。
+# 远程过风控多为按次计费/有配额的外部服务，这里做硬上限：超出后本次执行不再调用远程，
+# 回退到原有「加冷却 + 换下一个账号」逻辑，并在监控日志的说明中标注已达上限。
+_MAX_REMOTE_RISK_CALLS_PER_RUN = 3
 
 # 采集商品各字符串字段对应的列长度上限（与 xy_listing_monitor_items 表定义保持一致），
 # 写库前按上限安全截断，避免超长值触发 MySQL DataError 导致整批回滚。
@@ -238,6 +249,54 @@ class ListingMonitorTaskService:
             ordered.append(acc)
         return ordered
 
+    async def _load_remote_risk_config(self, owner_id: Optional[int]) -> Dict[str, str]:
+        """读取任务所属用户的「远程过风控」个人设置（URL + 秘钥，未配置返回空值）。"""
+        try:
+            async with async_session_maker() as session:
+                return await get_remote_risk_config(session, owner_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"【{self.task_name}】读取用户 {owner_id} 的远程过风控配置失败: {exc}")
+            return {"url": "", "secret": ""}
+
+    async def _pass_remote_risk(
+        self,
+        acc: XYAccount,
+        punish_url: str,
+        config: Dict[str, str],
+    ) -> bool:
+        """调用用户配置的远程过风控服务求解验证链接，成功则把 x5sec 合并回账号 Cookie。
+
+        Args:
+            acc: 触发风控的采集账号（成功后其 cookie 字段被更新为含 x5sec 的新值）
+            punish_url: 闲鱼下发的 punish 验证链接
+            config: 用户个人设置中的远程过风控配置 {"url": ..., "secret": ...}
+        Returns:
+            True 表示已过风控且账号 Cookie 已更新（调用方可用同账号重试）
+        """
+        if not punish_url:
+            logger.warning(
+                f"【{self.task_name}】账号 {acc.account_id} 触发风控但接口未返回验证链接，无法走远程过风控"
+            )
+            return False
+
+        cookies, message = await solve_remote_risk(
+            config["url"], config["secret"], punish_url, account_id=acc.account_id
+        )
+        if not cookies:
+            logger.warning(
+                f"【{self.task_name}】账号 {acc.account_id} 远程过风控未通过: {message or '无返回原因'}"
+            )
+            return False
+
+        # 合并远程返回的 x5sec 等校验值并写库，供本次重试与后续任务复用
+        merged = merge_cookies(acc.cookie or "", cookies)
+        acc.cookie = merged
+        await update_account_cookies_in_db(acc.account_id, merged, owner_id=acc.owner_id)
+        # 已过风控：解除该账号冷却，避免仍被冷却过滤挡住
+        account_cooldown_manager.clear(acc.account_id)
+        logger.info(f"【{self.task_name}】账号 {acc.account_id} 远程过风控成功，已更新Cookie并重试采集")
+        return True
+
     async def _resolve_and_load_accounts(self, task: ListingMonitorTask) -> List[XYAccount]:
         """合并任务采集账号与兜底账号，加载可用账号（单次 session，减少连接获取）。"""
         async with async_session_maker() as session:
@@ -310,14 +369,24 @@ class ListingMonitorTaskService:
                     reverse=True,
                 )
 
+        # 该用户的远程过风控配置（个人设置，每个用户单独一份；未配置则完全沿用原冷却换号逻辑）
+        remote_risk_config = await self._load_remote_risk_config(task.owner_id)
+        remote_risk_enabled = is_remote_risk_enabled(remote_risk_config)
+
         # 风控冷却过滤：去掉处于冷却期（被挤爆/触发验证后冷却时长内）的账号；
-        # 若全部都在冷却期，则本次不采集，并在监控日志记录失败原因。
+        # 若全部都在冷却期：未配置远程过风控时本次不采集并记录失败原因；
+        # 已配置远程过风控时仍然尝试（重新拿到验证链接后交给远程求解），避免整段冷却期内什么都不做。
         cooldown_blocked = False
         if accounts:
             all_ids = [a.account_id for a in accounts]
             available_ids = set(account_cooldown_manager.filter_available(all_ids))
             if available_ids:
                 accounts = [a for a in accounts if a.account_id in available_ids]
+            elif remote_risk_enabled:
+                logger.warning(
+                    f"【{self.task_name}】监控任务 {task.id} 所有关联账号均在风控冷却期，"
+                    f"但已配置远程过风控，本次仍尝试采集并交由远程过风控处理"
+                )
             else:
                 cooldown_blocked = True
                 accounts = []
@@ -331,6 +400,11 @@ class ListingMonitorTaskService:
         message = ""
         all_items: List[dict] = []
         pages_collected = 0
+        # 本次执行远程过风控的成功/失败次数，用于在监控日志中体现
+        remote_risk_passed = 0
+        remote_risk_failed = 0
+        # 是否有账号因达到远程调用上限而未调用远程（用于日志说明）
+        remote_risk_limited = False
 
         if not accounts:
             status = "failed"
@@ -344,6 +418,16 @@ class ListingMonitorTaskService:
             price_max = float(task.price_max) if task.price_max is not None else None
             # 任务配置了代理API地址时，取一个HTTP代理供本次采集使用（失败则直连）
             task_proxy = await fetch_proxy_from_api(task.proxy_url, account_id=str(task.id)) if task.proxy_url else None
+            # 除页码外的搜索参数固定，先组装好供正常调用与过风控后的重试复用
+            search_kwargs = {
+                "keyword": task.keyword,
+                "sort_field": sort_field,
+                "sort_value": sort_value,
+                "rows_per_page": _ROWS_PER_PAGE,
+                "price_min": price_min,
+                "price_max": price_max,
+                "publish_days": task.publish_days,
+            }
             working_idx = 0
             page_failed = False
             # 本次运行中因风控被冷却的账号：后续页不再尝试
@@ -358,18 +442,39 @@ class ListingMonitorTaskService:
                     if acc.account_id in cooled_this_run:
                         continue
                     client = XianyuSearchClient(acc.account_id, acc.cookie, owner_id=acc.owner_id, proxy=task_proxy)
-                    res = await client.search(
-                        keyword=task.keyword,
-                        page_number=page,
-                        sort_field=sort_field,
-                        sort_value=sort_value,
-                        rows_per_page=_ROWS_PER_PAGE,
-                        price_min=price_min,
-                        price_max=price_max,
-                        publish_days=task.publish_days,
-                    )
+                    res = await client.search(page_number=page, **search_kwargs)
                     # 令牌可能已刷新：回写内存账号Cookie，供同账号后续页复用，避免重复刷新
                     acc.cookie = client.cookies_str
+
+                    # 触发风控且该用户配置了远程过风控：先求解验证链接，成功后用同账号重试一次
+                    # 单次执行的远程调用次数受 _MAX_REMOTE_RISK_CALLS_PER_RUN 限制，超出后不再调用远程
+                    if (
+                        not res.get("success")
+                        and remote_risk_enabled
+                        and account_cooldown_manager.is_risk_control_error(res.get("error"))
+                    ):
+                        punish_url = res.get("punish_url") or ""
+                        if not punish_url:
+                            # 没有验证链接时无法调用远程，也不占用调用配额
+                            logger.warning(
+                                f"【{self.task_name}】任务 {task.id} 第{page}页 账号 {acc.account_id} 触发风控"
+                                f"但接口未返回验证链接，本次不调用远程过风控"
+                            )
+                        elif remote_risk_passed + remote_risk_failed >= _MAX_REMOTE_RISK_CALLS_PER_RUN:
+                            remote_risk_limited = True
+                            logger.warning(
+                                f"【{self.task_name}】任务 {task.id} 第{page}页 账号 {acc.account_id} 触发风控，"
+                                f"但本次执行远程过风控调用已达上限 {_MAX_REMOTE_RISK_CALLS_PER_RUN} 次，"
+                                f"不再调用远程，按原逻辑加冷却并换账号"
+                            )
+                        elif await self._pass_remote_risk(acc, punish_url, remote_risk_config):
+                            remote_risk_passed += 1
+                            client.cookies_str = acc.cookie
+                            res = await client.search(page_number=page, **search_kwargs)
+                            acc.cookie = client.cookies_str
+                        else:
+                            remote_risk_failed += 1
+
                     if res.get("success"):
                         working_idx = idx
                         used_account_id = acc.account_id
@@ -415,6 +520,12 @@ class ListingMonitorTaskService:
 
         if status == "success" and not message:
             message = f"采集{pages_collected}页，获取{fetched_count}，新增{inserted_count}，更新{updated_count}"
+
+        # 本次用过远程过风控则在日志说明中体现，便于在监控日志页直接看到效果
+        if remote_risk_passed or remote_risk_failed or remote_risk_limited:
+            message = f"{message}；远程过风控成功{remote_risk_passed}次、失败{remote_risk_failed}次"
+            if remote_risk_limited:
+                message = f"{message}（已达本次上限{_MAX_REMOTE_RISK_CALLS_PER_RUN}次，其余账号按冷却换号处理）"
 
         await self._write_log(
             task=task,

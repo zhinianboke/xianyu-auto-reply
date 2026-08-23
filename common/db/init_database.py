@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import warnings
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 
 from loguru import logger
 from sqlalchemy import text
@@ -30,6 +30,17 @@ from common.db.default_publish_addresses import (
 from common.db.session import async_engine, async_session_maker
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.security import generate_secret_key, get_password_hash
+
+
+# 建表/改表时的锁等待上限（秒）。MySQL 的 lock_wait_timeout 默认 31536000 秒（一年），
+# 一旦某张表被别的事务或 ALTER 占着元数据锁，DDL 会无限挂住且没有任何日志，
+# 收敛成 30 秒后报错，让启动日志能直接看出是锁冲突。
+DDL_LOCK_WAIT_TIMEOUT_SECONDS = 30
+
+# 多服务（backend-web / scheduler / websocket 等）同时启动时，用 MySQL 命名锁把自检串行化，
+# 避免彼此争抢同一张表的元数据锁。名称与库同级，不同库互不影响。
+INIT_ADVISORY_LOCK_NAME = "xy_db_init"
+INIT_ADVISORY_LOCK_WAIT_SECONDS = 300
 
 
 @contextmanager
@@ -83,6 +94,108 @@ def suppress_db_warnings():
         for lg in loggers_to_filter:
             lg.removeFilter(db_filter)
         warnings.filterwarnings('default', category=SAWarning)
+
+
+def describe_ddl_error(exc: Exception) -> str:
+    """
+    把建表/改表异常转成带排查提示的信息。
+
+    Args:
+        exc: DDL 执行抛出的异常。
+    Returns:
+        原始错误信息；锁等待超时时追加持锁方的排查指引。
+    """
+    message = str(exc)
+    lowered = message.lower()
+    if "lock wait timeout" in lowered or "metadata lock" in lowered:
+        return (
+            f"{message} ｜ 该表被其他连接的事务或 ALTER 占用元数据锁，"
+            f"已按 {DDL_LOCK_WAIT_TIMEOUT_SECONDS} 秒上限放弃等待。"
+            f"排查：SELECT trx_mysql_thread_id, trx_started, trx_query "
+            f"FROM information_schema.innodb_trx ORDER BY trx_started; "
+            f"确认非必要事务后 KILL 对应线程再重启服务"
+        )
+    return message
+
+
+async def _apply_lock_wait_timeout(conn) -> None:
+    """
+    给当前连接设置锁等待上限，避免建表/改表卡在元数据锁上无限等待。
+
+    Args:
+        conn: 已建立的数据库连接。
+    Returns:
+        无返回值；非 MySQL 或无权限时只记录告警，沿用数据库默认值。
+    """
+    try:
+        await conn.execute(text(f"SET SESSION lock_wait_timeout = {DDL_LOCK_WAIT_TIMEOUT_SECONDS}"))
+        await conn.execute(
+            text(f"SET SESSION innodb_lock_wait_timeout = {DDL_LOCK_WAIT_TIMEOUT_SECONDS}")
+        )
+    except Exception as exc:
+        logger.warning(f"设置锁等待上限失败，本次自检沿用数据库默认超时: {exc}")
+
+
+@asynccontextmanager
+async def ddl_connection():
+    """
+    获取执行建表/改表用的连接，已带锁等待上限。
+
+    Returns:
+        事务内的数据库连接，退出时自动提交。
+    """
+    async with async_engine.begin() as conn:
+        await _apply_lock_wait_timeout(conn)
+        yield conn
+
+
+@asynccontextmanager
+async def init_advisory_lock():
+    """
+    用 MySQL 命名锁把多服务的启动自检串行化。
+
+    拿不到锁（超时或数据库不支持）时不阻断启动，只记录告警后继续执行自检：
+    此时建表/改表已有 30 秒锁等待上限，最坏情况是单张表报错并在日志中写明，
+    不会像以前那样无提示地永久卡住。
+
+    Returns:
+        上下文本身不返回值，退出时释放命名锁。
+    """
+    acquired = False
+    conn = None
+    try:
+        conn = await async_engine.connect()
+        result = await conn.execute(
+            text("SELECT GET_LOCK(:lock_name, :wait_seconds)"),
+            {
+                "lock_name": INIT_ADVISORY_LOCK_NAME,
+                "wait_seconds": INIT_ADVISORY_LOCK_WAIT_SECONDS,
+            },
+        )
+        acquired = result.scalar() == 1
+        if not acquired:
+            logger.warning(
+                f"等待 {INIT_ADVISORY_LOCK_WAIT_SECONDS} 秒仍未取得数据库自检锁 "
+                f"{INIT_ADVISORY_LOCK_NAME}，可能有其他服务正在执行自检；"
+                f"本次继续执行，如遇表被占用会在日志中逐表提示"
+            )
+    except Exception as exc:
+        logger.warning(f"获取数据库自检锁失败（不影响自检执行）: {exc}")
+
+    try:
+        yield
+    finally:
+        if conn is not None:
+            try:
+                if acquired:
+                    await conn.execute(
+                        text("SELECT RELEASE_LOCK(:lock_name)"),
+                        {"lock_name": INIT_ADVISORY_LOCK_NAME},
+                    )
+            except Exception as exc:
+                logger.warning(f"释放数据库自检锁失败（连接关闭后会自动释放）: {exc}")
+            finally:
+                await conn.close()
 
 
 class DatabaseInitializer:
@@ -1939,39 +2052,41 @@ class DatabaseInitializer:
         try:
             logger.info("=" * 50)
             logger.info("开始初始化数据库...")
-            
-            # 使用上下文管理器抑制初始化时的重复警告日志
-            with suppress_db_warnings():
-                # 1. 创建所有表
-                await self.create_all_tables()
-                
-                # 2. 创建默认管理员用户
-                await self.create_default_admin()
-                
-                # 3. 初始化系统设置
-                await self.init_system_settings()
-                
-                # 4. 初始化定时任务配置
-                await self.init_scheduled_tasks()
 
-                # 5. 初始化随机地址默认数据
-                await self.init_publish_addresses()
-                
-                # 6. 初始化Redis平台日
-                await self.init_redis_platform_day()
-                
-                # 7. 迁移卡券商品关联数据（从 xy_cards.item_id 到关联表）
-                await self.migrate_card_item_relations()
+            # 命名锁保证多服务同时启动时只有一个进程在建表/改表，避免元数据锁互相阻塞
+            async with init_advisory_lock():
+                # 使用上下文管理器抑制初始化时的重复警告日志
+                with suppress_db_warnings():
+                    # 1. 创建所有表
+                    await self.create_all_tables()
 
-                # 8. 迁移旧禁止发货设置到规则配置表
-                await self.migrate_delivery_block_rules()
+                    # 2. 创建默认管理员用户
+                    await self.create_default_admin()
 
-                # 9. 为历史用户回填分销秘钥（secret_key 为空的存量用户）
-                await self.backfill_user_secret_keys()
-            
+                    # 3. 初始化系统设置
+                    await self.init_system_settings()
+
+                    # 4. 初始化定时任务配置
+                    await self.init_scheduled_tasks()
+
+                    # 5. 初始化随机地址默认数据
+                    await self.init_publish_addresses()
+
+                    # 6. 初始化Redis平台日
+                    await self.init_redis_platform_day()
+
+                    # 7. 迁移卡券商品关联数据（从 xy_cards.item_id 到关联表）
+                    await self.migrate_card_item_relations()
+
+                    # 8. 迁移旧禁止发货设置到规则配置表
+                    await self.migrate_delivery_block_rules()
+
+                    # 9. 为历史用户回填分销秘钥（secret_key 为空的存量用户）
+                    await self.backfill_user_secret_keys()
+
             logger.info("数据库初始化完成")
             logger.info("=" * 50)
-            
+
         except Exception as e:
             logger.error(f"数据库初始化失败: {e}")
             raise
@@ -1990,13 +2105,13 @@ class DatabaseInitializer:
         # 先重命名旧表（如果存在）
         await self.rename_legacy_tables()
         
-        async with async_engine.begin() as conn:
+        async with ddl_connection() as conn:
             for table_name, ddl in self.TABLES_DDL.items():
                 try:
                     await conn.execute(text(ddl))
                     logger.info(f"✓ 表 {table_name} 已就绪")
                 except Exception as e:
-                    logger.warning(f"✗ 表 {table_name} 创建失败: {e}")
+                    logger.warning(f"✗ 表 {table_name} 创建失败: {describe_ddl_error(e)}")
         
         logger.info(f"数据表创建完成，共 {len(self.TABLES_DDL)} 张表")
         
@@ -2008,7 +2123,7 @@ class DatabaseInitializer:
     
     async def rename_legacy_tables(self):
         """重命名旧表（统一加 xy_ 前缀）"""
-        async with async_engine.begin() as conn:
+        async with ddl_connection() as conn:
             for old_name, new_name in self.TABLES_TO_RENAME.items():
                 try:
                     # 检查旧表是否存在
@@ -2045,7 +2160,7 @@ class DatabaseInitializer:
         """检查并添加/修改字段"""
         logger.info("检查字段迁移...")
         
-        async with async_engine.begin() as conn:
+        async with ddl_connection() as conn:
             for table_name, columns in self.COLUMN_MIGRATIONS.items():
                 for col_name, col_def, after_col in columns:
                     try:
@@ -2074,7 +2189,9 @@ class DatabaseInitializer:
                         else:
                             logger.debug(f"✓ 表 {table_name} 已有字段 {col_name}")
                     except Exception as e:
-                        logger.warning(f"✗ 表 {table_name} 字段 {col_name} 迁移失败: {e}")
+                        logger.warning(
+                            f"✗ 表 {table_name} 字段 {col_name} 迁移失败: {describe_ddl_error(e)}"
+                        )
 
             # xy_users: account_limit 字段允许为空且默认值为空
             try:
@@ -2196,7 +2313,7 @@ class DatabaseInitializer:
         """检查并迁移索引（如更新 UNIQUE KEY 等）"""
         logger.info("检查索引迁移...")
         
-        async with async_engine.begin() as conn:
+        async with ddl_connection() as conn:
             try:
                 # xy_card_item_relations: 将旧的 uk_card_item(card_id, item_id) 替换为 uk_card_item_dock(card_id, item_id, dock_record_id)
                 # 检查旧索引是否存在
