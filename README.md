@@ -4,31 +4,6 @@
 
 主系统负责账号管理、消息收发、自动回复、自动发货、商品发布与后台管理；`promotion` 子项目负责返佣账号、选品规则、素材库、发布规则、删除规则和相关修复任务。
 
-## 🔴 说明
-
-> **🔴 诚邀各位开发者提交pr，完善系统**
->
-> **🔴 承接各类项目定制，各类项目均可，有需要可联系，另外我菜，不一定都会**
-
-## 🔴 最新源码地址(建议转存)
-
-> 🔴 我用夸克网盘给你分享了「自动发货」，点击链接或复制整段内容，打开「夸克网盘APP」即可获取。
-> 
-> 🔴 /~79313YhCQU~:/
-> 
-> 🔴 **链接：https://pan.quark.cn/s/af567356cba7**
-
-## 交流群
-
-| 微信群 | QQ群 | 微信公众号 | Telegram | 赞赏支持 |
-|:---:|:---:|:---:|:---:|:---:|
-| ![微信群](https://xy.zhinianboke.com/static/qrcode/wechat-group.jpg) | ![QQ群](https://xy.zhinianboke.com/static/qrcode/qq-group.jpg) | ![微信公众号](https://xy.zhinianboke.com/static/qrcode/wechat-official-group.jpg) | ![Telegram](https://xy.zhinianboke.com/static/qrcode/telegram-group.png) | ![赞赏支持](https://xy.zhinianboke.com/static/qrcode/reward-group.png) |
-| 扫码加入微信交流群 | 扫码加入QQ交流群 | 关注公众号发送"最新源码"获取最新代码 | 扫码加入Telegram群 | 如果觉得好用，请作者喝杯咖啡 |
-
-如群二维码过期，请关注公众号获取最新群链接。
-
----
-
 ## 功能概览
 
 ### 主系统
@@ -467,8 +442,3 @@ curl -fsSL https://xy-update.zhinianboke.com/deploy.sh | sed 's/\r$//' | bash
 
 
 感谢这些优秀的开源项目为本项目的开发提供了宝贵的参考和启发！
-
-
-## Star History
-
-[![Star History Chart](https://star-history.dera.page/svg?repos=zhinianboke/xianyu-auto-reply&type=Date)](https://star-history.dera.page/#zhinianboke/xianyu-auto-reply&Date)
