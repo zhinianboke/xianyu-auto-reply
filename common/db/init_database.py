@@ -1171,6 +1171,8 @@ class DatabaseInitializer:
                 `task_name` VARCHAR(100) NOT NULL COMMENT '任务名称',
                 `interval_seconds` INT NOT NULL DEFAULT 60 COMMENT '执行间隔(秒)',
                 `enabled` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+                `run_start_time` VARCHAR(5) NOT NULL DEFAULT '00:00' COMMENT '执行范围开始时间(HH:MM)',
+                `run_end_time` VARCHAR(5) NOT NULL DEFAULT '23:59' COMMENT '执行范围结束时间(HH:MM)',
                 `description` TEXT COMMENT '任务描述',
                 `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -1857,6 +1859,10 @@ class DatabaseInitializer:
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
     COLUMN_MIGRATIONS = {
+        "xy_scheduled_tasks": [
+            ("run_start_time", "VARCHAR(5) NOT NULL DEFAULT '00:00' COMMENT '执行范围开始时间(HH:MM)'", "enabled"),
+            ("run_end_time", "VARCHAR(5) NOT NULL DEFAULT '23:59' COMMENT '执行范围结束时间(HH:MM)'", "run_start_time"),
+        ],
         "xy_token_cache": [
             ("renew_expire_at", "DATETIME DEFAULT NULL COMMENT '续期Token过期时间'", "expire_at"),
         ],

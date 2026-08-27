@@ -38,6 +38,7 @@ from app.services.user_service import UserService
 from app.services.recharge_service import RechargeService
 from common.services.settlement_service import BALANCE_KEY
 
+from common.scheduled_task_time import validate_daily_time_range
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 router = APIRouter(tags=["admin"])
 settings = get_settings()
@@ -773,6 +774,8 @@ async def list_scheduled_tasks(
                 "task_name": task.task_name,
                 "interval_seconds": task.interval_seconds,
                 "enabled": task.enabled,
+                "run_start_time": task.run_start_time,
+                "run_end_time": task.run_end_time,
                 "description": task.description,
                 "created_at": safe_isoformat(task.created_at),
                 "updated_at": safe_isoformat(task.updated_at),
@@ -797,6 +800,8 @@ async def update_scheduled_task(
     task_code: str,
     interval_seconds: int | None = None,
     enabled: bool | None = None,
+    run_start_time: str | None = None,
+    run_end_time: str | None = None,
     _: User = Depends(deps.get_current_admin_user),
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> dict:
@@ -833,6 +838,20 @@ async def update_scheduled_task(
         
         if enabled is not None:
             task.enabled = enabled
+
+        if run_start_time is not None or run_end_time is not None:
+            if task_code != "polish":
+                return {
+                    "success": False,
+                    "message": "仅擦亮任务支持配置执行范围",
+                    "data": None,
+                }
+            start_time, end_time = validate_daily_time_range(
+                run_start_time if run_start_time is not None else task.run_start_time,
+                run_end_time if run_end_time is not None else task.run_end_time,
+            )
+            task.run_start_time = start_time
+            task.run_end_time = end_time
         
         await session.commit()
         await session.refresh(task)
@@ -865,6 +884,8 @@ async def update_scheduled_task(
                 "task_name": task.task_name,
                 "interval_seconds": task.interval_seconds,
                 "enabled": task.enabled,
+                "run_start_time": task.run_start_time,
+                "run_end_time": task.run_end_time,
                 "description": task.description,
             },
         }
