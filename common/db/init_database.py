@@ -1256,6 +1256,7 @@ class DatabaseInitializer:
                 order_no VARCHAR(64) NOT NULL COMMENT '充值订单号',
                 user_id BIGINT NOT NULL COMMENT '用户ID',
                 amount VARCHAR(32) NOT NULL COMMENT '充值金额',
+                order_type VARCHAR(20) NOT NULL DEFAULT 'recharge' COMMENT '订单类型：recharge-余额充值，ad-广告申请付款',
                 status VARCHAR(32) NOT NULL DEFAULT 'pending' COMMENT '订单状态：pending-待支付，paid-已支付，expired-已过期，failed-失败',
                 trade_no VARCHAR(128) DEFAULT NULL COMMENT '支付宝交易号',
                 qr_code VARCHAR(512) DEFAULT NULL COMMENT '支付二维码内容',
@@ -1857,6 +1858,9 @@ class DatabaseInitializer:
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
     COLUMN_MIGRATIONS = {
+        "xy_recharge_orders": [
+            ("order_type", "VARCHAR(20) NOT NULL DEFAULT 'recharge' COMMENT '订单类型：recharge-余额充值，ad-广告申请付款'", "amount"),
+        ],
         "xy_token_cache": [
             ("renew_expire_at", "DATETIME DEFAULT NULL COMMENT '续期Token过期时间'", "expire_at"),
         ],
