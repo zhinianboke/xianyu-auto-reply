@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select, delete, func, or_, and_, update
@@ -537,7 +538,7 @@ class CardService:
         **kwargs
     ) -> bool:
         """更新卡券
-        
+
         Raises:
             ValueError: 卡券重复时抛出
         """
@@ -546,6 +547,15 @@ class CardService:
         card = result.scalars().first()
         if not card:
             return False
+
+        # 保存旧图片数据快照，用于后续差异检测和文件删除
+        old_image_url = card.image_url
+        old_image_urls: list[str] = []
+        if card.image_urls:
+            try:
+                old_image_urls = json.loads(card.image_urls)
+            except (json.JSONDecodeError, TypeError):
+                pass
 
         # 获取更新后的值（如果没有传入则使用原值）
         new_name = kwargs.get("name", card.name)
@@ -575,8 +585,49 @@ class CardService:
                     value = json.dumps(value)
                 setattr(card, key, value)
 
+        # 检测并删除被移除的图片文件
+        removed: set[str] = set()
+
+        if "image_urls" in kwargs:
+            new_urls: list[str] = []
+            raw = card.image_urls
+            if raw:
+                try:
+                    if isinstance(raw, str):
+                        new_urls = json.loads(raw)
+                    elif isinstance(raw, list):
+                        new_urls = raw
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            removed |= set(old_image_urls) - set(new_urls)
+
+        if "image_url" in kwargs:
+            if old_image_url and old_image_url != card.image_url:
+                removed.add(old_image_url)
+
+        for url in removed:
+            self._delete_card_image_file(url)
+
         await self.session.commit()
         return True
+
+    @staticmethod
+    def _delete_card_image_file(image_url: str) -> None:
+        """删除卡券图片文件（根据 /static/... URL 定位磁盘文件）"""
+        if not image_url:
+            return
+        try:
+            # image_url 格式: "/static/uploads/cards/filename.jpg"
+            relative = image_url.lstrip("/")
+            if relative.startswith("static/"):
+                relative = relative[7:]  # 去掉 "static/" 前缀 -> "uploads/cards/filename.jpg"
+            from app.core.paths import STATIC_ROOT
+            file_path = STATIC_ROOT / relative
+            if file_path.exists():
+                os.remove(str(file_path))
+                logger.info(f"Deleted card image file: {file_path}")
+        except Exception as e:
+            logger.warning(f"Failed to delete card image {image_url}: {e}")
 
     async def delete_card(self, card_id: int, user_id: int) -> bool:
         """删除卡券（同时删除关联表记录）"""
