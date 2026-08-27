@@ -40,6 +40,7 @@ TASK_CODE_LISTING_MONITOR = "listing_monitor"
 TASK_CODE_SELLER_FILL = "seller_fill"
 TASK_CODE_DM_SEND = "dm_send"
 TASK_CODE_AUTO_ORDER = "auto_order"
+TASK_CODE_IMAGE_CLEANUP = "image_cleanup"
 
 # 默认配置（数据库无配置时使用）
 DEFAULT_CONFIGS = {
@@ -64,6 +65,7 @@ DEFAULT_CONFIGS = {
     TASK_CODE_SELLER_FILL: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_DM_SEND: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_AUTO_ORDER: {"interval_seconds": 60, "enabled": True},
+    TASK_CODE_IMAGE_CLEANUP: {"interval_seconds": 1200, "enabled": True},
 }
 
 
