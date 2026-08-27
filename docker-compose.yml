@@ -209,7 +209,7 @@ services:
       - TZ=Asia/Shanghai
     volumes:
       - scheduler_logs:/app/scheduler/logs
-      - static-files:/app/static:ro
+      - static-files:/app/static
       - backup-files:/app/backups
     ports:
       - "${SCHEDULER_PORT:-8091}:8091"
