@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.scheduled_task import ScheduledTask
+from common.scheduled_task_time import validate_daily_time_range
 
 
 # 任务代码常量
@@ -46,7 +47,12 @@ TASK_CODE_IMAGE_CLEANUP = "image_cleanup"
 DEFAULT_CONFIGS = {
     TASK_CODE_REDELIVERY: {"interval_seconds": 5, "enabled": True},
     TASK_CODE_RATE: {"interval_seconds": 20, "enabled": True},
-    TASK_CODE_POLISH: {"interval_seconds": 60, "enabled": True},
+    TASK_CODE_POLISH: {
+        "interval_seconds": 60,
+        "enabled": True,
+        "run_start_time": "00:00",
+        "run_end_time": "23:59",
+    },
     TASK_CODE_DAY_SWITCH: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_CLEANUP_BROWSER_DATA: {"interval_seconds": 600, "enabled": False},
     TASK_CODE_FETCH_ORDERS: {"interval_seconds": 600, "enabled": True},
@@ -108,6 +114,11 @@ class ScheduledTaskService:
                     "interval_seconds": task.interval_seconds,
                     "enabled": task.enabled,
                 }
+                if task_code == TASK_CODE_POLISH:
+                    config.update(
+                        run_start_time=task.run_start_time,
+                        run_end_time=task.run_end_time,
+                    )
                 # 更新缓存
                 self._config_cache[task_code] = config
                 logger.info(
@@ -148,6 +159,8 @@ class ScheduledTaskService:
         task_code: str,
         interval_seconds: Optional[int] = None,
         enabled: Optional[bool] = None,
+        run_start_time: Optional[str] = None,
+        run_end_time: Optional[str] = None,
     ) -> Optional[ScheduledTask]:
         """
         更新定时任务配置
@@ -156,6 +169,8 @@ class ScheduledTaskService:
             task_code: 任务代码
             interval_seconds: 执行间隔（秒），None表示不更新
             enabled: 是否启用，None表示不更新
+            run_start_time: 执行范围开始时间，仅擦亮任务支持
+            run_end_time: 执行范围结束时间，仅擦亮任务支持
             
         Returns:
             更新后的任务配置，如果任务不存在返回None
@@ -173,6 +188,16 @@ class ScheduledTaskService:
         
         if enabled is not None:
             task.enabled = enabled
+
+        if run_start_time is not None or run_end_time is not None:
+            if task_code != TASK_CODE_POLISH:
+                raise ValueError("仅擦亮任务支持配置执行范围")
+            start_time, end_time = validate_daily_time_range(
+                run_start_time if run_start_time is not None else task.run_start_time,
+                run_end_time if run_end_time is not None else task.run_end_time,
+            )
+            task.run_start_time = start_time
+            task.run_end_time = end_time
         
         await self.session.commit()
         await self.session.refresh(task)
@@ -183,10 +208,16 @@ class ScheduledTaskService:
         )
         
         # 更新缓存
-        self._config_cache[task_code] = {
+        config = {
             "interval_seconds": task.interval_seconds,
             "enabled": task.enabled,
         }
+        if task_code == TASK_CODE_POLISH:
+            config.update(
+                run_start_time=task.run_start_time,
+                run_end_time=task.run_end_time,
+            )
+        self._config_cache[task_code] = config
         
         # 通知调度器刷新配置
         await self._notify_scheduler_reload(task_code)

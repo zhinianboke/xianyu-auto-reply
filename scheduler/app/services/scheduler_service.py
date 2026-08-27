@@ -65,6 +65,8 @@ from app.services.scheduled_task_service import (
     TASK_CODE_IMAGE_CLEANUP,
 )
 from common.db.session import async_session_maker
+from common.scheduled_task_time import is_within_daily_time_range
+from common.utils.time_utils import get_beijing_now_naive
 
 
 class SchedulerService:
@@ -596,12 +598,17 @@ class SchedulerService:
         while self._running:
             config = ScheduledTaskService.get_cached_config(TASK_CODE_POLISH)
             if not config:
-                config = {"interval_seconds": 60, "enabled": True}
+                config = {
+                    "interval_seconds": 60,
+                    "enabled": True,
+                    "run_start_time": "00:00",
+                    "run_end_time": "23:59",
+                }
             
             interval = config.get("interval_seconds", 60)
             enabled = config.get("enabled", True)
             
-            if enabled:
+            if enabled and self._is_polish_run_window(config):
                 try:
                     await self._polish_task.execute()
                 except asyncio.CancelledError:
@@ -618,6 +625,21 @@ class SchedulerService:
                 break
         
         logger.info("[定时任务调度] 擦亮任务循环结束")
+
+    @staticmethod
+    def _is_polish_run_window(config: dict) -> bool:
+        """仅在擦亮任务配置的北京时间执行范围内运行。"""
+        start_time = config.get("run_start_time", "00:00")
+        end_time = config.get("run_end_time", "23:59")
+        try:
+            return is_within_daily_time_range(
+                get_beijing_now_naive(),
+                start_time,
+                end_time,
+            )
+        except ValueError as error:
+            logger.error(f"[定时任务调度] 擦亮任务执行范围无效: {error}")
+            return False
     
     async def _run_day_switch_loop(self) -> None:
         """平台日切换任务执行循环"""

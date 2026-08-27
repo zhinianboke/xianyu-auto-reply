@@ -17,6 +17,8 @@ export interface ScheduledTask {
   task_name: string
   interval_seconds: number
   enabled: boolean
+  run_start_time: string
+  run_end_time: string
   description: string | null
   task_running: boolean
   created_at: string | null
@@ -34,6 +36,8 @@ export interface ScheduledTasksResponse {
 export interface UpdateScheduledTaskParams {
   interval_seconds?: number
   enabled?: boolean
+  run_start_time?: string
+  run_end_time?: string
 }
 
 /** 更新定时任务响应 */
@@ -65,6 +69,12 @@ export async function updateScheduledTask(
   }
   if (params.enabled !== undefined) {
     query.set('enabled', String(params.enabled))
+  }
+  if (params.run_start_time !== undefined) {
+    query.set('run_start_time', params.run_start_time)
+  }
+  if (params.run_end_time !== undefined) {
+    query.set('run_end_time', params.run_end_time)
   }
   return put<UpdateScheduledTaskResponse>(`${ADMIN_PREFIX}/scheduled-tasks/${taskCode}?${query.toString()}`)
 }

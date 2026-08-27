@@ -4,7 +4,7 @@
  * 功能：
  * 1. 显示定时任务列表（任务名称、间隔时间、是否启用、运行状态）
  * 2. 支持开启/关闭定时任务
- * 3. 支持修改定时任务间隔时间
+ * 3. 支持修改定时任务间隔时间和擦亮任务执行范围
  * 4. 修改后实时生效
  */
 import { useState, useEffect } from 'react'
@@ -23,6 +23,9 @@ export function ScheduledTasks() {
   // 编辑状态
   const [editingTask, setEditingTask] = useState<string | null>(null)
   const [editInterval, setEditInterval] = useState<number>(0)
+  const [editingTimeRangeTask, setEditingTimeRangeTask] = useState<string | null>(null)
+  const [editRunStartTime, setEditRunStartTime] = useState('00:00')
+  const [editRunEndTime, setEditRunEndTime] = useState('23:59')
   const [updating, setUpdating] = useState<string | null>(null)
   const [triggering, setTriggering] = useState<string | null>(null)
 
@@ -93,6 +96,42 @@ export function ScheduledTasks() {
     setEditInterval(0)
   }
 
+  const handleStartTimeRangeEdit = (task: ScheduledTask) => {
+    setEditingTimeRangeTask(task.task_code)
+    setEditRunStartTime(task.run_start_time || '00:00')
+    setEditRunEndTime(task.run_end_time || '23:59')
+  }
+
+  const handleCancelTimeRangeEdit = () => {
+    setEditingTimeRangeTask(null)
+  }
+
+  const handleSaveTimeRange = async (taskCode: string) => {
+    if (editRunStartTime > editRunEndTime) {
+      addToast({ type: 'error', message: '开始时间不能晚于结束时间' })
+      return
+    }
+
+    setUpdating(taskCode)
+    try {
+      const result = await updateScheduledTask(taskCode, {
+        run_start_time: editRunStartTime,
+        run_end_time: editRunEndTime,
+      })
+      if (result.success) {
+        addToast({ type: 'success', message: result.message })
+        setEditingTimeRangeTask(null)
+        loadTasks()
+      } else {
+        addToast({ type: 'error', message: result.message || '更新失败' })
+      }
+    } catch (error: any) {
+      addToast({ type: 'error', message: error.response?.data?.detail || '更新失败' })
+    } finally {
+      setUpdating(null)
+    }
+  }
+
   // 保存间隔时间
   const handleSaveInterval = async (taskCode: string) => {
     if (editInterval < 1) {
@@ -127,7 +166,7 @@ export function ScheduledTasks() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="page-title">定时任务管理</h1>
-          <p className="page-description">管理系统定时任务的执行间隔和启用状态</p>
+          <p className="page-description">管理系统定时任务的执行间隔、执行范围和启用状态</p>
         </div>
         <div className="flex gap-3">
           <button onClick={loadTasks} disabled={loading} className="btn-ios-secondary">
@@ -157,6 +196,7 @@ export function ScheduledTasks() {
                 <th>任务名称</th>
                 <th>任务代码</th>
                 <th>执行间隔</th>
+                <th>执行范围</th>
                 <th>启用状态</th>
                 <th>描述</th>
                 <th>操作</th>
@@ -165,7 +205,7 @@ export function ScheduledTasks() {
             <tbody>
               {tasks.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="text-center py-8 text-slate-500 dark:text-slate-400">
+                  <td colSpan={7} className="text-center py-8 text-slate-500 dark:text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <Clock className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>暂无定时任务</p>
@@ -220,6 +260,59 @@ export function ScheduledTasks() {
                             onClick={() => handleStartEdit(task)}
                             className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                             title="编辑"
+                          >
+                            <Edit2 className="w-3.5 h-3.5 text-slate-400" />
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      {task.task_code !== 'polish' ? (
+                        <span className="text-slate-400 dark:text-slate-500">-</span>
+                      ) : editingTimeRangeTask === task.task_code ? (
+                        <div className="flex items-center gap-2 whitespace-nowrap">
+                          <input
+                            type="time"
+                            value={editRunStartTime}
+                            onChange={(e) => setEditRunStartTime(e.target.value)}
+                            className="px-2 py-1 border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-sm"
+                            aria-label="擦亮任务开始执行时间"
+                          />
+                          <span className="text-sm text-slate-500">至</span>
+                          <input
+                            type="time"
+                            value={editRunEndTime}
+                            onChange={(e) => setEditRunEndTime(e.target.value)}
+                            className="px-2 py-1 border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-sm"
+                            aria-label="擦亮任务结束执行时间"
+                          />
+                          <button
+                            onClick={() => handleSaveTimeRange(task.task_code)}
+                            disabled={updating === task.task_code}
+                            className="p-1 rounded hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
+                            title="保存执行范围"
+                          >
+                            {updating === task.task_code ? (
+                              <Loader2 className="w-4 h-4 animate-spin text-green-500" />
+                            ) : (
+                              <Check className="w-4 h-4 text-green-500" />
+                            )}
+                          </button>
+                          <button
+                            onClick={handleCancelTimeRangeEdit}
+                            className="p-1 rounded hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                            title="取消"
+                          >
+                            <X className="w-4 h-4 text-red-500" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{task.run_start_time}–{task.run_end_time}</span>
+                          <button
+                            onClick={() => handleStartTimeRangeEdit(task)}
+                            className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                            title="编辑执行范围"
                           >
                             <Edit2 className="w-3.5 h-3.5 text-slate-400" />
                           </button>

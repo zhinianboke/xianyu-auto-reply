@@ -23,5 +23,6 @@ class ScheduledTask(TimestampMixin, Base):
     task_name: Mapped[str] = mapped_column(String(100), nullable=False, comment="任务名称")
     interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60, comment="执行间隔(秒)")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否启用")
+    run_start_time: Mapped[str] = mapped_column(String(5), nullable=False, default="00:00", comment="执行范围开始时间(HH:MM)")
+    run_end_time: Mapped[str] = mapped_column(String(5), nullable=False, default="23:59", comment="执行范围结束时间(HH:MM)")
     description: Mapped[str | None] = mapped_column(Text, comment="任务描述")
-
