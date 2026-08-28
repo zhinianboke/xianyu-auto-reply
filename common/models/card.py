@@ -31,6 +31,9 @@ class Card(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='卡券描述')
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment='是否启用')
     delay_seconds: Mapped[int] = mapped_column(Integer, default=0, comment='延迟秒数')
+    use_no_logistics_form: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0", comment='是否通过无需邮寄表单发货'
+    )
     delivery_count: Mapped[int] = mapped_column(Integer, default=0, comment='发货次数')
     price: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, comment='对接价格')
     is_dockable: Mapped[bool] = mapped_column(Boolean, default=False, comment='是否可对接')
@@ -70,4 +73,3 @@ class Card(Base):
         viewonly=True,
         lazy="select",
     )
-
