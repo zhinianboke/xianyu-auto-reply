@@ -356,6 +356,13 @@ class DatabaseInitializer:
             "定时清理被禁用账号的浏览器数据",
         ),
         (
+            "cleanup_unconfigured_browser_data",
+            "清理未配置账号密码的浏览器数据任务",
+            10800,
+            False,
+            "定时清理未配置登录账号密码（username 或 login_password 为空）账号的浏览器数据",
+        ),
+        (
             "fetch_orders",
             "获取闲鱼订单任务",
             600,
