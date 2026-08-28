@@ -624,6 +624,7 @@ class CardMatcher:
             "description": card.description,
             "enabled": card.enabled,
             "delay_seconds": card.delay_seconds or 0,
+            "use_no_logistics_form": bool(card.use_no_logistics_form),
             "delivery_count": card.delivery_count,
             "is_multi_spec": card.is_multi_spec or False,
             "spec_name": card.spec_name,
