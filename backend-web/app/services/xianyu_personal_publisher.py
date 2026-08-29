@@ -22,7 +22,7 @@ from app.services.xianyu_direct_payload import (
     price_in_cent,
     text,
 )
-from app.services.xianyu_direct_publisher import _build_attribute_labels, _resolve_item_address
+from app.services.xianyu_item_payload_builder import _build_attribute_labels, _resolve_item_address
 from common.services.xianyu_mtop import mtop_call
 from common.services.xianyu_publish_media import PublishMediaError, upload_publish_image
 from common.services.xianyu_publish_video import PublishVideoError, upload_publish_videos

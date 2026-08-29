@@ -100,6 +100,20 @@ export interface Keyword {
 }
 
 // 商品相关类型
+// 商品规格明细（鱼小铺多规格商品）
+export interface ItemSkuSpec {
+  name: string   // 规格名，如「颜色」
+  value: string  // 规格值，如「红色」
+}
+
+export interface ItemSku {
+  sku_id: string
+  inventory_id?: string
+  quantity?: string | number  // 该规格库存
+  price?: string              // 该规格价格（元）
+  specs?: ItemSkuSpec[]       // 规格名/值组合
+}
+
 export interface Item {
   id: string | number
   cookie_id: string
@@ -112,6 +126,12 @@ export interface Item {
   item_category?: string
   price?: string
   item_price?: string
+  item_quantity?: string | number   // 库存（鱼小铺）
+  item_shelf_time?: string          // 上架时间（鱼小铺）
+  item_status_desc?: string         // 商品状态文案（鱼小铺）
+  item_sku_list?: ItemSku[]         // 多规格明细（鱼小铺）
+  item_sku_count?: number           // 规格数（鱼小铺）
+  is_seller_item?: boolean          // 是否鱼小铺商品（仅鱼小铺可改价）
   has_sku?: boolean
   is_polished?: boolean            // 是否擦亮
   is_multi_spec?: number | boolean
@@ -285,6 +305,8 @@ export interface SystemSettings {
   'account.face_verify_timeout_disable'?: boolean
   // 账号密码登录方式
   'password_login.mode'?: PasswordLoginMode
+  'password_login.remote_url'?: string
+  'password_login.remote_secret_key'?: string
   'captcha.slider_mode'?: SliderMode
   // Token获取方式
   'token.api_mode'?: TokenApiMode

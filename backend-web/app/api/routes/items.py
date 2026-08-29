@@ -16,12 +16,14 @@ from common.schemas.item import (
     ItemBatchOfflineRequest,
     ItemFullFetchRequest,
     ItemPageFetchRequest,
+    SellerItemEditRequest,
 )
 from common.services.item_offline_service import batch_offline_items_from_xianyu
 from common.services.item_delete_service import batch_delete_items_from_xianyu
 from app.services.account_service import AccountService
 from app.services.item_service import ItemService
 from app.services.selectable_item_service import SelectableItemService
+from app.services.xianyu_item_edit_service import edit_seller_item, fetch_seller_item_edit_detail
 
 logger = logging.getLogger(__name__)
 
@@ -709,6 +711,139 @@ async def update_item_multi_spec(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="商品不存在")
     status_text = "开启" if is_multi_spec else "关闭"
     return ApiResponse(success=True, message=f"商品多规格状态已{status_text}")
+
+
+@items_router.put("/{cookie_id}/{item_id}/price", response_model=ApiResponse)
+async def update_item_price(
+    cookie_id: str,
+    item_id: str,
+    payload: dict,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+    item_service: ItemService = Depends(deps.get_item_service),
+) -> ApiResponse:
+    """鱼小铺商品改价（价格与库存一并提交）。
+
+    单规格：payload = {"price": 22.22, "quantity": 242}
+    多规格：payload = {"skus": [{"sku_id": "...", "price": 11.11, "quantity": 111}, ...]}
+    仅鱼小铺账号可用；服务层会校验账号类型并返回 success=False。
+    """
+    # 管理员可以操作所有账号，普通用户只能操作自己的账号
+    owner_id, _ = resolve_owner_scope(current_user)
+
+    account = await account_service.get_account_for_user(owner_id, cookie_id)
+    if not account:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账号不存在")
+
+    skus = payload.get("skus")
+    if isinstance(skus, list) and skus:
+        result = await item_service.update_item_price(account, item_id, skus=skus)
+    else:
+        single = {"price": payload.get("price"), "quantity": payload.get("quantity")}
+        result = await item_service.update_item_price(account, item_id, single=single)
+
+    return ApiResponse(
+        success=bool(result.get("success")),
+        message=result.get("message", ""),
+    )
+
+
+@items_router.get("/{cookie_id}/{item_id}/seller-detail", response_model=ApiResponse)
+async def get_seller_item_edit_detail(
+    cookie_id: str,
+    item_id: str,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+) -> ApiResponse:
+    """拉取鱼小铺商品的平台编辑详情，返回与单品发布同构的表单数据。
+
+    仅鱼小铺账号可用；非鱼小铺账号返回 success=False 由前端展示提示。
+    """
+    # 管理员可以操作所有账号，普通用户只能操作自己的账号
+    owner_id, _ = resolve_owner_scope(current_user)
+
+    account = await account_service.get_account_for_user(owner_id, cookie_id)
+    if not account:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账号不存在")
+
+    result = await fetch_seller_item_edit_detail(
+        account_id=account.account_id,
+        cookie=account.cookie,
+        item_id=item_id,
+        owner_id=account.owner_id,
+    )
+    return ApiResponse(
+        success=bool(result.get("success")),
+        message=result.get("message", ""),
+        data=result.get("data"),
+    )
+
+
+@items_router.put("/{cookie_id}/{item_id}/seller-edit", response_model=ApiResponse)
+async def update_seller_item(
+    cookie_id: str,
+    item_id: str,
+    payload: SellerItemEditRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+    item_service: ItemService = Depends(deps.get_item_service),
+) -> ApiResponse:
+    """提交鱼小铺商品编辑到闲鱼平台，成功后重新同步该账号商品。
+
+    编辑为全量覆盖式提交，服务层会先拉取平台详情作为快照，
+    未改动的图片/视频/宝贝所在地/发货设置直接复用平台数据。
+    """
+    # 管理员可以操作所有账号，普通用户只能操作自己的账号
+    owner_id, _ = resolve_owner_scope(current_user)
+
+    account = await account_service.get_account_for_user(owner_id, cookie_id)
+    if not account:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账号不存在")
+
+    result = await edit_seller_item(
+        account_id=account.account_id,
+        cookie=account.cookie,
+        item_id=item_id,
+        item_data=payload.model_dump(),
+        owner_id=account.owner_id,
+    )
+    if not result.get("success"):
+        if result.get("account_invalid"):
+            logger.warning(
+                f"鱼小铺商品编辑时账号登录状态失效: cookie_id={cookie_id}, item_id={item_id}, "
+                f"message={result.get('message')}"
+            )
+        return ApiResponse(success=False, message=result.get("message", "商品编辑失败"))
+
+    # mtop 令牌刷新可能返回合并后的 Cookie，后续同步必须继续使用该账号的新 Cookie
+    refreshed_cookies = result.get("cookies_str")
+    if refreshed_cookies:
+        account.cookie = refreshed_cookies
+
+    # 平台编辑成功后重新同步该账号商品，保证本地列表与平台一致
+    message = result.get("message") or "商品编辑成功"
+    try:
+        sync_result = await item_service.fetch_all_items_from_account(account=account)
+        if sync_result.get("success"):
+            synced_total = sync_result.get("total_count", 0) or 0
+            sync_message = str(sync_result.get("message") or "")
+            if not synced_total and sync_message:
+                # 同步锁被占用等场景也是 success，此时拼「已同步 0 个商品」会误导用户
+                message = f"{message}，{sync_message}，请稍后手动刷新商品列表"
+            else:
+                message = (
+                    f"{message}，已重新同步 {synced_total} 个商品，"
+                    f"入库 {sync_result.get('saved_count', 0)} 个商品"
+                )
+        else:
+            message = (
+                f"{message}，但商品同步失败：{sync_result.get('message') or '未知错误'}，"
+                "请手动刷新商品列表"
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"编辑成功后同步商品失败: cookie_id={cookie_id}, item_id={item_id}, error={exc}")
+        message = f"{message}，但商品同步失败：{exc}，请手动刷新商品列表"
+    return ApiResponse(success=True, message=message)
 
 
 @items_router.put("/{cookie_id}/{item_id}/multi-quantity-delivery", response_model=ApiResponse)

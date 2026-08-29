@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import mimetypes
 import uuid
 from io import BytesIO
@@ -26,6 +27,24 @@ IMAGE_UPLOAD_URL = (
 )
 MEDIA_TIMEOUT = aiohttp.ClientTimeout(total=90)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+)
+# 阿里图床（img.alicdn.com 等）对不带浏览器请求头的下载会返回 HTTP 420 限流。
+# 编辑时回填平台原有规格图必须下载原图才能拿到真实宽高，因此下载也要带浏览器头。
+# Accept 刻意不声明 webp/avif：图床会按 Accept 做格式协商，声明后返回的字节格式
+# 与 URL 后缀不一致（.png 拿到 webp），上传时容易因扩展名与内容不符出问题。
+IMAGE_DOWNLOAD_HEADERS = {
+    "Accept": "image/jpeg,image/png,image/*;q=0.8,*/*;q=0.5",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+    "Referer": "https://www.goofish.com/",
+    "User-Agent": BROWSER_USER_AGENT,
+}
+# 图床限流与瞬时故障的状态码：这些情况重试有意义，其余状态码直接失败
+RETRYABLE_DOWNLOAD_STATUS = {420, 429, 500, 502, 503, 504}
+# 重试等待秒数，长度即额外重试次数
+DOWNLOAD_RETRY_DELAYS = (1.0, 3.0)
 
 
 class PublishMediaError(RuntimeError):
@@ -61,18 +80,56 @@ def _dimensions(content: bytes) -> tuple[int, int]:
         raise PublishMediaError(f"图片无法解析，不能发布：{exc}") from exc
 
 
+async def _download_image(url: str) -> tuple[bytes, str]:
+    """下载远程图片，带浏览器请求头并对图床限流做有限重试。
+
+    Args:
+        url: 图片地址（http/https）。
+    Returns:
+        tuple: (图片字节, Content-Type)
+    Raises:
+        PublishMediaError: 下载失败或返回空内容，错误信息为中文，直接展示给用户。
+    """
+    last_status = 0
+    for attempt in range(len(DOWNLOAD_RETRY_DELAYS) + 1):
+        async with aiohttp.ClientSession(
+            timeout=MEDIA_TIMEOUT,
+            cookie_jar=aiohttp.DummyCookieJar(),
+        ) as session:
+            async with session.get(url, headers=IMAGE_DOWNLOAD_HEADERS) as response:
+                content = await response.read()
+                last_status = response.status
+                if response.status == 200 and content:
+                    content_type = (response.headers.get("Content-Type") or "").split(";", 1)[0]
+                    return content, content_type.strip()
+        if last_status not in RETRYABLE_DOWNLOAD_STATUS or attempt >= len(DOWNLOAD_RETRY_DELAYS):
+            break
+        logger.warning(
+            f"远程图片下载被限流或失败，准备重试: url={url}, http_status={last_status}, "
+            f"attempt={attempt + 1}"
+        )
+        await asyncio.sleep(DOWNLOAD_RETRY_DELAYS[attempt])
+    if last_status in RETRYABLE_DOWNLOAD_STATUS:
+        raise PublishMediaError(
+            f"远程图片下载被图床限流（HTTP {last_status}），已重试仍失败，请稍后重试"
+        )
+    raise PublishMediaError(f"远程图片下载失败：HTTP {last_status}")
+
+
 async def _read_image(value: str, static_root: Path | None) -> tuple[bytes, str, str]:
     """读取远程或本地图片内容。"""
     normalized = value.strip()
     if normalized.lower().startswith(("http://", "https://")):
         try:
-            async with aiohttp.ClientSession(timeout=MEDIA_TIMEOUT) as session:
-                async with session.get(normalized) as response:
-                    content = await response.read()
-                    if response.status != 200 or not content:
-                        raise PublishMediaError(f"远程图片下载失败：HTTP {response.status}")
-                    content_type = (response.headers.get("Content-Type") or "").split(";", 1)[0].strip()
+            content, content_type = await _download_image(normalized)
             name = Path(urlparse(normalized).path).name or "publish-image.jpg"
+            # 图床返回的实际格式可能与 URL 后缀不一致，按 Content-Type 校正文件名，
+            # 避免上传时扩展名与内容不符
+            extension = mimetypes.guess_extension(content_type) if content_type else None
+            if extension == ".jpe":
+                extension = ".jpg"
+            if extension in IMAGE_EXTENSIONS and Path(name).suffix.lower() != extension:
+                name = f"{Path(name).stem or 'publish-image'}{extension}"
             return content, name, content_type or _content_type_for(name)
         except PublishMediaError:
             raise
@@ -133,10 +190,7 @@ async def upload_publish_image_content(
         "Cookie": cookie,
         "Origin": "https://seller.goofish.com",
         "Referer": "https://seller.goofish.com/?site=COMMONPRO",
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
-        ),
+        "User-Agent": BROWSER_USER_AGENT,
         "X-Requested-With": "XMLHttpRequest",
     }
     try:

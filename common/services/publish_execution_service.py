@@ -21,6 +21,7 @@ from common.services.publish_address_service import PublishAddressService
 from common.services.publish_log_service import PublishLogService
 from common.services.xianyu_publish_service import (
     detect_publish_account_capability,
+    ensure_publish_capability_reliable,
     publish_personal_single_item,
     publish_single_item,
 )
@@ -155,6 +156,8 @@ async def execute_single_publish(
             owner_id=user_id,
         )
         cookies_str = capability.get("cookies_str") or cookies_str
+        # 鱼小铺账号必须走鱼小铺接口：判定不可信时报错不发布，不允许回落个人版发布
+        capability = ensure_publish_capability_reliable(capability)
         if not capability.get("success"):
             result = capability
         elif capability.get("is_fish_shop"):

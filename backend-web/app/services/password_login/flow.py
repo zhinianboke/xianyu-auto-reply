@@ -20,9 +20,8 @@ from loguru import logger
 from app.core.config import get_settings
 from app.core.http_client import get_http_client
 from app.services.account_service import AccountService
-from app.services.websocket_client import websocket_client
 from common.db.session import async_session_maker
-from common.services.captcha.remote_solver import solve_remote
+from common.services.remote_password_login_api import solve_remote_x5sec_login
 from common.services.token_renewal_cache_service import mark_token_cache_expired
 from common.services.xianyu_login.face_verification import (
     FaceVerificationError,
@@ -45,7 +44,10 @@ _LOGIN_SLIDER_COOKIE_NAMES = ("x5sec", "x5secdata", "x5sectag")
 
 
 async def _read_remote_config() -> Dict[str, Any]:
-    """读取远程过滑块配置（url/secret）。
+    """读取协议登录远程过滑块接口配置（password_login.remote_*，阿里滑块获取 x5sec）。
+
+    选择协议登录时远程URL与秘钥为必填（前端与后端 _validate_password_login_remote_setting
+    双重强制），故协议登录一定已配置该远程接口。
 
     注：协议登录是全新登录、此时账号尚无 Cookie，故不涉及"传递账号Cookie"开关。
     """
@@ -54,8 +56,8 @@ async def _read_remote_config() -> Dict[str, Any]:
     from common.models.system_setting import SystemSetting
 
     keys = [
-        "captcha.remote_service_url",
-        "captcha.remote_secret_key",
+        "password_login.remote_url",
+        "password_login.remote_secret_key",
     ]
     async with async_session_maker() as session:
         rows = (
@@ -63,52 +65,34 @@ async def _read_remote_config() -> Dict[str, Any]:
         ).scalars().all()
     m = {r.key: (r.value or "") for r in rows}
     return {
-        "url": m.get("captcha.remote_service_url", "").strip(),
-        "secret": m.get("captcha.remote_secret_key", "").strip(),
+        "login_remote_url": m.get("password_login.remote_url", "").strip(),
+        "login_remote_secret": m.get("password_login.remote_secret_key", "").strip(),
     }
 
 
 async def _solve_slider(
     account_id: str, slider_url: str, remote_config: Dict[str, Any]
 ) -> Tuple[str, Optional[Dict[str, str]], Optional[str]]:
-    """过滑块（登录场景）：配了远程则远程处理，否则委托 WebSocket 滑块引擎。
+    """过滑块（登录场景）：直接调用协议登录远程接口(x5sec_ali)求解。
 
-    WebSocket 服务自行根据系统设置决定使用真实鼠标或其它滑块引擎，
-    backend-web 不参与引擎选择。
-
-    协议模式一旦选定过滑块通道（远程 / 本机），满足协议后【不允许跨通道回退】：
-    远程超时/不可用（solve_remote 返回 'fallback'，其本意是"回退本机"）在协议语境下
-    统一归并为 'fail'，由上层继续重试同一远程通道，不切换到本机真实鼠标。
+    协议登录的滑块风控本项目自身 / 本地网页端均已无法处理，且选择协议登录时远程接口
+    为必填，故此处直接走 password_login.remote_* 远程接口，不再尝试本地或通用远程通道。
 
     Returns:
         (status, cookies, message)  status: 'ok'/'fail'/'url_expired'
     """
-    # 配了远程时优先远程
-    if remote_config.get("url") and remote_config.get("secret"):
-        status, cookies, message = await solve_remote(
-            remote_url=remote_config["url"],
-            remote_secret=remote_config["secret"],
-            user_id=account_id,
-            url=slider_url,
-        )
-        # 协议模式不回退本机：'fallback'（远程超时/不可用）按普通失败处理，交上层重试远程
-        if status == "fallback":
-            logger.warning(
-                f"【{account_id}】远程过滑块超时/不可用，协议模式不回退本机，按失败重试"
-            )
-            return "fail", None, message
-        return status, cookies, message
-    # 否则委托 WebSocket 滑块引擎（并发、排队和引擎选择统一在 WebSocket）
-    resp = await websocket_client.solve_captcha(
-        account_id=account_id, url=slider_url, call_type="local"
+    login_remote_url = remote_config.get("login_remote_url")
+    login_remote_secret = remote_config.get("login_remote_secret")
+    # 防御：正常流程下协议登录一定已配置远程接口；缺配置时明确失败，不静默兜底
+    if not (login_remote_url and login_remote_secret):
+        return "fail", None, "未配置协议登录远程接口，无法过滑块"
+
+    return await solve_remote_x5sec_login(
+        login_remote_url,
+        login_remote_secret,
+        account_id=account_id,
+        punish_url=slider_url,
     )
-    if isinstance(resp, dict) and resp.get("success"):
-        cookies = (resp.get("data") or {}).get("cookies") or {}
-        if cookies:
-            return "ok", cookies, None
-    if isinstance(resp, dict) and (resp.get("data") or {}).get("url_expired"):
-        return "url_expired", None, resp.get("message")
-    return "fail", None, resp.get("message") if isinstance(resp, dict) else "过滑块失败"
 
 
 async def _collect_login_cookies(client: httpx.AsyncClient) -> Tuple[str, str]:

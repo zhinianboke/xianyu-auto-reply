@@ -12,7 +12,8 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, Set
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
+from typing import Any, Dict, Optional, Set
 
 from loguru import logger
 from sqlalchemy import select
@@ -32,6 +33,83 @@ class ItemService:
 
     def __init__(self, session: AsyncSession):
         self.session = session
+        # 账号是否鱼小铺的实例级缓存，避免同一请求内对同一账号重复调用 preget 检测
+        self._fish_shop_cache: dict[str, bool] = {}
+
+    async def _resolve_item_fetch_manager(self, account: XYAccount):
+        """按账号类型选择商品抓取器：鱼小铺走卖家平台接口，普通账号走个人版接口。
+
+        参照单品发布界面的能力检测（detect_publish_account_capability，优先调用鱼小铺卖家后台
+        mtop.idle.pc.backend.idleitem.preget，不可用时回落个人版 mtop.idle.pc.idleitem.preget）
+        判定是否开通鱼小铺；检测失败/无法识别时回退个人版接口。
+
+        Args:
+            account: 账号对象。
+        Returns:
+            与 ItemInfoManager 接口对齐的抓取器实例（ItemInfoManager 或 SellerItemInfoManager）。
+        """
+        from common.utils.item_info_manager import ItemInfoManager
+        from common.services.xianyu_seller_item_client import SellerItemInfoManager
+
+        is_fish_shop = self._fish_shop_cache.get(account.account_id)
+        if is_fish_shop is None:
+            is_fish_shop = await self._detect_is_fish_shop(account)
+            self._fish_shop_cache[account.account_id] = is_fish_shop
+
+        if is_fish_shop:
+            logger.info(f"账号[{account.account_id}]为鱼小铺，使用卖家平台接口获取商品")
+            return SellerItemInfoManager(
+                account.account_id, account.cookie, owner_id=account.owner_id
+            )
+
+        logger.info(f"账号[{account.account_id}]为普通账号，使用个人版接口获取商品")
+        return ItemInfoManager(account.account_id, account.cookie)
+
+    async def _detect_is_fish_shop(self, account: XYAccount) -> bool:
+        """检测账号是否开通鱼小铺；检测失败或无法识别时回退为普通账号（False）。
+
+        注意：检测过程中 mtop 可能因令牌过期而刷新 _m_h5_tk，但 mtop_call 仅在调用成功时
+        才把新 Cookie 写回数据库。因此这里无论成败都要把 cookies_str 回填到 account，
+        否则紧随其后的商品抓取仍用旧令牌，会白跑一次「令牌过期→重试」。
+        """
+        from common.services.xianyu_publish_service import detect_publish_account_capability
+
+        try:
+            result = await detect_publish_account_capability(
+                cookie=account.cookie,
+                account_id=account.account_id,
+                owner_id=account.owner_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"账号[{account.account_id}]鱼小铺检测异常，回退个人版接口获取商品: {exc}"
+            )
+            return False
+
+        self._sync_account_cookie(account, result.get("cookies_str"))
+
+        if not result.get("success"):
+            logger.warning(
+                f"账号[{account.account_id}]鱼小铺检测失败，回退个人版接口获取商品: "
+                f"{result.get('message') or '未知原因'}"
+            )
+            return False
+
+        return bool(result.get("is_fish_shop"))
+
+    @staticmethod
+    def _sync_account_cookie(account: XYAccount, latest_cookie: Optional[str]) -> None:
+        """把检测/请求过程中刷新出的最新 Cookie 回填到账号对象，供后续请求复用。
+
+        Args:
+            account: 账号对象（ORM 实例，随本次会话提交一并持久化）。
+            latest_cookie: 最新 Cookie 字符串；为空或未变化时不处理。
+        """
+        latest = (latest_cookie or "").strip()
+        if not latest or latest == (account.cookie or ""):
+            return
+        account.cookie = latest
+        logger.info(f"账号[{account.account_id}]检测期间令牌已刷新，后续商品抓取改用新Cookie")
 
     def _resolve_account_fetch_user_id(self, account: XYAccount) -> str:
         from common.utils.xianyu_utils import extract_account_user_id_from_cookie
@@ -229,11 +307,9 @@ class ItemService:
         page_size: int = 20,
     ) -> dict[str, Any]:
         """从指定账号抓取单页商品并入库"""
-        from common.utils.item_info_manager import ItemInfoManager
-
         myid = self._resolve_account_fetch_user_id(account)
 
-        manager = ItemInfoManager(account.account_id, account.cookie)
+        manager = await self._resolve_item_fetch_manager(account)
         try:
             result = await manager.get_item_list_info(page, page_size, myid=myid)
         except Exception as exc:
@@ -334,12 +410,10 @@ class ItemService:
         required_title_keyword: str | None = None,
     ) -> dict[str, Any]:
         """抓取指定账号全部商品并入库（实际实现，调用方需已持有账号锁）"""
-        from common.utils.item_info_manager import ItemInfoManager
-
         myid = self._resolve_account_fetch_user_id(account)
         normalized_required_title_keyword = str(required_title_keyword or "").strip()
 
-        manager = ItemInfoManager(account.account_id, account.cookie)
+        manager = await self._resolve_item_fetch_manager(account)
         fetched_items: list[dict] = []
         total_saved_count = 0
         fetched_pages = 0
@@ -596,6 +670,9 @@ class ItemService:
         返回 True 表示有实际变更（新增或字段值变化），False 表示无需更新。
         """
         category = str(item.get("category_id", ""))
+        # 多规格商品（卖家平台 idleItemSkuList 多于一项）同步时自动开启「多规格」开关
+        sku_list = item.get("idle_item_sku_list")
+        is_multi_spec = isinstance(sku_list, list) and len(sku_list) > 1
 
         stmt = select(XYCatalogItem).where(
             XYCatalogItem.owner_id == account.owner_id,
@@ -620,8 +697,29 @@ class ItemService:
                 existing_item.metadata_json = metadata_json
                 flag_modified(existing_item, "metadata_json")
                 changed = True
+            # 刷新整块 detail：让库存、上架时间、状态等随每次同步更新，而非停留在首次抓取值
+            new_detail = json.dumps(item, ensure_ascii=False)
+            if metadata_json.get("detail") != new_detail:
+                metadata_json["detail"] = new_detail
+                existing_item.metadata_json = metadata_json
+                flag_modified(existing_item, "metadata_json")
+                changed = True
+            # 多规格商品自动开启开关；仅在识别到多规格时置 True，不覆盖用户手动设置
+            if is_multi_spec and metadata_json.get("is_multi_spec") is not True:
+                metadata_json["is_multi_spec"] = True
+                existing_item.metadata_json = metadata_json
+                flag_modified(existing_item, "metadata_json")
+                changed = True
             return changed
 
+        new_metadata = {
+            "description": "",
+            "category": category,
+            "detail": json.dumps(item, ensure_ascii=False),
+        }
+        # 新增即为多规格商品时，同步自动开启「多规格」开关
+        if is_multi_spec:
+            new_metadata["is_multi_spec"] = True
         new_item = XYCatalogItem(
             owner_id=account.owner_id,
             account_pk=account.id,
@@ -629,16 +727,170 @@ class ItemService:
             title=item.get("title", ""),
             price=item.get("price_text", ""),
             is_polished=False,
-            metadata_json={
-                "description": "",
-                "category": category,
-                "detail": json.dumps(item, ensure_ascii=False),
-            },
+            metadata_json=new_metadata,
             created_at=datetime.now(timezone.utc),
         )
         self.session.add(new_item)
         return True
-    
+
+    @staticmethod
+    def _normalize_price_yuan(value: Any) -> Decimal:
+        """把「元」金额规整为最多两位小数的 Decimal（四舍五入），非法输入抛 ValueError。"""
+        try:
+            return Decimal(str(value)).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+        except (InvalidOperation, TypeError, ValueError):
+            raise ValueError("价格格式不正确")
+
+    @staticmethod
+    def _price_to_num(price_yuan: Decimal):
+        """把「元」Decimal 转为 JSON 数字：整数金额用 int，含小数用 float。
+
+        卖家平台改价接口 price 字段单位为元；抓包中整数金额提交为整型（如 111111），
+        故整数金额发 int、带小数金额发 float，尽量与平台请求保持一致。
+        """
+        if price_yuan == price_yuan.to_integral_value():
+            return int(price_yuan)
+        return float(price_yuan)
+
+    async def update_item_price(
+        self,
+        account: XYAccount,
+        item_id: str,
+        single: dict | None = None,
+        skus: list[dict] | None = None,
+    ) -> dict:
+        """鱼小铺商品改价（价格与库存一并提交）。仅鱼小铺账号可用。
+
+        Args:
+            account: 账号对象。
+            item_id: 商品ID。
+            single: 单规格 {"price": 元, "quantity": int}。
+            skus: 多规格 [{"sku_id": str, "price": 元, "quantity": int}, ...]。
+        Returns:
+            dict: {success, message}
+        """
+        from common.services.xianyu_seller_item_client import update_seller_item_price
+
+        # 改价功能仅支持鱼小铺账号
+        if not await self._detect_is_fish_shop(account):
+            return {"success": False, "message": "改价功能仅支持鱼小铺账号"}
+
+        try:
+            single_payload = None
+            sku_payload = None
+            # 卖家平台改价接口 price 字段单位为「元」（平台内部再 ×100 存为分），上限 99999999.99 元
+            max_price_yuan = Decimal("99999999.99")
+            if single is not None:
+                price_yuan = self._normalize_price_yuan(single.get("price"))
+                quantity = int(single.get("quantity"))
+                if price_yuan <= 0 or quantity < 0:
+                    return {"success": False, "message": "价格需大于0、库存不能为负数"}
+                if price_yuan > max_price_yuan:
+                    return {"success": False, "message": "价格不能超过99999999.99元"}
+                single_payload = {"price": self._price_to_num(price_yuan), "quantity": quantity}
+            elif skus:
+                sku_payload = []
+                for sku in skus:
+                    sku_id = str(sku.get("sku_id") or "").strip()
+                    price_yuan = self._normalize_price_yuan(sku.get("price"))
+                    quantity = int(sku.get("quantity"))
+                    if not sku_id or price_yuan <= 0 or quantity < 0:
+                        return {
+                            "success": False,
+                            "message": "每个规格需填写规格ID、价格大于0、库存不能为负数",
+                        }
+                    if price_yuan > max_price_yuan:
+                        return {"success": False, "message": "规格价格不能超过99999999.99元"}
+                    sku_payload.append(
+                        {"sku_id": sku_id, "price": self._price_to_num(price_yuan), "quantity": quantity}
+                    )
+            else:
+                return {"success": False, "message": "缺少改价参数"}
+        except (TypeError, ValueError):
+            return {"success": False, "message": "价格或库存格式不正确"}
+
+        result = await update_seller_item_price(
+            account_id=account.account_id,
+            cookie=account.cookie,
+            item_id=item_id,
+            single=single_payload,
+            sku_list=sku_payload,
+            owner_id=account.owner_id,
+        )
+        if not result.get("success"):
+            return result
+
+        # 远程改价成功后同步更新本地价格/库存，界面立即反映（真实数据，非模拟）
+        await self._apply_local_price_change(account, item_id, single_payload, sku_payload)
+        return {"success": True, "message": "改价成功"}
+
+    async def _apply_local_price_change(
+        self,
+        account: XYAccount,
+        item_id: str,
+        single_payload: dict | None,
+        sku_payload: list[dict] | None,
+    ) -> None:
+        """远程改价成功后，把新价格/库存回写本地商品记录（含 detail 内规格明细）。"""
+        stmt = select(XYCatalogItem).where(
+            XYCatalogItem.owner_id == account.owner_id,
+            XYCatalogItem.account_pk == account.id,
+            XYCatalogItem.item_id == item_id,
+        )
+        item = (await self.session.execute(stmt)).scalars().first()
+        if not item:
+            return
+
+        metadata = item.metadata_json or {}
+        detail: dict = {}
+        detail_raw = metadata.get("detail")
+        if isinstance(detail_raw, str) and detail_raw:
+            try:
+                parsed = json.loads(detail_raw)
+                detail = parsed if isinstance(parsed, dict) else {}
+            except (ValueError, TypeError):
+                detail = {}
+
+        if single_payload:
+            yuan = f"{float(single_payload['price']):.2f}"
+            item.price = yuan
+            detail["price"] = yuan
+            detail["price_text"] = yuan
+            detail["reservePrice"] = yuan
+            detail["quantity"] = single_payload["quantity"]
+        else:
+            sku_map = {s["sku_id"]: s for s in (sku_payload or [])}
+            total_qty = 0
+            prices: list[float] = []
+            for sku in detail.get("idle_item_sku_list") or []:
+                sid = str(sku.get("sku_id") or "")
+                if sid in sku_map:
+                    sku["price"] = f"{float(sku_map[sid]['price']):.2f}"
+                    sku["quantity"] = sku_map[sid]["quantity"]
+                try:
+                    total_qty += int(sku.get("quantity") or 0)
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    prices.append(float(sku.get("price") or 0))
+                except (TypeError, ValueError):
+                    pass
+            if prices:
+                lo, hi = min(prices), max(prices)
+                price_str = f"{lo:.2f}" if lo == hi else f"{lo:.2f}~{hi:.2f}"
+                item.price = price_str
+                detail["reservePrice"] = price_str
+                detail["price"] = price_str
+                detail["price_text"] = price_str
+            detail["quantity"] = total_qty
+
+        metadata["detail"] = json.dumps(detail, ensure_ascii=False)
+        item.metadata_json = metadata
+        flag_modified(item, "metadata_json")
+        await self.session.commit()
+
     async def _get_default_reply_status_batch(self, items_data: list) -> Dict[tuple, dict]:
         """批量获取商品默认回复状态
         
@@ -876,6 +1128,16 @@ class ItemService:
 
     def _serialize_item(self, item: XYCatalogItem, account_id: str, default_reply_info: dict | None = None, has_card: bool = False) -> dict:
         metadata = item.metadata_json or {}
+        # 从 detail(整块商品JSON) 解析鱼小铺特有字段供界面展示；普通账号无此字段时返回空
+        detail_raw = metadata.get("detail")
+        detail_obj: dict = {}
+        if isinstance(detail_raw, str) and detail_raw:
+            try:
+                parsed = json.loads(detail_raw)
+                if isinstance(parsed, dict):
+                    detail_obj = parsed
+            except (ValueError, TypeError):
+                detail_obj = {}
         return {
             "id": item.id,
             "cookie_id": account_id,
@@ -883,9 +1145,18 @@ class ItemService:
             "title": item.title,
             "item_title": item.title,
             "item_description": metadata.get("description"),
-            "item_detail": metadata.get("detail"),
+            "item_detail": detail_raw,
             "item_category": metadata.get("category"),
             "item_price": item.price,
+            # 鱼小铺特有：库存、上架时间、商品状态（普通账号为空，前端显示 -）
+            "item_quantity": detail_obj.get("quantity", ""),
+            "item_shelf_time": detail_obj.get("gmt_shelf", ""),
+            "item_status_desc": detail_obj.get("item_status_desc", ""),
+            # 多规格明细：供前端「规格数」列与规格详情弹窗展示
+            "item_sku_list": detail_obj.get("idle_item_sku_list") or [],
+            "item_sku_count": len(detail_obj.get("idle_item_sku_list") or []),
+            # 是否鱼小铺商品：仅鱼小铺商品可改价
+            "is_seller_item": detail_obj.get("source") == "seller",
             "ai_prompt": item.ai_prompt or "",
             "has_ai_prompt": bool(item.ai_prompt),
             "is_polished": item.is_polished or False,

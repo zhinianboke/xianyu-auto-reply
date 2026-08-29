@@ -45,7 +45,8 @@ _TOKEN_EXPIRED_MARKERS = (
 )
 
 # 触发验证/被挤爆/机器检测等风控标志（命中则应切换账号重试）
-_VALIDATE_MARKERS = (
+# 对外公开：发布账号能力检测需要判断「失败是否属于风控」，直接复用本元组避免两处维护出现漂移
+VALIDATE_MARKERS = (
     "FAIL_SYS_USER_VALIDATE",
     "RGV587",
     "FAIL_SYS_ILLEGAL_ACCESS",
@@ -274,7 +275,7 @@ async def mtop_call(
             }
 
         # 触发验证/被挤爆等风控：切换账号（同时回传 punish 验证链接，供远程过风控使用）
-        if any(marker in ret_msg for marker in _VALIDATE_MARKERS):
+        if any(marker in ret_msg for marker in VALIDATE_MARKERS):
             return {
                 "success": False, "account_invalid": True, "res": res_json,
                 "error": ret_msg or "触发验证/风控", "cookies_str": current_cookies,
@@ -294,4 +295,4 @@ async def mtop_call(
     }
 
 
-__all__ = ["mtop_call", "fetch_proxy_from_api", "extract_punish_url"]
+__all__ = ["mtop_call", "fetch_proxy_from_api", "extract_punish_url", "VALIDATE_MARKERS"]
