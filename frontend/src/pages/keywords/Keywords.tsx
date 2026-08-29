@@ -238,10 +238,7 @@ export function Keywords() {
       return
     }
 
-    if (!replyText.trim()) {
-      addToast({ type: 'warning', message: '请输入回复内容' })
-      return
-    }
+    // 回复内容允许留空：留空表示命中关键词但不回复，用于屏蔽特定消息
 
     try {
       setSaving(true)

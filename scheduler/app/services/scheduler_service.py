@@ -20,6 +20,7 @@ from app.services.scheduler.rate_task import RateTask
 from app.services.scheduler.polish_task import polish_task_service
 from app.services.scheduler.day_switch_task import day_switch_task_service
 from app.services.scheduler.cleanup_browser_data_task import cleanup_browser_data_task_service
+from app.services.scheduler.cleanup_unconfigured_browser_data_task import cleanup_unconfigured_browser_data_task_service
 from app.services.scheduler.fetch_orders_task import (
     fetch_orders_task_service,
     fetch_pending_orders_task_service,
@@ -38,6 +39,7 @@ from app.services.scheduler.listing_monitor_task import listing_monitor_task_ser
 from app.services.scheduler.seller_fill_task import seller_fill_task_service
 from app.services.scheduler.dm_send_task import dm_send_task_service
 from app.services.scheduler.auto_order_task import auto_order_task_service
+from app.services.scheduler.image_cleanup_task import image_cleanup_task_service
 from app.services.scheduled_task_service import (
     ScheduledTaskService,
     TASK_CODE_REDELIVERY,
@@ -45,6 +47,7 @@ from app.services.scheduled_task_service import (
     TASK_CODE_POLISH,
     TASK_CODE_DAY_SWITCH,
     TASK_CODE_CLEANUP_BROWSER_DATA,
+    TASK_CODE_CLEANUP_UNCONFIGURED_BROWSER_DATA,
     TASK_CODE_FETCH_ORDERS,
     TASK_CODE_FETCH_PENDING_ORDERS,
     TASK_CODE_FETCH_REFUND_ORDERS,
@@ -61,6 +64,7 @@ from app.services.scheduled_task_service import (
     TASK_CODE_SELLER_FILL,
     TASK_CODE_DM_SEND,
     TASK_CODE_AUTO_ORDER,
+    TASK_CODE_IMAGE_CLEANUP,
 )
 from common.db.session import async_session_maker
 
@@ -77,6 +81,7 @@ class SchedulerService:
         self._polish_task_handle: Optional[asyncio.Task] = None
         self._day_switch_task_handle: Optional[asyncio.Task] = None
         self._cleanup_browser_data_task_handle: Optional[asyncio.Task] = None
+        self._cleanup_unconfigured_browser_data_task_handle: Optional[asyncio.Task] = None
         self._fetch_orders_task_handle: Optional[asyncio.Task] = None
         self._fetch_pending_orders_task_handle: Optional[asyncio.Task] = None
         self._fetch_refund_orders_task_handle: Optional[asyncio.Task] = None
@@ -93,11 +98,13 @@ class SchedulerService:
         self._seller_fill_task_handle: Optional[asyncio.Task] = None
         self._dm_send_task_handle: Optional[asyncio.Task] = None
         self._auto_order_task_handle: Optional[asyncio.Task] = None
+        self._image_cleanup_task_handle: Optional[asyncio.Task] = None
         self._redelivery_task = RedeliveryTask()
         self._rate_task = RateTask()
         self._polish_task = polish_task_service
         self._day_switch_task = day_switch_task_service
         self._cleanup_browser_data_task = cleanup_browser_data_task_service
+        self._cleanup_unconfigured_browser_data_task = cleanup_unconfigured_browser_data_task_service
         self._fetch_orders_task = fetch_orders_task_service
         self._fetch_pending_orders_task = fetch_pending_orders_task_service
         self._fetch_refund_orders_task = fetch_refund_orders_task_service
@@ -114,6 +121,7 @@ class SchedulerService:
         self._seller_fill_task = seller_fill_task_service
         self._dm_send_task = dm_send_task_service
         self._auto_order_task = auto_order_task_service
+        self._image_cleanup_task = image_cleanup_task_service
     
     @classmethod
     def get_instance(cls) -> "SchedulerService":
@@ -142,10 +150,11 @@ class SchedulerService:
     
     async def reload_all_configs(self) -> None:
         """重新加载所有任务配置"""
-        for task_code in [TASK_CODE_REDELIVERY, TASK_CODE_RATE, TASK_CODE_POLISH, TASK_CODE_DAY_SWITCH, TASK_CODE_CLEANUP_BROWSER_DATA, TASK_CODE_FETCH_ORDERS, TASK_CODE_FETCH_PENDING_ORDERS, TASK_CODE_FETCH_REFUND_ORDERS, TASK_CODE_FETCH_ITEMS, TASK_CODE_LOGIN_RENEW, TASK_CODE_TOKEN_RENEWAL, TASK_CODE_COOKIES_REFRESH, TASK_CODE_API_COOKIE_RENEW, TASK_CODE_CLOSE_NOTICE, TASK_CODE_RED_FLOWER, TASK_CODE_DB_BACKUP]:
+        for task_code in [TASK_CODE_REDELIVERY, TASK_CODE_RATE, TASK_CODE_POLISH, TASK_CODE_DAY_SWITCH, TASK_CODE_CLEANUP_BROWSER_DATA, TASK_CODE_CLEANUP_UNCONFIGURED_BROWSER_DATA, TASK_CODE_FETCH_ORDERS, TASK_CODE_FETCH_PENDING_ORDERS, TASK_CODE_FETCH_REFUND_ORDERS, TASK_CODE_FETCH_ITEMS, TASK_CODE_LOGIN_RENEW, TASK_CODE_TOKEN_RENEWAL, TASK_CODE_COOKIES_REFRESH, TASK_CODE_API_COOKIE_RENEW, TASK_CODE_CLOSE_NOTICE, TASK_CODE_RED_FLOWER, TASK_CODE_DB_BACKUP]:
             await self.reload_task_config(task_code)
         for task_code in [TASK_CODE_DELIVERY_TIMEOUT, TASK_CODE_LISTING_MONITOR, TASK_CODE_SELLER_FILL, TASK_CODE_DM_SEND, TASK_CODE_AUTO_ORDER]:
             await self.reload_task_config(task_code)
+        await self.reload_task_config(TASK_CODE_IMAGE_CLEANUP)
     
     def start(self) -> None:
         """启动定时任务"""
@@ -160,6 +169,7 @@ class SchedulerService:
         self._polish_task_handle = asyncio.create_task(self._run_polish_loop())
         self._day_switch_task_handle = asyncio.create_task(self._run_day_switch_loop())
         self._cleanup_browser_data_task_handle = asyncio.create_task(self._run_cleanup_browser_data_loop())
+        self._cleanup_unconfigured_browser_data_task_handle = asyncio.create_task(self._run_cleanup_unconfigured_browser_data_loop())
         self._fetch_orders_task_handle = asyncio.create_task(self._run_fetch_orders_loop())
         self._fetch_pending_orders_task_handle = asyncio.create_task(self._run_fetch_pending_orders_loop())
         self._fetch_refund_orders_task_handle = asyncio.create_task(self._run_fetch_refund_orders_loop())
@@ -176,6 +186,7 @@ class SchedulerService:
         self._seller_fill_task_handle = asyncio.create_task(self._run_seller_fill_loop())
         self._dm_send_task_handle = asyncio.create_task(self._run_dm_send_loop())
         self._auto_order_task_handle = asyncio.create_task(self._run_auto_order_loop())
+        self._image_cleanup_task_handle = asyncio.create_task(self._run_image_cleanup_loop())
         logger.info("[定时任务调度] 已启动")
     
     def stop(self) -> None:
@@ -200,6 +211,9 @@ class SchedulerService:
         if self._cleanup_browser_data_task_handle:
             self._cleanup_browser_data_task_handle.cancel()
             self._cleanup_browser_data_task_handle = None
+        if self._cleanup_unconfigured_browser_data_task_handle:
+            self._cleanup_unconfigured_browser_data_task_handle.cancel()
+            self._cleanup_unconfigured_browser_data_task_handle = None
         if self._fetch_orders_task_handle:
             self._fetch_orders_task_handle.cancel()
             self._fetch_orders_task_handle = None
@@ -248,6 +262,9 @@ class SchedulerService:
         if self._auto_order_task_handle:
             self._auto_order_task_handle.cancel()
             self._auto_order_task_handle = None
+        if self._image_cleanup_task_handle:
+            self._image_cleanup_task_handle.cancel()
+            self._image_cleanup_task_handle = None
         logger.info("[定时任务调度] 已停止")
     
     def get_task_status(self) -> dict:
@@ -257,6 +274,7 @@ class SchedulerService:
         polish_config = ScheduledTaskService.get_cached_config(TASK_CODE_POLISH)
         day_switch_config = ScheduledTaskService.get_cached_config(TASK_CODE_DAY_SWITCH)
         cleanup_browser_data_config = ScheduledTaskService.get_cached_config(TASK_CODE_CLEANUP_BROWSER_DATA)
+        cleanup_unconfigured_browser_data_config = ScheduledTaskService.get_cached_config(TASK_CODE_CLEANUP_UNCONFIGURED_BROWSER_DATA)
         fetch_orders_config = ScheduledTaskService.get_cached_config(TASK_CODE_FETCH_ORDERS)
         fetch_pending_orders_config = ScheduledTaskService.get_cached_config(TASK_CODE_FETCH_PENDING_ORDERS)
         fetch_refund_orders_config = ScheduledTaskService.get_cached_config(TASK_CODE_FETCH_REFUND_ORDERS)
@@ -273,6 +291,7 @@ class SchedulerService:
         seller_fill_config = ScheduledTaskService.get_cached_config(TASK_CODE_SELLER_FILL)
         dm_send_config = ScheduledTaskService.get_cached_config(TASK_CODE_DM_SEND)
         auto_order_config = ScheduledTaskService.get_cached_config(TASK_CODE_AUTO_ORDER)
+        image_cleanup_config = ScheduledTaskService.get_cached_config(TASK_CODE_IMAGE_CLEANUP)
         
         return {
             "running": self._running,
@@ -308,8 +327,15 @@ class SchedulerService:
                 TASK_CODE_CLEANUP_BROWSER_DATA: {
                     "config": cleanup_browser_data_config or {"interval_seconds": 600, "enabled": True},
                     "task_running": (
-                        self._cleanup_browser_data_task_handle is not None 
+                        self._cleanup_browser_data_task_handle is not None
                         and not self._cleanup_browser_data_task_handle.done()
+                    ),
+                },
+                TASK_CODE_CLEANUP_UNCONFIGURED_BROWSER_DATA: {
+                    "config": cleanup_unconfigured_browser_data_config or {"interval_seconds": 10800, "enabled": False},
+                    "task_running": (
+                        self._cleanup_unconfigured_browser_data_task_handle is not None
+                        and not self._cleanup_unconfigured_browser_data_task_handle.done()
                     ),
                 },
                 TASK_CODE_FETCH_ORDERS: {
@@ -424,6 +450,13 @@ class SchedulerService:
                         and not self._auto_order_task_handle.done()
                     ),
                 },
+                TASK_CODE_IMAGE_CLEANUP: {
+                    "config": image_cleanup_config or {"interval_seconds": 1200, "enabled": True},
+                    "task_running": (
+                        self._image_cleanup_task_handle is not None
+                        and not self._image_cleanup_task_handle.done()
+                    ),
+                },
             }
         }
     
@@ -449,6 +482,9 @@ class SchedulerService:
         elif task_code == TASK_CODE_CLEANUP_BROWSER_DATA:
             logger.info("[定时任务调度] 手动触发清理被禁用账号浏览器数据任务")
             await self._cleanup_browser_data_task.execute()
+        elif task_code == TASK_CODE_CLEANUP_UNCONFIGURED_BROWSER_DATA:
+            logger.info("[定时任务调度] 手动触发清理未配置账号密码的浏览器数据任务")
+            await self._cleanup_unconfigured_browser_data_task.execute()
         elif task_code == TASK_CODE_FETCH_ORDERS:
             logger.info("[定时任务调度] 手动触发获取闲鱼订单任务")
             await self._fetch_orders_task.execute()
@@ -497,6 +533,9 @@ class SchedulerService:
         elif task_code == TASK_CODE_AUTO_ORDER:
             logger.info("[定时任务调度] 手动触发采集商品自动下单任务")
             await self._auto_order_task.execute()
+        elif task_code == TASK_CODE_IMAGE_CLEANUP:
+            logger.info("[定时任务调度] 手动触发图片清理任务")
+            await self._image_cleanup_task.execute()
         else:
             logger.warning(f"[定时任务调度] 未知的任务代码: {task_code}")
     
@@ -664,6 +703,39 @@ class SchedulerService:
                 break
         
         logger.info("[定时任务调度] 清理被禁用账号浏览器数据任务循环结束")
+
+    async def _run_cleanup_unconfigured_browser_data_loop(self) -> None:
+        """清理未配置账号密码的浏览器数据任务执行循环"""
+        logger.info("[定时任务调度] 清理未配置账号密码的浏览器数据任务循环开始")
+
+        # 初始加载配置
+        await self.reload_task_config(TASK_CODE_CLEANUP_UNCONFIGURED_BROWSER_DATA)
+
+        while self._running:
+            config = ScheduledTaskService.get_cached_config(TASK_CODE_CLEANUP_UNCONFIGURED_BROWSER_DATA)
+            if not config:
+                config = {"interval_seconds": 10800, "enabled": False}
+
+            interval = config.get("interval_seconds", 10800)
+            enabled = config.get("enabled", False)
+
+            if enabled:
+                try:
+                    await self._cleanup_unconfigured_browser_data_task.execute()
+                except asyncio.CancelledError:
+                    logger.info("[定时任务调度] 清理未配置账号密码的浏览器数据任务被取消")
+                    break
+                except Exception as e:
+                    logger.error(f"[定时任务调度] 清理未配置账号密码的浏览器数据任务执行异常: {e}")
+
+            # 等待下一次执行
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                logger.info("[定时任务调度] 清理未配置账号密码的浏览器数据任务等待被取消")
+                break
+
+        logger.info("[定时任务调度] 清理未配置账号密码的浏览器数据任务循环结束")
 
     async def _run_fetch_orders_loop(self) -> None:
         """获取闲鱼订单任务执行循环"""
@@ -1189,6 +1261,39 @@ class SchedulerService:
                 break
 
         logger.info("[定时任务调度] 采集商品自动下单任务循环结束")
+
+    async def _run_image_cleanup_loop(self) -> None:
+        """图片清理任务执行循环"""
+        logger.info("[定时任务调度] 图片清理任务循环开始")
+
+        # 初始加载配置
+        await self.reload_task_config(TASK_CODE_IMAGE_CLEANUP)
+
+        while self._running:
+            config = ScheduledTaskService.get_cached_config(TASK_CODE_IMAGE_CLEANUP)
+            if not config:
+                config = {"interval_seconds": 1200, "enabled": True}
+
+            interval = config.get("interval_seconds", 1200)
+            enabled = config.get("enabled", True)
+
+            if enabled:
+                try:
+                    await self._image_cleanup_task.execute()
+                except asyncio.CancelledError:
+                    logger.info("[定时任务调度] 图片清理任务被取消")
+                    break
+                except Exception as e:
+                    logger.error(f"[定时任务调度] 图片清理任务执行异常: {e}")
+
+            # 等待下一次执行
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                logger.info("[定时任务调度] 图片清理任务等待被取消")
+                break
+
+        logger.info("[定时任务调度] 图片清理任务循环结束")
 
 
 # 全局实例获取函数
