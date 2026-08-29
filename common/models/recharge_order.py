@@ -23,6 +23,13 @@ class RechargeOrder(Base):
     order_no: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True, comment='充值订单号')
     user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment='用户ID')
     amount: Mapped[str] = mapped_column(String(32), nullable=False, comment='充值金额')
+    # 订单类型：recharge-余额充值，ad-广告申请付款。
+    # 该表被充值和广告付款共用，且共用同一个支付宝异步回调，必须靠此字段区分处理逻辑，
+    # 避免广告付款被当成充值给用户加余额（历史 bug）。
+    order_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default='recharge', server_default='recharge',
+        comment='订单类型：recharge-余额充值，ad-广告申请付款'
+    )
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default='pending', server_default='pending',
         comment='订单状态：pending-待支付，paid-已支付，expired-已过期，failed-失败'

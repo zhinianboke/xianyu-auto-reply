@@ -8,6 +8,7 @@ WebSocket连接管理模块
 4. 重连逻辑
 """
 import asyncio
+import inspect
 import json
 import random
 import time
@@ -124,6 +125,65 @@ class ConnectionManager:
         
         return False
     
+    @staticmethod
+    def is_ws_closed(ws) -> bool:
+        """
+        判断 WebSocket 连接是否已关闭（兼容 websockets 旧版与新版实现）
+
+        websockets 14.0 起 connect() 默认返回新版 asyncio 实现的 ClientConnection，
+        它没有旧版 WebSocketClientProtocol 的 .closed / .open 属性，改为暴露
+        .state（State 枚举：CONNECTING / OPEN / CLOSING / CLOSED）。
+        直接访问 ws.closed 会抛 AttributeError，被心跳循环当成发送失败，
+        导致心跳连续失败 3 次后停止、连接被误判为断开。
+
+        Args:
+            ws: WebSocket 连接对象（旧版 protocol 或新版 ClientConnection）
+        Returns:
+            True 表示连接已关闭/正在关闭，False 表示仍可用
+        """
+        # 旧版（websockets <= 13）：直接使用 .closed 属性，保持原有语义
+        closed = getattr(ws, 'closed', None)
+        if isinstance(closed, bool):
+            return closed
+
+        # 新版（websockets >= 14）：通过 .state 判断，CLOSING/CLOSED 均视为不可用
+        state = getattr(ws, 'state', None)
+        if state is not None:
+            return getattr(state, 'name', '') in ('CLOSING', 'CLOSED')
+
+        # 两者都取不到时不阻断发送，交由实际 send 抛错处理
+        return False
+
+    def _resolve_header_kwarg_name(self, websockets_version: str) -> str:
+        """
+        根据 websockets 库版本选择连接时传递请求头的关键字参数名
+
+        websockets 14.0 起 extra_headers 更名为 additional_headers。优先内省
+        connect() 的函数签名判断（最可靠，不受版本号格式影响），无法内省时再
+        回退到主版本号判断。
+
+        Args:
+            websockets_version: 已获取的 websockets 版本号字符串
+        Returns:
+            'additional_headers'（websockets >= 14）或 'extra_headers'（旧版）
+        """
+        # 优先内省 connect 签名：新版显式声明 additional_headers 参数，旧版为 extra_headers
+        try:
+            params = inspect.signature(websockets.connect).parameters
+            if 'additional_headers' in params:
+                return 'additional_headers'
+            if 'extra_headers' in params:
+                return 'extra_headers'
+        except (ValueError, TypeError):
+            pass
+
+        # 无法内省时按主版本号判断（14.0 起使用 additional_headers）
+        try:
+            major = int(str(websockets_version).split('.')[0])
+        except (ValueError, TypeError, IndexError):
+            major = 0
+        return 'additional_headers' if major >= 14 else 'extra_headers'
+
     async def create_websocket_connection(self, headers: dict):
         """
         创建WebSocket连接,兼容不同版本的websockets库,支持代理配置
@@ -211,53 +271,25 @@ class ConnectionManager:
                 logger.warning(f"【{self.cookie_id}】将尝试不使用代理进行WebSocket连接")
                 proxy_sock = None
 
-        try:
-            # 尝试使用extra_headers参数
-            connect_kwargs = {
-                'extra_headers': headers,
-                **timeout_kwargs,
-            }
-            if proxy_sock:
-                connect_kwargs['sock'] = proxy_sock
-                
-            return websockets.connect(
-                self.xianyu.base_url,
-                **connect_kwargs
-            )
-        except Exception as e:
-            # 捕获所有异常类型
-            error_msg = str(e)
-            logger.warning(f"【{self.cookie_id}】extra_headers参数失败: {error_msg}")
+        # 选择正确的请求头参数名（关键修复）
+        # ──────────────────────────────────────────────────────────────
+        # websockets 14.0 起，connect() 的 extra_headers 参数更名为 additional_headers。
+        # 更关键的是：新版 connect() 是惰性的，非法关键字参数不会在 connect() 调用时报错，
+        # 而是被透传给 loop.create_connection()，直到外层 await 连接时才抛出：
+        #   "BaseEventLoop.create_connection() got an unexpected keyword argument 'extra_headers'"
+        # 因此原先"先试 extra_headers、报错再回退 additional_headers"的 try/except 完全无效
+        # （connect() 不抛错，异常在外层 await 处才出现），必须在调用前就选对参数名。
+        header_kwarg = self._resolve_header_kwarg_name(websockets_version)
+        logger.info(f"【{self.cookie_id}】WebSocket 请求头参数使用: {header_kwarg}")
 
-            if "extra_headers" in error_msg or "unexpected keyword argument" in error_msg:
-                logger.warning(f"【{self.cookie_id}】websockets库不支持extra_headers参数,尝试additional_headers")
-                # 使用additional_headers参数(较新版本)
-                try:
-                    connect_kwargs = {
-                        'additional_headers': headers,
-                        **timeout_kwargs,
-                    }
-                    if proxy_sock:
-                        connect_kwargs['sock'] = proxy_sock
-                        
-                    return websockets.connect(
-                        self.xianyu.base_url,
-                        **connect_kwargs
-                    )
-                except Exception as e2:
-                    error_msg2 = str(e2)
-                    logger.warning(f"【{self.cookie_id}】additional_headers参数失败: {error_msg2}")
+        connect_kwargs = {
+            header_kwarg: headers,
+            **timeout_kwargs,
+        }
+        if proxy_sock:
+            connect_kwargs['sock'] = proxy_sock
 
-                    if "additional_headers" in error_msg2 or "unexpected keyword argument" in error_msg2:
-                        # 如果都不支持,则不传递headers（仍然带上 timeout_kwargs）
-                        logger.warning(f"【{self.cookie_id}】websockets库不支持headers参数,使用基础连接模式")
-                        if proxy_sock:
-                            return websockets.connect(self.xianyu.base_url, sock=proxy_sock, **timeout_kwargs)
-                        return websockets.connect(self.xianyu.base_url, **timeout_kwargs)
-                    else:
-                        raise e2
-            else:
-                raise e
+        return websockets.connect(self.xianyu.base_url, **connect_kwargs)
     
     async def send_heartbeat(self, ws):
         """
@@ -266,7 +298,7 @@ class ConnectionManager:
         Args:
             ws: WebSocket连接
         """
-        if ws.closed:
+        if self.is_ws_closed(ws):
             raise ConnectionError("WebSocket连接已关闭,无法发送心跳")
         
         from common.utils.xianyu_utils import generate_mid
@@ -298,7 +330,7 @@ class ConnectionManager:
         try:
             while True:
                 try:
-                    if ws.closed:
+                    if self.is_ws_closed(ws):
                         logger.warning(f"【{self.cookie_id}】WebSocket连接已关闭,停止心跳循环")
                         break
 

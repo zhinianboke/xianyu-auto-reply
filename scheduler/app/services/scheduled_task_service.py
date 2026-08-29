@@ -24,6 +24,7 @@ TASK_CODE_RATE = "rate"
 TASK_CODE_POLISH = "polish"
 TASK_CODE_DAY_SWITCH = "day_switch"
 TASK_CODE_CLEANUP_BROWSER_DATA = "cleanup_browser_data"
+TASK_CODE_CLEANUP_UNCONFIGURED_BROWSER_DATA = "cleanup_unconfigured_browser_data"
 TASK_CODE_FETCH_ORDERS = "fetch_orders"
 TASK_CODE_FETCH_PENDING_ORDERS = "fetch_pending_orders"
 TASK_CODE_FETCH_REFUND_ORDERS = "fetch_refund_orders"
@@ -40,6 +41,7 @@ TASK_CODE_LISTING_MONITOR = "listing_monitor"
 TASK_CODE_SELLER_FILL = "seller_fill"
 TASK_CODE_DM_SEND = "dm_send"
 TASK_CODE_AUTO_ORDER = "auto_order"
+TASK_CODE_IMAGE_CLEANUP = "image_cleanup"
 
 # 默认配置（数据库无配置时使用）
 DEFAULT_CONFIGS = {
@@ -48,6 +50,7 @@ DEFAULT_CONFIGS = {
     TASK_CODE_POLISH: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_DAY_SWITCH: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_CLEANUP_BROWSER_DATA: {"interval_seconds": 600, "enabled": False},
+    TASK_CODE_CLEANUP_UNCONFIGURED_BROWSER_DATA: {"interval_seconds": 10800, "enabled": False},
     TASK_CODE_FETCH_ORDERS: {"interval_seconds": 600, "enabled": True},
     TASK_CODE_FETCH_PENDING_ORDERS: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_FETCH_REFUND_ORDERS: {"interval_seconds": 120, "enabled": True},
@@ -64,6 +67,7 @@ DEFAULT_CONFIGS = {
     TASK_CODE_SELLER_FILL: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_DM_SEND: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_AUTO_ORDER: {"interval_seconds": 60, "enabled": True},
+    TASK_CODE_IMAGE_CLEANUP: {"interval_seconds": 1200, "enabled": True},
 }
 
 

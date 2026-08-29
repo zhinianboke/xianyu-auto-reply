@@ -72,7 +72,8 @@ class XianyuSearchClient:
 
         Returns:
             {success: bool, items: list(resultList原始项), has_next_page: bool,
-             account_invalid: bool, error: str}
+             account_invalid: bool, error: str, punish_url: str}
+            punish_url 仅在触发验证类风控时有值，调用方可据此走远程过风控后重试。
         """
         search_filter = self._build_search_filter(price_min, price_max, publish_days)
         data = {
@@ -114,12 +115,14 @@ class XianyuSearchClient:
             result_info = data_node.get("resultInfo", {}) or {}
             has_next = bool(result_info.get("hasNextPage"))
             return {"success": True, "items": result_list, "has_next_page": has_next,
-                    "account_invalid": False, "error": ""}
+                    "account_invalid": False, "error": "", "punish_url": ""}
 
         return {
             "success": False, "items": [], "has_next_page": False,
             "account_invalid": bool(result.get("account_invalid")),
             "error": result.get("error") or "搜索失败",
+            # 风控验证链接（punish），供调用方走远程过风控服务求解后重试
+            "punish_url": result.get("punish_url") or "",
         }
 
 

@@ -510,12 +510,15 @@ async def create_ad_payment(
         error_msg = pay_result.get('error', '生成支付二维码失败') if pay_result else '生成支付二维码失败'
         return ApiResponse(success=False, message=error_msg)
 
-    # 保存充值订单（复用 recharge_orders 表）
+    # 保存充值订单（复用 recharge_orders 表）；
+    # 必须标记 order_type='ad'，否则支付宝异步回调会把它当成余额充值，
+    # 错误地给用户加余额并写"充值"流水（见 recharge_service.handle_alipay_notify）。
     from common.models.recharge_order import RechargeOrder
     order = RechargeOrder(
         order_no=order_no,
         user_id=current_user.id,
         amount=amount,
+        order_type='ad',
         status='pending',
         qr_code=pay_result['qr_code'],
     )
@@ -543,12 +546,14 @@ async def ad_payment_notify(
     """前端轮询确认广告付款状态，如果支付宝已付款则完成广告付款流程"""
     from common.models.recharge_order import RechargeOrder
 
-    # 查询广告
+    # 查询广告（加行锁）：本接口由前端轮询触发，可能并发进入，
+    # 用 SELECT ... FOR UPDATE 锁定广告行，配合下方 status 判断保证同一广告
+    # 只结算一次，避免并发导致管理员收入被重复入账。
     result = await db.execute(
         select(Advertisement).where(
             Advertisement.id == ad_id,
             Advertisement.user_id == current_user.id
-        )
+        ).with_for_update()
     )
     ad = result.scalar_one_or_none()
     if not ad:
@@ -586,12 +591,12 @@ async def ad_payment_notify(
 
     # 3. 管理员收入流水
     if admin_user:
-        # 获取管理员余额
+        # 获取管理员余额（加行锁，防止并发广告结算/充值同时改动管理员余额导致丢更新）
         admin_balance_result = await db.execute(
             select(UserSetting).where(
                 UserSetting.user_id == admin_user.id,
                 UserSetting.key == BALANCE_KEY,
-            )
+            ).with_for_update()
         )
         admin_balance_setting = admin_balance_result.scalar_one_or_none()
         admin_balance_before = Decimal(admin_balance_setting.value or '0') if admin_balance_setting else Decimal('0')
@@ -618,26 +623,10 @@ async def ad_payment_notify(
         )
         db.add(admin_flow)
 
-    # 4. 广告申请用户支出流水
-    user_balance_result = await db.execute(
-        select(UserSetting).where(
-            UserSetting.user_id == current_user.id,
-            UserSetting.key == BALANCE_KEY,
-        )
-    )
-    user_balance_setting = user_balance_result.scalar_one_or_none()
-    user_balance_before = Decimal(user_balance_setting.value or '0') if user_balance_setting else Decimal('0')
-    user_balance_after = user_balance_before  # 支付宝直接付款，不扣余额
-
-    user_flow = FundFlow(
-        user_id=current_user.id,
-        type='expense',
-        amount=str(amount),
-        balance_before=str(user_balance_before),
-        balance_after=str(user_balance_after),
-        description=f'广告申请（广告ID:{ad.id} 标题:{ad.title}）',
-    )
-    db.add(user_flow)
+    # 注意：广告为支付宝外部付款，用户在系统内的余额并未发生任何变动，
+    # 因此不给用户写资金流水。资金流水是余额账本（收入-支出=余额），写入一笔
+    # "不扣款的支出"会破坏该不变量，并触发提现风控的余额一致性误报。
+    # 用户的广告消费记录以广告表和已支付订单（xy_recharge_orders）为准。
 
     await db.commit()
     logger.info(f"广告付款完成: ad_id={ad.id}, user_id={current_user.id}, amount={amount}")
