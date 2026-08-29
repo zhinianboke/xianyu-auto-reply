@@ -87,6 +87,38 @@ async def detect_publish_account_capability(
     return await service.detect(account_id=account_id, cookie=cookie, owner_id=owner_id)
 
 
+def ensure_publish_capability_reliable(capability: dict) -> dict:
+    """发布链路加严：把不可信的「个人卖家」判定转成明确失败。
+
+    鱼小铺卖家后台的发布初始化接口失败时（闲鱼限流、系统异常、风控、网络超时，
+    或返回了无法识别的配置），检测会回落到个人版发布页判定，而个人版对鱼小铺账号
+    可能返回个人卖家的服务费文案，从而把鱼小铺账号误判成普通卖家。发布一旦按个人版
+    接口落地，多规格、独立库存等能力会丢失，且商品已经上架无法回滚，因此发布链路
+    （单品发布、批量发布、公开接口发布）宁可报错不发布。
+    编辑与商品同步不调用本函数：它们只在判定为鱼小铺时才继续，误判只会拒绝操作，
+    不会把商品按个人版写到平台。
+
+    Args:
+        capability: detect_publish_account_capability 的返回。
+    Returns:
+        dict: 判定可信时原样返回；不可信时返回同结构的 success=False 结果。
+    """
+    if not capability.get("success") or capability.get("is_fish_shop"):
+        return capability
+    if capability.get("detection_reliable", True):
+        return capability
+    # 带上具体原因（限流码/网络异常/无法识别的配置），便于用户与运维区分成因
+    reason = str(capability.get("detection_unreliable_reason") or "鱼小铺后台发布配置暂时取不到")
+    return {
+        **capability,
+        "success": False,
+        "message": (
+            f"账号发布能力检测不可信：{reason}，无法确认账号是否开通鱼小铺。"
+            "为避免鱼小铺账号被按个人卖家发布，本次未发布，请稍后重试"
+        ),
+    }
+
+
 async def publish_personal_single_item(
     item_data: dict,
     cookie: str,

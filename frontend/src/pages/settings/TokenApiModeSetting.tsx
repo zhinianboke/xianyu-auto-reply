@@ -207,7 +207,7 @@ export function TokenApiModeSetting({
             >
               https://api.xianyusite.shop
             </a>{' '}
-            获取
+            获取，使用接口列表中的“闲鱼获取Token”接口
           </p>
         </div>
       )}

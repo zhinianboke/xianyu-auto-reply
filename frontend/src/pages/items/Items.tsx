@@ -1,9 +1,10 @@
 ﻿import { useEffect, useState, useRef } from 'react'
-import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink } from 'lucide-react'
-import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
+import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink, Tag } from 'lucide-react'
+import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, updateItemPrice, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
 import { getAccountDetails } from '@/api/accounts'
 import { batchClearItemRelations } from '@/api/cards'
 import { ItemCardRelationModal } from './ItemCardRelationModal'
+import SellerItemEditModal from './SellerItemEditModal'
 import { useUIStore } from '@/store/uiStore'
 import { PageLoading } from '@/components/common/Loading'
 import { useAuthStore } from '@/store/authStore'
@@ -47,9 +48,26 @@ export function Items() {
   const [editPrice, setEditPrice] = useState('')
   const [editSaving, setEditSaving] = useState(false)
 
+  // 鱼小铺商品编辑弹窗状态（界面同单品发布，提交后同步到闲鱼平台）
+  const [sellerEditingItem, setSellerEditingItem] = useState<Item | null>(null)
+
   // 卡券关联选择弹窗
   const [relationItem, setRelationItem] = useState<Item | null>(null)
-  
+
+  // 规格明细弹窗状态（鱼小铺多规格商品）
+  const [skuDetailItem, setSkuDetailItem] = useState<Item | null>(null)
+
+  // 改价弹窗状态（仅鱼小铺商品）
+  const [priceModalItem, setPriceModalItem] = useState<Item | null>(null)
+  const [priceSaving, setPriceSaving] = useState(false)
+  const [priceSingle, setPriceSingle] = useState<{ price: string; quantity: string }>({
+    price: '',
+    quantity: '',
+  })
+  const [priceSkus, setPriceSkus] = useState<
+    Array<{ sku_id: string; label: string; price: string; quantity: string }>
+  >([])
+
   // 图片预览弹窗状态
   const [isImagePreviewOpen, setIsImagePreviewOpen] = useState(false)
   const [previewImageUrl] = useState('')
@@ -522,6 +540,90 @@ export function Items() {
       loadItems()
     } catch {
       addToast({ type: 'error', message: '操作失败' })
+    }
+  }
+
+  // 是否多规格改价（存在规格明细即按多规格处理）
+  const isMultiSpecPrice = (item: Item): boolean => (item.item_sku_list?.length ?? 0) > 0
+
+  // 打开改价弹窗（仅鱼小铺商品），预填当前价格与库存
+  const handleOpenPriceModal = (item: Item) => {
+    if (isMultiSpecPrice(item)) {
+      setPriceSkus(
+        (item.item_sku_list || []).map((sku) => ({
+          sku_id: sku.sku_id,
+          label: (sku.specs || []).map((s) => `${s.name}：${s.value}`).join('，') || sku.sku_id,
+          price: sku.price ? String(sku.price) : '',
+          quantity: sku.quantity !== undefined && sku.quantity !== null ? String(sku.quantity) : '',
+        })),
+      )
+      setPriceSingle({ price: '', quantity: '' })
+    } else {
+      const priceNum = String(item.item_price || item.price || '').replace(/[^\d.]/g, '')
+      setPriceSingle({
+        price: priceNum,
+        quantity:
+          item.item_quantity !== undefined && item.item_quantity !== null
+            ? String(item.item_quantity)
+            : '',
+      })
+      setPriceSkus([])
+    }
+    setPriceModalItem(item)
+  }
+
+  // 提交改价
+  const handleSubmitPrice = async () => {
+    if (!priceModalItem || priceSaving) return
+
+    const multi = isMultiSpecPrice(priceModalItem)
+    let payload
+    if (multi) {
+      for (const sku of priceSkus) {
+        const price = Number(sku.price)
+        const quantity = Number(sku.quantity)
+        if (!sku.price || Number.isNaN(price) || price <= 0) {
+          addToast({ type: 'error', message: `规格「${sku.label}」价格需大于0` })
+          return
+        }
+        if (sku.quantity === '' || Number.isNaN(quantity) || quantity < 0) {
+          addToast({ type: 'error', message: `规格「${sku.label}」库存不能为负数` })
+          return
+        }
+      }
+      payload = {
+        skus: priceSkus.map((sku) => ({
+          sku_id: sku.sku_id,
+          price: Number(sku.price),
+          quantity: Number(sku.quantity),
+        })),
+      }
+    } else {
+      const price = Number(priceSingle.price)
+      const quantity = Number(priceSingle.quantity)
+      if (!priceSingle.price || Number.isNaN(price) || price <= 0) {
+        addToast({ type: 'error', message: '价格需大于0' })
+        return
+      }
+      if (priceSingle.quantity === '' || Number.isNaN(quantity) || quantity < 0) {
+        addToast({ type: 'error', message: '库存不能为负数' })
+        return
+      }
+      payload = { price, quantity }
+    }
+
+    setPriceSaving(true)
+    try {
+      const result = await updateItemPrice(priceModalItem.cookie_id, priceModalItem.item_id, payload)
+      if (!result.success) {
+        addToast({ type: 'error', message: result.message || '改价失败' })
+        return
+      }
+      addToast({ type: 'success', message: result.message || '改价成功' })
+      setPriceModalItem(null)
+      loadItems()
+    } finally {
+      setPriceSaving(false)
     }
   }
 
@@ -1339,7 +1441,11 @@ export function Items() {
                   <th className="min-w-[160px]">商品ID</th>
                   <th className="min-w-[260px]">商品标题</th>
                   <th className="min-w-[80px]">价格</th>
+                  <th className="min-w-[80px] text-center">库存</th>
+                  <th className="min-w-[100px] text-center">状态</th>
+                  <th className="min-w-[170px]">上架时间</th>
                   <th className="min-w-[100px] text-center">是否擦亮</th>
+                  <th className="min-w-[120px] text-center">规格数</th>
                   <th className="min-w-[100px] text-center">多规格</th>
                   <th className="min-w-[120px] text-center">多数量发货</th>
                   <th className="min-w-[110px] text-center">关联卡券</th>
@@ -1353,7 +1459,7 @@ export function Items() {
             <tbody>
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={14}>
+                  <td colSpan={18}>
                     <div className="empty-state py-8">
                       <Package className="empty-state-icon" />
                       <p className="text-gray-500">暂无商品数据</p>
@@ -1399,17 +1505,20 @@ export function Items() {
                       >
                         {item.item_title || item.title || '-'}
                       </div>
-                      {(item.item_detail || item.desc) && (
-                        <div
-                          className="text-xs text-gray-400 line-clamp-1 mt-0.5 cursor-help"
-                          title={item.item_detail || item.desc}
-                        >
-                          {item.item_detail || item.desc}
-                        </div>
-                      )}
                     </td>
                     <td className="text-amber-600 font-medium">
                       {item.item_price || (item.price ? `¥${item.price}` : '-')}
+                    </td>
+                    <td className="text-center text-gray-600 dark:text-gray-300">
+                      {item.item_quantity !== undefined && item.item_quantity !== null && `${item.item_quantity}` !== ''
+                        ? item.item_quantity
+                        : '-'}
+                    </td>
+                    <td className="text-center text-gray-600 dark:text-gray-300">
+                      {item.item_status_desc || '-'}
+                    </td>
+                    <td className="text-gray-500 text-xs">
+                      {item.item_shelf_time || '-'}
                     </td>
                     <td>
                       <span
@@ -1421,6 +1530,19 @@ export function Items() {
                       >
                         {item.is_polished ? '已擦亮' : '未擦亮'}
                       </span>
+                    </td>
+                    <td className="text-center">
+                      {item.item_sku_count && item.item_sku_count > 0 ? (
+                        <button
+                          onClick={() => setSkuDetailItem(item)}
+                          className="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400 transition-colors whitespace-nowrap"
+                          title="点击查看规格明细"
+                        >
+                          {item.item_sku_count} 个规格
+                        </button>
+                      ) : (
+                        <span className="text-gray-400 text-xs">-</span>
+                      )}
                     </td>
                     <td>
                       <button
@@ -1501,12 +1623,28 @@ export function Items() {
                     <td className="sticky right-0 bg-white dark:bg-slate-900">
                       <div className="flex gap-1">
                         <button
-                          onClick={() => handleEdit(item)}
+                          onClick={() => {
+                            if (!item.is_seller_item) return handleEdit(item)
+                            // 账号被删后残留的商品没有 cookie_id，无法定位闲鱼账号，直接提示而不是发起必然失败的请求
+                            if (!item.cookie_id) {
+                              return addToast({ type: 'warning', message: '该商品缺少所属账号，无法同步编辑到闲鱼，请先重新同步商品' })
+                            }
+                            setSellerEditingItem(item)
+                          }}
                           className="table-action-btn hover:!bg-blue-50"
-                          title="编辑"
+                          title={item.is_seller_item ? '编辑（同步到闲鱼）' : '编辑'}
                         >
                           <Edit2 className="w-4 h-4 text-blue-500" />
                         </button>
+                        {item.is_seller_item && (
+                          <button
+                            onClick={() => handleOpenPriceModal(item)}
+                            className="table-action-btn hover:!bg-amber-50"
+                            title="改价"
+                          >
+                            <Tag className="w-4 h-4 text-amber-500" />
+                          </button>
+                        )}
                         <button
                           onClick={() => setDeleteItemConfirm({ open: true, item })}
                           className="table-action-btn hover:!bg-red-50"
@@ -1578,9 +1716,214 @@ export function Items() {
         />
       )}
 
-      {/* 编辑弹窗 */}
-      {editingItem && (
+      {/* 规格明细弹窗（鱼小铺多规格商品） */}
+      {skuDetailItem && (
         <div className="modal-overlay">
+          <div className="modal-content max-w-2xl">
+            <div className="modal-header">
+              <h2 className="modal-title">规格明细</h2>
+              <button onClick={() => setSkuDetailItem(null)} className="modal-close">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="modal-body space-y-4">
+              {/* 商品信息卡片：标题 + 商品ID + 规格数 */}
+              <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 p-4">
+                <div className="font-medium text-slate-900 dark:text-slate-100 line-clamp-2 break-all">
+                  {skuDetailItem.item_title || skuDetailItem.title || skuDetailItem.item_id}
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+                  <span>商品ID：{skuDetailItem.item_id}</span>
+                  <span>共 {(skuDetailItem.item_sku_list || []).length} 个规格</span>
+                </div>
+              </div>
+
+              <div className="space-y-3 max-h-[52vh] overflow-y-auto pr-1">
+                {(skuDetailItem.item_sku_list || []).map((sku, idx) => (
+                  <div
+                    key={sku.sku_id || idx}
+                    className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 dark:border-slate-700 p-3"
+                  >
+                    <div
+                      className="min-w-0 flex-1 text-sm font-medium text-slate-700 dark:text-slate-200 break-all"
+                      title={(sku.specs || []).map((s) => `${s.name}：${s.value}`).join('，')}
+                    >
+                      {(sku.specs || []).length > 0
+                        ? (sku.specs || []).map((s) => `${s.name}：${s.value}`).join('，')
+                        : '默认规格'}
+                    </div>
+                    <div className="flex flex-shrink-0 items-center gap-5 text-right">
+                      <div>
+                        <div className="text-[11px] text-slate-400">价格</div>
+                        <div className="text-amber-600 dark:text-amber-400 font-semibold whitespace-nowrap">
+                          {sku.price ? `¥${sku.price}` : '-'}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[11px] text-slate-400">库存</div>
+                        <div className="font-semibold text-slate-700 dark:text-slate-200 whitespace-nowrap">
+                          {sku.quantity !== undefined && `${sku.quantity}` !== '' ? sku.quantity : '-'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button onClick={() => setSkuDetailItem(null)} className="btn-ios-secondary">
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 改价弹窗（仅鱼小铺商品，价格与库存一并提交） */}
+      {priceModalItem && (
+        <div className="modal-overlay">
+          <div className="modal-content max-w-4xl">
+            <div className="modal-header">
+              <h2 className="modal-title">修改价格/库存</h2>
+              <button onClick={() => setPriceModalItem(null)} className="modal-close">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="modal-body space-y-4">
+              {/* 商品信息卡片：标题 + 商品ID + 当前价/库存参考 */}
+              <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 p-4">
+                <div className="font-medium text-slate-900 dark:text-slate-100 line-clamp-2 break-all">
+                  {priceModalItem.item_title || priceModalItem.title || priceModalItem.item_id}
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+                  <span>商品ID：{priceModalItem.item_id}</span>
+                  {(priceModalItem.item_price || priceModalItem.price) && (
+                    <span>
+                      当前价：
+                      <span className="text-amber-600 dark:text-amber-400 font-medium">
+                        {priceModalItem.item_price || `¥${priceModalItem.price}`}
+                      </span>
+                    </span>
+                  )}
+                  {priceModalItem.item_quantity !== undefined &&
+                    priceModalItem.item_quantity !== null &&
+                    `${priceModalItem.item_quantity}` !== '' && (
+                      <span>当前库存：{priceModalItem.item_quantity}</span>
+                    )}
+                </div>
+              </div>
+
+              {isMultiSpecPrice(priceModalItem) ? (
+                <div>
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                      多规格价格 / 库存
+                    </span>
+                    <span className="text-xs text-slate-400">共 {priceSkus.length} 个规格</span>
+                  </div>
+                  <div className="space-y-3 max-h-[42vh] overflow-y-auto pr-1">
+                    {priceSkus.map((sku, idx) => (
+                      <div
+                        key={sku.sku_id || idx}
+                        className="rounded-xl border border-slate-200 dark:border-slate-700 p-3"
+                      >
+                        <div
+                          className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-200 break-all"
+                          title={sku.label}
+                        >
+                          {sku.label}
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <label className="block">
+                            <span className="mb-1 block text-xs text-slate-500 dark:text-slate-400">
+                              价格（元）
+                            </span>
+                            <div className="relative">
+                              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
+                                ¥
+                              </span>
+                              <input
+                                type="number"
+                                min="0.01"
+                                step="0.01"
+                                className="input-ios w-full pl-7"
+                                value={sku.price}
+                                onChange={(e) =>
+                                  setPriceSkus((prev) =>
+                                    prev.map((s, i) => (i === idx ? { ...s, price: e.target.value } : s)),
+                                  )
+                                }
+                              />
+                            </div>
+                          </label>
+                          <label className="block">
+                            <span className="mb-1 block text-xs text-slate-500 dark:text-slate-400">
+                              库存
+                            </span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              className="input-ios w-full"
+                              value={sku.quantity}
+                              onChange={(e) =>
+                                setPriceSkus((prev) =>
+                                  prev.map((s, i) => (i === idx ? { ...s, quantity: e.target.value } : s)),
+                                )
+                              }
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-4">
+                  <label className="block">
+                    <span className="mb-1 block text-sm text-slate-600 dark:text-slate-300">价格（元）</span>
+                    <div className="relative">
+                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
+                        ¥
+                      </span>
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        className="input-ios w-full pl-7"
+                        value={priceSingle.price}
+                        onChange={(e) => setPriceSingle((prev) => ({ ...prev, price: e.target.value }))}
+                      />
+                    </div>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-sm text-slate-600 dark:text-slate-300">库存</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      className="input-ios w-full"
+                      value={priceSingle.quantity}
+                      onChange={(e) => setPriceSingle((prev) => ({ ...prev, quantity: e.target.value }))}
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button onClick={() => setPriceModalItem(null)} className="btn-ios-secondary" disabled={priceSaving}>
+                关闭
+              </button>
+              <button onClick={handleSubmitPrice} className="btn-ios-primary" disabled={priceSaving}>
+                {priceSaving ? '提交中...' : '保存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 编辑弹窗 */}
+      {editingItem && (        <div className="modal-overlay">
           <div className="modal-content max-w-lg">
             <div className="modal-header">
               <h2 className="modal-title">编辑商品</h2>
@@ -1653,6 +1996,20 @@ export function Items() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* 鱼小铺商品编辑弹窗：界面同单品发布，保存后直接同步到闲鱼平台 */}
+      {sellerEditingItem && (
+        <SellerItemEditModal
+          cookieId={sellerEditingItem.cookie_id}
+          itemId={sellerEditingItem.item_id}
+          itemTitle={sellerEditingItem.item_title || sellerEditingItem.title || ''}
+          onClose={() => setSellerEditingItem(null)}
+          onSaved={() => {
+            setSellerEditingItem(null)
+            loadItems()
+          }}
+        />
       )}
 
 

@@ -26,11 +26,17 @@ interface ProductPublishFormProps {
   showAccount?: boolean
   categoryLocked?: boolean
   onCategoryEdit?: () => void
+  /**
+   * 修改标题/描述时是否自动解锁类目并重新推荐。
+   * 平台商品编辑（鱼小铺）必须传 false：解锁会触发推荐接口回写类目并清空
+   * platform_attributes/brand/condition，导致只改标题也会覆盖平台已保存的成色、品牌等属性。
+   */
+  unlockCategoryOnTextChange?: boolean
   accountCapability?: PublishAccountCapability | null
   capabilityLoading?: boolean
 }
 
-export function ProductPublishForm({ form, setForm, accounts, onUploadSpecImage, showAccount = true, categoryLocked = false, onCategoryEdit, accountCapability = null, capabilityLoading = false }: ProductPublishFormProps) {
+export function ProductPublishForm({ form, setForm, accounts, onUploadSpecImage, showAccount = true, categoryLocked = false, onCategoryEdit, unlockCategoryOnTextChange = true, accountCapability = null, capabilityLoading = false }: ProductPublishFormProps) {
   const [showAddressPicker, setShowAddressPicker] = useState(false)
   // 未传账号能力时保持公共表单原有功能；只有明确检测为普通卖家才收起鱼小铺字段。
   const isFishShop = accountCapability?.is_fish_shop !== false
@@ -41,7 +47,7 @@ export function ProductPublishForm({ form, setForm, accounts, onUploadSpecImage,
     && (form.specifications.length > 0 || form.sku_rows.length > 0)
 
   const update = (patch: Partial<PublishForm>) => {
-    if ((patch.title !== undefined || patch.description !== undefined) && onCategoryEdit) onCategoryEdit()
+    if (unlockCategoryOnTextChange && (patch.title !== undefined || patch.description !== undefined) && onCategoryEdit) onCategoryEdit()
     setForm((current) => ({ ...current, ...patch }))
   }
   const updateSpecs = (specifications: ProductSpecification[], skuRows: SkuRow[]) => update({ specifications, sku_rows: skuRows, price: skuRows[0]?.price || form.price })

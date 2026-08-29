@@ -57,6 +57,10 @@ class SendCodeRequest(BaseModel):
     email: EmailStr
     session_id: Optional[str] = None
     type: str = "register"  # register, login 或 reset_password
+    # 极验滑动验证参数（仅忘记密码 reset_password 场景使用，参照登录逻辑）
+    geetest_challenge: Optional[str] = None
+    geetest_validate: Optional[str] = None
+    geetest_seccode: Optional[str] = None
 
 
 class SliderSolveRequest(BaseModel):
@@ -382,10 +386,26 @@ async def send_email_verification_code(
     """发送邮箱验证码"""
     try:
         cleanup_expired_email_codes()
-        
+
         from app.services.user_service import UserService
         user_service = UserService(db)
-        
+
+        # 忘记密码场景：参照登录逻辑，开启滑动验证时必须先通过极验二次验证
+        if request.type == "reset_password":
+            setting_service = SystemSettingService(db)
+            all_settings = await setting_service.list_settings()
+            captcha_enabled_str = all_settings.get("login_captcha_enabled")
+            captcha_enabled = captcha_enabled_str in (None, "true", "1")  # 默认开启
+            if captcha_enabled:
+                from app.api.routes.geetest import check_geetest_verified
+
+                if not request.geetest_challenge:
+                    return ApiResponse(success=False, message="请完成滑动验证")
+
+                geetest_ok, geetest_msg = check_geetest_verified(request.geetest_challenge)
+                if not geetest_ok:
+                    return ApiResponse(success=False, message=geetest_msg)
+
         # 根据类型检查邮箱
         if request.type == "register":
             existing_user = await user_service.get_by_email(request.email)

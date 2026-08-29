@@ -687,8 +687,17 @@ export function Settings() {
               </div>
               <PasswordLoginModeSetting
                 value={settings?.['password_login.mode']}
-                onSaved={(mode) => setSettings((current) => (
-                  current ? { ...current, 'password_login.mode': mode } : current
+                remoteUrl={settings?.['password_login.remote_url']}
+                remoteSecretKey={settings?.['password_login.remote_secret_key']}
+                onSaved={(mode, remoteUrl, remoteSecretKey) => setSettings((current) => (
+                  current
+                    ? {
+                        ...current,
+                        'password_login.mode': mode,
+                        'password_login.remote_url': remoteUrl ?? String(current['password_login.remote_url'] || ''),
+                        'password_login.remote_secret_key': remoteSecretKey ?? String(current['password_login.remote_secret_key'] || ''),
+                      }
+                    : current
                 ))}
               />
               <SliderModeSetting

@@ -3,7 +3,7 @@
  * 支持最多两组规格、规格值图片和自动生成 SKU 价格/库存矩阵。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ImagePlus, Plus, Trash2, Upload, X } from 'lucide-react'
+import { Plus, Trash2, Upload, X } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { buildSkuKey, type ProductSpecification, type SkuRow, type SpecificationValue } from './publishTypes'
 
@@ -89,7 +89,13 @@ export function ProductSpecificationsEditor({
 
   const updateSpec = (specId: string, patch: Partial<ProductSpecification>) => {
     updateSpecifications(specifications.map((spec) => {
-      if (spec.id !== specId) return spec
+      if (spec.id !== specId) {
+        // 闲鱼只允许一组规格带规格图（抓包确认），勾选新的一组时关闭其余组并清理其图片
+        if (patch.supportImage === true && spec.supportImage) {
+          return { ...spec, supportImage: false, values: spec.values.map((value) => ({ ...value, image: null })) }
+        }
+        return spec
+      }
       // 关闭规格图片时同步清理图片，避免界面隐藏后仍把旧图发布出去。
       if (patch.supportImage === false) {
         return { ...spec, ...patch, values: spec.values.map((value) => ({ ...value, image: null })) }
@@ -228,36 +234,63 @@ export function ProductSpecificationsEditor({
               <div key={value.id} className="flex items-center gap-1">
                 <div className="relative">
                   <input
-                    className="input-ios w-36 pr-8"
+                    className={`input-ios w-36${spec.supportImage && !value.image ? ' pr-8' : ''}`}
                     value={value.name}
                     placeholder="输入规格值"
                     onChange={(event) => updateValue(spec, value.id, { name: event.target.value })}
                     onFocus={(event) => { event.currentTarget.dataset.previousValue = value.name }}
                     onBlur={(event) => finishValueEdit(spec, value, event.currentTarget)}
                   />
-                  {(spec.supportImage || Boolean(value.image)) && (
-                    <>
-                      <button
-                        type="button"
-                        className="absolute right-1 top-1/2 -translate-y-1/2 text-slate-400 hover:text-blue-500"
-                        title="上传规格图片"
-                        onClick={() => imageInputs.current[value.id]?.click()}
-                      >
-                        {value.image ? <ImagePlus className="w-4 h-4 text-blue-500" /> : <Upload className="w-4 h-4" />}
-                      </button>
-                      <input
-                        ref={(element) => { imageInputs.current[value.id] = element }}
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(event) => {
-                          void handleValueImage(spec, value, event.target.files?.[0])
-                          event.target.value = ''
-                        }}
-                      />
-                    </>
+                  {spec.supportImage && !value.image && (
+                    <button
+                      type="button"
+                      className="absolute right-1 top-1/2 -translate-y-1/2 text-slate-400 hover:text-blue-500"
+                      title="上传规格图片"
+                      onClick={() => imageInputs.current[value.id]?.click()}
+                    >
+                      <Upload className="w-4 h-4" />
+                    </button>
                   )}
                 </div>
+                {(spec.supportImage || Boolean(value.image)) && (
+                  <>
+                    {/* 有图时展示缩略图，让用户直接看到平台原有/新上传的规格图，点击可更换 */}
+                    {value.image && (
+                      <div className="relative h-9 w-9 flex-shrink-0">
+                        <button
+                          type="button"
+                          title="点击更换规格图片"
+                          onClick={() => imageInputs.current[value.id]?.click()}
+                          className="block h-full w-full overflow-hidden rounded border border-slate-200 hover:border-blue-400 dark:border-slate-600"
+                        >
+                          <img
+                            src={value.image}
+                            alt={`规格图片：${value.name || '未命名规格值'}`}
+                            className="h-full w-full object-cover"
+                          />
+                        </button>
+                        <button
+                          type="button"
+                          title="移除规格图片"
+                          onClick={() => updateValue(spec, value.id, { image: null })}
+                          className="absolute -right-1 -top-1 rounded-full bg-slate-600 p-0.5 text-white hover:bg-red-500"
+                        >
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      </div>
+                    )}
+                    <input
+                      ref={(element) => { imageInputs.current[value.id] = element }}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(event) => {
+                        void handleValueImage(spec, value, event.target.files?.[0])
+                        event.target.value = ''
+                      }}
+                    />
+                  </>
+                )}
                 <button type="button" className="p-1 text-slate-400 hover:text-red-500" title="删除规格值" onClick={() => updateSpec(spec.id, { values: spec.values.filter((item) => item.id !== value.id) })}>
                   <X className="w-4 h-4" />
                 </button>

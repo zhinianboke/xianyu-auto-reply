@@ -17,7 +17,10 @@ from app.api.deps import get_current_active_user, get_db_session
 from app.services.account_service import AccountService
 from common.models.user import User, UserRole
 from common.schemas.common import ApiResponse
-from common.services.xianyu_publish_service import detect_publish_account_capability
+from common.services.xianyu_publish_service import (
+    detect_publish_account_capability,
+    ensure_publish_capability_reliable,
+)
 
 
 router = APIRouter(prefix="/product-publish/accounts", tags=["商品发布"])
@@ -52,6 +55,9 @@ async def get_publish_account_capability(
             account_id=account.account_id,
             owner_id=account.owner_id,
         )
+        # 本接口只服务发布页：判定不可信时直接报错，让用户在选账号阶段就知道，
+        # 而不是填完表单提交后才被发布链路拒绝
+        result = ensure_publish_capability_reliable(result)
     except Exception as exc:
         logger.error(f"账号发布能力检测异常: account_id={account_id}, error={exc}")
         return ApiResponse(success=False, message=f"账号发布能力检测失败：{exc}", data=None)

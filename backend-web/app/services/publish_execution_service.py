@@ -25,6 +25,7 @@ from common.models.xy_account import XYAccount
 from common.services.publish_execution_service import execute_single_publish
 from common.services.xianyu_publish_service import (
     detect_publish_account_capability,
+    ensure_publish_capability_reliable,
     publish_personal_single_item,
     publish_single_item,
 )
@@ -291,6 +292,8 @@ class PublishExecutorService:
                 )
                 cookies_str = capability.get("cookies_str") or cookies_str
                 account.cookie = cookies_str
+                # 鱼小铺账号必须走鱼小铺接口：判定不可信时跳过该账号，不允许回落个人版发布
+                capability = ensure_publish_capability_reliable(capability)
             except Exception as capability_exc:
                 capability = {
                     "success": False,

@@ -1,5 +1,12 @@
 import { get, post, put, del } from '@/utils/request'
 import type { Item, ApiResponse } from '@/types'
+import type {
+  MaterialVideo,
+  PlatformCategoryPathItem,
+  PlatformMaterialAttribute,
+  PublishSkuRow,
+  PublishSpecification,
+} from '@/api/productPublish'
 
 // API前缀
 const ITEM_PREFIX = '/api/v1/items'
@@ -154,6 +161,101 @@ export const updateItemMultiQuantityDelivery = (cookieId: string, itemId: string
 // 更新商品多规格状态
 export const updateItemMultiSpec = (cookieId: string, itemId: string, enabled: boolean): Promise<ApiResponse> => {
   return put(`${ITEM_PREFIX}/${cookieId}/${itemId}/multi-spec`, { is_multi_spec: enabled })
+}
+
+// 鱼小铺商品改价（价格与库存一并提交）
+// 单规格：{ price, quantity }；多规格：{ skus: [{ sku_id, price, quantity }] }
+export interface UpdateItemPricePayload {
+  price?: number
+  quantity?: number
+  skus?: Array<{ sku_id: string; price: number; quantity: number }>
+}
+
+export const updateItemPrice = (
+  cookieId: string,
+  itemId: string,
+  payload: UpdateItemPricePayload,
+): Promise<ApiResponse> => {
+  return put(`${ITEM_PREFIX}/${cookieId}/${itemId}/price`, payload)
+}
+
+// ==================== 鱼小铺商品编辑（同步到闲鱼平台）====================
+
+// 平台商品编辑详情，字段与素材库/单品发布保持一致，可直接回填发布表单
+export interface SellerItemEditForm {
+  item_id: string
+  title: string
+  description: string
+  price: number | null
+  original_price: number | null
+  category: string
+  quantity: number
+  images: string[]
+  videos: MaterialVideo[]
+  specifications: PublishSpecification[]
+  sku_rows: PublishSkuRow[]
+  platform_category_id: string
+  platform_category_name: string
+  platform_channel_category_id: string
+  platform_channel_category_name: string
+  platform_leaf_id: string
+  platform_tb_category_id: string
+  platform_category_path: PlatformCategoryPathItem[]
+  platform_attributes: PlatformMaterialAttribute[]
+  category_source: 'manual' | 'recommendation'
+  address: string
+  address_expected_text: string
+  shipping_method: 'free' | 'distance' | 'fixed' | 'template' | 'none'
+  postage: number
+  support_pickup: boolean
+  delivery_method: 'express' | 'pickup'
+  condition: string
+  brand: string
+}
+
+// 鱼小铺商品编辑提交参数（字段与单品发布一致，不含账号ID）
+export interface SellerItemEditPayload {
+  title: string
+  description: string
+  price: number
+  original_price?: number | null
+  images: string[]
+  // 平台已有视频带 file_id（后端凭此原样回传，不重复上传）；空数组表示清空平台视频
+  videos: MaterialVideo[]
+  platform_category_id?: string | null
+  platform_category_name?: string | null
+  platform_channel_category_id?: string | null
+  platform_channel_category_name?: string | null
+  platform_leaf_id?: string | null
+  platform_tb_category_id?: string | null
+  platform_attributes: PlatformMaterialAttribute[]
+  specifications: PublishSpecification[]
+  sku_rows: PublishSkuRow[]
+  quantity: number
+  address?: string | null
+  address_expected_text?: string | null
+  shipping_method: 'free' | 'distance' | 'fixed' | 'template' | 'none'
+  support_pickup: boolean
+  postage: number
+  brand?: string | null
+  condition?: string | null
+}
+
+// 获取鱼小铺商品的平台编辑详情（用于编辑弹窗回填）
+export const getSellerItemEditDetail = (
+  cookieId: string,
+  itemId: string,
+): Promise<ApiResponse<{ form: SellerItemEditForm }>> => {
+  return get(`${ITEM_PREFIX}/${cookieId}/${itemId}/seller-detail`)
+}
+
+// 提交鱼小铺商品编辑到闲鱼平台，成功后后端会重新同步该账号商品
+export const updateSellerItem = (
+  cookieId: string,
+  itemId: string,
+  payload: SellerItemEditPayload,
+): Promise<ApiResponse> => {
+  return put(`${ITEM_PREFIX}/${cookieId}/${itemId}/seller-edit`, payload)
 }
 
 
