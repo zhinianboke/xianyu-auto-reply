@@ -502,6 +502,8 @@ export function Items() {
           addToast({ type: 'success', message: result.message || '闲鱼商品删除成功' })
         }
         setSelectedIds(new Set())
+        // 平台删除成功的商品已同步删除本地库记录，刷新列表移除这些商品
+        loadItems()
       } else {
         const firstFailure = failedResults[0]
         addToast({

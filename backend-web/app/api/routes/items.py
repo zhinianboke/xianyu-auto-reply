@@ -1017,9 +1017,10 @@ async def batch_delete_xianyu_items(
     account_service: AccountService = Depends(deps.get_account_service),
     item_service: ItemService = Depends(deps.get_item_service),
 ) -> ApiResponse:
-    """使用指定账号 Cookie 批量删除闲鱼平台商品。
+    """使用指定账号 Cookie 批量删除闲鱼平台商品，并同步删除本地库记录。
 
-    本接口只删除闲鱼平台商品，不物理删除本地商品及关联数据。
+    平台删除成功的商品会同步删除本地商品记录及其卡券关联，保持本地与平台一致；
+    平台删除失败的商品保留本地记录。本地清理失败不影响平台删除结果，仅记录日志。
     """
     owner_id, _ = resolve_owner_scope(current_user)
     try:
@@ -1121,14 +1122,28 @@ async def batch_delete_xianyu_items(
     )
     success_count = int(result.get("success_count", 0) or 0)
     fail_count = int(result.get("fail_count", 0) or 0)
+
+    # 平台删除成功的商品，同步删除本地库记录（含卡券关联），保持本地与平台一致
+    platform_deleted_ids = [
+        str(entry.get("item_id") or "").strip()
+        for entry in result.get("results", [])
+        if entry.get("success") and str(entry.get("item_id") or "").strip()
+    ]
+    local_delete = await item_service.delete_local_items(account, platform_deleted_ids)
+    local_deleted_count = len(local_delete.get("deleted", []))
+    local_failed_ids = local_delete.get("failed", [])
+
     data = {
         "results": result.get("results", []),
         "success_count": success_count,
         "fail_count": fail_count,
+        "local_deleted_count": local_deleted_count,
+        "local_failed_ids": local_failed_ids,
     }
     logger.info(
         f"批量删除闲鱼商品: 账号={account.account_id}, 请求={len(cleaned_item_ids)}, "
-        f"成功={success_count}, 失败={fail_count}"
+        f"成功={success_count}, 失败={fail_count}, "
+        f"本地同步删除={local_deleted_count}, 本地删除失败={len(local_failed_ids)}"
     )
     if success_count == 0:
         return ApiResponse(
@@ -1136,9 +1151,14 @@ async def batch_delete_xianyu_items(
             message=result.get("message") or "删除闲鱼商品失败",
             data=data,
         )
+    base_message = result.get("message") or f"已删除 {success_count} 个闲鱼商品"
+    if local_failed_ids:
+        base_message = (
+            f"{base_message}；其中 {len(local_failed_ids)} 个本地记录清理失败，请稍后重试"
+        )
     return ApiResponse(
         success=True,
-        message=result.get("message") or f"已删除 {success_count} 个闲鱼商品",
+        message=base_message,
         data=data,
     )
 

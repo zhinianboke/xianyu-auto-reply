@@ -1126,6 +1126,38 @@ class ItemService:
                 deleted += 1
         return deleted
 
+    async def delete_local_items(
+        self, account: XYAccount, item_ids: list[str]
+    ) -> dict:
+        """按账号批量删除本地商品记录（含卡券关联），逐个提交、互不影响。
+
+        用于「删除闲鱼商品」在平台删除成功后同步清理本地库，保持本地与平台一致。
+        单个商品删除失败只回滚自身并记录日志，不影响其余商品的删除。
+
+        Args:
+            account: 已校验归属的账号对象。
+            item_ids: 需要删除的商品ID列表（应为平台删除成功的商品）。
+        Returns:
+            dict: {"deleted": [...成功删除的item_id], "failed": [...删除失败的item_id]}
+        """
+        deleted: list[str] = []
+        failed: list[str] = []
+        for raw_item_id in item_ids or []:
+            item_id = str(raw_item_id or "").strip()
+            if not item_id:
+                continue
+            try:
+                if await self.delete_item(account, item_id):
+                    deleted.append(item_id)
+            except Exception as exc:
+                await self.session.rollback()
+                failed.append(item_id)
+                logger.error(
+                    f"平台删除成功后清理本地商品 {item_id} 失败: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+        return {"deleted": deleted, "failed": failed}
+
     def _serialize_item(self, item: XYCatalogItem, account_id: str, default_reply_info: dict | None = None, has_card: bool = False) -> dict:
         metadata = item.metadata_json or {}
         # 从 detail(整块商品JSON) 解析鱼小铺特有字段供界面展示；普通账号无此字段时返回空
