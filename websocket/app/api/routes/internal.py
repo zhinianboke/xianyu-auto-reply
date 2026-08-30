@@ -448,7 +448,24 @@ async def solve_captcha(request: SolveCaptchaRequest):
             from common.db.compat import db_manager as _dm
             kwargs = {"processing_status": status, "processing_result": result}
             if engine is not None:
-                kwargs["captcha_engine"] = engine
+                # 远程编排器在失败时会把诊断原因拼到引擎名后面
+                # （例如 ``remote:Connection aborted...``）。
+                # captcha_engine 是 VARCHAR(32)，把这段诊断文案直接写入会
+                # 触发 MySQL 1406，导致整条 UPDATE 回滚，日志永久停在
+                # processing。引擎字段只保存稳定的引擎标识，详细原因放到
+                # error_message，保证收口更新一定能提交。
+                normalized_engine = str(engine).strip()
+                if normalized_engine.startswith("remote:"):
+                    remote_reason = normalized_engine.split(":", 1)[1].strip()
+                    normalized_engine = "remote"
+                    if remote_reason and not error:
+                        error = remote_reason
+                # 防御未来新增引擎返回超长诊断字符串时再次撑爆字段。
+                if len(normalized_engine) > 32:
+                    if not error:
+                        error = f"滑块引擎返回异常标识: {normalized_engine}"
+                    normalized_engine = normalized_engine[:32]
+                kwargs["captcha_engine"] = normalized_engine
             if error is not None:
                 kwargs["error_message"] = error
             _dm.update_risk_control_log(log_id=log_id, **kwargs)

@@ -147,6 +147,40 @@ class InternalCaptchaRoutingTests(unittest.IsolatedAsyncioTestCase):
         real_mouse_runner.assert_awaited_once()
         browser_runner.assert_not_awaited()
 
+    async def test_remote_failure_reason_does_not_overflow_captcha_engine_column(self):
+        """远程失败诊断写入 error_message，不得让 processing 日志无法收口。"""
+        long_reason = (
+            "('Connection aborted.', RemoteDisconnected('Remote end closed connection "
+            "without response'))"
+        )
+        browser_runner = AsyncMock(
+            return_value=(False, None, f"remote:{long_reason}")
+        )
+        update_log = patch.object(
+            db_manager, "update_risk_control_log", return_value=True
+        )
+
+        with (
+            patch.object(internal, "run_browser_task", new=browser_runner),
+            update_log as update_mock,
+        ):
+            result = await internal.solve_captcha(
+                internal.SolveCaptchaRequest(
+                    account_id="account-1",
+                    url="https://example.invalid/punish",
+                    call_type="remote",
+                    risk_log_id=123,
+                )
+            )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["data"]["engine"], f"remote:{long_reason}")
+        update_mock.assert_called_once()
+        update_kwargs = update_mock.call_args.kwargs
+        self.assertEqual(update_kwargs["processing_status"], "failed")
+        self.assertEqual(update_kwargs["captcha_engine"], "remote")
+        self.assertEqual(update_kwargs["error_message"], long_reason)
+
 
 if __name__ == "__main__":
     unittest.main()
