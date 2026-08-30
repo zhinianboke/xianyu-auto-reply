@@ -621,7 +621,12 @@ class CookieTokenManager:
         )
         return routing.remote_config if routing is not None else None
 
-    async def handle_captcha_verification(self, res_json: dict) -> str:
+    async def handle_captcha_verification(
+        self,
+        res_json: dict,
+        *,
+        remote_config: dict | None = None,
+    ) -> str:
         """处理滑块验证，返回新的cookies字符串"""
         try:
             import os
@@ -722,7 +727,8 @@ class CookieTokenManager:
 
                 # 读取全局"远程过滑块"配置（system_settings，仅管理员可配）。
                 # 配置了则固定走远程接口；远程不可用时不静默抢本机鼠标。
-                remote_config = await self._load_remote_captcha_config()
+                if remote_config is None:
+                    remote_config = await self._load_remote_captcha_config()
 
                 # 真实鼠标任务先按权重排队，其他模式保持使用原浏览器任务专用线程池；
                 # 两条路径都不占用 asyncio 默认线程池，避免饿死 aiohttp 的 DNS 解析。
@@ -1102,8 +1108,8 @@ class CookieTokenManager:
 
                 logger.warning(
                     f"【{self.cookie_id}】本机滑块不处理已开启且Token缓存不存在，"
-                    "继续请求Token接口；若网页接口最终仍需滑块，"
-                    "将跳过本机滑块并等待下次轮询"
+                    "继续请求Token接口；若最终需要滑块，"
+                    "将由已配置的远程路由处理，本机不启动滑块"
                 )
 
             # 常规模式仅在首次调用时读取有效缓存，重试时保持原有接口处理逻辑。
@@ -1278,7 +1284,16 @@ class CookieTokenManager:
 
             # 检查是否需要滑块验证
             if self.need_captcha_verification(res_json):
+                # “本机滑块不处理”只应禁止本机浏览器/鼠标，不应阻断已配置的
+                # 远程 Worker。此前这里无条件 return，导致远程 Token 返回滑块
+                # URL 后既不启动本机，也不调用远程，账号会一直卡在 captcha_required。
+                # 本机开关读取失败时仍按安全策略跳过；远程配置读取失败也不
+                # 擅自启动本机滑块。
+                remote_captcha_config = None
                 if local_slider_disabled:
+                    remote_captcha_config = await self._load_remote_captcha_config()
+
+                if local_slider_disabled and not remote_captcha_config:
                     self.current_token = None
                     self.last_token_refresh_status = "skipped_local_slider_disabled"
                     logger.warning(
@@ -1287,11 +1302,20 @@ class CookieTokenManager:
                     )
                     return None
 
-                logger.warning(f"【{self.cookie_id}】检测到需要滑块验证，开始处理...")
+                if local_slider_disabled:
+                    logger.warning(
+                        f"【{self.cookie_id}】检测到需要滑块验证，本机滑块不处理已开启，"
+                        "转交已配置的远程服务处理"
+                    )
+                else:
+                    logger.warning(f"【{self.cookie_id}】检测到需要滑块验证，开始处理...")
 
                 try:
                     captcha_start_time = time.time()
-                    new_cookies_str = await self.handle_captcha_verification(res_json)
+                    new_cookies_str = await self.handle_captcha_verification(
+                        res_json,
+                        remote_config=remote_captcha_config,
+                    )
                     captcha_duration = time.time() - captcha_start_time
 
                     if self.last_token_refresh_status in (
@@ -1792,4 +1816,3 @@ class CookieTokenManager:
         result['details'] = '; '.join(result['details'])
         logger.info(f"【{self.cookie_id}】Cookie有效性验证完成: {result}")
         return result
-
