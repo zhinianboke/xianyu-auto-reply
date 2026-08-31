@@ -58,6 +58,9 @@ const CardPickup = React.lazy(() => import('@/pages/distribution/CardPickup').th
 const SharedScanManager = React.lazy(() => import('@/pages/shared-scan/SharedScanManager').then(m => ({ default: m.SharedScanManager })))
 const SharedScanPage = React.lazy(() => import('@/pages/shared-scan/SharedScanPage').then(m => ({ default: m.SharedScanPage })))
 
+// 同意后发货 - 买家提货页（无需登录，公开访问）
+const AgreePickupPage = React.lazy(() => import('@/pages/agree-pickup/AgreePickupPage').then(m => ({ default: m.AgreePickupPage })))
+
 // 商品发布页面懒加载
 const ProductMaterials = React.lazy(() => import('@/pages/product-publish/ProductMaterials').then(m => ({ default: m.ProductMaterials })))
 const ProductPublish = React.lazy(() => import('@/pages/product-publish/ProductPublish').then(m => ({ default: m.ProductPublish })))
@@ -322,6 +325,8 @@ function App() {
           <Route path="/get-source-code" element={<GetSourceCode />} />
           {/* 兼职端扫码页面：无需登录，公开访问 */}
           <Route path="/shared-scan-page" element={<SharedScanPage />} />
+          {/* 同意后发货提货页：无需登录，公开访问 */}
+          <Route path="/agree-pickup" element={<AgreePickupPage />} />
 
           {/* Protected routes */}
           <Route

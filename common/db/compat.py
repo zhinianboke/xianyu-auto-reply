@@ -287,6 +287,33 @@ class DBManagerCompat:
                 return bool(value) if value is not None else False
         return self._run_async(_query)
 
+    def get_agree_deliver_config(self, cookie_id: str) -> dict:
+        """获取同意后发货配置（开关/通知信息/提货URL），一次查询返回。
+
+        Args:
+            cookie_id: 闲鱼账号标识（account_id）
+        Returns:
+            {"enabled": bool, "notify_message": str|None, "pickup_url": str|None}；
+            无记录时返回 enabled=False 的空配置
+        """
+        async def _query(session_maker):
+            async with session_maker() as session:
+                stmt = select(
+                    XYAccount.agree_deliver_enabled,
+                    XYAccount.agree_deliver_notify_message,
+                    XYAccount.agree_deliver_pickup_url,
+                ).where(XYAccount.account_id == cookie_id)
+                result = await session.execute(stmt)
+                row = result.first()
+                if not row:
+                    return {"enabled": False, "notify_message": None, "pickup_url": None}
+                return {
+                    "enabled": bool(row[0]),
+                    "notify_message": row[1],
+                    "pickup_url": row[2],
+                }
+        return self._run_async(_query)
+
     def get_cookie_status(self, cookie_id: str) -> bool:
         """获取账号是否启用"""
         async def _query(session_maker):

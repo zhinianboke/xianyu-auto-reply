@@ -58,6 +58,11 @@ class XYAccount(TimestampMixin, Base):
     refund_cancel_url: Mapped[str | None] = mapped_column(String(255), comment="退款订单注销请求URL")
     refund_cancel_timeout: Mapped[int | None] = mapped_column(Integer, default=60, comment="退款订单注销超时时间(秒)")
 
+    # 同意后发货配置字段（仅做配置存储，发货逻辑后续接入）
+    agree_deliver_enabled: Mapped[bool] = mapped_column(Boolean, default=False, comment="同意后发货开关")
+    agree_deliver_notify_message: Mapped[str | None] = mapped_column(String(2000), comment="同意后发货-通知用户信息")
+    agree_deliver_pickup_url: Mapped[str | None] = mapped_column(String(255), comment="同意后发货-提货URL")
+
     # 相同消息等待时间(秒)
     message_expire_time: Mapped[int] = mapped_column(Integer, default=3600, comment="相同消息等待时间(秒)")
     

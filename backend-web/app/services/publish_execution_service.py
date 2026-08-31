@@ -22,7 +22,10 @@ from app.services.publish_batch_status_service import PublishBatchStatusService
 from app.services.item_service import ItemService
 from common.models.publish_log import PublishLog
 from common.models.xy_account import XYAccount
-from common.services.publish_execution_service import execute_single_publish
+from common.services.publish_execution_service import (
+    SYNC_AFTER_PUBLISH_DELAY_SECONDS,
+    execute_single_publish,
+)
 from common.services.xianyu_publish_service import (
     detect_publish_account_capability,
     ensure_publish_capability_reliable,
@@ -182,6 +185,12 @@ class PublishExecutorService:
 
     async def _sync_account_items_after_publish(self, account_id: str, account: XYAccount) -> Dict[str, Any]:
         item_svc = ItemService(self.session)
+        # 平台商品列表有索引延迟，最后一件商品发布后没有间隔就同步会漏掉它，先等待再拉取
+        if SYNC_AFTER_PUBLISH_DELAY_SECONDS > 0:
+            logger.info(
+                f"账号 {account_id} 批量发布完成，等待 {SYNC_AFTER_PUBLISH_DELAY_SECONDS} 秒后再自动获取商品"
+            )
+            await asyncio.sleep(SYNC_AFTER_PUBLISH_DELAY_SECONDS)
         try:
             sync_result = await item_svc.fetch_all_items_from_account(account=account)
             sync_status = "success" if sync_result.get("success") else "failed"

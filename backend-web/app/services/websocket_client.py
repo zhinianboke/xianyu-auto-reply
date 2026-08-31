@@ -151,10 +151,13 @@ class WebSocketServiceClient:
         """
         url = f"{self.base_url}/internal/accounts/{account_id}/create-chat"
         try:
+            # create-chat 遇 code:400 会触发「刷新 token + 断线重连 + 重试」，最坏约 73s，
+            # 故单独放宽超时到 90s；且该操作有副作用（会关闭并重建连接），不可安全重试，
+            # 显式 max_retries=1 避免超时后重复触发 create-chat 与重连叠加。
             response = await self.http_client.post(url, json={
                 "buyer_id": buyer_id,
                 "item_id": item_id,
-            })
+            }, timeout=90, max_retries=1)
             return response
         except Exception as e:
             logger.error(f"创建会话失败: account_id={account_id}, buyer_id={buyer_id}, 错误: {e}")
@@ -208,6 +211,20 @@ class WebSocketServiceClient:
         except Exception as e:
             logger.error(f"订单发货失败: {order_no}, 错误: {e}")
             return {"success": False, "message": f"订单发货失败: {str(e)}"}
+
+
+    async def agree_pickup_deliver(self, order_no: str) -> dict:
+        """同意后发货：买家在公开提货页点击「同意」后触发真实发货并返回卡券内容。
+
+        websocket 侧据 order_no 定位在线账号实例，完成 免拼(小刀)→确认发货 并取卡落库，
+        返回 {success, message, data:{order_no, content, already_agreed?}}。
+        """
+        url = f"{self.base_url}/internal/orders/agree-pickup-deliver"
+        try:
+            return await self.http_client.post(url, json={"order_no": order_no})
+        except Exception as e:
+            logger.error(f"同意后发货失败: {order_no}, 错误: {e}")
+            return {"success": False, "message": f"同意后发货失败: {str(e)}"}
 
 
     async def confirm_no_logistics(

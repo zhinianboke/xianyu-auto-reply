@@ -209,12 +209,16 @@ class RedeliveryTask:
         
         条件：
         - status = 'active'（启用）
-        - auto_confirm = True 或 only_send_card = True
+        - auto_confirm = True 或 only_send_card = True 或 agree_deliver_enabled = True
         - scheduled_redelivery = True（定时补发货开启）
         """
         stmt = select(XYAccount).where(
             XYAccount.status == "active",
-            or_(XYAccount.auto_confirm == True, XYAccount.only_send_card == True),
+            or_(
+                XYAccount.auto_confirm == True,
+                XYAccount.only_send_card == True,
+                XYAccount.agree_deliver_enabled == True,
+            ),
             XYAccount.scheduled_redelivery == True,
         )
         result = await session.execute(stmt)
@@ -245,6 +249,8 @@ class RedeliveryTask:
             XYOrder.placed_at >= today_start,
             XYOrder.status.in_(["pending_payment", "processing", "pending_ship"]),
             XYOrder.card_only_delivered.is_(False),
+            # 双保险：买家已在提货页点「同意」的订单已单独发货，不再走定时补发货
+            XYOrder.agree_deliver_agreed.is_(False),
         ).order_by(XYOrder.placed_at)
         
         result = await session.execute(stmt)
@@ -747,7 +753,7 @@ class RedeliveryTask:
                 f"[定时补发货] 订单 {order.order_no} 缺少会话ID，"
                 f"调用 WebSocket 服务创建会话: buyer_id={order.buyer_id}, item_id={order.item_id}"
             )
-            result = await http_client.post(create_url, json=create_payload)
+            result = await http_client.post(create_url, json=create_payload, timeout=90, max_retries=1)
             
             if not result.get("success"):
                 error_msg = result.get("message", "创建会话失败")

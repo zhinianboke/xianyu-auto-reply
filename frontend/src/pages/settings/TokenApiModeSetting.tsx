@@ -200,12 +200,12 @@ export function TokenApiModeSetting({
           <p className="mt-1">
             秘钥请到{' '}
             <a
-              href="https://api.xianyusite.shop"
+              href="https://api.xianyushop.shop"
               target="_blank"
               rel="noreferrer"
               className="font-medium underline underline-offset-2 hover:opacity-80"
             >
-              https://api.xianyusite.shop
+              https://api.xianyushop.shop
             </a>{' '}
             获取，使用接口列表中的“闲鱼获取Token”接口
           </p>
@@ -225,7 +225,7 @@ export function TokenApiModeSetting({
                 disabled={saving || testing}
                 required
                 onChange={(event) => setRemoteUrlValue(event.target.value)}
-                placeholder="https://api.xianyusite.shop/api/external/invoke"
+                placeholder="https://api.xianyushop.shop/api/external/invoke"
                 className="input-ios"
               />
             </div>

@@ -600,6 +600,51 @@ export const updateRefundCancelConfig = (accountId: string, config: RefundCancel
   return put(`${REFUND_CANCEL_PREFIX}/${accountId}`, config)
 }
 
+// ==================== 同意后发货配置 ====================
+
+const AGREE_DELIVER_PREFIX = '/api/v1/agree-deliver'
+
+export interface AgreeDeliverConfig {
+  enabled: boolean                 // 是否开启同意后发货
+  notify_message?: string | null   // 通知用户信息（文本域）
+  pickup_url?: string | null       // 提货URL
+}
+
+export interface AgreeDeliverConfigResponse {
+  success: boolean
+  message?: string
+  data?: AgreeDeliverConfig
+}
+
+// 获取同意后发货配置
+export const getAgreeDeliverConfig = (accountId: string): Promise<AgreeDeliverConfigResponse> => {
+  return get(`${AGREE_DELIVER_PREFIX}/${accountId}`)
+}
+
+// 更新同意后发货配置
+export const updateAgreeDeliverConfig = (accountId: string, config: AgreeDeliverConfig): Promise<AgreeDeliverConfigResponse> => {
+  return put(`${AGREE_DELIVER_PREFIX}/${accountId}`, config)
+}
+
+// 本系统提货页地址推荐（供「提货URL」填写提示）
+export interface PickupUrlSuggestion {
+  pickup_url: string    // 推荐填写的提货URL
+  warning: string       // 需要注意的提示（为空表示可直接使用）
+  env_name: string      // 公网部署需配置的环境变量名
+  example_url: string   // 买家最终收到的完整链接示例
+}
+
+export interface PickupUrlSuggestionResponse {
+  success: boolean
+  message?: string
+  data?: PickupUrlSuggestion
+}
+
+// 获取本系统提货页地址推荐
+export const getPickupUrlSuggestion = (): Promise<PickupUrlSuggestionResponse> => {
+  return get(`${AGREE_DELIVER_PREFIX}/pickup-url/suggestion`)
+}
+
 // ==================== 人脸验证相关 ====================
 const FACE_VERIFICATION_PREFIX = '/api/v1/face-verification'
 

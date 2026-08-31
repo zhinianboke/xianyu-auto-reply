@@ -64,6 +64,13 @@ class XYOrder(TimestampMixin, Base):
     card_only_delivered: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, comment="仅发卡券流程是否已处理"
     )
+    # 同意后发货：买家在公开提货页点击「同意」的记录。点击后才触发免拼/确认发货并取卡展示。
+    agree_deliver_agreed: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, comment="同意后发货-买家是否已点击同意"
+    )
+    agree_deliver_agreed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), comment="同意后发货-买家点击同意时间"
+    )
     item_snapshot: Mapped[dict | None] = mapped_column(JSON, comment="商品快照")
     metadata_json: Mapped[dict | None] = mapped_column("metadata", JSON, comment="元数据")
     source: Mapped[str | None] = mapped_column(String(32), comment="数据来源：fetch_xianyu-获取闲鱼订单按钮")

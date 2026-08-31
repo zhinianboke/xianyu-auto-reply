@@ -5,6 +5,8 @@
 1. 发货内容参数替换
 2. 发货内容处理和变量替换
 3. 递归参数替换
+4. 平台发货结果判定（确认发货/免拼发货是否可继续发卡券）
+5. 卡券来源优先级与来源分组
 
 说明:
     本模块从 websocket/app/services/xianyu/delivery_utils.py 下沉而来，
@@ -12,9 +14,67 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
+
+# 卡券来源优先级：自有 → 一级对接 → 二级对接
+# 选卡语义：按此顺序找到「有且仅有一张」的来源分组即命中
+CARD_SOURCE_PRIORITY = ("own", "dock_l1", "dock_l2")
+
+# 平台「该订单已发货」的返回特征串（错误码 + 中文文案两种形态）
+_ALREADY_DELIVERED_MARKERS = ("ORDER_ALREADY_DELIVERY", "已发货成功")
+
+
+def is_shipping_already_delivered(*messages: Optional[str]) -> bool:
+    """判断平台返回文案是否表示「该订单平台侧已发货」
+
+    确认发货/免拼发货重复调用时平台会返回该错误，业务上应视为已完成而非失败。
+
+    Args:
+        *messages: 任意个待检查文案（message / error / ret_msg 等，None 自动跳过）
+    Returns:
+        命中任一「已发货」特征串返回 True
+    """
+    for message in messages:
+        if not message:
+            continue
+        text = str(message)
+        if any(marker in text for marker in _ALREADY_DELIVERED_MARKERS):
+            return True
+    return False
+
+
+def is_shipping_result_ok(result: Optional[Dict[str, Any]]) -> bool:
+    """确认发货/免拼发货结果是否可继续后续发卡券流程
+
+    成功、或平台提示「已发货」（重复调用）均视为通过。
+
+    Args:
+        result: 发货接口返回的字典（可能为 None）
+    Returns:
+        可继续后续流程返回 True
+    """
+    if not result:
+        return False
+    if result.get('success'):
+        return True
+    return is_shipping_already_delivered(result.get('message'), result.get('error'))
+
+
+def group_cards_by_source(cards: Optional[List[Dict[str, Any]]]) -> Dict[str, List[Dict[str, Any]]]:
+    """按卡券来源(card_source)分组，缺省来源按自有(own)处理
+
+    Args:
+        cards: db_manager.get_cards_by_item_id 返回的卡券字典列表
+    Returns:
+        {来源: [卡券, ...]} 分组字典
+    """
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for card in (cards or []):
+        source = card.get('card_source') or 'own'
+        groups.setdefault(source, []).append(card)
+    return groups
 
 
 def process_delivery_content_with_description(

@@ -77,10 +77,12 @@ class HTTPClient:
         json: Optional[Dict[str, Any]] = None,
         data: Optional[Any] = None,
         params: Optional[Dict[str, Any]] = None,
+        timeout: Optional[int] = None,
+        max_retries: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         发送HTTP请求(带重试)
-        
+
         Args:
             method: HTTP方法
             url: 请求URL
@@ -88,17 +90,24 @@ class HTTPClient:
             json: JSON数据
             data: 表单数据
             params: URL参数
-            
+            timeout: 本次请求的超时时间(秒)，不传则用实例默认(30s)。
+                     用于个别耗时较长的接口（如 create-chat 触发断线重连），避免用全局默认误伤。
+            max_retries: 本次请求的最大重试次数，不传则用实例默认(3)。
+                     对「有副作用/不可安全重试」的接口应显式传 1（不重试）。
+
         Returns:
             响应数据
-            
+
         Raises:
             aiohttp.ClientError: 请求失败
         """
         session = await self._get_session()
         last_error = None
-        
-        for attempt in range(self.max_retries):
+        # 本次请求的超时与重试：显式传入时覆盖实例默认，否则沿用实例默认
+        req_timeout = aiohttp.ClientTimeout(total=timeout) if timeout is not None else self.timeout
+        req_max_retries = max_retries if max_retries is not None else self.max_retries
+
+        for attempt in range(req_max_retries):
             try:
                 async with session.request(
                     method=method,
@@ -107,6 +116,7 @@ class HTTPClient:
                     json=json,
                     data=data,
                     params=params,
+                    timeout=req_timeout,
                 ) as response:
                     # 检查HTTP状态码
                     if response.status >= 500:
@@ -138,15 +148,15 @@ class HTTPClient:
                 asyncio.TimeoutError,
             ) as e:
                 last_error = e
-                
+
                 # 判断是否应该重试
-                if attempt < self.max_retries - 1:
+                if attempt < req_max_retries - 1:
                     # 计算退避延迟(指数退避: 1s, 2s, 4s)
                     delay = self.retry_delay * (2 ** attempt)
-                    
+
                     logger.warning(
                         f"请求失败,{delay}秒后重试 "
-                        f"(第{attempt + 1}/{self.max_retries}次): "
+                        f"(第{attempt + 1}/{req_max_retries}次): "
                         f"{method} {url}, 错误: {str(e)}"
                     )
                     
@@ -175,9 +185,14 @@ class HTTPClient:
         headers: Optional[Dict[str, str]] = None,
         json: Optional[Dict[str, Any]] = None,
         data: Optional[Any] = None,
+        timeout: Optional[int] = None,
+        max_retries: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """POST请求"""
-        return await self.request("POST", url, headers=headers, json=json, data=data)
+        """POST请求（timeout/max_retries 不传则用实例默认）"""
+        return await self.request(
+            "POST", url, headers=headers, json=json, data=data,
+            timeout=timeout, max_retries=max_retries,
+        )
     
     async def put(
         self,

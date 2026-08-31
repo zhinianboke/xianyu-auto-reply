@@ -350,6 +350,7 @@ async def list_cookie_details_paginated(
             "only_send_card": bool(account.only_send_card),
             "auto_red_flower": bool(account.auto_red_flower),
             "ai_reply_block_ordered_users": bool(account.ai_reply_block_ordered_users),
+            "agree_deliver_enabled": bool(account.agree_deliver_enabled),
             "delivery_disabled": bool(account.delivery_disabled),
             "delivery_disabled_reason": account.delivery_disabled_reason or "",
             "auto_close_order": bool(account.auto_close_order),

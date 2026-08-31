@@ -356,8 +356,11 @@ class DmSendTaskService:
         # 1) 创建/获取与卖家的会话
         create_url = f"{base_url}/internal/accounts/{account_id}/create-chat"
         try:
+            # create-chat 遇 code:400 会触发「刷新 token + 断线重连 + 重试」，最坏约 73s，
+            # 故放宽超时到 90s 且不自动重试（该操作会重建连接，重试会造成重连叠加）
             create_res = await http_client.post(
-                create_url, json={"buyer_id": str(seller_user_id), "item_id": str(item_id)}
+                create_url, json={"buyer_id": str(seller_user_id), "item_id": str(item_id)},
+                timeout=90, max_retries=1,
             )
         except Exception as exc:  # noqa: BLE001
             reason = f"创建会话异常：{exc}"

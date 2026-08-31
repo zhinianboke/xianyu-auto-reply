@@ -64,6 +64,8 @@ from . import (
     external_publish,
     proxy,
     refund_cancel,
+    agree_deliver,
+    agree_pickup,
     qr_login,
     qrcode,
     risk_control_logs,
@@ -162,6 +164,9 @@ api_router.include_router(token_renewal_logs.router, prefix="/admin", tags=["Tok
 # 代理和上传
 api_router.include_router(proxy.router, prefix="/proxy", tags=["代理配置"])
 api_router.include_router(refund_cancel.router, prefix="/refund-cancel", tags=["退款订单注销配置"])
+api_router.include_router(agree_deliver.router, prefix="/agree-deliver", tags=["同意后发货配置"])
+# 同意后发货提货页（公开接口，无需登录）
+api_router.include_router(agree_pickup.router, prefix="/agree-pickup", tags=["同意后发货提货页"])
 api_router.include_router(upload.router, prefix="/upload", tags=["文件上传"])
 api_router.include_router(qrcode.router, tags=["群二维码"])  # 已定义prefix="/qrcode"
 

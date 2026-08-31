@@ -104,7 +104,7 @@ REMOTE_CONFIG_WEIGHT_REMOTE_KEY = "captcha.real_mouse_weight_remote"
 
 # Token获取方式专用域名：这些是取Token的远程接口地址，不属于过滑块远程服务，
 # 误填到风控日志的远程服务URL会导致过滑块一直失败，因此保存时直接拦截。
-TOKEN_API_ONLY_DOMAINS = ("api.xianyusite.shop", "api.zhinianblog.cn")
+TOKEN_API_ONLY_DOMAINS = ("api.xianyushop.shop", "api.xianyusite.shop", "api.zhinianblog.cn")
 
 
 def _check_token_api_domain(url: str) -> Optional[ApiResponse]:
