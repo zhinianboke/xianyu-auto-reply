@@ -30,6 +30,7 @@ const apiMethodOptions = [
 const postParams = [
   { name: 'order_id', desc: '订单编号' },
   { name: 'item_id', desc: '商品编号' },
+  { name: 'item_title', desc: '商品标题' },
   { name: 'item_detail', desc: '商品详情' },
   { name: 'order_amount', desc: '订单金额' },
   { name: 'order_quantity', desc: '订单数量' },
