@@ -53,6 +53,7 @@ const DECISION_REASON_LABELS: Record<string, string> = {
   chat_paused_after_delay: '延迟后会话已暂停',
   empty_reply: '回复内容为空',
   default_reply_once: '默认回复仅回复一次',
+  manual_reply_ai_paused: '人工回复后暂停 AI',
 }
 
 function formatDateTime(value?: string | null) {
@@ -107,6 +108,7 @@ const SEND_STATUS_LABELS: Record<string, string> = {
   failed: '发送失败',
   unknown: '待确认',
   timeout: '超时',
+  paused: '暂停回复',
 }
 
 const SEND_STATUS_CLASSES: Record<string, string> = {
@@ -114,6 +116,7 @@ const SEND_STATUS_CLASSES: Record<string, string> = {
   failed: 'text-red-600 dark:text-red-400',
   unknown: 'text-slate-500 dark:text-slate-400',
   timeout: 'text-amber-600 dark:text-amber-400',
+  paused: 'text-yellow-600 dark:text-yellow-400',
 }
 
 function buildSendStatusLabel(value?: string | null) {
@@ -307,6 +310,7 @@ export function AutoReplyLogs() {
                 <option value="failed">发送失败</option>
                 <option value="unknown">待确认</option>
                 <option value="timeout">超时</option>
+                <option value="paused">暂停回复</option>
               </select>
             </div>
             <button onClick={handleSearch} className="btn-ios-primary">
