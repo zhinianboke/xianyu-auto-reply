@@ -31,6 +31,7 @@ import {
 } from '@/config/navigation'
 import { useMenuVisibilityStore } from '@/store/menuVisibilityStore'
 import { useUIStore } from '@/store/uiStore'
+import { useVersionStore } from '@/store/versionStore'
 import { cn } from '@/utils/cn'
 
 interface SidebarProps {
@@ -41,6 +42,7 @@ export function Sidebar({ systemName = '闲鱼管理系统' }: SidebarProps) {
   const { user } = useAuthStore()
   const { hiddenMenuKeys, isExeMode } = useMenuVisibilityStore()
   const { sidebarCollapsed, sidebarMobileOpen, setSidebarMobileOpen, setSidebarCollapsed } = useUIStore()
+  const { currentVersion, fetchCurrentVersion } = useVersionStore()
   const location = useLocation()
   const navRef = useRef<HTMLElement>(null)
   const isAdmin = Boolean(user?.is_admin)
@@ -62,6 +64,11 @@ export function Sidebar({ systemName = '闲鱼管理系统' }: SidebarProps) {
     // 默认折叠所有分组
     return new Set<string>()
   })
+
+  // 加载系统版本号（与「关于」页同源：GET /api/v1/version/current，store 内已做缓存与并发去重）
+  useEffect(() => {
+    fetchCurrentVersion()
+  }, [fetchCurrentVersion])
 
   // 监听窗口大小变化
   useEffect(() => {
@@ -278,14 +285,25 @@ export function Sidebar({ systemName = '闲鱼管理系统' }: SidebarProps) {
             !showLabel ? 'justify-center px-2' : 'justify-between px-4'
           )}
         >
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2 min-w-0">
             <div className="w-8 h-8 rounded-lg bg-blue-500 flex items-center justify-center flex-shrink-0">
               <MessageSquare className="w-4 h-4 text-white" />
             </div>
             {showLabel && (
-              <span className="font-semibold text-sm text-slate-900 dark:text-white truncate max-w-[140px]">
-                {systemName}
-              </span>
+              <>
+                <span className="font-semibold text-sm text-slate-900 dark:text-white truncate min-w-0">
+                  {systemName}
+                </span>
+                {/* 版本号：取值与「关于」页面完全一致（后端 /api/v1/version/current），未取到时不展示 */}
+                {currentVersion && (
+                  <span
+                    className="flex-shrink-0 text-[11px] leading-none text-slate-500 dark:text-slate-400 whitespace-nowrap"
+                    title={`当前版本 v${currentVersion}`}
+                  >
+                    v{currentVersion}
+                  </span>
+                )}
+              </>
             )}
           </div>
           {sidebarMobileOpen && (

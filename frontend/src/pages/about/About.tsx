@@ -17,10 +17,13 @@ import {
 import { getQrcodeUrl } from '@/api/settings'
 import { checkUpdate, type VersionCheckResult } from '@/api/version'
 import { useUIStore } from '@/store/uiStore'
+import { useVersionStore } from '@/store/versionStore'
 import { UpdateModal } from './UpdateModal'
 
 export function About() {
   const { addToast } = useUIStore()
+  // 版本号统一由 versionStore 提供，与侧边栏共享同一取值
+  const { currentVersion, setCurrentVersion, fetchCurrentVersion } = useVersionStore()
 
   const [previewImage, setPreviewImage] = useState<string | null>(null)
   const [totalUsers, setTotalUsers] = useState(0)
@@ -33,7 +36,6 @@ export function About() {
   const [rewardQrcode, setRewardQrcode] = useState<string | null>(null)
 
   // 版本检测状态
-  const [currentVersion, setCurrentVersion] = useState('')
   const [updateInfo, setUpdateInfo] = useState<VersionCheckResult | null>(null)
   const [hasUpdate, setHasUpdate] = useState(false)
   const [checkingUpdate, setCheckingUpdate] = useState(false)
@@ -88,7 +90,7 @@ export function About() {
     } finally {
       setCheckingUpdate(false)
     }
-  }, [addToast])
+  }, [addToast, setCurrentVersion])
 
   useEffect(() => {
     // 获取使用人数
@@ -128,9 +130,12 @@ export function About() {
       }
     }).catch(() => {})
 
+    // 先取本地版本号兜底（store 有缓存时不重复请求），保证远程检查更新失败时也能显示当前版本
+    fetchCurrentVersion()
+
     // 页面挂载时静默检查版本（失败不弹 toast，避免无网环境干扰用户）
     handleCheckUpdate(true)
-  }, [handleCheckUpdate])
+  }, [handleCheckUpdate, fetchCurrentVersion])
 
   return (
     <div className="max-w-5xl mx-auto space-y-4">
