@@ -35,6 +35,7 @@ from common.services.token_renewal_cache_service import (
 )
 from common.services.token_api_mode import load_token_api_mode
 from common.utils.xianyu_utils import trans_cookies
+from app.utils.captcha_engine import normalize_captcha_engine
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -452,7 +453,8 @@ async def solve_captcha(request: SolveCaptchaRequest):
             from common.db.compat import db_manager as _dm
             kwargs = {"processing_status": status, "processing_result": result}
             if engine is not None:
-                kwargs["captcha_engine"] = engine
+                normalized_engine, error = normalize_captcha_engine(engine, error)
+                kwargs["captcha_engine"] = normalized_engine
             if error is not None:
                 kwargs["error_message"] = error
             _dm.update_risk_control_log(log_id=log_id, **kwargs)
