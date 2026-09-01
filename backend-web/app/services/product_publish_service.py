@@ -181,8 +181,11 @@ class ProductMaterialService:
         )
         rows = (await self.session.execute(stmt)).scalars().all()
 
+        from app.services.auto_relist_rule_service import AutoRelistRuleService
+        auto_relist_map = await AutoRelistRuleService(self.session).get_map([int(r.id) for r in rows])
+
         return {
-            "list": [_material_to_dict(r) for r in rows],
+            "list": [_material_to_dict(r, auto_relist=auto_relist_map.get(int(r.id))) for r in rows],
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -277,7 +280,7 @@ class ProductMaterialService:
 
 # ==================== 工具函数 ====================
 
-def _material_to_dict(m: ProductMaterial) -> dict:
+def _material_to_dict(m: ProductMaterial, auto_relist: dict | None = None) -> dict:
     """将素材模型转为字典"""
     return {
         "id": m.id,
@@ -313,4 +316,5 @@ def _material_to_dict(m: ProductMaterial) -> dict:
         "remark": m.remark,
         "created_at": safe_isoformat(m.created_at),
         "updated_at": safe_isoformat(m.updated_at),
+        "auto_relist": auto_relist,
     }
