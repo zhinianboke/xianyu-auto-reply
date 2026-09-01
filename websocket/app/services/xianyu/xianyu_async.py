@@ -2264,11 +2264,20 @@ class XianyuAsync:
         except Exception as e:
             logger.error(f"【{self.cookie_id}】刷新 token 异常，放弃断线重连（保留当前连接）: {self._safe_str(e)}")
             return False
+        refresh_status = getattr(self, 'last_token_refresh_status', '') or '未知'
         if not new_token:
-            refresh_status = getattr(self, 'last_token_refresh_status', '') or '未知'
             logger.error(
                 f"【{self.cookie_id}】刷新 token 未获取到新 token（原因: {refresh_status}），"
                 f"放弃断线重连（保留当前连接），本次发货失败留待重试"
+            )
+            return False
+        # 「本机滑块不处理 / 配置读取失败」等场景下，refresh_token 会回退复用过期缓存 token
+        # （返回值非空但并非新 token）。此时带着同一个过期 token 重连仍会 400，白白中断实时消息，
+        # 因此这里视同刷新失败：不断连，保留当前连接，交由外部续期/下轮重试。
+        if refresh_status in ("success_from_expired_cache", "success_from_expired_startup_cache"):
+            logger.error(
+                f"【{self.cookie_id}】刷新 token 仅复用了过期缓存（状态: {refresh_status}），"
+                f"并非新 token，放弃断线重连（保留当前连接），本次发货失败留待重试"
             )
             return False
         # 刷新成功：清除「启动过期 token」标记，避免关连接后被 _reject_expired_startup_token 误清掉新 token
