@@ -26,7 +26,11 @@ from common.utils.cookie_refresh import (
     merge_cookies,
     update_account_cookies_in_db,
 )
-from common.services.captcha.token_response import is_token_expired_response
+from common.services.captcha.token_response import (
+    is_token_expired_response,
+    safe_url_for_log,
+    summarize_token_response_for_log,
+)
 from common.services.im_token_api import (
     extract_im_access_token,
     request_im_token_with_fallback,
@@ -749,7 +753,7 @@ class GoofishImClient:
             if not access_token:
                 logger.error(
                     f"【{self.account_id}】Token响应异常: "
-                    f"{json.dumps(result, ensure_ascii=False)[:300]}"
+                    f"{summarize_token_response_for_log(result, limit=300)}"
                 )
             return access_token
 
@@ -802,7 +806,8 @@ class GoofishImClient:
             return False
 
         logger.info(
-            f"【{self.account_id}】检测到风控，委托WebSocket过滑块: {verification_url[:80]}..."
+            f"【{self.account_id}】检测到风控，委托WebSocket过滑块: "
+            f"{safe_url_for_log(verification_url)}"
         )
         self._captcha_token_cache_saved = False
         # 携带当前Cookie与设备ID：验证链接过期时 WebSocket 端可凭此重取新鲜链接

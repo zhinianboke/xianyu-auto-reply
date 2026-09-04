@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
@@ -73,6 +73,9 @@ class RemoteTokenResult:
     token: str = ""
     device_id: str = ""
     api_mode: str = ""
+    captcha_url: str = ""
+    # 自建服务可选返回闲鱼接口下发的增量 Cookie；旧服务缺失此字段时保持空字典。
+    cookies: dict[str, str] = field(default_factory=dict)
 
 
 def validate_remote_token_settings(url: str, secret_key: str) -> str | None:
@@ -166,6 +169,23 @@ def _parse_remote_token_response(
         )
 
     message = str(response_json.get("message") or "")
+    data = response_json.get("data")
+    response_data = data if isinstance(data, dict) else {}
+    device_id = str(response_data.get("device_id") or "").strip()
+    api_mode = str(response_data.get("api_mode") or "").strip()
+    captcha_url = str(
+        response_data.get("captcha_url") or response_data.get("url") or ""
+    ).strip()
+    raw_cookies = response_data.get("cookies")
+    response_cookies = (
+        {
+            str(name): str(value)
+            for name, value in raw_cookies.items()
+            if str(name).strip()
+        }
+        if isinstance(raw_cookies, dict)
+        else {}
+    )
     if not bool(response_json.get("success")):
         return RemoteTokenResult(
             success=False,
@@ -173,9 +193,12 @@ def _parse_remote_token_response(
             response_json=response_json,
             status_code=status_code,
             duration_seconds=duration_seconds,
+            device_id=device_id,
+            api_mode=api_mode,
+            captcha_url=captcha_url,
+            cookies=response_cookies,
         )
 
-    data = response_json.get("data")
     if not isinstance(data, dict):
         return RemoteTokenResult(
             success=False,
@@ -186,8 +209,6 @@ def _parse_remote_token_response(
         )
 
     token = str(data.get("token") or "").strip()
-    device_id = str(data.get("device_id") or "").strip()
-    api_mode = str(data.get("api_mode") or "").strip()
     if not token:
         return RemoteTokenResult(
             success=False,
@@ -215,6 +236,8 @@ def _parse_remote_token_response(
         token=token,
         device_id=device_id,
         api_mode=api_mode,
+        captcha_url=captcha_url,
+        cookies=response_cookies,
     )
 
 

@@ -126,9 +126,11 @@ def run_slider_verification_with_fallback(
         browser_timeout: 主引擎单次超时（秒）
         existing_cookies_str: 现有 cookie 字符串，供兜底引擎注入
         url_provider: 可选回调，浏览器就绪后用于重新获取新鲜验证链接，规避等待槽位导致的链接过期
-        remote_config: 远程过滑块配置 dict {url, secret, pass_cookies, device_id} | None。
+        remote_config: 远程过滑块配置 dict
+            {url, secret, pass_cookies, device_id, allow_local_fallback} | None。
             pass_cookies 为 True 时，会把 existing_cookies_str 与 device_id 一并传给远程端，
             供其在链接过期时重取新链接继续处理。
+            allow_local_fallback 为 False 时，远程网络不可用也不会启动本机引擎。
         weight_class: 排队来源类别（"local"=本地Token刷新 / "remote"=远程过滑块接口），
             仅 real_mouse 引擎排队时按权重放行使用；默认 "local"。
         slider_mode: 本次任务在入队前读取的滑动方式快照；未传时读取当前进程缓存。
@@ -138,7 +140,7 @@ def run_slider_verification_with_fallback(
         通过引擎取值：'playwright'（主引擎）/ 'real_mouse'（真实鼠标）/ 'remote'（远程接口）/ None（未成功）
     """
     # -1. 远程过滑块（可选，由全局配置 remote_config 触发）：
-    #     已配置则优先调远程接口求解；超时/网络不可用 → 继续本机主流程；
+    #     已配置则优先调远程接口求解；默认不因网络不可用静默启动本机鼠标；
     #     非超时（远程有返回，无论成败）→ 直接采用远程结果，不回退。
     #     注意：远程接口自身（/internal/captcha/solve）调用本函数时不传 remote_config，
     #     从而避免“远程地址指回本机”造成的无限递归。
@@ -189,7 +191,16 @@ def run_slider_verification_with_fallback(
                 reason = remote_message or "远程过滑块未通过"
                 logger.info(f"【{user_id}】远程过滑块未通过（非超时），按配置不回退本机，返回失败: {reason}")
                 return False, None, f"remote:{reason}"
-            # status == 'fallback' → 继续下面的本机主流程
+            if status == "fallback" and not remote_config.get(
+                "allow_local_fallback", True
+            ):
+                reason = remote_message or "远程过滑块服务不可用"
+                logger.warning(
+                    f"【{user_id}】远程过滑块不可用，当前为远程专用路由，"
+                    f"禁止回退本机: {reason}"
+                )
+                return False, None, f"remote:{reason}"
+            # status == 'fallback' 且允许本机处理 → 继续下面的本机主流程
 
     # 0. 真实鼠标模式（在系统设置中选择）：
     #    用物理光标回放真人轨迹，成功率高但会占用桌面鼠标，仅限有桌面的 Windows。

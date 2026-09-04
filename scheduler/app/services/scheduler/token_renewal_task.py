@@ -374,7 +374,11 @@ class TokenRenewalTask:
 
             new_token = extract_im_access_token(result.response_json)
             if not new_token:
-                response_text = json.dumps(result.response_json, ensure_ascii=False)[:500]
+                from common.services.captcha.token_response import (
+                    summarize_token_response_for_log,
+                )
+
+                response_text = summarize_token_response_for_log(result.response_json)
                 logger.warning(
                     f"【{self.task_name}】【{candidate.account_id}】续期未成功: "
                     f"status={result.status_code}, response={response_text}"
