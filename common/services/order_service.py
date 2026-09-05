@@ -1098,7 +1098,8 @@ class OrderService:
             is_token_expired_error, handle_token_expired_response,
             update_account_cookies_in_db,
             is_session_expired_error, trigger_password_login_async,
-            mark_account_session_expired
+            mark_account_session_expired,
+            extract_cookies_from_response, merge_cookies,
         )
         
         cookies = trans_cookies(cookies_str)
@@ -1120,21 +1121,25 @@ class OrderService:
             't': timestamp,
             'sign': sign,
             'v': '1.0',
-            'type': 'json',
+            # 卖家端页面使用 originaljson；json 会在部分账号上被判定为
+            # 非卖家端请求，表现为 TOKEN_EMPTY 后 PERMISSION_EXCEPTION。
+            'type': 'originaljson',
             'accountSite': 'xianyu',
             'dataType': 'json',
             'timeout': '20000',
             'api': 'mtop.taobao.idle.trade.merchant.sold.get',
             'valueType': 'string',
             'sessionOption': 'AutoLoginOnly',
+            'spm_cnt': 'a21107h.42826273.0.0',
         }
         
         headers = {
             'accept': 'application/json',
             'content-type': 'application/x-www-form-urlencoded',
-            'idle_site_biz_code': 'COMMONPRO',
-            'cookie': cookies_str,
-            'Referer': 'https://seller.goofish.com/',
+            'cookie': cookies_str.replace('\n', '').replace('\r', ''),
+            # 卖家接口会校验来源；缺少 Origin 会被误报为 Session 过期/无权限。
+            'origin': 'https://seller.goofish.com',
+            'referer': 'https://seller.goofish.com/',
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36',
         }
         
@@ -1150,7 +1155,13 @@ class OrderService:
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=20)
             ) as response:
-                res_json = await response.json()
+                res_json = await response.json(content_type=None)
+                # 成功响应也可能下发新的签名 Cookie，供后续分页使用。
+                response_cookies = extract_cookies_from_response(response)
+                response_cookies_str = (
+                    merge_cookies(cookies_str, response_cookies)
+                    if response_cookies else cookies_str
+                )
                 
                 ret = res_json.get('ret', [])
                 ret_str = ret[0] if ret else ''
@@ -1209,7 +1220,7 @@ class OrderService:
             'items': items,
             'next_page': next_page,
             'total_count': total_count,
-            'cookies_str': cookies_str,
+            'cookies_str': response_cookies_str,
         }
 
     def _parse_sold_order_item(self, item: dict) -> Optional[dict]:
