@@ -8,8 +8,10 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import asyncio
 from io import BytesIO
 from typing import Optional
+from urllib.parse import urlparse
 
 import aiohttp
 from loguru import logger
@@ -157,6 +159,136 @@ class ImageUploader:
                 except Exception:
                     pass
     
+    async def upload_image_url(
+        self,
+        image_url: str,
+    ) -> Optional[str]:
+        """Download an image reference and re-upload it to Goofish CDN.
+
+        The consign API expects URLs returned by the Goofish image uploader;
+        the original card image URL cannot be submitted reliably as picList.
+        """
+        image_url = str(image_url or '').strip()
+        if not image_url.lower().startswith(('http://', 'https://')):
+            logger.warning(f"图片地址不是HTTP(S) URL，无法下载上传: {image_url}")
+            return None
+
+        temp_path = None
+        try:
+            if not self.session:
+                await self.create_session()
+
+            headers = {
+                'Referer': 'https://www.goofish.com/',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            }
+            # aiohttp may resolve the image CDN to the container's intercepted
+            # address and fail to connect.  requests uses the working network
+            # path in this deployment; use it for the source download and keep
+            # the existing aiohttp session for the Goofish upload.
+            return await self._upload_image_url_with_requests(image_url, headers)
+            async with self.session.get(
+                image_url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as response:
+                if response.status != 200:
+                    logger.error(f"下载卡券图片失败: HTTP {response.status}, URL: {image_url}")
+                    return None
+
+                # Wait for the complete response stream instead of a bounded
+                # read, which could pass a truncated CDN response to Pillow.
+                image_data = await response.read()
+                if not image_data:
+                    logger.error(f"下载卡券图片为空: {image_url}")
+                    return None
+                if len(image_data) > 10 * 1024 * 1024:
+                    logger.error(f"卡券图片超过10MB限制，拒绝上传: {image_url}")
+                    return None
+
+            # Reject incomplete/corrupt downloads before writing or uploading.
+            try:
+                with Image.open(BytesIO(image_data)) as image:
+                    image.verify()
+            except Exception as image_error:
+                logger.error(f"Image download validation failed: {image_error}, URL: {image_url}")
+                return None
+
+            suffix = os.path.splitext(urlparse(image_url).path)[1].lower()
+            if suffix not in ('.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'):
+                suffix = '.jpg'
+            temp_fd, temp_path = tempfile.mkstemp(suffix=suffix)
+            os.close(temp_fd)
+            with open(temp_path, 'wb') as file_obj:
+                file_obj.write(image_data)
+
+            return await self.upload_image(temp_path)
+        except Exception as e:
+            logger.error(f"下载并上传卡券图片异常: {e}")
+            return None
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+
+    async def _upload_image_url_with_requests(
+        self,
+        image_url: str,
+        headers: dict[str, str],
+    ) -> Optional[str]:
+        """Download a remote card image through the working HTTP path."""
+        import requests
+
+        def download() -> bytes:
+            last_error = None
+            for attempt in range(3):
+                request_url = image_url
+                if attempt:
+                    separator = '&' if '?' in image_url else '?'
+                    request_url = f"{image_url}{separator}_download_retry={attempt}"
+                try:
+                    response = requests.get(request_url, headers=headers, timeout=30)
+                    if response.status_code != 200:
+                        raise ValueError(f"HTTP {response.status_code}")
+                    data = response.content
+                    if not data:
+                        raise ValueError("响应内容为空")
+                    if len(data) > 10 * 1024 * 1024:
+                        raise ValueError("图片超过10MB限制")
+                    content_length = response.headers.get('Content-Length')
+                    if content_length and len(data) < int(content_length):
+                        raise ValueError(
+                            f"响应内容不完整: {len(data)}/{content_length} bytes"
+                        )
+                    with Image.open(BytesIO(data)) as image:
+                        image.verify()
+                    return data
+                except Exception as error:
+                    last_error = error
+                    if attempt < 2:
+                        continue
+            raise RuntimeError(f"图片下载失败: {last_error}")
+
+        image_data = await asyncio.to_thread(download)
+        suffix = os.path.splitext(urlparse(image_url).path)[1].lower()
+        if suffix not in ('.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'):
+            suffix = '.jpg'
+        temp_path = None
+        try:
+            temp_fd, temp_path = tempfile.mkstemp(suffix=suffix)
+            os.close(temp_fd)
+            with open(temp_path, 'wb') as file_obj:
+                file_obj.write(image_data)
+            return await self.upload_image(temp_path)
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+
     def _parse_upload_response(self, response_text: str) -> Optional[str]:
         """解析上传响应获取图片URL"""
         try:

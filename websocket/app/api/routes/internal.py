@@ -9,6 +9,7 @@ WebSocket服务内部API路由
 from __future__ import annotations
 
 import asyncio
+import json
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -79,6 +80,7 @@ class ConfirmNoLogisticsRequest(BaseModel):
     item_id: str
     buyer_id: str = ""
     is_bargain: bool = False
+    card_id: int | None = None
 
 
 class CancelOrderRequest(BaseModel):
@@ -1080,13 +1082,53 @@ async def confirm_no_logistics(request: ConfirmNoLogisticsRequest):
             "data": None,
         }
 
+    trade_text = None
+    pic_list = None
+    if request.card_id and not request.is_bargain:
+        from common.models.card import Card
+        from sqlalchemy import select
+
+        async with async_session_maker() as session:
+            card_result = await session.execute(
+                select(Card).where(Card.id == request.card_id)
+            )
+            card = card_result.scalars().first()
+        if not card:
+            return {"success": False, "code": 404, "message": "卡券不存在", "data": None}
+        if card.type == "text":
+            trade_text = (card.text_content or "").strip()
+        elif card.type == "image":
+            # 图片卡券的备注对应旧版的 tradeText；图片本身仍通过 picList
+            # 作为平台发货凭证提交。
+            trade_text = (card.description or "").strip()
+            raw_urls = card.image_urls or []
+            if isinstance(raw_urls, str):
+                try:
+                    raw_urls = json.loads(raw_urls)
+                except (TypeError, json.JSONDecodeError):
+                    raw_urls = [raw_urls]
+            pic_list = [
+                str(url).strip()
+                for url in (raw_urls if isinstance(raw_urls, (list, tuple)) else [])
+                if isinstance(url, str) and url.strip()
+            ]
+            if card.image_url and card.image_url not in pic_list:
+                pic_list.append(card.image_url)
+            if not pic_list:
+                return {"success": False, "code": 400, "message": "图片卡券缺少凭证图片", "data": None}
+        else:
+            return {"success": False, "code": 400, "message": "无物流凭证仅支持文字或图片卡券", "data": None}
+
     if request.is_bargain:
         result = await xianyu_live.auto_delivery_handler.auto_freeshipping(
             request.order_no, request.item_id, request.buyer_id
         )
     else:
         result = await xianyu_live.auto_delivery_handler.auto_confirm(
-            request.order_no, request.item_id
+            request.order_no,
+            request.item_id,
+            trade_text=trade_text,
+            pic_list=pic_list,
         )
 
     if not result or not result.get("success"):
@@ -1474,6 +1516,21 @@ async def _deliver_order_impl(request: DeliverOrderRequest):
             }
         
         # 验证商品是否属于当前账号
+        # 无需邮寄凭证必须随首次确认发货请求一起提交。
+        # 先读取轻量开关，避免本入口在卡券流程前提前调用 auto_confirm，
+        # 导致图片卡券的 picList 为空。
+        no_logistics_form_card = False
+        if request.card_id:
+            async with async_session_maker() as session:
+                card_flag_stmt = select(Card.use_no_logistics_form).where(Card.id == request.card_id)
+                card_flag_result = await session.execute(card_flag_stmt)
+                no_logistics_form_card = bool(card_flag_result.scalar_one_or_none())
+            if no_logistics_form_card:
+                logger.info(
+                    f"【内部API】订单 {request.order_no} 使用无需邮寄凭证卡券，"
+                    "跳过前置确认，等待卡券流程携带 picList 一次性提交"
+                )
+
         if request.item_id:
             from common.db.session import async_session_maker
             from sqlalchemy import select
@@ -1667,7 +1724,7 @@ async def _deliver_order_impl(request: DeliverOrderRequest):
                 f"【内部API】send_before_confirm 模式：先发卡券再确认发货，跳过此处确认: "
                 f"order_no={request.order_no}"
             )
-        elif xianyu_live.is_auto_confirm_enabled():
+        elif xianyu_live.is_auto_confirm_enabled() and not no_logistics_form_card:
             logger.info(f"【内部API】开始确认发货: order_no={request.order_no}")
             confirm_result = await xianyu_live.auto_delivery_handler.auto_confirm(
                 order_id=request.order_no,
@@ -1715,7 +1772,13 @@ async def _deliver_order_impl(request: DeliverOrderRequest):
             logger.info(f"【内部API】自动确认发货已关闭，跳过确认发货")
 
         # 如果是小刀订单，调用免拼接口（card_only 模式和 send_before_confirm 模式下跳过）
-        if request.is_bargain and not order_already_shipped and not skip_shipping_confirm and not send_before_confirm_mode:
+        if (
+            request.is_bargain
+            and not order_already_shipped
+            and not skip_shipping_confirm
+            and not send_before_confirm_mode
+            and not no_logistics_form_card
+        ):
             logger.info(f"【内部API】检测到小刀订单，调用免拼发货接口: order_no={request.order_no}")
             freeshipping_result = await xianyu_live.auto_delivery_handler.auto_freeshipping(
                 order_id=request.order_no,
@@ -1966,6 +2029,101 @@ async def _deliver_order_impl(request: DeliverOrderRequest):
             }
 
         # 构建订单上下文（仅 text/data/api 文字渲染需要）
+        # 图片/文字凭证卡券必须在发送卡券前完成平台确认，
+        # 否则“无需寄件”分支会跳过前置确认，也不会进入 send_before_confirm 后置确认。
+        form_trade_text = None
+        form_pic_list = None
+        if no_logistics_form_card and send_before_confirm_mode:
+            # 先发卡券再确认发货时，先准备同一份平台凭证数据，
+            # 由下方后置确认请求携带备注和图片提交。
+            if card.type == 'text':
+                form_trade_text = (card.text_content or '').strip()
+            elif card.type == 'image':
+                form_trade_text = (card.description or '').strip()
+                raw_form_pic_list = card.image_urls or []
+                if isinstance(raw_form_pic_list, str):
+                    try:
+                        raw_form_pic_list = json.loads(raw_form_pic_list)
+                    except (TypeError, json.JSONDecodeError):
+                        raw_form_pic_list = [raw_form_pic_list]
+                form_pic_list = [
+                    str(url).strip()
+                    for url in (raw_form_pic_list if isinstance(raw_form_pic_list, (list, tuple)) else [])
+                    if isinstance(url, str) and url.strip()
+                ]
+                if card.image_url and card.image_url not in form_pic_list:
+                    form_pic_list.append(card.image_url)
+
+        if no_logistics_form_card and not platform_shipping_confirmed and not send_before_confirm_mode:
+            form_trade_text = None
+            form_pic_list = None
+            if card.type == 'text':
+                form_trade_text = (card.text_content or '').strip()
+                if not form_trade_text:
+                    return {
+                        "success": False,
+                        "code": 400,
+                        "message": "无需寄件文字凭证为空",
+                        "data": None,
+                    }
+            elif card.type == 'image':
+                # 与旧版一致：图片卡券的备注写入 tradeText，图片写入 picList。
+                form_trade_text = (card.description or '').strip()
+                raw_form_pic_list = card.image_urls or []
+                if isinstance(raw_form_pic_list, str):
+                    try:
+                        raw_form_pic_list = json.loads(raw_form_pic_list)
+                    except (TypeError, json.JSONDecodeError):
+                        raw_form_pic_list = [raw_form_pic_list]
+                form_pic_list = [
+                    str(url).strip()
+                    for url in (raw_form_pic_list if isinstance(raw_form_pic_list, (list, tuple)) else [])
+                    if isinstance(url, str) and url.strip()
+                ]
+                if card.image_url and card.image_url not in form_pic_list:
+                    form_pic_list.append(card.image_url)
+                if not form_pic_list:
+                    return {
+                        "success": False,
+                        "code": 400,
+                        "message": "无需寄件图片凭证为空",
+                        "data": None,
+                    }
+            else:
+                return {
+                    "success": False,
+                    "code": 400,
+                    "message": "无需寄件凭证仅支持文字或图片卡券",
+                    "data": None,
+                }
+
+            logger.info(
+                f"【内部API】订单 {request.order_no} 提交无需寄件凭证确认发货: "
+                f"card_type={card.type}, pic_count={len(form_pic_list or [])}"
+            )
+            confirm_result = await xianyu_live.auto_delivery_handler.auto_confirm(
+                order_id=request.order_no,
+                item_id=request.item_id,
+                trade_text=form_trade_text,
+                pic_list=form_pic_list,
+            )
+            if not confirm_result or not confirm_result.get('success'):
+                confirm_error = (
+                    (confirm_result or {}).get('error')
+                    or (confirm_result or {}).get('message')
+                    or '无需寄件凭证确认发货失败'
+                )
+                logger.warning(
+                    f"【内部API】订单 {request.order_no} 无需寄件凭证确认发货失败: {confirm_error}"
+                )
+                return {
+                    "success": False,
+                    "code": 400,
+                    "message": confirm_error,
+                    "data": confirm_result,
+                }
+            platform_shipping_confirmed = True
+
         from app.services.xianyu.delivery_utils import process_delivery_content_with_description
         _order_context = {
             'order_id': request.order_no or '',
@@ -2216,7 +2374,9 @@ async def _deliver_order_impl(request: DeliverOrderRequest):
                 if not only_send_card_mode:
                     confirm_result = await xianyu_live.auto_delivery_handler.auto_confirm(
                         order_id=request.order_no,
-                        item_id=request.item_id
+                        item_id=request.item_id,
+                        trade_text=form_trade_text,
+                        pic_list=form_pic_list,
                     )
                     if confirm_result and confirm_result.get('skipped_only_send_card'):
                         only_send_card_mode = True
