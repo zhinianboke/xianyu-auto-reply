@@ -101,7 +101,12 @@ def shipping_method_from_post_fee(post_fee: Any) -> str:
     """
     if not isinstance(post_fee, dict):
         return "free"
-    if as_bool(post_fee.get("onlyTakeSelf")):
+    # 「支持自提」是独立开关，不能用 onlyTakeSelf 判断「无需邮寄」。
+    # 平台的「无需邮寄」实际由 supportFreight=false 表示；包邮即使支持自提，
+    # canFreeShipping 仍然为 true，必须继续回填为 free。
+    if as_bool(post_fee.get("canFreeShipping")):
+        return "free"
+    if "supportFreight" in post_fee and not as_bool(post_fee.get("supportFreight")):
         return "none"
     template_id = _text(post_fee.get("templateId")) or _text(post_fee.get("idleTemplateId"))
     if template_id and template_id != "0":
@@ -130,6 +135,8 @@ def snapshot_post_fee_unchanged(item_data: dict[str, Any], snapshot_post_fee: An
         form_postage = int(round(float(item_data.get("postage") or 0) * 100))
     except (TypeError, ValueError):
         form_postage = 0
+    if as_bool(snapshot_post_fee.get("onlyTakeSelf")) != as_bool(item_data.get("support_pickup")):
+        return False
     return as_int(snapshot_post_fee.get("postPriceInCent")) == form_postage
 
 

@@ -24,6 +24,7 @@ from app.services.xianyu_direct_payload import (
     text as _text,
 )
 from app.services.xianyu_item_snapshot import (
+    as_bool,
     as_int,
     normalize_snapshot_post_fee,
     snapshot_address_if_unchanged,
@@ -167,12 +168,13 @@ def _build_attribute_labels(item_data: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _build_post_fee(item_data: dict[str, Any]) -> dict[str, bool]:
-    """转换已由抓包确认的包邮和仅自提发货方式。"""
+    """构造发货方式与「支持自提」分离的运费载荷。"""
     shipping_method = _text(item_data.get("shipping_method")) or "free"
+    only_take_self = as_bool(item_data.get("support_pickup"))
     if shipping_method == "free":
-        return {"canFreeShipping": True, "supportFreight": True, "onlyTakeSelf": False}
+        return {"canFreeShipping": True, "supportFreight": True, "onlyTakeSelf": only_take_self}
     if shipping_method == "none":
-        return {"canFreeShipping": False, "supportFreight": False, "onlyTakeSelf": True}
+        return {"canFreeShipping": False, "supportFreight": False, "onlyTakeSelf": only_take_self}
     raise DirectPublishError("当前接口抓包未包含非包邮运费载荷，请改为包邮或无需邮寄后发布")
 
 
@@ -417,7 +419,8 @@ async def build_item_payload(
         "quantity": "1" if is_multi_spec else _resolve_quantity(item_data),
         "simpleItem": "true",
         "imageInfoDOList": video_items + image_items,
-        "itemTextDTO": {"desc": description, "title": title, "titleDescSeparate": False},
+        # True 才会让平台分别使用 title 和 desc；False 时平台会忽略 title，按正文拆标题。
+        "itemTextDTO": {"desc": description, "title": title, "titleDescSeparate": True},
         "itemLabelExtList": labels,
         "itemProperties": item_properties,
         "userRightsProtocols": _resolve_user_rights(snapshot),

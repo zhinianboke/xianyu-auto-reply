@@ -2335,7 +2335,7 @@ export function Accounts() {
                   <th className="whitespace-nowrap min-w-[120px]">状态</th>
                   <th className="whitespace-nowrap min-w-[90px]">在线状态</th>
                   <th className="whitespace-nowrap min-w-[90px]">配置密码</th>
-                  <th className="whitespace-nowrap min-w-[620px]">功能开关</th>
+                  <th className="whitespace-nowrap min-w-[340px]">功能开关</th>
                   <th className="whitespace-nowrap min-w-[90px]">暂停时间</th>
                   <th className="whitespace-nowrap min-w-[160px] sticky right-0 bg-slate-50 dark:bg-slate-800 z-20">操作</th>
                 </tr>
@@ -2431,132 +2431,132 @@ export function Accounts() {
                         {/* AI回复 */}
                         <button
                           onClick={() => handleToggleAI(account)}
-                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
+                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
                             account.aiEnabled
                               ? 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300 dark:hover:bg-purple-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
                           }`}
+                          aria-label="AI回复"
                           title={`AI回复：${account.aiEnabled ? '已开启（点击关闭）' : '已关闭（点击开启）'}`}
                         >
                           <Bot className="w-3.5 h-3.5" />
-                          <span>AI回复</span>
                         </button>
                         {/* 定时补发货 */}
                         <button
                           onClick={() => handleToggleScheduledRedelivery(account)}
-                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
+                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
                             account.scheduled_redelivery
                               ? 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-300 dark:hover:bg-teal-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
                           }`}
+                          aria-label="定时补发货"
                           title={`定时补发货：${account.scheduled_redelivery ? '已开启（点击关闭）' : '已关闭（点击开启）'}`}
                         >
                           <Repeat className="w-3.5 h-3.5" />
-                          <span>补发货</span>
                         </button>
                         {/* 定时补评价 */}
                         <button
                           onClick={() => handleToggleScheduledRate(account)}
-                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
+                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
                             account.scheduled_rate
                               ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
                           }`}
+                          aria-label="定时补评价"
                           title={`定时补评价：${account.scheduled_rate ? '已开启（点击关闭）' : '已关闭（点击开启）'}`}
                         >
                           <Star className="w-3.5 h-3.5" />
-                          <span>补评价</span>
                         </button>
                         {/* 商品擦亮 */}
                         <button
                           onClick={() => handleToggleAutoPolish(account)}
-                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
+                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
                             account.auto_polish
                               ? 'bg-fuchsia-100 text-fuchsia-700 hover:bg-fuchsia-200 dark:bg-fuchsia-900/30 dark:text-fuchsia-300 dark:hover:bg-fuchsia-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
                           }`}
+                          aria-label="商品自动擦亮"
                           title={`商品自动擦亮：${account.auto_polish ? '已开启（点击关闭）' : '已关闭（点击开启）'}`}
                         >
                           <RefreshCw className="w-3.5 h-3.5" />
-                          <span>擦亮</span>
                         </button>
                         {/* 自动确认发货 */}
                         <button
                           onClick={() => handleToggleAutoConfirm(account)}
-                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
+                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
                             account.auto_confirm
                               ? 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300 dark:hover:bg-green-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
                           }`}
+                          aria-label="自动确认发货"
                           title={`自动确认发货：${account.auto_confirm ? '已开启（点击关闭）' : '已关闭（点击开启，开启后会关闭“只发卡券不确认发货”）'}`}
                         >
                           <PackageCheck className="w-3.5 h-3.5" />
-                          <span>确认发货</span>
                         </button>
                         {/* 发货成功再发卡券 */}
                         <button
                           onClick={() => handleToggleConfirmBeforeSend(account)}
-                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
+                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
                             account.confirm_before_send
                               ? 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-300 dark:hover:bg-cyan-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
                           }`}
+                          aria-label="发货成功再发卡券"
                           title={`发货成功再发卡券：${account.confirm_before_send ? '已开启（点击关闭）' : '已关闭（点击开启，开启后确认发货失败将不发送卡券）'}`}
                         >
                           <ShieldCheck className="w-3.5 h-3.5" />
-                          <span>先发货后发卡</span>
                         </button>
                         {/* 卡券发送成功再确认发货 */}
                         <button
                           onClick={() => handleToggleSendBeforeConfirm(account)}
-                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
+                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
                             account.send_before_confirm
                               ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
                           }`}
+                          aria-label="卡券发送成功再确认发货"
                           title={`卡券发送成功再确认发货：${account.send_before_confirm ? '已开启（点击关闭）' : '已关闭（点击开启，开启后先发卡券，发送成功后再确认发货）'}`}
                         >
                           <Send className="w-3.5 h-3.5" />
-                          <span>先发卡后发货</span>
                         </button>
                         {/* 只发卡券不确认发货 */}
                         <button
                           onClick={() => handleToggleOnlySendCard(account)}
-                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
+                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
                             account.only_send_card
                               ? 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:hover:bg-orange-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
                           }`}
+                          aria-label="只发卡券不确认发货"
                           title={`只发卡券不确认发货：${account.only_send_card ? '已开启（点击关闭，当前所有发货仅发送卡券）' : '已关闭（点击开启，开启后会关闭自动确认发货，并跳过确认发货和免拼接口）'}`}
                         >
                           <Ticket className="w-3.5 h-3.5" />
-                          <span>只发卡券</span>
                         </button>
                         {/* 自动求小红花 */}
                         <button
                           onClick={() => handleToggleAutoRedFlower(account)}
-                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
+                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
                             account.auto_red_flower
                               ? 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-300 dark:hover:bg-pink-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
                           }`}
+                          aria-label="自动求小红花"
                           title={`自动求小红花：${account.auto_red_flower ? '已开启（点击关闭）' : '已关闭（点击开启）'}`}
                         >
                           <Flower2 className="w-3.5 h-3.5" />
-                          <span>求小红花</span>
                         </button>
                         {/* 已下单用户禁止AI回复 */}
                         <button
                           onClick={() => handleToggleAiReplyBlockOrderedUsers(account)}
-                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
+                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
                             account.ai_reply_block_ordered_users
                               ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
                           }`}
+                          aria-label="已下单用户禁止AI回复"
                           title={`已下单用户禁止AI回复：${account.ai_reply_block_ordered_users ? '已开启（点击关闭）对已下单用户不使用AI回复' : '已关闭（点击开启）'}`}
                         >
                           <Ban className="w-3.5 h-3.5" />
-                          <span>已购禁AI</span>
                         </button>
                       </div>
                     </td>

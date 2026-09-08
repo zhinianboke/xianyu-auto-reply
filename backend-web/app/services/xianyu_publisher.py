@@ -23,6 +23,7 @@ from loguru import logger
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from common.utils.browser_utils import ensure_playwright_browser_path, get_chromium_executable_path
 from common.services.publish_image_service import cleanup_temp_images, download_remote_image
+from app.services.xianyu_item_snapshot import as_bool
 
 
 class XianyuPublisher:
@@ -1729,12 +1730,47 @@ class XianyuPublisher:
                 except Exception:
                     continue
 
-        if item_data.get("support_pickup"):
+        # 闲鱼页面的「支持自提」默认状态可能是开启的，不能只在 True 时点击，
+        # 否则用户传 False 时会把页面默认值原样提交出去。
+        expected_pickup = as_bool(item_data.get("support_pickup"))
+        pickup_text = self.page.get_by_text("支持自提", exact=True).last
+        pickup_control = None
+        if await pickup_text.count() > 0:
+            # 文案与开关在不同版本页面中可能是父子节点或兄弟节点，逐级查找控件。
+            for level in range(1, 5):
+                container = pickup_text.locator("xpath=" + "/.." * level)
+                candidate = container.locator(
+                    'input[type="checkbox"], button[role="switch"], [role="switch"]'
+                ).last
+                try:
+                    if await candidate.count() > 0 and await candidate.is_visible():
+                        pickup_control = candidate
+                        break
+                except Exception:
+                    continue
+
+        if pickup_control is not None:
+            try:
+                tag_name = await pickup_control.evaluate("el => el.tagName")
+                if tag_name == "INPUT":
+                    current_pickup = await pickup_control.is_checked()
+                else:
+                    aria_checked = await pickup_control.get_attribute("aria-checked")
+                    class_name = await pickup_control.get_attribute("class") or ""
+                    current_pickup = aria_checked == "true" or "ant-switch-checked" in class_name
+                if current_pickup != expected_pickup:
+                    await pickup_control.click()
+                logger.info(f"✅ 支持自提状态：{'开启' if expected_pickup else '关闭'}")
+            except Exception as exc:
+                logger.warning(f"⚠️ 未能核验支持自提开关状态: {exc}")
+        elif expected_pickup:
+            # 只有在明确需要开启时才使用旧版兜底点击，避免 False 时误切换。
             for selector in ['label:has-text("支持自提")', 'button:has-text("支持自提")', 'text=支持自提']:
                 try:
                     element = await self.page.query_selector(selector)
                     if element and await element.is_visible():
                         await element.click()
+                        logger.info("✅ 已开启支持自提（兼容旧版页面）")
                         break
                 except Exception:
                     continue
