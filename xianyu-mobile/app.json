@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "闲鱼管家",
+    "slug": "xianyu-mobile",
+    "version": "1.0.6",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "scheme": "xianyu-mobile",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.xianyu.mobile"
+    },
+    "android": {
+      "package": "com.xianyu.mobile",
+      "usesCleartextTraffic": true,
+      "adaptiveIcon": {
+        "backgroundColor": "#FF6A00",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": true
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-status-bar",
+      "expo-image-picker",
+      "expo-document-picker"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

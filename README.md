@@ -1137,3 +1137,18 @@ GET /api/v1/external/message-logs?secret_key=your-secret-key&item_id=商品ID&me
 ## Star History
 
 [![Star History Chart](https://star-history.dera.page/svg?repos=zhinianboke/xianyu-auto-reply&type=Date)](https://star-history.dera.page/#zhinianboke/xianyu-auto-reply&Date)
+
+## 移动端 App (xianyu-mobile)
+
+本仓库包含一个 Android 移动端客户端，位于 `xianyu-mobile/` 目录。
+
+- 基于 Expo SDK 57 + React Native 0.86.2 + React 19
+- 50+ 页面，4 大 Tab（消息/订单/商品/我的）
+- 蓝白冷色系设计系统，13 个自研 UI 组件
+- 多类型卡券、AI 上架、左滑操作、条形图可视化
+- 与本后端完全解耦，用户自托管服务器即可使用
+- 支持 OpenAPI 契约驱动的类型安全 API 调用
+
+详见 [xianyu-mobile/README.md](xianyu-mobile/README.md)。
+
+![我的页面](xianyu-mobile/docs/screenshots/mine.png)
