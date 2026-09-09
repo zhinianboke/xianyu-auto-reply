@@ -8,33 +8,33 @@ import {
   ShoppingBag,
   Wifi,
   Users,
-  ListTodo,
+  TrendingUp,
 } from 'lucide-react-native';
 import { Card, StatCard, Loading } from '@/components/ui';
 import { colors, spacing, typography } from '@/lib/theme';
-import { getBrowseSummary, type DashboardStats } from '@/api/wrappers/dashboard';
+import {
+  getCookieStats,
+  getOrderTrend,
+  type CookieStats,
+  type OrderTrendPoint,
+} from '@/api/wrappers/dashboard';
 import { useAccountsStore } from '@/stores/accounts';
 
-/** YYYY-MM-DD 格式化 */
-function formatDate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
+const EMPTY_STATS: CookieStats = {
+  total_accounts: 0,
+  active_accounts: 0,
+  total_keywords: 0,
+  total_orders: 0,
+  today_reply_count: 0,
+  yesterday_reply_count: 0,
+  account_limit: null,
+  used_account_count: 0,
+  remaining_account_count: null,
+};
 
-/** 从统计结果中按候选字段名提取数字，缺失时返回 undefined */
-function maybeNumber(
-  obj: Record<string, unknown>,
-  keys: string[],
-): number | undefined {
-  for (const k of keys) {
-    if (k in obj && obj[k] != null && obj[k] !== '') {
-      const n = Number(obj[k]);
-      if (Number.isFinite(n)) return n;
-    }
-  }
-  return undefined;
+/** 金额展示：0 显示 0，保留两位小数 */
+function formatAmount(n: number): string {
+  return `¥${n.toFixed(2)}`;
 }
 
 export default function DashboardScreen() {
@@ -44,12 +44,9 @@ export default function DashboardScreen() {
 
   const accounts = useAccountsStore((s) => s.options);
   const loadAccounts = useAccountsStore((s) => s.load);
-  const [stats, setStats] = useState<DashboardStats>({
-    total_accounts: 0,
-    active_accounts: 0,
-    today_replies: 0,
-    total_orders: 0,
-  });
+  // 真实数据源：GET /api/v1/cookies/stats + /api/v1/cookies/stats/order-trend
+  const [stats, setStats] = useState<CookieStats>(EMPTY_STATS);
+  const [trend, setTrend] = useState<OrderTrendPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -58,40 +55,13 @@ export default function DashboardScreen() {
     setRefreshing(true);
     try {
       await loadAccounts(force);
-      const accs = useAccountsStore.getState().options;
-
-      // 用今天日期范围调用浏览概要；接口需要账号，取第一个账号的 pk
-      if (accs.length > 0) {
-        const today = formatDate(new Date());
-        const result = await getBrowseSummary(String(accs[0].pk), today, today);
-        const totalAccounts =
-          maybeNumber(result, ['total_accounts', 'account_count', 'accounts']) ??
-          accs.length;
-        const activeAccounts =
-          maybeNumber(result, ['active_accounts', 'active_count']) ??
-          accs.filter((a) => a.enabled).length;
-        const todayReplies =
-          maybeNumber(result, [
-            'today_replies',
-            'today_reply_count',
-            'replies',
-          ]) ?? 0;
-        const totalOrders =
-          maybeNumber(result, ['total_orders', 'orders', 'order_count']) ?? 0;
-        setStats({
-          total_accounts: totalAccounts,
-          active_accounts: activeAccounts,
-          today_replies: todayReplies,
-          total_orders: totalOrders,
-        });
-      } else {
-        setStats({
-          total_accounts: 0,
-          active_accounts: 0,
-          today_replies: 0,
-          total_orders: 0,
-        });
-      }
+      // 趋势失败不阻断统计卡展示
+      const [statsRes, trendRes] = await Promise.all([
+        getCookieStats(),
+        getOrderTrend(7).catch(() => [] as OrderTrendPoint[]),
+      ]);
+      setStats(statsRes);
+      setTrend(trendRes);
     } catch (e) {
       console.error('加载仪表盘失败', e);
       Alert.alert('加载失败', (e as Error).message);
@@ -114,7 +84,6 @@ export default function DashboardScreen() {
   }
 
   // 上方统计卡只放可操作的高价值指标；账号明细见下方"账号概览"卡。
-  // 近7日趋势暂无数据源，该位按约定回退为"账号总数"。
   const statCards: {
     label: string;
     value: number;
@@ -124,7 +93,7 @@ export default function DashboardScreen() {
   }[] = [
     {
       label: '今日回复',
-      value: stats.today_replies,
+      value: stats.today_reply_count,
       icon: MessageCircle,
       accent: c.info,
       onPress: () => router.push('/(tabs)/messages'),
@@ -137,7 +106,7 @@ export default function DashboardScreen() {
       onPress: () => router.push('/(tabs)/orders'),
     },
     {
-      label: '在线账号',
+      label: '启用账号',
       value: stats.active_accounts,
       icon: Wifi,
       accent: c.success,
@@ -151,6 +120,11 @@ export default function DashboardScreen() {
       onPress: () => router.push('/(tabs)/mine/accounts'),
     },
   ];
+
+  // 近7日趋势条形图（横向，参考 data-analysis 分布条画法）
+  const maxAmount = trend.reduce((m, p) => Math.max(m, p.amount), 0);
+  const trendTotalCount = trend.reduce((sum, p) => sum + p.count, 0);
+  const trendTotalAmount = trend.reduce((sum, p) => sum + p.amount, 0);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['left', 'right', 'bottom']}>
@@ -184,7 +158,7 @@ export default function DashboardScreen() {
               账号总数
             </Text>
             <Text style={[styles.infoValue, { color: c.text }]}>
-              {accounts.length}
+              {stats.total_accounts}
             </Text>
           </View>
           <View
@@ -194,7 +168,7 @@ export default function DashboardScreen() {
               启用账号
             </Text>
             <Text style={[styles.infoValue, { color: c.success }]}>
-              {accounts.filter((a) => a.enabled).length}
+              {stats.active_accounts}
             </Text>
           </View>
           <View
@@ -204,19 +178,90 @@ export default function DashboardScreen() {
               停用账号
             </Text>
             <Text style={[styles.infoValue, { color: c.textMuted }]}>
-              {accounts.filter((a) => !a.enabled).length}
+              {Math.max(0, stats.total_accounts - stats.active_accounts)}
+            </Text>
+          </View>
+          <View
+            style={[styles.infoRow, { borderTopColor: c.border, borderTopWidth: 1 }]}
+          >
+            <Text style={[styles.infoLabel, { color: c.textSecondary }]}>
+              关键词总数
+            </Text>
+            <Text style={[styles.infoValue, { color: c.text }]}>
+              {stats.total_keywords}
+            </Text>
+          </View>
+          <View
+            style={[styles.infoRow, { borderTopColor: c.border, borderTopWidth: 1 }]}
+          >
+            <Text style={[styles.infoLabel, { color: c.textSecondary }]}>
+              昨日回复
+            </Text>
+            <Text style={[styles.infoValue, { color: c.text }]}>
+              {stats.yesterday_reply_count}
+            </Text>
+          </View>
+          <View
+            style={[styles.infoRow, { borderTopColor: c.border, borderTopWidth: 1 }]}
+          >
+            <Text style={[styles.infoLabel, { color: c.textSecondary }]}>
+              剩余额度
+            </Text>
+            <Text style={[styles.infoValue, { color: c.text }]}>
+              {stats.remaining_account_count == null
+                ? '不限'
+                : `${stats.remaining_account_count} / 限 ${stats.account_limit ?? '—'}`}
             </Text>
           </View>
         </Card>
 
-        <Card style={styles.todoCard}>
-          <View style={styles.todoHeader}>
-            <ListTodo size={16} stroke={c.primary} />
-            <Text style={[styles.todoTitle, { color: c.text }]}>今日待办</Text>
+        {/* 近7日订单趋势（真实数据源 order-trend；无数据源支撑的"今日待办"卡已移除） */}
+        <Card style={styles.trendCard}>
+          <View style={styles.trendHeader}>
+            <TrendingUp size={16} stroke={c.primary} />
+            <Text style={[styles.infoTitle, { color: c.text }]}>近7日订单</Text>
           </View>
-          <Text style={[styles.todoEmpty, { color: c.textMuted }]}>
-            暂无待办事项
-          </Text>
+          {trend.length === 0 ? (
+            <Text style={[styles.trendEmpty, { color: c.textMuted }]}>
+              暂无订单数据
+            </Text>
+          ) : (
+            <>
+              <Text style={[styles.trendSummary, { color: c.textSecondary }]}>
+                合计 {trendTotalCount} 单 · {formatAmount(trendTotalAmount)}
+              </Text>
+              {trend.map((p, idx) => {
+                const widthPct =
+                  maxAmount > 0 ? (p.amount / maxAmount) * 100 : 0;
+                return (
+                  <View key={`${p.date}-${idx}`} style={styles.trendRow}>
+                    <Text
+                      style={[styles.trendLabel, { color: c.textSecondary }]}
+                      numberOfLines={1}
+                    >
+                      {p.date}
+                    </Text>
+                    <View
+                      style={[styles.trendTrack, { backgroundColor: c.surfaceAlt }]}
+                    >
+                      <View
+                        style={[
+                          styles.trendFill,
+                          { width: `${widthPct}%`, backgroundColor: c.primary },
+                        ]}
+                      />
+                    </View>
+                    <Text
+                      style={[styles.trendValue, { color: c.primary }]}
+                      numberOfLines={1}
+                    >
+                      {p.amount > 0 ? formatAmount(p.amount) : '0'} · {p.count}单
+                    </Text>
+                  </View>
+                );
+              })}
+            </>
+          )}
         </Card>
 
         {accounts.length === 0 && (
@@ -244,9 +289,20 @@ const styles = StyleSheet.create({
   },
   infoLabel: { ...typography.body },
   infoValue: { ...typography.body, fontWeight: '600' },
-  todoCard: { gap: spacing.sm },
-  todoHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  todoTitle: { ...typography.heading },
-  todoEmpty: { ...typography.caption },
+  // 近7日订单趋势
+  trendCard: { gap: spacing.sm },
+  trendHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  trendSummary: { ...typography.caption },
+  trendRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  trendLabel: { ...typography.small, width: 42 },
+  trendTrack: {
+    flex: 1,
+    height: 8,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  trendFill: { height: '100%', borderRadius: 4 },
+  trendValue: { ...typography.small, width: 110, textAlign: 'right' },
+  trendEmpty: { ...typography.caption },
   hint: { ...typography.caption, textAlign: 'center', paddingVertical: spacing.md },
 });

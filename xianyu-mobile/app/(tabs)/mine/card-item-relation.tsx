@@ -15,9 +15,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { CheckSquare, Square, Package } from 'lucide-react-native';
-import { EmptyState, Button, Loading } from '@/components/ui';
+import { EmptyState, Button, Loading, Input } from '@/components/ui';
 import { colors, spacing, typography, radius } from '@/lib/theme';
-import { getXianyuItems, type XianyuItem } from '@/api/wrappers/items';
+import type { XianyuItem } from '@/api/wrappers/items';
+import { searchXianyuItems } from '@/api/wrappers/products';
 import { getAccountOptions, type AccountOption } from '@/api/wrappers/accounts';
 import {
   getCardItemIds,
@@ -49,6 +50,10 @@ export default function CardItemRelationScreen() {
   // 选中态以 getCardItemIds 为准（含已删除商品的孤儿关联），保存时不丢失
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
+  // 商品标题搜索（服务端 keyword，500ms 防抖）
+  const [searchText, setSearchText] = useState('');
+  const [keyword, setKeyword] = useState('');
+
   // 切换账号/分页会触发重复请求，用序号丢弃过期响应
   const reqSeqRef = useRef(0);
 
@@ -72,14 +77,21 @@ export default function CardItemRelationScreen() {
   }, [cardId]);
 
   const loadItems = useCallback(
-    async (accountId: string, opts?: { append?: boolean; fromPage?: number }) => {
+    async (
+      accountId: string,
+      opts?: { append?: boolean; fromPage?: number; keyword?: string },
+    ) => {
       const append = opts?.append ?? false;
       const targetPage = opts?.fromPage ?? 1;
+      const kw = opts?.keyword ?? keyword;
       const seq = ++reqSeqRef.current;
       if (append) setLoadingMore(true);
       else if (opts?.fromPage == null) setRefreshing(true);
       try {
-        const res = await getXianyuItems(targetPage, PAGE_SIZE, accountId || undefined);
+        const res = await searchXianyuItems(targetPage, PAGE_SIZE, {
+          cookieId: accountId || undefined,
+          keyword: kw || undefined,
+        });
         if (seq !== reqSeqRef.current) return;
         setItems((prev) => (append ? [...prev, ...res.items] : res.items));
         setPage(res.page);
@@ -95,7 +107,7 @@ export default function CardItemRelationScreen() {
         setLoading(false);
       }
     },
-    [],
+    [keyword],
   );
 
   useEffect(() => {
@@ -104,14 +116,20 @@ export default function CardItemRelationScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 标题搜索防抖 500ms（与账号切换一样重置到第一页）
+  useEffect(() => {
+    const t = setTimeout(() => setKeyword(searchText.trim()), 500);
+    return () => clearTimeout(t);
+  }, [searchText]);
+
   useEffect(() => {
     setLoading(true);
-    loadItems(selectedAccountId);
-  }, [selectedAccountId, loadItems]);
+    loadItems(selectedAccountId, { keyword });
+  }, [selectedAccountId, keyword, loadItems]);
 
   const handleRefresh = useCallback(() => {
-    loadItems(selectedAccountId);
-  }, [selectedAccountId, loadItems]);
+    loadItems(selectedAccountId, { keyword });
+  }, [selectedAccountId, keyword, loadItems]);
 
   const handleLoadMore = useCallback(() => {
     if (loadingMore || refreshing || loading) return;
@@ -246,6 +264,17 @@ export default function CardItemRelationScreen() {
         </ScrollView>
       </View>
 
+      {/* 商品标题搜索（服务端 keyword） */}
+      <View style={[styles.searchWrap, { backgroundColor: c.surface, borderColor: c.border }]}>
+        <Input
+          value={searchText}
+          onChangeText={setSearchText}
+          placeholder="搜索商品标题"
+          style={styles.searchInput}
+          returnKeyType="search"
+        />
+      </View>
+
       {/* 工具栏：标题 + 全选 + 计数 */}
       <View style={[styles.toolbar, { borderBottomColor: c.borderLight, backgroundColor: c.surfaceAlt }]}>
         <View style={styles.toolbarLeft}>
@@ -287,7 +316,13 @@ export default function CardItemRelationScreen() {
           <EmptyState
             icon={Package}
             title="暂无商品"
-            message={selectedAccountId ? '该账号暂无已发布商品' : '暂无已发布商品'}
+            message={
+              keyword
+                ? '没有匹配的商品'
+                : selectedAccountId
+                  ? '该账号暂无已发布商品'
+                  : '暂无已发布商品'
+            }
           />
         }
         ListFooterComponent={
@@ -323,6 +358,14 @@ export default function CardItemRelationScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   accountBar: { borderBottomWidth: 1, paddingBottom: spacing.sm },
+  searchWrap: {
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+    borderRadius: radius.md,
+    borderWidth: 1,
+  },
+  searchInput: { minHeight: 40, borderWidth: 0, borderRadius: 0 },
   chipRowScroll: { gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: 2 },
   chip: {
     paddingHorizontal: spacing.md,

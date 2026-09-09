@@ -21,6 +21,8 @@ import { Trash2, Eye, EyeOff } from 'lucide-react-native';
 import { PasswordLoginModal } from '@/components/PasswordLoginModal';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import { colors, spacing, typography, radius } from '@/lib/theme';
 import {
   getAccountDetailsPaginated,
@@ -32,6 +34,9 @@ import {
   batchRenewLogin,
   exportAccounts,
   importAccounts,
+  createAccountByCookie,
+  fetchAiModels,
+  type AiModelOption,
   updateAccountRemark,
   updateAccountCookie,
   updateAccountPauseDuration,
@@ -91,6 +96,9 @@ import {
 
 const PAGE_SIZE = 20;
 const POLL_INTERVAL = 2000;
+/** xlsx 导出文件的 MIME 类型 */
+const XLSX_MIME =
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 /** 顶部筛选 tab：全部 / 在线 / 离线 / 已禁用（客户端过滤已加载列表） */
 type AccountFilter = 'all' | 'online' | 'offline' | 'disabled';
@@ -386,6 +394,15 @@ export default function AccountsScreen() {
   const [batchLoading, setBatchLoading] = useState(false);
   const [pwdLoginAccount, setPwdLoginAccount] = useState<AccountDetail | null>(null);
 
+  // 手动粘贴 Cookie 添加账号
+  const [manualVisible, setManualVisible] = useState(false);
+  const [manualId, setManualId] = useState('');
+  const [manualCookie, setManualCookie] = useState('');
+  const [manualSaving, setManualSaving] = useState(false);
+
+  // 账号导出（写文件 + 系统分享）
+  const [exporting, setExporting] = useState(false);
+
   // 扫码登录状态
   const [qrVisible, setQrVisible] = useState(false);
   const [qrSession, setQrSession] = useState<QrLoginSession | null>(null);
@@ -436,6 +453,10 @@ export default function AccountsScreen() {
   const [aiPrompts, setAiPrompts] = useState('');
   const [aiTimeStart, setAiTimeStart] = useState('');
   const [aiTimeEnd, setAiTimeEnd] = useState('');
+  // AI 模型在线拉取（POST /api/v1/ai-reply-settings/models）
+  const [aiModels, setAiModels] = useState<AiModelOption[]>([]);
+  const [aiModelsLoading, setAiModelsLoading] = useState(false);
+  const [aiModelPickerVisible, setAiModelPickerVisible] = useState(false);
 
   // 默认回复
   const [replyVisible, setReplyVisible] = useState(false);
@@ -670,13 +691,82 @@ export default function AccountsScreen() {
     }
   }
 
+  /** RN Blob 无 arrayBuffer()，用 FileReader.readAsDataURL 取 base64 段 */
+  function blobToBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const s = String(reader.result ?? '');
+        const idx = s.indexOf(',');
+        resolve(idx >= 0 ? s.slice(idx + 1) : s);
+      };
+      reader.onerror = () => reject(new Error('读取导出数据失败'));
+      reader.readAsDataURL(blob);
+    });
+  }
+
   async function handleExport() {
+    if (exporting) return;
     const ids = multiSelect ? Array.from(selectedIds) : undefined;
+    setExporting(true);
     try {
       const blob = await exportAccounts(ids);
-      Alert.alert('导出成功', `已导出 ${blob.size} 字节数据`);
+      const base64 = await blobToBase64(blob);
+      const filename = `账号导出_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      const fileUri = `${FileSystem.cacheDirectory}${filename}`;
+      await FileSystem.writeAsStringAsync(fileUri, base64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      // 通过系统分享面板保存到用户可见位置（微信/文件/网盘等）
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: XLSX_MIME,
+          dialogTitle: '保存账号导出文件',
+          UTI: 'com.microsoft.excel',
+        });
+      } else {
+        Alert.alert('导出成功', `已导出 ${blob.size} 字节\n文件位置：${fileUri}`);
+      }
     } catch (e) {
       Alert.alert('导出失败', (e as Error).message);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  // ---- 手动粘贴 Cookie 添加账号 ----
+  function openManualAdd() {
+    setManualId('');
+    setManualCookie('');
+    setManualVisible(true);
+  }
+
+  async function handleManualAdd() {
+    const accountId = manualId.trim();
+    const cookie = manualCookie.trim();
+    if (!accountId) {
+      Alert.alert('缺少账号ID', '请输入账号ID（闲鱼用户唯一标识）');
+      return;
+    }
+    if (!cookie) {
+      Alert.alert('缺少Cookie', '请粘贴账号 Cookie 文本');
+      return;
+    }
+    setManualSaving(true);
+    try {
+      const res = await createAccountByCookie(accountId, cookie);
+      if (!res.success) {
+        Alert.alert('添加失败', res.message || '账号添加失败');
+        return;
+      }
+      setManualVisible(false);
+      useAccountsStore.getState().invalidate();
+      Alert.alert('成功', '账号已添加');
+      await loadAccounts(true);
+    } catch (e) {
+      Alert.alert('添加失败', (e as Error).message);
+    } finally {
+      setManualSaving(false);
     }
   }
 
@@ -959,6 +1049,9 @@ export default function AccountsScreen() {
     setAiPrompts('');
     setAiTimeStart('');
     setAiTimeEnd('');
+    setAiModels([]);
+    setAiModelsLoading(false);
+    setAiModelPickerVisible(false);
     getAccountAiSettings(account.id)
       .then((s) => {
         if (req !== aiReqRef.current) return;
@@ -997,6 +1090,39 @@ export default function AccountsScreen() {
     const isPrevDefault =
       !aiApiUrl || Object.values(AI_PROVIDER_DEFAULT_BASE_URLS).includes(aiApiUrl);
     if (isPrevDefault) setAiApiUrl(AI_PROVIDER_DEFAULT_BASE_URLS[next]);
+  }
+
+  // ---- AI 模型在线拉取（dashscope_app 不支持，后端也会拒绝）----
+  async function handleFetchAiModels() {
+    if (aiModelsLoading) return;
+    if (aiProvider === 'dashscope_app') {
+      Alert.alert('不支持自动获取', 'DashScope应用API不支持获取模型列表，请手动填写模型名称');
+      return;
+    }
+    if (!aiApiKey.trim()) {
+      Alert.alert('缺少API Key', '请先填写 API Key 再获取模型列表');
+      return;
+    }
+    setAiModelsLoading(true);
+    try {
+      const res = await fetchAiModels({
+        provider_type: aiProvider,
+        base_url: aiApiUrl.trim() || AI_PROVIDER_DEFAULT_BASE_URLS[aiProvider],
+        api_key: aiApiKey.trim(),
+      });
+      if (res.success && res.models.length > 0) {
+        setAiModels(res.models);
+        setAiModelPickerVisible(true);
+      } else {
+        setAiModels([]);
+        Alert.alert('未获取到模型', res.message || '该服务商未返回模型列表，请直接输入模型名称');
+      }
+    } catch (e) {
+      setAiModels([]);
+      Alert.alert('获取失败', (e as Error).message);
+    } finally {
+      setAiModelsLoading(false);
+    }
   }
 
   function buildAiSettings(): AIReplySettings {
@@ -1704,6 +1830,7 @@ export default function AccountsScreen() {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['left', 'right', 'bottom']}>
       <View style={styles.header}>
+        <Button label="手动添加" onPress={openManualAdd} variant="secondary" />
         <Button label="导入" onPress={handleImport} variant="secondary" />
       </View>
 
@@ -1733,7 +1860,7 @@ export default function AccountsScreen() {
             <Button label="清Token" onPress={() => handleBatch('clearToken')} variant="secondary" style={styles.batchBtn} />
             <Button label="关通知" onPress={() => handleBatch('closeNotice')} variant="secondary" style={styles.batchBtn} />
             <Button label="续期" onPress={() => handleBatch('renew')} variant="secondary" style={styles.batchBtn} />
-            <Button label="导出" onPress={handleExport} variant="secondary" style={styles.batchBtn} />
+            <Button label="导出" onPress={handleExport} variant="secondary" style={styles.batchBtn} loading={exporting} />
             <Button label="取消" onPress={exitMultiSelect} variant="danger" style={styles.batchBtn} />
           </View>
         </View>
@@ -1853,6 +1980,114 @@ export default function AccountsScreen() {
                 </>
               )}
             </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* 手动添加账号 Modal（粘贴 Cookie） */}
+      <FormModal
+        visible={manualVisible}
+        onClose={() => setManualVisible(false)}
+        title="手动添加账号"
+      >
+        <View style={styles.fieldGroup}>
+          <Text style={[styles.fieldLabel, { color: c.textSecondary }]}>账号ID</Text>
+          <Input
+            value={manualId}
+            onChangeText={setManualId}
+            placeholder="闲鱼账号唯一标识"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
+        <View style={styles.fieldGroup}>
+          <Text style={[styles.fieldLabel, { color: c.textSecondary }]}>Cookie</Text>
+          <Input
+            value={manualCookie}
+            onChangeText={setManualCookie}
+            placeholder="粘贴账号 Cookie 文本"
+            multiline
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={[
+              styles.editTextarea,
+              { backgroundColor: c.background, color: c.text, borderColor: c.border },
+            ]}
+          />
+          <Text style={[styles.hintText, { color: c.textMuted }]}>
+            添加后可在账号卡片"编辑"中设置备注；请勿泄露 Cookie 给他人
+          </Text>
+        </View>
+        <View style={styles.modalActions}>
+          <Button
+            label="取消"
+            variant="ghost"
+            onPress={() => setManualVisible(false)}
+            style={styles.modalBtn}
+          />
+          <Button
+            label="添加"
+            onPress={handleManualAdd}
+            loading={manualSaving}
+            disabled={manualSaving}
+            style={styles.modalBtn}
+          />
+        </View>
+      </FormModal>
+
+      {/* AI 模型选择 Modal（在线拉取结果） */}
+      <Modal
+        visible={aiModelPickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAiModelPickerVisible(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setAiModelPickerVisible(false)}
+        >
+          <Pressable
+            style={[styles.modalCard, styles.modelPickerCard, { backgroundColor: c.surface }]}
+            onPress={() => {}}
+          >
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: c.text }]}>
+                选择模型（共 {aiModels.length} 个）
+              </Text>
+              <Pressable
+                onPress={() => setAiModelPickerVisible(false)}
+                hitSlop={8}
+              >
+                <Text style={[styles.closeBtn, { color: c.textMuted }]}>✕</Text>
+              </Pressable>
+            </View>
+            <FlatList
+              data={aiModels}
+              keyExtractor={(item) => item.id}
+              style={styles.modelList}
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item }) => (
+                <Pressable
+                  onPress={() => {
+                    setAiModel(item.id);
+                    setAiModelPickerVisible(false);
+                  }}
+                  style={({ pressed }) => [
+                    styles.modelItem,
+                    { borderBottomColor: c.border, opacity: pressed ? 0.6 : 1 },
+                  ]}
+                >
+                  <Text style={[styles.modelName, { color: c.text }]} numberOfLines={1}>
+                    {item.id}
+                  </Text>
+                  {item.name !== item.id ? (
+                    <Text style={[styles.modelAlias, { color: c.textMuted }]} numberOfLines={1}>
+                      {item.name}
+                    </Text>
+                  ) : null}
+                </Pressable>
+              )}
+            />
           </Pressable>
         </Pressable>
       </Modal>
@@ -2162,13 +2397,24 @@ export default function AccountsScreen() {
 
               <View style={styles.fieldGroup}>
                 <Text style={[styles.fieldLabel, { color: c.textSecondary }]}>模型</Text>
-                <Input
-                  value={aiModel}
-                  onChangeText={setAiModel}
-                  placeholder="如 qwen-plus"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
+                <View style={styles.modelRow}>
+                  <Input
+                    value={aiModel}
+                    onChangeText={setAiModel}
+                    placeholder="如 qwen-plus"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    style={styles.modelInput}
+                  />
+                  <Button
+                    label="获取模型"
+                    variant="secondary"
+                    onPress={handleFetchAiModels}
+                    loading={aiModelsLoading}
+                    disabled={aiModelsLoading}
+                    style={styles.modelFetchBtn}
+                  />
+                </View>
               </View>
 
               <View style={styles.fieldGroup}>
@@ -3117,4 +3363,17 @@ const styles = StyleSheet.create({
   ruleTitleBox: { flex: 1, marginRight: spacing.sm, gap: spacing.xs },
   ruleName: { ...typography.body, fontWeight: '600' },
   ruleDesc: { ...typography.small },
+  // AI 模型在线拉取
+  modelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  modelInput: { flex: 1 },
+  modelFetchBtn: { minHeight: 50, paddingHorizontal: spacing.md },
+  modelPickerCard: { maxHeight: '70%', minHeight: 260 },
+  modelList: { flexGrow: 0, marginTop: spacing.sm },
+  modelItem: {
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    gap: 2,
+  },
+  modelName: { ...typography.body },
+  modelAlias: { ...typography.small },
 });

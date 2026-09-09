@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,19 +13,34 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image,
+  ActivityIndicator,
   type TextStyle,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useColorScheme } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { Card, Button, Input, Loading, EmptyState, Badge, FilterTabs } from '@/components/ui';
-import { Ticket, Plus, X } from 'lucide-react-native';
+import { useRouter } from 'expo-router';
+import { Card, Button, Input, Loading, EmptyState, Badge, FilterTabs, DetailRow } from '@/components/ui';
+import {
+  Ticket,
+  Plus,
+  X,
+  Eye,
+  Pencil,
+  Link2,
+  Copy,
+  CheckSquare,
+  Square,
+  Trash2,
+} from 'lucide-react-native';
 import { colors, spacing, typography, radius } from '@/lib/theme';
 import {
-  getCards,
+  getCardsPaged,
+  getCard,
   createCard,
   updateCard,
   deleteCard,
+  batchDeleteCards,
   uploadCardImage,
   type Card as CardType,
   type CardKind,
@@ -35,6 +50,18 @@ import {
 // ---------------------------------------------------------------------------
 // 常量与映射
 // ---------------------------------------------------------------------------
+
+/** 列表分页大小（服务端分页 + onEndReached 增量加载） */
+const PAGE_SIZE = 20;
+
+/** 类型筛选 tab（筛选条件传给服务端 type 参数，不再做客户端计数） */
+const FILTER_TABS: { key: string; label: string }[] = [
+  { key: 'all', label: '全部' },
+  { key: 'text', label: '固定文字' },
+  { key: 'data', label: '批量数据' },
+  { key: 'api', label: 'API' },
+  { key: 'image', label: '图片' },
+];
 
 const TYPE_OPTIONS: { key: CardKind; label: string }[] = [
   { key: 'text', label: '固定文字' },
@@ -252,12 +279,21 @@ function validateForm(f: CardFormState): string {
 export default function CardsScreen() {
   const scheme = useColorScheme();
   const c = colors[scheme === 'dark' ? 'dark' : 'light'];
+  const router = useRouter();
 
+  // 列表：服务端分页 + 搜索 + 类型过滤（lite 轻量字段，编辑/详情按需补全）
   const [cards, setCards] = useState<CardType[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(0);
+  const [total, setTotal] = useState(0);
+  // 搜索/筛选/翻页并发请求用序号丢弃过期响应
+  const reqSeqRef = useRef(0);
 
   const [modalVisible, setModalVisible] = useState(false);
   const [editing, setEditing] = useState<CardType | null>(null);
@@ -266,54 +302,68 @@ export default function CardsScreen() {
   const [uploading, setUploading] = useState(false);
   const [dockOpen, setDockOpen] = useState(false);
   const [specOpen, setSpecOpen] = useState(false);
+  // lite 列表项缺大字段，编辑/复制前按需拉全量时的加载态
+  const [formLoading, setFormLoading] = useState(false);
 
-  const loadCards = useCallback(async () => {
-    try {
-      setRefreshing(true);
-      const list = await getCards();
-      setCards(list);
-    } catch (e) {
-      Alert.alert('加载失败', (e as Error).message);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
+  // 长按操作菜单
+  const [menuCard, setMenuCard] = useState<CardType | null>(null);
+  // 批量删除多选模式
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [batchDeleting, setBatchDeleting] = useState(false);
+  // 只读详情
+  const [detail, setDetail] = useState<CardType | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
-  useEffect(() => {
-    loadCards();
-  }, [loadCards]);
-
-  // 客户端过滤（已一次性拉取全部卡券）
-  const filtered = useMemo(() => {
-    const kw = search.trim().toLowerCase();
-    return cards.filter((card) => {
-      if (typeFilter !== 'all' && card.type !== typeFilter) return false;
-      if (!kw) return true;
-      const hay = `${card.name ?? ''} ${card.description ?? ''}`.toLowerCase();
-      return hay.includes(kw);
-    });
-  }, [cards, search, typeFilter]);
-
-  // 各类型计数（基于全量，不受搜索影响）
-  const typeCounts = useMemo(() => {
-    const map: Record<string, number> = { text: 0, data: 0, api: 0, image: 0 };
-    for (const card of cards) {
-      if (card.type && map[card.type] != null) map[card.type]++;
-    }
-    return map;
-  }, [cards]);
-
-  const filterTabs = useMemo(
-    () => [
-      { key: 'all', label: '全部', count: cards.length },
-      { key: 'text', label: '固定文字', count: typeCounts.text },
-      { key: 'data', label: '批量数据', count: typeCounts.data },
-      { key: 'api', label: 'API', count: typeCounts.api },
-      { key: 'image', label: '图片', count: typeCounts.image },
-    ],
-    [cards.length, typeCounts],
+  const fetchPage = useCallback(
+    async (targetPage: number, mode: 'reset' | 'append') => {
+      const seq = ++reqSeqRef.current;
+      if (mode === 'append') setLoadingMore(true);
+      else setRefreshing(true);
+      try {
+        const res = await getCardsPaged(targetPage, PAGE_SIZE, {
+          search: debouncedSearch,
+          type: typeFilter === 'all' ? undefined : (typeFilter as CardKind),
+          lite: true,
+        });
+        if (seq !== reqSeqRef.current) return;
+        setCards((prev) =>
+          mode === 'append' ? [...prev, ...res.list] : res.list,
+        );
+        setPage(res.page);
+        setTotalPages(res.total_pages);
+        setTotal(res.total);
+      } catch (e) {
+        if (seq !== reqSeqRef.current) return;
+        Alert.alert('加载失败', (e as Error).message);
+      } finally {
+        if (seq !== reqSeqRef.current) return;
+        setRefreshing(false);
+        setLoadingMore(false);
+        setLoading(false);
+      }
+    },
+    [debouncedSearch, typeFilter],
   );
+
+  // 首次加载 + 关键词（防抖后）/类型筛选变化时重置到第一页
+  useEffect(() => {
+    fetchPage(1, 'reset');
+  }, [fetchPage]);
+
+  // 搜索防抖 500ms，走服务端 search
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 500);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const loadCards = useCallback(() => fetchPage(1, 'reset'), [fetchPage]);
+
+  const loadMore = useCallback(() => {
+    if (loadingMore || refreshing) return;
+    if (totalPages > 0 && page >= totalPages) return;
+    return fetchPage(page + 1, 'append');
+  }, [loadingMore, refreshing, totalPages, page, fetchPage]);
 
   function openCreate() {
     setEditing(null);
@@ -323,12 +373,136 @@ export default function CardsScreen() {
     setModalVisible(true);
   }
 
-  function openEdit(card: CardType) {
-    setEditing(card);
-    setForm(cardToForm(card));
-    setDockOpen(card.is_dockable ?? false);
-    setSpecOpen(card.is_multi_spec ?? false);
-    setModalVisible(true);
+  /** lite 列表项缺 text/data/api_config/图片等大字段，编辑前按需拉全量 */
+  async function openEdit(card: CardType) {
+    setMenuCard(null);
+    setFormLoading(true);
+    try {
+      const full = await getCard(card.id);
+      setEditing(full);
+      setForm(cardToForm(full));
+      setDockOpen(full.is_dockable ?? false);
+      setSpecOpen(full.is_multi_spec ?? false);
+      setModalVisible(true);
+    } catch (e) {
+      Alert.alert('加载卡券失败', (e as Error).message);
+    } finally {
+      setFormLoading(false);
+    }
+  }
+
+  /** 复制卡券：以现有卡券预填表单并清空名称，保存时走新建（createCard） */
+  async function copyCard(card: CardType) {
+    setMenuCard(null);
+    setFormLoading(true);
+    try {
+      const full = await getCard(card.id);
+      const next = cardToForm(full);
+      next.name = '';
+      setEditing(null);
+      setForm(next);
+      setDockOpen(next.isDockable);
+      setSpecOpen(next.isMultiSpec);
+      setModalVisible(true);
+    } catch (e) {
+      Alert.alert('加载卡券失败', (e as Error).message);
+    } finally {
+      setFormLoading(false);
+    }
+  }
+
+  /** 查看详情：先展示列表轻量信息，再用全量接口替换 */
+  async function openDetail(card: CardType) {
+    setMenuCard(null);
+    setDetail(card);
+    setDetailLoading(true);
+    try {
+      const full = await getCard(card.id);
+      setDetail(full);
+    } catch (e) {
+      Alert.alert('加载详情失败', (e as Error).message);
+      setDetail(null);
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  /** 跳转卡券→商品关联页（mine Stack 已注册 card-item-relation） */
+  function openRelation(card: CardType) {
+    setMenuCard(null);
+    router.push({
+      pathname: '/(tabs)/mine/card-item-relation',
+      params: {
+        cardId: String(card.id),
+        cardName: card.name || card.remark || `卡券 #${card.id}`,
+      },
+    });
+  }
+
+  // ------------------------- 批量删除（多选模式） -------------------------
+
+  function enterSelectMode(card: CardType) {
+    setMenuCard(null);
+    setSelectMode(true);
+    setSelectedIds(new Set([card.id]));
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  }
+
+  function toggleSelect(id: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const allLoadedSelected =
+    cards.length > 0 && cards.every((x) => selectedIds.has(x.id));
+
+  /** 全选/取消全选：作用于当前已加载的卡券 */
+  function toggleSelectAll() {
+    setSelectedIds((prev) => {
+      if (allLoadedSelected) return new Set();
+      return new Set(cards.map((x) => x.id));
+    });
+  }
+
+  function confirmBatchDelete() {
+    if (selectedIds.size === 0) {
+      Alert.alert('提示', '请先选择要删除的卡券');
+      return;
+    }
+    Alert.alert(
+      '批量删除',
+      `确定删除选中的 ${selectedIds.size} 张卡券吗？此操作不可恢复。`,
+      [
+        { text: '取消', style: 'cancel' },
+        { text: '删除', style: 'destructive', onPress: () => void doBatchDelete() },
+      ],
+      { cancelable: true },
+    );
+  }
+
+  async function doBatchDelete() {
+    setBatchDeleting(true);
+    try {
+      const res = await batchDeleteCards(Array.from(selectedIds));
+      exitSelectMode();
+      Alert.alert(
+        '删除完成',
+        `成功删除 ${res.success_count}/${res.total_count} 张卡券`,
+      );
+      await loadCards();
+    } catch (e) {
+      Alert.alert('删除失败', (e as Error).message);
+    } finally {
+      setBatchDeleting(false);
+    }
   }
 
   function closeModal() {
@@ -425,12 +599,13 @@ export default function CardsScreen() {
   }
 
   function confirmDelete(card: CardType) {
+    setMenuCard(null);
     Alert.alert(
       '删除卡券',
       `确定删除「${card.name || card.remark || '此卡券'}」吗？此操作不可恢复。`,
       [
         { text: '取消', style: 'cancel' },
-        { text: '删除', style: 'destructive', onPress: () => doDelete(card) },
+        { text: '删除', style: 'destructive', onPress: () => void doDelete(card) },
       ],
       { cancelable: true },
     );
@@ -440,17 +615,10 @@ export default function CardsScreen() {
     try {
       await deleteCard(card.id);
       setCards((prev) => prev.filter((x) => x.id !== card.id));
+      setTotal((t) => Math.max(0, t - 1));
     } catch (e) {
       Alert.alert('删除失败', (e as Error).message);
     }
-  }
-
-  function handleLongPress(card: CardType) {
-    Alert.alert(card.name || card.remark || '卡券', undefined, [
-      { text: '编辑', onPress: () => openEdit(card) },
-      { text: '删除', style: 'destructive', onPress: () => confirmDelete(card) },
-      { text: '取消', style: 'cancel' },
-    ]);
   }
 
   if (loading) {
@@ -463,9 +631,37 @@ export default function CardsScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['left', 'right', 'bottom']}>
-      <View style={styles.header}>
-        <Button label="+ 新建" onPress={openCreate} variant="secondary" />
-      </View>
+      {selectMode ? (
+        <View style={[styles.header, styles.selectHeader, { borderBottomColor: c.border }]}>
+          <Pressable onPress={toggleSelectAll} style={styles.selectAllBtn} hitSlop={4}>
+            {allLoadedSelected ? (
+              <CheckSquare size={16} color={c.primary} />
+            ) : (
+              <Square size={16} color={c.textMuted} />
+            )}
+            <Text style={[styles.selectAllText, { color: c.textSecondary }]}>全选</Text>
+          </Pressable>
+          <Text style={[styles.selectCount, { color: c.text }]}>
+            已选 {selectedIds.size} / {total}
+          </Text>
+          <View style={styles.selectActions}>
+            <Button
+              label="删除"
+              variant="danger"
+              onPress={confirmBatchDelete}
+              loading={batchDeleting}
+              disabled={batchDeleting}
+              style={styles.selectBtn}
+            />
+            <Button label="取消" variant="ghost" onPress={exitSelectMode} style={styles.selectBtn} />
+          </View>
+        </View>
+      ) : (
+        <View style={styles.header}>
+          <Text style={[styles.headerTitle, { color: c.text }]}>共 {total} 张</Text>
+          <Button label="+ 新建" onPress={openCreate} variant="secondary" />
+        </View>
+      )}
 
       <View style={[styles.searchWrap, { backgroundColor: c.surface, borderColor: c.border }]}>
         <Input
@@ -477,46 +673,68 @@ export default function CardsScreen() {
         />
       </View>
 
-      <FilterTabs tabs={filterTabs} active={typeFilter} onChange={setTypeFilter} />
+      <FilterTabs tabs={FILTER_TABS} active={typeFilter} onChange={setTypeFilter} />
 
       <FlatList
-        data={filtered}
+        data={cards}
         keyExtractor={(item) => String(item.id)}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadCards} />}
-        renderItem={({ item }) => (
-          <Pressable onPress={() => openEdit(item)} onLongPress={() => handleLongPress(item)}>
-            <Card style={styles.cardItem}>
-              <View style={styles.cardTop}>
-                <View style={styles.cardTitleRow}>
-                  <Text style={[styles.cardName, { color: c.text }]} numberOfLines={1}>
-                    {item.name || '未命名卡券'}
-                  </Text>
-                  <Badge label={typeLabel(item.type)} variant={typeBadgeVariant(item.type)} />
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.3}
+        renderItem={({ item }) => {
+          const checked = selectedIds.has(item.id);
+          return (
+            <Pressable
+              onPress={() => (selectMode ? toggleSelect(item.id) : openEdit(item))}
+              onLongPress={() => (selectMode ? undefined : setMenuCard(item))}
+            >
+              <Card
+                style={[styles.cardItem, selectMode && checked && { borderColor: c.primary }]}
+              >
+                <View style={styles.cardTop}>
+                  <View style={styles.cardTitleRow}>
+                    {selectMode ? (
+                      checked ? (
+                        <CheckSquare size={18} color={c.primary} />
+                      ) : (
+                        <Square size={18} color={c.textMuted} />
+                      )
+                    ) : null}
+                    <Text style={[styles.cardName, { color: c.text }]} numberOfLines={1}>
+                      {item.name || '未命名卡券'}
+                    </Text>
+                    <Badge label={typeLabel(item.type)} variant={typeBadgeVariant(item.type)} />
+                  </View>
+                  {!selectMode ? (
+                    <Switch
+                      value={item.enabled ?? true}
+                      onValueChange={(v) => toggleEnabled(item, v)}
+                      trackColor={{ false: c.border, true: c.primary }}
+                    />
+                  ) : null}
                 </View>
-                <Switch
-                  value={item.enabled ?? true}
-                  onValueChange={(v) => toggleEnabled(item, v)}
-                  trackColor={{ false: c.border, true: c.primary }}
-                />
-              </View>
-              {item.description ? (
-                <Text style={[styles.cardDesc, { color: c.textMuted }]} numberOfLines={1}>
-                  {item.description.slice(0, 40)}
-                </Text>
-              ) : null}
-              <View style={styles.cardMeta}>
-                {item.is_dockable ? (
-                  <Badge label={`对接 ¥${item.price || '-'}`} variant="info" />
+                {item.description ? (
+                  <Text style={[styles.cardDesc, { color: c.textMuted }]} numberOfLines={1}>
+                    {item.description.slice(0, 40)}
+                  </Text>
                 ) : null}
-                {item.is_multi_spec ? (
-                  <Badge label={`${item.spec_name || ''}:${item.spec_value || ''}`} variant="warning" />
-                ) : null}
-                {item.use_no_logistics_form ? <Badge label="无物流" variant="gray" /> : null}
-                {item.delay_seconds ? <Badge label={`延时${item.delay_seconds}s`} variant="gray" /> : null}
-              </View>
-            </Card>
-          </Pressable>
-        )}
+                <View style={styles.cardMeta}>
+                  {item.is_dockable ? (
+                    <Badge label={`对接 ¥${item.price || '-'}`} variant="info" />
+                  ) : null}
+                  {item.is_multi_spec ? (
+                    <Badge label={`${item.spec_name || ''}:${item.spec_value || ''}`} variant="warning" />
+                  ) : null}
+                  {item.use_no_logistics_form ? <Badge label="无物流" variant="gray" /> : null}
+                  {item.delay_seconds ? <Badge label={`延时${item.delay_seconds}s`} variant="gray" /> : null}
+                  {item.delivery_count ? (
+                    <Badge label={`已发货 ${item.delivery_count} 次`} variant="gray" />
+                  ) : null}
+                </View>
+              </Card>
+            </Pressable>
+          );
+        }}
         ListEmptyComponent={
           <EmptyState
             icon={Ticket}
@@ -525,6 +743,15 @@ export default function CardsScreen() {
             actionLabel="添加卡券"
             onAction={openCreate}
           />
+        }
+        ListFooterComponent={
+          loadingMore ? (
+            <View style={styles.footer}>
+              <ActivityIndicator size="small" color={c.primary} />
+            </View>
+          ) : cards.length > 0 && totalPages > 0 && page >= totalPages ? (
+            <Text style={[styles.footerText, { color: c.textMuted }]}>没有更多了</Text>
+          ) : null
         }
         contentContainerStyle={styles.list}
       />
@@ -944,15 +1171,183 @@ export default function CardsScreen() {
               <Button
                 label="保存"
                 onPress={save}
-                loading={saving}
-                disabled={saving}
+                loading={saving || formLoading}
+                disabled={saving || formLoading}
                 style={styles.modalBtn}
               />
             </View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* 长按操作菜单 */}
+      <Modal
+        visible={menuCard !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMenuCard(null)}
+      >
+        <Pressable style={styles.menuBackdrop} onPress={() => setMenuCard(null)}>
+          <View style={[styles.menuSheet, { backgroundColor: c.surface }]}>
+            <Text style={[styles.menuTitle, { color: c.text }]} numberOfLines={1}>
+              {menuCard?.name || menuCard?.remark || '卡券'}
+            </Text>
+            <MenuItem icon={Eye} label="查看详情" onPress={() => menuCard && void openDetail(menuCard)} />
+            <MenuItem icon={Pencil} label="编辑" onPress={() => menuCard && void openEdit(menuCard)} />
+            <MenuItem icon={Link2} label="关联商品" onPress={() => menuCard && openRelation(menuCard)} />
+            <MenuItem icon={Copy} label="复制" onPress={() => menuCard && void copyCard(menuCard)} />
+            <MenuItem
+              icon={CheckSquare}
+              label="批量删除（多选）"
+              onPress={() => menuCard && enterSelectMode(menuCard)}
+            />
+            <MenuItem icon={Trash2} label="删除" danger onPress={() => menuCard && confirmDelete(menuCard)} />
+            <MenuItem icon={X} label="取消" onPress={() => setMenuCard(null)} />
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* 卡券详情（只读） */}
+      <Modal
+        visible={detail !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDetail(null)}
+      >
+        <Pressable style={styles.menuBackdrop} onPress={() => setDetail(null)}>
+          <Pressable
+            style={[styles.detailSheet, { backgroundColor: c.surface }]}
+            onPress={() => {}}
+          >
+            <View style={[styles.modalHeader, { paddingHorizontal: spacing.lg }]}>
+              <Text style={[styles.modalTitle, { color: c.text }]} numberOfLines={1}>
+                {detail?.name || '卡券详情'}
+              </Text>
+              <Pressable onPress={() => setDetail(null)} hitSlop={8}>
+                <Text style={[styles.modalClose, { color: c.textMuted }]}>✕</Text>
+              </Pressable>
+            </View>
+            {detail && !detailLoading ? (
+              <ScrollView style={styles.detailScroll} contentContainerStyle={styles.detailBody}>
+                <View style={styles.detailBadges}>
+                  <Badge label={typeLabel(detail.type)} variant={typeBadgeVariant(detail.type)} />
+                  <Badge
+                    label={detail.enabled ? '已启用' : '已停用'}
+                    variant={detail.enabled ? 'success' : 'gray'}
+                  />
+                  {detail.is_dockable ? (
+                    <Badge label={`对接 ¥${detail.price || '-'}`} variant="info" />
+                  ) : null}
+                  {detail.is_multi_spec ? (
+                    <Badge
+                      label={`${detail.spec_name || ''}:${detail.spec_value || ''}`}
+                      variant="warning"
+                    />
+                  ) : null}
+                  {detail.use_no_logistics_form ? <Badge label="无物流" variant="gray" /> : null}
+                  {detail.delay_seconds ? (
+                    <Badge label={`延时${detail.delay_seconds}s`} variant="gray" />
+                  ) : null}
+                  {detail.delivery_count ? (
+                    <Badge label={`已发货 ${detail.delivery_count} 次`} variant="gray" />
+                  ) : null}
+                </View>
+
+                <DetailRow label="名称" value={detail.name || '未命名卡券'} c={c} />
+                <DetailRow label="ID" value={String(detail.id)} c={c} />
+                {detail.description ? (
+                  <DetailRow label="备注" value={detail.description} c={c} />
+                ) : null}
+
+                {detail.type === 'text' ? (
+                  <DetailRow label="文字内容" value={detail.text_content || '（空）'} c={c} />
+                ) : null}
+
+                {detail.type === 'data' ? (
+                  <>
+                    <DetailRow
+                      label="数据条数"
+                      value={`${countDataLines(detail.data_content)} 条`}
+                      c={c}
+                    />
+                    <DetailRow label="数据内容" value={detail.data_content || '（空）'} c={c} />
+                  </>
+                ) : null}
+
+                {detail.type === 'api' && detail.api_config ? (
+                  <>
+                    <DetailRow label="接口地址" value={detail.api_config.url || '（空）'} c={c} />
+                    <DetailRow label="请求方法" value={detail.api_config.method || 'GET'} c={c} />
+                    <DetailRow
+                      label="超时时间"
+                      value={`${detail.api_config.timeout ?? 60} 秒`}
+                      c={c}
+                    />
+                    {detail.api_config.headers ? (
+                      <DetailRow label="请求头" value={detail.api_config.headers} c={c} />
+                    ) : null}
+                    {detail.api_config.params ? (
+                      <DetailRow label="请求参数" value={detail.api_config.params} c={c} />
+                    ) : null}
+                    {detail.api_config.response_field ? (
+                      <DetailRow label="取值字段" value={detail.api_config.response_field} c={c} />
+                    ) : null}
+                  </>
+                ) : null}
+
+                {detail.type === 'image' ? (
+                  <View style={styles.detailImages}>
+                    {detail.image_urls.length > 0 ? (
+                      detail.image_urls.map((url) => (
+                        <Image key={url} source={{ uri: url }} style={styles.detailImage} />
+                      ))
+                    ) : (
+                      <Text style={[styles.detailHint, { color: c.textMuted }]}>暂无图片</Text>
+                    )}
+                  </View>
+                ) : null}
+              </ScrollView>
+            ) : (
+              <View style={styles.detailLoading}>
+                <ActivityIndicator color={c.primary} />
+                <Text style={[styles.detailHint, { color: c.textMuted }]}>加载详情...</Text>
+              </View>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
+  );
+}
+
+/** 批量数据条数：按行拆分并过滤空行 */
+function countDataLines(content?: string): number {
+  if (!content) return 0;
+  return content.split('\n').map((s) => s.trim()).filter(Boolean).length;
+}
+
+/** 长按菜单项 */
+function MenuItem({
+  icon: Icon,
+  label,
+  onPress,
+  danger,
+}: {
+  icon: React.ComponentType<{ color?: string; size?: number }>;
+  label: string;
+  onPress: () => void;
+  danger?: boolean;
+}) {
+  const scheme = useColorScheme();
+  const c = colors[scheme === 'dark' ? 'dark' : 'light'];
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.menuItem, pressed && { opacity: 0.6 }]}
+    >
+      <Icon color={danger ? c.error : c.textSecondary} size={18} />
+      <Text style={[styles.menuItemText, { color: danger ? c.error : c.text }]}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -1193,4 +1588,52 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   imageAddText: { ...typography.small, marginTop: 2 },
+
+  // 分页 footer
+  footer: { paddingVertical: spacing.lg, alignItems: 'center' },
+  footerText: { ...typography.small, textAlign: 'center', paddingVertical: spacing.md },
+
+  // 批量删除选择态顶栏
+  selectHeader: { borderBottomWidth: StyleSheet.hairlineWidth },
+  selectAllBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  selectAllText: { ...typography.small, fontWeight: '600' },
+  selectCount: { ...typography.caption, flex: 1, textAlign: 'center' },
+  selectActions: { flexDirection: 'row', gap: spacing.sm },
+  selectBtn: { minHeight: 40, paddingHorizontal: spacing.md },
+
+  // 长按操作菜单
+  menuBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.xl,
+  },
+  menuSheet: {
+    width: '100%',
+    maxWidth: 320,
+    borderRadius: radius.lg,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  menuTitle: { ...typography.caption, fontWeight: '600', paddingVertical: spacing.sm },
+  menuItem: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 11 },
+  menuItemText: { ...typography.body },
+
+  // 卡券详情（只读）
+  detailSheet: {
+    width: '100%',
+    maxWidth: 480,
+    maxHeight: '80%',
+    borderRadius: radius.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.md,
+  },
+  detailScroll: { paddingHorizontal: spacing.lg },
+  detailBody: { gap: spacing.sm, paddingTop: spacing.sm },
+  detailBadges: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+  detailImages: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  detailImage: { width: 96, height: 96, borderRadius: radius.md },
+  detailLoading: { alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xl },
+  detailHint: { ...typography.small },
 });

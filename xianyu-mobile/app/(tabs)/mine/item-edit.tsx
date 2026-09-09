@@ -17,8 +17,15 @@ import { colors, spacing, typography, radius } from '@/lib/theme';
 import {
   getSellerItemDetail,
   updateSellerItem,
+  updateItemPrice,
   type SellerItemForm,
 } from '@/api/wrappers/item-edit';
+import {
+  getXianyuItemDetail,
+  setItemMultiSpec,
+  setItemMultiQuantityDelivery,
+  type XianyuItemSku,
+} from '@/api/wrappers/items';
 
 // seller-detail 可能回填 'template'，表单仅支持四种；回填为 template 时不选中任何 chip，保存时回退为原值
 type ShippingMethod = NonNullable<SellerItemForm['shipping_method']>;
@@ -53,6 +60,16 @@ export default function ItemEditScreen() {
   const [postage, setPostage] = useState('');
   const [supportPickup, setSupportPickup] = useState(false);
 
+  // 快捷改价：多规格行（来自本地库 item_sku_list，含 sku_id 供回传）
+  const [priceSkus, setPriceSkus] = useState<
+    Array<{ skuId: string; label: string; price: string; quantity: string }>
+  >([]);
+  const [isMultiSpecItem, setIsMultiSpecItem] = useState(false);
+  const [priceSaving, setPriceSaving] = useState(false);
+  // 商品标记（本地库标记，供商品列表筛选）
+  const [flagMultiSpec, setFlagMultiSpec] = useState(false);
+  const [flagMultiQty, setFlagMultiQty] = useState(false);
+
   const paramsReady = Boolean(cookieId && itemId);
 
   const load = useCallback(async () => {
@@ -76,6 +93,32 @@ export default function ItemEditScreen() {
       }
       setPostage(form.postage != null ? String(form.postage) : '');
       setSupportPickup(Boolean(form.support_pickup));
+      // 本地库详情：取多规格明细（含 sku_id）与列表筛选标记；失败不阻塞编辑表单
+      try {
+        const { item } = await getXianyuItemDetail(cookieId, itemId);
+        const skus = item.item_sku_list ?? [];
+        if (skus.length > 0) {
+          setIsMultiSpecItem(true);
+          setPriceSkus(
+            skus.map((sku: XianyuItemSku) => ({
+              skuId: sku.sku_id,
+              label:
+                (sku.specs ?? []).map((s) => `${s.name}：${s.value}`).join('，') || sku.sku_id,
+              price: sku.price != null ? String(sku.price) : '',
+              quantity: sku.quantity != null ? String(sku.quantity) : '',
+            })),
+          );
+        } else {
+          setIsMultiSpecItem(false);
+          setPriceSkus([]);
+        }
+        setFlagMultiSpec(Boolean(item.is_multi_spec));
+        setFlagMultiQty(Boolean(item.multi_quantity_delivery));
+      } catch {
+        // 本地详情缺失时退化为单规格快捷改价（用表单价格/库存）
+        setIsMultiSpecItem(false);
+        setPriceSkus([]);
+      }
     } catch (e) {
       setLoadError((e as Error).message || '加载商品详情失败');
     } finally {
@@ -140,6 +183,92 @@ export default function ItemEditScreen() {
       Alert.alert('保存失败', `${(e as Error).message || '未知错误'}\n${BACKEND_VERSION_HINT}`);
     } finally {
       setSaving(false);
+    }
+  }
+
+  const updateSkuRow = (idx: number, field: 'price' | 'quantity', value: string) => {
+    setPriceSkus((prev) => prev.map((row, i) => (i === idx ? { ...row, [field]: value } : row)));
+  };
+
+  /** 单规格快捷改价：仅提交价格与库存（PUT /items/{cookie_id}/{item_id}/price） */
+  async function handleQuickPriceSave() {
+    if (!cookieId || !itemId || priceSaving) return;
+    const priceNum = parseFloat(price);
+    if (!price.trim() || Number.isNaN(priceNum) || priceNum <= 0) {
+      Alert.alert('提示', '价格需大于0');
+      return;
+    }
+    const quantityNum = parseInt(quantity, 10);
+    if (!quantity.trim() || Number.isNaN(quantityNum) || quantityNum < 0) {
+      Alert.alert('提示', '库存不能为负数');
+      return;
+    }
+    setPriceSaving(true);
+    try {
+      const res = await updateItemPrice(cookieId, itemId, {
+        price: priceNum,
+        quantity: quantityNum,
+      });
+      if (!res.success) {
+        Alert.alert('改价失败', res.message || '未知错误');
+        return;
+      }
+      Alert.alert('改价成功', res.message || '价格与库存已更新');
+    } catch (e) {
+      Alert.alert('改价失败', `${(e as Error).message || '未知错误'}\n${BACKEND_VERSION_HINT}`);
+    } finally {
+      setPriceSaving(false);
+    }
+  }
+
+  /** 多规格快捷改价：提交每个 SKU 的价格与库存 */
+  async function handleSkuPriceSave() {
+    if (!cookieId || !itemId || priceSaving) return;
+    for (const sku of priceSkus) {
+      const p = parseFloat(sku.price);
+      if (!sku.price || Number.isNaN(p) || p <= 0) {
+        Alert.alert('提示', `规格「${sku.label}」价格需大于0`);
+        return;
+      }
+      const q = parseInt(sku.quantity, 10);
+      if (!sku.quantity || Number.isNaN(q) || q < 0) {
+        Alert.alert('提示', `规格「${sku.label}」库存不能为负数`);
+        return;
+      }
+    }
+    setPriceSaving(true);
+    try {
+      const res = await updateItemPrice(cookieId, itemId, {
+        skus: priceSkus.map((sku) => ({
+          sku_id: sku.skuId,
+          price: parseFloat(sku.price),
+          quantity: parseInt(sku.quantity, 10),
+        })),
+      });
+      if (!res.success) {
+        Alert.alert('改价失败', res.message || '未知错误');
+        return;
+      }
+      Alert.alert('改价成功', res.message || '规格价格与库存已更新');
+    } catch (e) {
+      Alert.alert('改价失败', `${(e as Error).message || '未知错误'}\n${BACKEND_VERSION_HINT}`);
+    } finally {
+      setPriceSaving(false);
+    }
+  }
+
+  /** 切换本地"多规格 / 多数量发货"标记（供商品列表筛选） */
+  async function handleToggleFlag(kind: 'spec' | 'qty', value: boolean) {
+    if (!cookieId || !itemId) return;
+    const setter = kind === 'spec' ? setFlagMultiSpec : setFlagMultiQty;
+    const prev = kind === 'spec' ? flagMultiSpec : flagMultiQty;
+    setter(value);
+    try {
+      if (kind === 'spec') await setItemMultiSpec(cookieId, itemId, value);
+      else await setItemMultiQuantityDelivery(cookieId, itemId, value);
+    } catch (e) {
+      setter(prev);
+      Alert.alert('操作失败', (e as Error).message || '未知错误');
     }
   }
 
@@ -225,7 +354,55 @@ export default function ItemEditScreen() {
             keyboardType="number-pad"
             placeholder="1"
           />
+
+          {!isMultiSpecItem ? (
+            <Button
+              label="仅保存价格与库存（快捷改价）"
+              variant="secondary"
+              onPress={handleQuickPriceSave}
+              loading={priceSaving}
+              style={styles.quickPriceBtn}
+            />
+          ) : null}
         </Card>
+
+        {isMultiSpecItem ? (
+          <Card style={styles.section}>
+            <Text style={[styles.label, { color: c.textSecondary }]}>改价（多规格）</Text>
+            <Text style={[styles.hintText, { color: c.textMuted }]}>
+              逐个规格设置价格与库存，保存后立即生效
+            </Text>
+            {priceSkus.map((sku, idx) => (
+              <View key={sku.skuId || idx} style={styles.skuRow}>
+                <Text style={[styles.skuLabel, { color: c.text }]} numberOfLines={2}>
+                  {sku.label}
+                </Text>
+                <View style={styles.skuInputs}>
+                  <Input
+                    value={sku.price}
+                    onChangeText={(v) => updateSkuRow(idx, 'price', v)}
+                    keyboardType="decimal-pad"
+                    placeholder="价格"
+                    style={styles.skuInput}
+                  />
+                  <Input
+                    value={sku.quantity}
+                    onChangeText={(v) => updateSkuRow(idx, 'quantity', v)}
+                    keyboardType="number-pad"
+                    placeholder="库存"
+                    style={styles.skuInput}
+                  />
+                </View>
+              </View>
+            ))}
+            <Button
+              label="保存全部规格价格"
+              onPress={handleSkuPriceSave}
+              loading={priceSaving}
+              style={styles.quickPriceBtn}
+            />
+          </Card>
+        ) : null}
 
         <Card style={styles.section}>
           <Text style={[styles.label, { color: c.textSecondary }]}>商品图片</Text>
@@ -295,6 +472,29 @@ export default function ItemEditScreen() {
           </View>
         </Card>
 
+        <Card style={styles.section}>
+          <Text style={[styles.label, { color: c.textSecondary }]}>商品标记</Text>
+          <View style={[styles.switchRow, { borderBottomColor: c.borderLight }]}>
+            <Text style={[styles.switchLabel, { color: c.text }]}>多规格</Text>
+            <Switch
+              value={flagMultiSpec}
+              onValueChange={(v) => handleToggleFlag('spec', v)}
+              trackColor={{ false: c.border, true: c.primary }}
+            />
+          </View>
+          <View style={[styles.switchRow, { borderBottomColor: c.borderLight }]}>
+            <Text style={[styles.switchLabel, { color: c.text }]}>多数量发货</Text>
+            <Switch
+              value={flagMultiQty}
+              onValueChange={(v) => handleToggleFlag('qty', v)}
+              trackColor={{ false: c.border, true: c.primary }}
+            />
+          </View>
+          <Text style={[styles.hintText, { color: c.textMuted }]}>
+            标记仅用于商品列表筛选，不影响闲鱼平台商品
+          </Text>
+        </Card>
+
         <Button
           label="保存修改"
           onPress={handleSave}
@@ -332,6 +532,12 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
   },
   switchLabel: { ...typography.body },
+  hintText: { ...typography.small, paddingVertical: spacing.xs },
+  quickPriceBtn: { marginTop: spacing.md },
+  skuRow: { marginTop: spacing.sm, gap: spacing.xs },
+  skuLabel: { ...typography.small, fontWeight: '600' },
+  skuInputs: { flexDirection: 'row', gap: spacing.sm },
+  skuInput: { flex: 1 },
   saveBtn: { marginTop: spacing.sm },
   errorWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl, gap: spacing.sm },
   errorTitle: { ...typography.heading },

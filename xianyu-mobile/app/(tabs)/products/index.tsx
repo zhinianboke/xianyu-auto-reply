@@ -7,7 +7,6 @@ import {
   Switch,
   Pressable,
   Alert,
-  Modal,
   RefreshControl,
   ScrollView,
 } from 'react-native';
@@ -20,15 +19,10 @@ import { colors, spacing, typography, radius } from '@/lib/theme';
 import {
   getListingOverview,
   getMonitoredItems,
-  getCards,
-  createCard,
-  updateCard,
-  deleteCard,
   getDeliveryBlockRules,
   updateDeliveryBlockRules,
   type ListingOverview,
   type MonitoredItem,
-  type Card as CardType,
   type DeliveryBlockRule,
 } from '@/api/wrappers/products';
 import { useAccountsStore } from '@/stores/accounts';
@@ -327,229 +321,31 @@ function MonitorTab() {
 }
 
 // ---------------------------------------------------------------------------
-// 2. 卡券管理：列表 + 新增/编辑/删除
+// 2. 卡券管理：旧版 text-only 编辑器已下线，引导前往完整卡券管理页
 // ---------------------------------------------------------------------------
 
 function CardsTab() {
   const scheme = useColorScheme();
   const c = colors[scheme === 'dark' ? 'dark' : 'light'];
-  const [cards, setCards] = useState<CardType[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [modalVisible, setModalVisible] = useState(false);
-  // editing === null 表示新增模式
-  const [editing, setEditing] = useState<CardType | null>(null);
-  const [content, setContent] = useState('');
-  const [remark, setRemark] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  const load = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      const list = await getCards();
-      setCards(list);
-    } catch (e) {
-      Alert.alert('加载失败', (e as Error).message);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  function openCreate() {
-    setEditing(null);
-    setContent('');
-    setRemark('');
-    setModalVisible(true);
-  }
-
-  function openEdit(card: CardType) {
-    setEditing(card);
-    setContent(card.content);
-    setRemark(card.remark ?? '');
-    setModalVisible(true);
-  }
-
-  function closeModal() {
-    setModalVisible(false);
-  }
-
-  async function save() {
-    const contentTrim = content.trim();
-    if (!contentTrim) {
-      Alert.alert('提示', '请输入卡券内容');
-      return;
-    }
-    setSaving(true);
-    try {
-      if (editing) {
-        await updateCard(editing.id, contentTrim, remark.trim() || undefined);
-      } else {
-        await createCard(contentTrim, remark.trim() || undefined);
-      }
-      closeModal();
-      await load();
-    } catch (e) {
-      Alert.alert('保存失败', (e as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  function confirmDelete(card: CardType) {
-    Alert.alert(
-      '删除卡券',
-      `确定删除「${card.remark || '此卡券'}」吗？此操作不可恢复。`,
-      [
-        { text: '取消', style: 'cancel' },
-        {
-          text: '删除',
-          style: 'destructive',
-          onPress: () => doDelete(card),
-        },
-      ],
-      { cancelable: true },
-    );
-  }
-
-  async function doDelete(card: CardType) {
-    try {
-      await deleteCard(card.id);
-      setCards((prev) => prev.filter((x) => x.id !== card.id));
-    } catch (e) {
-      Alert.alert('删除失败', (e as Error).message);
-    }
-  }
-
-  function handleLongPress(card: CardType) {
-    Alert.alert(card.remark || '卡券', undefined, [
-      { text: '编辑', onPress: () => openEdit(card) },
-      {
-        text: '删除',
-        style: 'destructive',
-        onPress: () => confirmDelete(card),
-      },
-      { text: '取消', style: 'cancel' },
-    ]);
-  }
-
-  if (loading) return <Loading label="加载卡券..." />;
-
+  const router = useRouter();
   return (
-    <>
-      <View style={styles.subHeader}>
-        <Text style={[styles.subTitle, { color: c.text }]}>
-          共 {cards.length} 张
+    <View style={styles.guideWrap}>
+      <Card style={styles.guideCard}>
+        <View style={[styles.guideIcon, { backgroundColor: c.primaryLight }]}>
+          <Ticket color={c.primary} size={26} />
+        </View>
+        <Text style={[styles.guideTitle, { color: c.text }]}>卡券管理已升级</Text>
+        <Text style={[styles.guideDesc, { color: c.textMuted }]}>
+          此处为旧版入口（仅支持固定文字卡券），已停止维护。请前往完整的卡券管理页，支持固定文字
+          / 批量数据 / API接口 / 图片四种类型，以及关联商品、复制、批量删除、服务端搜索等功能。
         </Text>
-        <Button label="+ 新增卡券" onPress={openCreate} variant="secondary" />
-      </View>
-
-      <FlatList
-        data={cards}
-        keyExtractor={(item) => String(item.id)}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={load} />
-        }
-        renderItem={({ item }) => (
-          <Pressable onLongPress={() => handleLongPress(item)}>
-            <Card style={styles.cardItem}>
-              <Text
-                style={[styles.cardContent, { color: c.text }]}
-                numberOfLines={3}
-              >
-                {item.content || '（空内容）'}
-              </Text>
-              {item.remark ? (
-                <Text
-                  style={[styles.cardRemark, { color: c.textMuted }]}
-                  numberOfLines={1}
-                >
-                  备注：{item.remark}
-                </Text>
-              ) : null}
-            </Card>
-          </Pressable>
-        )}
-        ListEmptyComponent={
-          <EmptyState
-            icon={Ticket}
-            title="暂无卡券"
-            message="点击右上角「+ 新增卡券」添加"
-          />
-        }
-        contentContainerStyle={styles.listContent}
-      />
-
-      {/* 新增/编辑 Modal */}
-      <Modal
-        visible={modalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={closeModal}
-      >
-        <Pressable style={styles.modalOverlay} onPress={closeModal}>
-          <Pressable
-            style={[styles.modalCard, { backgroundColor: c.surface }]}
-            onPress={() => {}}
-          >
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: c.text }]}>
-                {editing ? '编辑卡券' : '新增卡券'}
-              </Text>
-              <Pressable onPress={closeModal} hitSlop={8}>
-                <Text style={[styles.closeBtn, { color: c.textMuted }]}>✕</Text>
-              </Pressable>
-            </View>
-
-            <View style={styles.fieldGroup}>
-              <Text style={[styles.fieldLabel, { color: c.textSecondary }]}>
-                内容
-              </Text>
-              <Input
-                value={content}
-                onChangeText={setContent}
-                placeholder="请输入卡券内容"
-                multiline
-                numberOfLines={4}
-                autoFocus
-              />
-            </View>
-
-            <View style={styles.fieldGroup}>
-              <Text style={[styles.fieldLabel, { color: c.textSecondary }]}>
-                备注
-              </Text>
-              <Input
-                value={remark}
-                onChangeText={setRemark}
-                placeholder="可选，备注名称"
-                maxLength={50}
-              />
-            </View>
-
-            <View style={styles.modalActions}>
-              <Button
-                label="取消"
-                variant="ghost"
-                onPress={closeModal}
-                style={styles.modalBtn}
-              />
-              <Button
-                label="保存"
-                onPress={save}
-                loading={saving}
-                disabled={saving}
-                style={styles.modalBtn}
-              />
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
-    </>
+        <Button
+          label="前往卡券管理"
+          onPress={() => router.push('/(tabs)/mine/cards')}
+          style={styles.guideBtn}
+        />
+      </Card>
+    </View>
   );
 }
 
@@ -772,22 +568,26 @@ const styles = StyleSheet.create({
   },
   tabLabel: { ...typography.body, fontWeight: '600' },
   // 通用列表
-  listContent: { padding: spacing.lg, gap: spacing.md },
+  listContent: { padding: spacing.lg, gap: spacing.md, paddingBottom: 80 },
   empty: { alignItems: 'center', justifyContent: 'center', paddingVertical: 28 },
   emptyText: { ...typography.body },
-  // 子页头
-  subHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  },
-  subTitle: { ...typography.heading },
   // 监控统计
   statsRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.md },
   // 监控商品项
   itemCard: { gap: spacing.sm },
+  // 卡券引导卡片（旧版入口已下线）
+  guideWrap: { flex: 1, padding: spacing.lg },
+  guideCard: { alignItems: 'center', gap: spacing.md, paddingVertical: spacing.xl },
+  guideIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  guideTitle: { ...typography.heading },
+  guideDesc: { ...typography.small, textAlign: 'center', lineHeight: 20 },
+  guideBtn: { minWidth: 180, marginTop: spacing.xs },
   itemHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -811,10 +611,6 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   actionBtn: { minHeight: 36, paddingHorizontal: spacing.lg },
-  // 卡券
-  cardItem: { gap: spacing.xs },
-  cardContent: { ...typography.body },
-  cardRemark: { ...typography.small },
   // 账号选择
   // 横向列表必须给显式高度：默认 flexGrow:1 会撑满整屏；仅 flexGrow:0 时安卓初始测量会把文字压扁
   acctScroll: {
@@ -850,28 +646,6 @@ const styles = StyleSheet.create({
   },
   ruleValue: { ...typography.body, fontWeight: '500' },
   ruleType: { ...typography.small, marginTop: spacing.xs },
-  // Modal
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: spacing.lg,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 340,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    gap: spacing.md,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  modalTitle: { ...typography.heading },
-  closeBtn: { fontSize: 22, paddingHorizontal: spacing.xs },
   priceItemTitle: { ...typography.small },
   fieldGroup: { gap: spacing.xs },
   fieldLabel: { ...typography.caption },
