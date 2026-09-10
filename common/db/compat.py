@@ -34,6 +34,12 @@ from common.utils.time_utils import get_beijing_now, get_beijing_now_naive
 # 线程本地存储，用于缓存每个线程的数据库引擎和会话工厂
 _thread_local = threading.local()
 
+# 同步兼容层会为阻塞调用创建独立事件循环。数据库或网络卡住时，旧实现会在每次
+# 调用时继续创建线程，最终耗尽容器 PID 配额。槽位仅在线程真正退出后释放。
+_SYNC_BRIDGE_MAX_THREADS = 8
+_SYNC_BRIDGE_ACQUIRE_TIMEOUT = 2
+_sync_bridge_slots = threading.BoundedSemaphore(_SYNC_BRIDGE_MAX_THREADS)
+
 
 def _get_thread_local_session_maker():
     """获取当前线程的数据库会话工厂（懒加载）"""
@@ -85,6 +91,13 @@ class DBManagerCompat:
         max_attempts = 3
 
         for attempt in range(1, max_attempts + 1):
+            if not _sync_bridge_slots.acquire(timeout=_SYNC_BRIDGE_ACQUIRE_TIMEOUT):
+                logger.warning(
+                    "异步数据库兼容层繁忙，"
+                    f"活跃线程已达到上限({_SYNC_BRIDGE_MAX_THREADS})，跳过本次调用"
+                )
+                return None
+
             result = [None]
             exception = [None]
 
@@ -120,13 +133,20 @@ class DBManagerCompat:
                         new_loop.close()
                 except Exception as e:
                     exception[0] = e
+                finally:
+                    _sync_bridge_slots.release()
 
             thread = threading.Thread(target=run_in_thread, daemon=True)
-            thread.start()
+            try:
+                thread.start()
+            except RuntimeError as e:
+                _sync_bridge_slots.release()
+                logger.error(f"无法启动异步数据库兼容线程: {e}")
+                return None
             thread.join(timeout=30)
 
             if thread.is_alive():
-                logger.error("异步操作超时")
+                logger.error("异步操作超时，保留线程槽位直到任务实际退出")
                 return None
 
             if exception[0]:
