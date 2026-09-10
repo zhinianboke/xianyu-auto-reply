@@ -25,6 +25,8 @@ dependencies = [
     "idna>=3.6",
     "certifi>=2023.11.0",
     "python-dateutil>=2.8.0",
+    "python-jose[cryptography]==3.3.0",
+    "passlib[bcrypt]==1.7.4",
     "bcrypt==5.0.0",
     "playwright",
     "Pillow>=10.0.0",
