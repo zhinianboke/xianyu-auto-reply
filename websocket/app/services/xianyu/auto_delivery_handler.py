@@ -1362,6 +1362,8 @@ class AutoDeliveryHandler:
                     form_delivery_content = None  # 无需邮寄表单成功时记录凭证，但不发送聊天消息
                     # 对接卡券退化标记：多数量循环里若第 1 张匹配到对接卡券，强制 break 退化为 1 张
                     # 规避底层 _create_agent_order + settlement_service 在 N 次调用时引发的金额 bug
+                    shipping_proof_trade_text = None
+                    shipping_proof_pic_list = None
                     quantity_degraded_for_dock = False
                     # 固定内容类型（text/image）退化标记：循环 N 次只是把同一段话/同一张图重复发 N 次，
                     # 业务上无意义且会打扰买家。商家若需要多数量真正发不同内容，应使用 data 或 api 类型卡券
@@ -1386,6 +1388,10 @@ class AutoDeliveryHandler:
                                 delivery_content = delivery_result.get('content')
                                 if delivery_result.get('form_only_delivered'):
                                     form_delivery_content = delivery_content
+                                if delivery_result.get('confirm_trade_text') is not None:
+                                    shipping_proof_trade_text = delivery_result.get('confirm_trade_text')
+                                if delivery_result.get('confirm_pic_list') is not None:
+                                    shipping_proof_pic_list = delivery_result.get('confirm_pic_list')
                                 platform_shipping_confirmed = (
                                     platform_shipping_confirmed
                                     or bool(delivery_result.get('platform_shipping_confirmed'))
@@ -1660,7 +1666,12 @@ class AutoDeliveryHandler:
                         if send_before_confirm_active and not any_send_failed and not card_intercept_reason:
                             logger.info(f'[{msg_time}] 【{self.cookie_id}】卡券发送成功，开始执行确认发货: order_id={order_id}')
                             if self.is_auto_confirm_enabled():
-                                confirm_result = await self.auto_confirm(order_id, item_id)
+                                confirm_result = await self.auto_confirm(
+                                    order_id,
+                                    item_id,
+                                    trade_text=shipping_proof_trade_text,
+                                    pic_list=shipping_proof_pic_list,
+                                )
                                 if confirm_result.get('skipped_only_send_card'):
                                     only_send_card_mode = True
                                     skip_shipping_confirm = True
@@ -1940,7 +1951,15 @@ class AutoDeliveryHandler:
 
     # ==================== 确认发货 ====================
 
-    async def auto_confirm(self, order_id, item_id=None, retry_count=0, trade_text=None, force: bool = False):
+    async def auto_confirm(
+        self,
+        order_id,
+        item_id=None,
+        retry_count=0,
+        trade_text=None,
+        pic_list=None,
+        force: bool = False,
+    ):
         """自动确认发货 - 使用重构后的确认发货服务
 
         force=True 用于「同意后发货」买家在提货页点击「同意」后的显式发货动作：
@@ -1988,7 +2007,11 @@ class AutoDeliveryHandler:
                 
                 # 调用确认方法
                 result = await confirm_service.auto_confirm(
-                    order_id, item_id, retry_count, trade_text=trade_text
+                    order_id,
+                    item_id,
+                    retry_count,
+                    trade_text=trade_text,
+                    pic_list=pic_list,
                 )
                 
                 # 同步更新后的cookies
@@ -2311,9 +2334,33 @@ class AutoDeliveryHandler:
 
             use_no_logistics_form = rule.get('use_no_logistics_form', False)
             form_trade_text = str(rule.get('card_text_content') or '').strip()
+            if rule.get('card_type') == 'image':
+                # 图片卡券的备注对应平台无需寄件表单的 tradeText；图片
+                # 内容单独通过 form_pic_list 作为发货凭证提交。
+                form_trade_text = str(rule.get('card_description') or '').strip()
+            raw_form_pic_list = rule.get('card_image_urls') or []
+            if isinstance(raw_form_pic_list, str):
+                try:
+                    raw_form_pic_list = json.loads(raw_form_pic_list)
+                except (TypeError, json.JSONDecodeError):
+                    raw_form_pic_list = [raw_form_pic_list]
+            form_pic_list = [
+                url.strip()
+                for url in (raw_form_pic_list if isinstance(raw_form_pic_list, (list, tuple)) else [])
+                if isinstance(url, str) and url.strip()
+            ]
+            single_form_pic = str(rule.get('card_image_url') or '').strip()
+            if single_form_pic and single_form_pic not in form_pic_list:
+                form_pic_list.append(single_form_pic)
             if use_no_logistics_form:
-                if rule['card_type'] != 'text' or not form_trade_text:
+                if rule['card_type'] == 'text' and not form_trade_text:
                     self._last_delivery_fail_reason = "无需邮寄表单发货仅支持非空的固定文字卡券"
+                    return None
+                if rule['card_type'] == 'image' and not form_pic_list:
+                    self._last_delivery_fail_reason = "无需邮寄表单发货的图片卡券必须至少配置一张凭证图片"
+                    return None
+                if rule['card_type'] not in ('text', 'image'):
+                    self._last_delivery_fail_reason = "无需邮寄表单发货仅支持固定文字或图片卡券"
                     return None
                 if not order_id or skip_confirm or not self.is_auto_confirm_enabled():
                     self._last_delivery_fail_reason = "无需邮寄表单发货需要订单ID并开启自动确认发货"
@@ -2331,8 +2378,7 @@ class AutoDeliveryHandler:
             # 由外层 _handle_auto_delivery 在卡券发送成功后再执行确认发货。
             # 前提：自动确认发货必须开启，否则整个发货流程都不应执行。
             send_before_confirm_mode = (
-                not use_no_logistics_form
-                and not skip_confirm
+                not skip_confirm
                 and self.is_send_before_confirm_enabled()
             )
             if send_before_confirm_mode and order_id:
@@ -2365,6 +2411,7 @@ class AutoDeliveryHandler:
                         if current_time - last_confirm_time < self.order_confirm_cooldown:
                             logger.info(f"订单 {order_id} 已在 {self.order_confirm_cooldown} 秒内确认过，跳过重复确认")
                             should_confirm = False
+                            platform_shipping_confirmed = True
 
                     if should_confirm:
                         logger.info(f"开始自动确认发货: 订单ID={order_id}, 商品ID={item_id}")
@@ -2372,6 +2419,7 @@ class AutoDeliveryHandler:
                             order_id,
                             item_id,
                             trade_text=form_trade_text if use_no_logistics_form else None,
+                            pic_list=form_pic_list if use_no_logistics_form else None,
                         )
                         if confirm_result.get('skipped_only_send_card'):
                             if use_no_logistics_form:
@@ -2431,6 +2479,10 @@ class AutoDeliveryHandler:
                                 return None
 
             # 检查是否存在订单ID，只有存在订单ID才处理发货内容
+            if use_no_logistics_form and not platform_shipping_confirmed and not send_before_confirm_mode:
+                self._last_delivery_fail_reason = "无需邮寄表单发货未获得平台确认结果"
+                return None
+
             if order_id:
                 # 保存订单基本信息到数据库（如果还没有详细信息）
                 try:
@@ -2508,7 +2560,17 @@ class AutoDeliveryHandler:
                     text_content = None
 
                 # 检查是否有图片需要发送（所有卡券类型都可以配置图片）
-                image_urls = rule.get('card_image_urls') or []
+                raw_image_urls = rule.get('card_image_urls') or []
+                if isinstance(raw_image_urls, str):
+                    try:
+                        raw_image_urls = json.loads(raw_image_urls)
+                    except (TypeError, json.JSONDecodeError):
+                        raw_image_urls = [raw_image_urls]
+                image_urls = [
+                    url.strip()
+                    for url in (raw_image_urls if isinstance(raw_image_urls, (list, tuple)) else [])
+                    if isinstance(url, str) and url.strip()
+                ]
                 single_image_url = rule.get('card_image_url')
                 card_description = rule.get('card_description', '')
 
@@ -2583,7 +2645,7 @@ class AutoDeliveryHandler:
                     logger.warning(f"卡券没有配置图片和文字内容: 卡券ID={rule['card_id']}")
                     delivery_content = None
 
-                if use_no_logistics_form:
+                if use_no_logistics_form and form_trade_text and not send_before_confirm_mode:
                     delivery_content = form_trade_text
 
                 if delivery_content:
@@ -2609,7 +2671,9 @@ class AutoDeliveryHandler:
                         'content': delivery_content,
                         'platform_shipping_confirmed': platform_shipping_confirmed,
                         'skipped_only_send_card': skipped_only_send_card,
-                        'form_only_delivered': use_no_logistics_form,
+                        'form_only_delivered': use_no_logistics_form and platform_shipping_confirmed,
+                        'confirm_trade_text': form_trade_text if use_no_logistics_form else None,
+                        'confirm_pic_list': form_pic_list if use_no_logistics_form else None,
                     }
                 else:
                     self._last_delivery_fail_reason = f"获取发货内容失败: 卡券ID={rule['card_id']}, 卡券名称={rule.get('card_name')}, 类型={rule.get('card_type')}"
