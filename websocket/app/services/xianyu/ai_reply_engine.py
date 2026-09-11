@@ -417,6 +417,8 @@ class AIReplyEngine:
             "custom_prompts": "",
             "ai_time_range_start": "",
             "ai_time_range_end": "",
+            "manual_reply_ai_pause_enabled": False,
+            "manual_reply_ai_pause_minutes": 10,
         }
 
     def _extract_ai_settings(self, ai_settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -437,6 +439,12 @@ class AIReplyEngine:
         payload["custom_prompts"] = payload.get("custom_prompts") or ""
         payload["ai_time_range_start"] = payload.get("ai_time_range_start") or ""
         payload["ai_time_range_end"] = payload.get("ai_time_range_end") or ""
+        payload["manual_reply_ai_pause_enabled"] = bool(
+            payload.get("manual_reply_ai_pause_enabled", False)
+        )
+        payload["manual_reply_ai_pause_minutes"] = max(
+            1, min(1440, int(payload.get("manual_reply_ai_pause_minutes", 10) or 10))
+        )
         return payload
     
     def _get_api_provider_name(self, settings: Dict) -> str:
@@ -786,6 +794,14 @@ class AIReplyEngine:
                 settings = await self.get_ai_settings(cookie_id, db_session)
                 if not settings.get("ai_enabled"):
                     return None
+                if (
+                    settings.get("manual_reply_ai_pause_enabled")
+                    and pause_manager.is_ai_reply_paused(cookie_id, user_id, item_id)
+                ):
+                    logger.info(
+                        f"【{cookie_id}】AI 回复前检测到人工回复暂停：buyer_id={user_id}, item_id={item_id}"
+                    )
+                    return None
                 
                 # 获取对话历史
                 context_stmt = (
@@ -926,7 +942,13 @@ class AIReplyEngine:
                 
                 if reply:
                     # 二次检测：大模型返回后，若人工已介入暂停，则放弃本次回复
-                    if pause_manager.is_chat_paused(chat_id, cookie_id):
+                    if (
+                        pause_manager.is_chat_paused(chat_id, cookie_id)
+                        or (
+                            settings.get("manual_reply_ai_pause_enabled")
+                            and pause_manager.is_ai_reply_paused(cookie_id, user_id, item_id)
+                        )
+                    ):
                         logger.info(f"【{cookie_id}】AI回复生成成功，但检测到会话 {chat_id} 已被人工介入暂停，跳过保存和发送")
                         return None
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AIReplySettings(BaseModel):
@@ -17,6 +17,8 @@ class AIReplySettings(BaseModel):
     custom_prompts: str = ""
     ai_time_range_start: str = ""
     ai_time_range_end: str = ""
+    manual_reply_ai_pause_enabled: bool = False
+    manual_reply_ai_pause_minutes: int = Field(default=10, ge=1, le=1440)
 
 
 class AIReplySettingsUpdate(BaseModel):
@@ -34,6 +36,8 @@ class AIReplySettingsUpdate(BaseModel):
     enabled: bool | None = None
     ai_time_range_start: str | None = None
     ai_time_range_end: str | None = None
+    manual_reply_ai_pause_enabled: bool | None = None
+    manual_reply_ai_pause_minutes: int | None = Field(default=None, ge=1, le=1440)
 
 
 class AIModelListRequest(BaseModel):
