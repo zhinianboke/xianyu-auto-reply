@@ -31,7 +31,7 @@ from common.services.risk_control_log_query_service import (
     check_account_processing_risk_control_log,
     get_account_risk_control_lock,
 )
-from common.services.token_renewal_cache_service import mark_token_cache_expired
+from common.services.token_renewal_cache_service import delete_token_cache
 from common.services.token_api_mode import (
     get_token_api_mode_label,
     load_token_api_mode,
@@ -463,11 +463,9 @@ class CookieTokenManager:
             logger.warning(f"【{self.cookie_id}】缓存Token到数据库失败: {e}")
 
     async def _delete_cached_token(self):
-        """将当前失效 Token 缓存标记为失效，不物理删除历史数据。"""
-        invalidation = await mark_token_cache_expired(
+        """按唯一 user_id 删除当前账号的 Token 缓存。"""
+        invalidation = await delete_token_cache(
             token_user_id=self.myid,
-            expected_token=self._cached_token_in_use,
-            expected_device_id=self.device_id,
         )
         if invalidation.success:
             logger.info(f"【{self.cookie_id}】{invalidation.message}: user_id={self.myid}")

@@ -140,6 +140,54 @@ async def mark_token_cache_expired(
     )
 
 
+async def delete_token_cache(
+    *,
+    token_user_id: str,
+    max_attempts: int = DEFAULT_DB_MAX_ATTEMPTS,
+    retry_delay_seconds: float = DEFAULT_DB_RETRY_DELAY_SECONDS,
+) -> TokenCacheInvalidationResult:
+    """按唯一 ``user_id`` 软删除 Token 缓存行。"""
+    clean_user_id = str(token_user_id or "").strip()
+    if not clean_user_id:
+        return TokenCacheInvalidationResult(False, message="Token缓存删除失败：用户ID为空")
+
+    attempts = max(1, int(max_attempts))
+    last_error = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            async with async_session_maker() as session:
+                invalidated_at = get_beijing_now_naive()
+                update_result = await session.execute(
+                    update(TokenCache)
+                    .where(TokenCache.user_id == clean_user_id)
+                    .values(
+                        token="",
+                        device_id="",
+                        expire_at=invalidated_at,
+                        renew_expire_at=invalidated_at,
+                        updated_at=invalidated_at,
+                    )
+                )
+                await session.commit()
+            break
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            if attempt < attempts:
+                await asyncio.sleep(max(0.0, retry_delay_seconds))
+    else:
+        return TokenCacheInvalidationResult(
+            False,
+            message=f"Token缓存删除失败，已重试{attempts}次：{last_error}",
+        )
+
+    changed = int(update_result.rowcount or 0) > 0
+    return TokenCacheInvalidationResult(
+        True,
+        changed=changed,
+        message="Token缓存已删除" if changed else "Token缓存不存在",
+    )
+
+
 async def upsert_token_cache(
     *,
     token_user_id: str,
