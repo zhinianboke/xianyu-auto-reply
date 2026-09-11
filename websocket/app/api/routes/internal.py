@@ -29,6 +29,7 @@ from common.services.risk_control_log_query_service import (
     get_account_risk_control_lock,
 )
 from common.services.token_renewal_cache_service import (
+    delete_token_cache,
     mark_token_cache_expired,
     upsert_token_cache,
     write_renewed_token_cache,
@@ -325,11 +326,10 @@ async def restart_account(account_id: str, request: StartAccountRequest = None):
                     logger.warning(f"解析Cookie获取unb失败: {parse_e}")
                     unb = ""
 
-            # 3) 用正确的 unb 作为 user_id 标记 Token 缓存失效
+            # 3) 用正确的 unb 作为唯一 user_id 删除 Token 缓存
             if unb:
-                invalidation = await mark_token_cache_expired(
+                invalidation = await delete_token_cache(
                     token_user_id=unb,
-                    invalidate_valid_cache=True,
                 )
                 logger.info(
                     f"账号重启前{invalidation.message}: "
