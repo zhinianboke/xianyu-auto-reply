@@ -31,6 +31,7 @@ from common.services.remote_token_api import (
     validate_remote_token_settings,
 )
 from common.services.remote_token_risk_log_service import (
+    REMOTE_OUTCOME_CAPTCHA_REQUIRED,
     REMOTE_OUTCOME_FAILED,
     REMOTE_OUTCOME_SUCCESS,
     build_remote_fallback_event_description,
@@ -300,9 +301,13 @@ def _try_remote_token_fallback(
         )
         return False
 
+    captcha_required = bool(
+        not remote_result.success and remote_result.captcha_url
+    )
     record_remote_token_risk_log_sync(
         account_identifier=cookie_id,
         success=remote_result.success,
+        captcha_required=captcha_required,
         message=remote_result.message,
         api_mode=remote_result.api_mode,
         status_code=remote_result.status_code,
@@ -311,16 +316,33 @@ def _try_remote_token_fallback(
         event_description=build_remote_fallback_event_description(
             local_failure_reason=local_failure_reason,
             remote_outcome=(
-                REMOTE_OUTCOME_SUCCESS if remote_result.success else REMOTE_OUTCOME_FAILED
+                REMOTE_OUTCOME_SUCCESS
+                if remote_result.success
+                else REMOTE_OUTCOME_CAPTCHA_REQUIRED
+                if captcha_required
+                else REMOTE_OUTCOME_FAILED
             ),
             scene=_REMOTE_FALLBACK_EVENT_SCENE,
         ),
     )
+    merged_response_cookies = dict(result.get("new_cookies") or {})
+    merged_response_cookies.update(remote_result.cookies)
+    result["new_cookies"] = merged_response_cookies
     if not remote_result.success:
-        logger.warning(
-            f"【{cookie_id}】本地网页接口获取Token失败后的远程回退失败: "
-            f"{remote_result.message or '未返回错误说明'}"
-        )
+        if remote_result.device_id:
+            result["device_id"] = remote_result.device_id
+        if remote_result.api_mode:
+            result["api_mode"] = remote_result.api_mode
+        if remote_result.captcha_url:
+            result["fresh_url"] = remote_result.captcha_url
+            logger.info(
+                f"【{cookie_id}】远程节点返回新鲜验证链接，将交给远程滑块节点"
+            )
+        else:
+            logger.warning(
+                f"【{cookie_id}】本地网页接口获取Token失败后的远程回退失败: "
+                f"{remote_result.message or '未返回错误说明'}"
+            )
         return False
 
     result["token_ok"] = True
@@ -419,14 +441,16 @@ def request_fresh_captcha_url(
             if _try_remote_token_fallback(
                 cookie_id,
                 result,
-                cookies_str=cookies_str,
+                # 把本地接口刚下发的增量 Cookie 一并交给远程节点，避免远程节点
+                # 使用已经过期的 _m_h5_tk 再发起一次无效请求。
+                cookies_str=current_cookies_str,
                 timeout_seconds=remaining_seconds,
                 local_failure_reason="未返回有效Token",
                 # 本地耗时由总预算反推，避免额外调用 monotonic 影响超时预算计算
                 local_duration_seconds=(
                     _TOKEN_REFETCH_TOTAL_TIMEOUT_SECONDS - remaining_seconds
                 ),
-            ):
+            ) or result.get("fresh_url"):
                 return result
 
         new_url = extract_token_captcha_url(primary_response)

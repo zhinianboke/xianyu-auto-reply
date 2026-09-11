@@ -17,6 +17,7 @@ import tempfile
 import time
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 from loguru import logger
 
@@ -61,6 +62,16 @@ CAPTCHA_NOT_REQUIRED = "__CAPTCHA_NOT_REQUIRED__"
 # 自助重取新链接"。作为 run()/solve() 返回元组中 cookies 位置的特殊值，由编排层识别后
 # 以 engine='url_expired' 上报，最终让远程调用方据此刷新 URL 后重试。
 URL_EXPIRED = "__URL_EXPIRED__"
+
+
+def _safe_url_for_log(url: object) -> str:
+    """移除查询串和片段，防止 x5secdata 等验证凭证进入日志。"""
+    value = str(url or "").strip()
+    try:
+        parsed = urlsplit(value)
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    except Exception:  # noqa: BLE001
+        return "<invalid-url>"
 
 
 class PlaywrightSliderService:
@@ -557,7 +568,11 @@ class PlaywrightSliderService:
                                 kw in page_content for kw in ["验证码", "captcha", "滑块", "nc_1_n1z", "nc-container"]
                             )
                             if not has_captcha_keywords:
-                                logger.info(f"【{self.pure_user_id}】✅ 页面已不包含验证元素，判定为验证已通过（可能人工完成），URL: {current_url}")
+                                logger.info(
+                                    f"【{self.pure_user_id}】✅ 页面已不包含验证元素，"
+                                    "判定为验证已通过（可能人工完成），"
+                                    f"URL: {_safe_url_for_log(current_url)}"
+                                )
                                 return True
                         except Exception as check_e:
                             logger.warning(f"【{self.pure_user_id}】检查页面状态时出错: {check_e}")
@@ -729,7 +744,10 @@ class PlaywrightSliderService:
 
             def _load_and_read(target_url: str) -> Optional[str]:
                 """导航到目标URL并读取页面内容。返回 page_content；需要中止时返回 None。"""
-                logger.info(f"【{self.pure_user_id}】导航到URL: {target_url}")
+                logger.info(
+                    f"【{self.pure_user_id}】导航到URL: "
+                    f"{_safe_url_for_log(target_url)}"
+                )
                 try:
                     # goto 超时设为 browser_timeout 的一半，确保不会卡住超过总超时
                     goto_timeout = min(browser_timeout * 1000 // 2, 15000)
@@ -1007,7 +1025,11 @@ class PlaywrightSliderService:
                                 kw in page_content for kw in ["验证码", "captcha", "滑块", "nc_1_n1z", "nc-container"]
                             )
                             if not has_captcha_keywords:
-                                logger.info(f"【{self.pure_user_id}】✅ 页面已不包含验证元素，判定为验证已通过（可能人工完成），URL: {current_url}")
+                                logger.info(
+                                    f"【{self.pure_user_id}】✅ 页面已不包含验证元素，"
+                                    "判定为验证已通过（可能人工完成），"
+                                    f"URL: {_safe_url_for_log(current_url)}"
+                                )
                                 return True
                         except Exception as check_e:
                             logger.warning(f"【{self.pure_user_id}】检查页面状态时出错: {check_e}")
@@ -1290,7 +1312,10 @@ class PlaywrightSliderService:
                 current_url = self.page.url or ""
             except Exception:
                 pass
-            logger.info(f"【{self.pure_user_id}】当前页面URL: {current_url}")
+            logger.info(
+                f"【{self.pure_user_id}】当前页面URL: "
+                f"{_safe_url_for_log(current_url)}"
+            )
 
             try:
                 logger.info(f"【{self.pure_user_id}】当前页面标题: {self.page.title()}")

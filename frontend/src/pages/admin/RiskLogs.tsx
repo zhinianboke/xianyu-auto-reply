@@ -93,6 +93,7 @@ export function RiskLogs() {
   const getProcessingStatusLabel = (log: RiskLog) => {
     if (log.processing_status === 'success') return '成功'
     if (log.processing_status === 'failed') return '失败'
+    if (log.processing_status === 'captcha_required') return '需滑块验证'
     if (log.processing_status === 'processing') return `处理中（${getCallTypeLabel(log.call_type)}）`
     if (log.processing_status === 'cancelled') return '已取消'
     return log.processing_status || '-'
@@ -662,6 +663,7 @@ export function RiskLogs() {
                 <option value="">全部状态</option>
                 <option value="success">成功</option>
                 <option value="failed">失败</option>
+                <option value="captcha_required">需滑块验证</option>
                 <option value="processing">处理中</option>
                 <option value="cancelled">已取消</option>
               </select>
@@ -846,6 +848,7 @@ export function RiskLogs() {
                       <span className={`text-xs px-2 py-1 rounded ${
                         log.processing_status === 'success' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
                         log.processing_status === 'failed' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
+                        log.processing_status === 'captcha_required' ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300' :
                         log.processing_status === 'processing' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' :
                         'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
                       }`}>

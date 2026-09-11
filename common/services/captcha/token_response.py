@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 
 TOKEN_CAPTCHA_KEYWORDS = (
@@ -86,3 +87,27 @@ def is_token_expired_response(response_json: Any) -> bool:
     ret_value = response_json.get("ret", []) or []
     ret_text = json.dumps(ret_value, ensure_ascii=False)
     return any(keyword in ret_text for keyword in TOKEN_EXPIRED_KEYWORDS)
+
+
+def safe_url_for_log(url: object) -> str:
+    """移除 URL 查询串和片段，避免把一次性验证凭证写入日志。"""
+    value = str(url or "").strip()
+    try:
+        parsed = urlsplit(value)
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    except Exception:  # noqa: BLE001
+        return "<invalid-url>"
+
+
+def summarize_token_response_for_log(response_json: Any, limit: int = 500) -> str:
+    """生成不含 Token、Cookie 和 punish 查询凭证的日志摘要。"""
+    if not isinstance(response_json, dict):
+        return str(type(response_json).__name__)
+    summary: dict[str, Any] = {"ret": response_json.get("ret")}
+    data = response_json.get("data")
+    if isinstance(data, dict):
+        summary["data_keys"] = sorted(str(key) for key in data.keys())
+        url = str(data.get("url") or "").strip()
+        if url:
+            summary["url"] = safe_url_for_log(url)
+    return json.dumps(summary, ensure_ascii=False, default=str)[: max(1, int(limit))]

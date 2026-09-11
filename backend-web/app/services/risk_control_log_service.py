@@ -118,7 +118,7 @@ class RiskControlLogService:
             account_identifier: 账号ID筛选
             start_date: 开始日期（格式：YYYY-MM-DD）
             end_date: 结束日期（格式：YYYY-MM-DD）
-            processing_status: 处理状态筛选（success/failed/processing）
+            processing_status: 处理状态筛选（success/failed/captcha_required/processing）
             call_type: 调用类型筛选（local-本机/remote-远程）
             call_user: 调用用户筛选（模糊匹配，仅远程调用记录该字段）
             limit: 每页数量
