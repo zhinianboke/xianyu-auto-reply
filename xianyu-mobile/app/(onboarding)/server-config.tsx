@@ -78,7 +78,7 @@ export default function ServerConfigScreen() {
       const err = e as Error;
       let msg = err.message || '未知错误';
       if (isTimeoutError(e)) {
-        msg = '连接超时（15秒）。\n\n常见原因：域名解析到了不可达的 IPv6 地址。\n建议：改用 IP 地址连接，如 http://113.205.186.225:18095\n（IP 可在电脑上 ping 域名获得）';
+        msg = '连接超时（15秒）。\n\n常见原因：域名解析到了不可达的 IPv6 地址。\n建议：改用 IP 地址连接，如 http://your-server-ip:port\n（IP 可在电脑上 ping 域名获得）';
       } else if (msg === 'Network request failed') {
         msg = '网络请求失败，请检查：\n1. 服务器地址是否正确\n2. 手机网络是否正常\n3. 服务器是否正在运行\n\n若用域名失败，建议改用 IP 地址直连';
       }

@@ -37,6 +37,9 @@ class AgreeDeliverConfig(BaseModel):
     enabled: bool = False  # 是否开启同意后发货
     notify_message: Optional[str] = None  # 通知用户信息（文本域）
     pickup_url: Optional[str] = None  # 提货URL
+    # 提货后通知（买家同意提货发卡后主动提醒确认收货，账号级，默认关闭）
+    pickup_notice_enabled: bool = False
+    pickup_notice_content: Optional[str] = None
 
 
 class AgreeDeliverConfigResponse(BaseModel):
@@ -135,6 +138,8 @@ async def get_agree_deliver_config(
             enabled=bool(account.agree_deliver_enabled),
             notify_message=account.agree_deliver_notify_message,
             pickup_url=account.agree_deliver_pickup_url,
+            pickup_notice_enabled=bool(account.agree_pickup_notice_enabled),
+            pickup_notice_content=account.agree_pickup_notice_content,
         )
 
         return AgreeDeliverConfigResponse(success=True, data=config)
@@ -189,11 +194,13 @@ async def update_agree_deliver_config(
         account.agree_deliver_enabled = config.enabled
         account.agree_deliver_notify_message = notify_message or None
         account.agree_deliver_pickup_url = pickup_url or None
+        account.agree_pickup_notice_enabled = config.pickup_notice_enabled
+        account.agree_pickup_notice_content = (config.pickup_notice_content or "").strip() or None
 
         session.add(account)
         await session.commit()
 
-        logger.info(f"更新账号 {account_id} 同意后发货配置: enabled={config.enabled}")
+        logger.info(f"更新账号 {account_id} 同意后发货配置: enabled={config.enabled}, pickup_notice={config.pickup_notice_enabled}")
 
         return AgreeDeliverConfigResponse(success=True, message="同意后发货配置已更新")
 

@@ -153,4 +153,9 @@ async def consume_card_and_record(
             logger.info(f"【同意后发货】订单 {order_no} 当前状态 {old_status} 为终态/退款中，保留不覆盖")
         await session.commit()
 
+        # 售罄守卫：提货发货成功后检查（自带开关/类型判断，异常只记日志）
+        if card.type == 'data':
+            from common.services.stock_guard_service import delist_card_if_empty
+            await delist_card_if_empty(session, card_id, trigger="delivery_pickup")
+
     return True, "发货成功", content

@@ -14,8 +14,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useColorScheme } from 'react-native';
 import { useRouter } from 'expo-router';
+import * as Clipboard from 'expo-clipboard';
 import { Card, Button, Input, Loading, FormModal, Badge } from '@/components/ui';
-import { colors, spacing, typography, radius } from '@/lib/theme';
+import { colors, spacing, typography, radius, type ThemeColors } from '@/lib/theme';
 import { useAuthStore } from '@/stores/auth';
 import {
   changePassword,
@@ -31,8 +32,15 @@ import {
   type SettlementRecord,
 } from '@/api/wrappers/settings';
 import {
+  getDockCode,
+  resetDockCode,
+  getSecretKey,
+  resetSecretKey,
+} from '@/api/wrappers/users-self';
+import {
   User,
   KeyRound,
+  ShieldCheck,
   Wallet,
   Eye,
   EyeOff,
@@ -86,6 +94,12 @@ function isExpired(value?: string | null): boolean {
   return Number.isFinite(t) && t < Date.now();
 }
 
+/** 凭证打码显示：保留首尾各2位，中间以 **** 代替 */
+function maskCredential(value: string): string {
+  if (value.length <= 6) return '****';
+  return `${value.slice(0, 2)}****${value.slice(-2)}`;
+}
+
 /** 结算记录状态 -> 徽章文案 + 配色 */
 function settlementStatusMeta(
   status: SettlementRecord['status'],
@@ -109,6 +123,86 @@ function paymentTypeLabel(rec: SettlementRecord): string {
   if (rec.payment_type === 'wechat') return '微信';
   if (rec.payment_type === 'alipay') return '支付宝';
   return rec.alipay_id ? '支付宝' : '-';
+}
+
+/** 凭证行：打码/明文展示 + 查看/复制/重置操作 */
+function CredentialRow({
+  label,
+  value,
+  visible,
+  loading,
+  onToggleVisible,
+  onCopy,
+  onReset,
+  c,
+}: {
+  label: string;
+  value: string | null;
+  visible: boolean;
+  loading: boolean;
+  onToggleVisible: () => void;
+  onCopy: () => void;
+  onReset: () => void;
+  c: ThemeColors;
+}) {
+  return (
+    <View style={styles.credRow}>
+      <View style={styles.credInfo}>
+        <Text style={[styles.credLabel, { color: c.text }]}>{label}</Text>
+        <Text
+          style={[styles.credValue, { color: c.textMuted }]}
+          numberOfLines={1}
+          selectable={visible && value != null}
+        >
+          {value == null
+            ? loading
+              ? '加载中...'
+              : '—'
+            : visible
+              ? value
+              : maskCredential(value)}
+        </Text>
+      </View>
+      <View style={styles.credActions}>
+        <Pressable
+          onPress={onToggleVisible}
+          hitSlop={6}
+          style={styles.credIconBtn}
+          disabled={value == null}
+        >
+          {visible ? (
+            <EyeOff size={16} stroke={c.textSecondary} />
+          ) : (
+            <Eye size={16} stroke={c.textSecondary} />
+          )}
+        </Pressable>
+        <Pressable
+          onPress={onCopy}
+          disabled={value == null}
+          style={[
+            styles.credBtn,
+            { borderColor: c.border },
+            value == null && { opacity: 0.4 },
+          ]}
+        >
+          <Text style={[styles.credBtnText, { color: c.textSecondary }]}>
+            复制
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={onReset}
+          disabled={value == null}
+          style={[
+            styles.credBtn,
+            { borderColor: c.error },
+            value == null && { opacity: 0.4 },
+          ]}
+        >
+          <Text style={[styles.credBtnText, { color: c.error }]}>重置</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
 }
 
 export default function PersonalSettingsScreen() {
@@ -163,6 +257,86 @@ export default function PersonalSettingsScreen() {
   const [settlementPageSize] = useState(20);
   const [settlementTotal, setSettlementTotal] = useState(0);
   const [settlementTotalPages, setSettlementTotalPages] = useState(0);
+
+  // 我的凭证：对接码 / 分销 API 秘钥（默认打码，点眼睛查看明文）
+  const [dockCode, setDockCode] = useState<string | null>(null);
+  const [dockVisible, setDockVisible] = useState(false);
+  const [secretKey, setSecretKey] = useState<string | null>(null);
+  const [secretVisible, setSecretVisible] = useState(false);
+  const [credLoading, setCredLoading] = useState(false);
+
+  const loadCredentials = useCallback(async () => {
+    setCredLoading(true);
+    try {
+      const [dock, key] = await Promise.all([getDockCode(), getSecretKey()]);
+      setDockCode(dock);
+      setSecretKey(key);
+    } catch (e) {
+      // 凭证加载失败不阻断页面，卡片内显示占位
+      setDockCode(null);
+      setSecretKey(null);
+      console.warn('加载凭证失败', e);
+    } finally {
+      setCredLoading(false);
+    }
+  }, []);
+
+  // ---- 凭证：复制 / 重置 ----
+  async function copyCredential(kind: 'dock' | 'secret') {
+    const value = kind === 'dock' ? dockCode : secretKey;
+    if (!value) {
+      Alert.alert('提示', '凭证尚未加载，请先刷新');
+      return;
+    }
+    try {
+      await Clipboard.setStringAsync(value);
+      Alert.alert('已复制', kind === 'dock' ? '对接码已复制到剪贴板' : 'API秘钥已复制到剪贴板');
+    } catch (e) {
+      Alert.alert('复制失败', (e as Error).message);
+    }
+  }
+
+  function confirmResetCredential(kind: 'dock' | 'secret') {
+    Alert.alert(
+      kind === 'dock' ? '重置对接码' : '重置API秘钥',
+      kind === 'dock'
+        ? '重置后旧对接码立即失效，所有已绑定的分销商与对接记录将被清除。确定重置吗？'
+        : '重置后旧API秘钥立即失效，使用旧秘钥的对接将无法继续。确定重置吗？',
+      [
+        { text: '取消', style: 'cancel' },
+        { text: '重置', style: 'destructive', onPress: () => doResetCredential(kind) },
+      ],
+      { cancelable: true },
+    );
+  }
+
+  async function doResetCredential(kind: 'dock' | 'secret') {
+    try {
+      if (kind === 'dock') {
+        const r = await resetDockCode();
+        if (!r.success) {
+          Alert.alert('重置失败', r.message ?? '请稍后重试');
+          return;
+        }
+        const code = await getDockCode();
+        setDockCode(code);
+        setDockVisible(true);
+        Alert.alert('成功', r.message ?? '对接码已重置，请及时通知分销商更新');
+      } else {
+        const r = await resetSecretKey();
+        if (!r.success) {
+          Alert.alert('重置失败', r.message ?? '请稍后重试');
+          return;
+        }
+        const key = r.secret_key ?? (await getSecretKey());
+        setSecretKey(key);
+        setSecretVisible(true);
+        Alert.alert('成功', r.message ?? 'API秘钥已重置，请及时更新对接配置');
+      }
+    } catch (e) {
+      Alert.alert('重置失败', (e as Error).message);
+    }
+  }
 
   const loadFlows = useCallback(async () => {
     setFlowsLoading(true);
@@ -236,7 +410,8 @@ export default function PersonalSettingsScreen() {
     loadFlows();
     loadProfile();
     loadRenewPrice();
-  }, [loadFlows, loadProfile, loadRenewPrice]);
+    loadCredentials();
+  }, [loadFlows, loadProfile, loadRenewPrice, loadCredentials]);
 
   // ---- 修改密码 ----
   async function handleChangePassword() {
@@ -484,6 +659,56 @@ export default function PersonalSettingsScreen() {
               账户已到期，请尽快续期以恢复服务。
             </Text>
           )}
+        </Card>
+
+        {/* 我的凭证 */}
+        <Card style={styles.section}>
+          <View style={styles.sectionTitleRow}>
+            <ShieldCheck size={16} stroke={c.textSecondary} />
+            <Text style={[styles.sectionTitle, { color: c.textSecondary }]}>
+              我的凭证
+            </Text>
+            <Pressable
+              onPress={loadCredentials}
+              hitSlop={8}
+              disabled={credLoading}
+              style={styles.refreshBtn}
+            >
+              {credLoading ? (
+                <ActivityIndicator size="small" color={c.primary} />
+              ) : (
+                <RefreshCw size={16} stroke={c.textSecondary} />
+              )}
+            </Pressable>
+          </View>
+
+          <CredentialRow
+            label="对接码"
+            value={dockCode}
+            visible={dockVisible}
+            loading={credLoading}
+            onToggleVisible={() => setDockVisible((v) => !v)}
+            onCopy={() => copyCredential('dock')}
+            onReset={() => confirmResetCredential('dock')}
+            c={c}
+          />
+          <Text style={[styles.credHint, { color: c.textMuted }]}>
+            用于分销商绑定，重置后旧码失效且清除全部绑定记录
+          </Text>
+
+          <CredentialRow
+            label="API秘钥"
+            value={secretKey}
+            visible={secretVisible}
+            loading={credLoading}
+            onToggleVisible={() => setSecretVisible((v) => !v)}
+            onCopy={() => copyCredential('secret')}
+            onReset={() => confirmResetCredential('secret')}
+            c={c}
+          />
+          <Text style={[styles.credHint, { color: c.textMuted }]}>
+            用于分销对接鉴权，重置后旧秘钥立即失效
+          </Text>
         </Card>
 
         {/* 余额管理 */}
@@ -1134,6 +1359,27 @@ const styles = StyleSheet.create({
   // 4 个按钮按 2×2 排列，避免在窄屏挤一行
   balanceActions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   balanceBtn: { flexGrow: 1, flexBasis: '47%' },
+  // 我的凭证
+  credRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    paddingTop: spacing.xs,
+  },
+  credInfo: { flex: 1, flexShrink: 1, gap: 2 },
+  credLabel: { ...typography.body, fontWeight: '600' },
+  credValue: { ...typography.small },
+  credActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  credIconBtn: { padding: spacing.xs },
+  credBtn: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+  },
+  credBtnText: { ...typography.small, fontWeight: '600' },
+  credHint: { ...typography.small, marginTop: 2 },
   fieldGroup: { gap: spacing.xs },
   fieldLabel: { ...typography.caption },
   showPwdRow: {

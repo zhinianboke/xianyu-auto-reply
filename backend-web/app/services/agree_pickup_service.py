@@ -19,9 +19,12 @@ from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from loguru import logger
 
 from app.services.websocket_client import websocket_client
+from app.services.item_query_service import ItemQueryService
 from common.db.redis_client import release_delivery_lock, try_acquire_delivery_lock
+from common.models.xy_account import XYAccount
 from common.models.xy_order import XYOrder
 from common.services.order_service import OrderService
 from common.utils.xianyu_utils import canonical_goofish_item_url
@@ -57,12 +60,17 @@ class AgreePickupService:
         return True, "", order
 
     @staticmethod
-    def _order_view(order: XYOrder, item_title: str = "") -> Dict[str, Any]:
+    def _order_view(
+        order: XYOrder,
+        item_title: str = "",
+        query_buttons: Optional[list] = None,
+    ) -> Dict[str, Any]:
         """提货页可展示的订单信息（最小必要字段）
 
         Args:
             order: 订单对象
             item_title: 商品标题（由调用方查商品表取得，取不到传空字符串）
+            query_buttons: 商品配置的通用查询按钮（只含 name 字段；无配置传空列表）
         Returns:
             提货页展示字段字典
         """
@@ -80,7 +88,22 @@ class AgreePickupService:
             "already_agreed": bool(order.agree_deliver_agreed),
             # 已同意时回显发货内容，未同意时不下发
             "content": order.delivery_content if order.agree_deliver_agreed else None,
+            "query_buttons": query_buttons or [],
         }
+
+    async def _load_query_buttons(self, order: XYOrder) -> list:
+        """读取商品配置的通用查询按钮（只取 name 列表下发给买家）。
+
+        任何异常都按空数组处理，不阻断提货主流程。
+        """
+        try:
+            buttons = await ItemQueryService(self.session).get_buttons_for_item(
+                order.owner_id, order.item_id or ""
+            )
+            return [{"name": button.get("name") or "查询"} for button in buttons]
+        except Exception as e:
+            logger.warning(f"[同意提货] 查询按钮配置读取失败 order={order.order_no}: {e}")
+            return []
 
     async def query_order(
         self, order_no: str, order_id: str
@@ -93,7 +116,8 @@ class AgreePickupService:
         item_title = await OrderService(self.session).resolve_item_title(
             order.owner_id, order.item_id or ""
         )
-        return True, "查询成功", self._order_view(order, item_title)
+        query_buttons = await self._load_query_buttons(order)
+        return True, "查询成功", self._order_view(order, item_title, query_buttons)
 
     async def agree(
         self, order_no: str, order_id: str
@@ -131,6 +155,23 @@ class AgreePickupService:
                 return False, "发货失败，请稍后重试或联系卖家", None
             success = bool(resp.get("success"))
             msg = resp.get("message") or ("发货成功" if success else "发货失败，请稍后重试或联系卖家")
+
+            # 发卡成功后按账号配置主动提醒买家确认收货（账号级 agree_pickup_notice_*，默认关闭）
+            if success and order.account_id and order.chat_id:
+                try:
+                    acct_result = await self.session.execute(
+                        select(XYAccount).where(XYAccount.account_id == order.account_id)
+                    )
+                    account = acct_result.scalars().first()
+                    if account and account.agree_pickup_notice_enabled:
+                        content = (account.agree_pickup_notice_content or "").strip()
+                        if content:
+                            await websocket_client.send_message(
+                                order.account_id, order.chat_id, content
+                            )
+                except Exception as e:
+                    logger.error(f"[同意提货] 确认收货提醒发送失败 order={real_order_no}: {e}")
+
             return success, msg, resp.get("data")
         finally:
             await release_delivery_lock(lock_result)

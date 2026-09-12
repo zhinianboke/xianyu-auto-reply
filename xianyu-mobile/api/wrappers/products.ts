@@ -1,4 +1,6 @@
 import { getApiClient, extractError } from './client';
+// 仅类型引用（复用 XianyuItem 行结构），不改动 items.ts（归属其他模块）
+import type { XianyuItem, XianyuItemsPage } from './items';
 
 // ---------------------------------------------------------------------------
 // 类型定义（与任务规格保持一致）
@@ -658,6 +660,126 @@ export async function deleteCard(cardId: number): Promise<void> {
   await (client.DELETE as any)(`/api/v1/cards/${cardId}`);
 }
 
+/** 批量删除结果（对齐后端 POST /cards/batch-delete 返回的 data） */
+export interface BatchDeleteResult {
+  success_count: number;
+  total_count: number;
+}
+
+/**
+ * 批量删除卡券
+ *
+ * POST /api/v1/cards/batch-delete，body { ids: number[] }。
+ * 后端返回 ApiResponse 包裹的 { success_count, total_count }。
+ */
+export async function batchDeleteCards(
+  cardIds: number[],
+): Promise<BatchDeleteResult> {
+  const client = await getApiClient();
+  const { data } = (await (client.POST as any)('/api/v1/cards/batch-delete', {
+    body: { ids: cardIds },
+  })) as { data?: unknown; error?: unknown };
+  assertOk(data);
+  const inner = unwrapData<Record<string, unknown>>(data);
+  const obj = inner && typeof inner === 'object' ? inner : {};
+  return {
+    success_count: num(obj.success_count, 0),
+    total_count: num(obj.total_count, cardIds.length),
+  };
+}
+
+/**
+ * 获取单个卡券详情（全量字段，含 text_content / data_content / api_config /
+ * image_urls / description 等列表轻量模式剔除的大字段）。
+ *
+ * GET /api/v1/cards/{card_id}。配合 getCardsPaged({ lite: true }) 使用：
+ * 列表走轻量接口，编辑 / 详情时按需拉取全量补全。
+ */
+export async function getCard(cardId: number): Promise<Card> {
+  const client = await getApiClient();
+  const { data } = (await (client.GET as any)(
+    `/api/v1/cards/${cardId}`,
+  )) as { data?: unknown; error?: unknown };
+  const inner = unwrapData<unknown>(data);
+  if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
+    return normalizeCard(inner as Record<string, unknown>);
+  }
+  throw new Error('卡券不存在或已删除');
+}
+
+/** 卡券分页结果 */
+export interface CardsPage {
+  list: Card[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface GetCardsPagedOptions {
+  /** 搜索关键词（后端匹配名称/描述） */
+  search?: string;
+  /** 卡券类型过滤（text/data/api/image） */
+  type?: CardKind;
+  /** 轻量模式：剔除 text_content/data_content/api_config/image_urls 等大字段 */
+  lite?: boolean;
+}
+
+/**
+ * 分页获取卡券列表（服务端搜索 + 类型过滤 + 可选轻量模式）。
+ *
+ * GET /api/v1/cards?page&page_size&search&type&lite。
+ * 后端返回裸分页对象 { list, total, page, page_size, total_pages }，
+ * 可能被 ApiResponse 包一层，统一兼容。
+ * lite=true 时列表项不含大字段，编辑/详情用 getCard(cardId) 按需补全。
+ */
+export async function getCardsPaged(
+  page: number = 1,
+  pageSize: number = 20,
+  opts: GetCardsPagedOptions = {},
+): Promise<CardsPage> {
+  const client = await getApiClient();
+  const query: Record<string, string | number | boolean> = {
+    page,
+    page_size: pageSize,
+  };
+  if (opts.search) query.search = opts.search;
+  if (opts.type) query.type = opts.type;
+  if (opts.lite) query.lite = 1;
+  const { data } = (await (client.GET as any)('/api/v1/cards', {
+    params: { query },
+  })) as { data?: unknown; error?: unknown };
+  const inner = unwrapData<unknown>(data);
+  const obj =
+    inner && typeof inner === 'object' && !Array.isArray(inner)
+      ? (inner as Record<string, unknown>)
+      : {};
+  const rawList: unknown[] = Array.isArray(inner)
+    ? inner
+    : Array.isArray(obj.list)
+      ? obj.list
+      : Array.isArray(obj.data)
+        ? obj.data
+        : Array.isArray(obj.items)
+          ? obj.items
+          : [];
+  const total = typeof obj.total === 'number' ? obj.total : rawList.length;
+  return {
+    list: rawList.map((it) =>
+      normalizeCard((it ?? {}) as Record<string, unknown>),
+    ),
+    total,
+    page: typeof obj.page === 'number' ? obj.page : page,
+    page_size: typeof obj.page_size === 'number' ? obj.page_size : pageSize,
+    total_pages:
+      typeof obj.total_pages === 'number'
+        ? obj.total_pages
+        : total > 0
+          ? Math.ceil(total / pageSize)
+          : 0,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // 商品列表（分页）
 // ---------------------------------------------------------------------------
@@ -707,6 +829,89 @@ export async function getProductItems(
       normalizeProductItem((item ?? {}) as Record<string, unknown>),
     ),
     total,
+  };
+}
+
+/** 从 item_detail（平台商品 JSON）解析主图，逻辑对齐 items.ts 的 extractImage */
+function extractItemImage(itemDetail: unknown): string | null {
+  if (typeof itemDetail !== 'string' || !itemDetail) return null;
+  try {
+    const parsed = JSON.parse(itemDetail) as { imageInfoDOList?: unknown };
+    const list = parsed.imageInfoDOList;
+    if (!Array.isArray(list)) return null;
+    const entries = list as Array<Record<string, unknown>>;
+    const major = entries.find(
+      (e) =>
+        typeof e === 'object' &&
+        e &&
+        String(e.major).toLowerCase() === 'true' &&
+        e.url,
+    );
+    const anyImg = entries.find((e) => typeof e === 'object' && e && e.url);
+    return ((major || anyImg)?.url as string) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 行结构对齐 items.ts 的 mapItem（此处独立实现，避免改动 items.ts） */
+function mapXianyuItem(raw: Record<string, unknown>): XianyuItem {
+  return {
+    id: raw.id as string | number,
+    cookie_id: (raw.cookie_id as string) ?? '',
+    item_id: (raw.item_id as string) ?? '',
+    title: (raw.item_title as string) || (raw.title as string) || '',
+    price: (raw.item_price as string) || (raw.price as string) || '',
+    status: (raw.item_status_desc as string) ?? '',
+    quantity: (raw.item_quantity ?? null) as string | number | null,
+    image: extractItemImage(raw.item_detail),
+    is_seller_item: Boolean(raw.is_seller_item),
+    created_at: raw.created_at as string | undefined,
+  };
+}
+
+/**
+ * 分页搜索闲鱼已发布商品（支持关键词 + 账号过滤）。
+ *
+ * GET /api/v1/items/paginated?page&page_size&cookie_id&keyword。
+ * 与 items.ts 的 getXianyuItems 同端点，但卡券关联商品页需要 keyword
+ * 搜索参数，而 items.ts 归属其他模块不可改动，故在此独立封装；
+ * 行结构直接复用 XianyuItem / XianyuItemsPage（仅类型引用）。
+ */
+export async function searchXianyuItems(
+  page: number = 1,
+  pageSize: number = 20,
+  opts?: { cookieId?: string; keyword?: string },
+): Promise<XianyuItemsPage> {
+  const client = await getApiClient();
+  const query: Record<string, string | number> = { page, page_size: pageSize };
+  if (opts?.cookieId) query.cookie_id = opts.cookieId;
+  if (opts?.keyword) query.keyword = opts.keyword;
+  const { data } = (await (client.GET as any)('/api/v1/items/paginated', {
+    params: { query },
+  })) as { data?: unknown; error?: unknown };
+  const body = (data ?? {}) as Record<string, unknown>;
+  const rawList = Array.isArray(body.data)
+    ? (body.data as Record<string, unknown>[])
+    : Array.isArray(body)
+      ? (body as unknown as Record<string, unknown>[])
+      : Array.isArray(body.items)
+        ? (body.items as Record<string, unknown>[])
+        : [];
+  const total = typeof body.total === 'number' ? body.total : rawList.length;
+  return {
+    items: rawList.map((it) =>
+      mapXianyuItem((it ?? {}) as Record<string, unknown>),
+    ),
+    total,
+    page: typeof body.page === 'number' ? body.page : page,
+    page_size: typeof body.page_size === 'number' ? body.page_size : pageSize,
+    total_pages:
+      typeof body.total_pages === 'number'
+        ? body.total_pages
+        : total > 0
+          ? Math.ceil(total / pageSize)
+          : 0,
   };
 }
 

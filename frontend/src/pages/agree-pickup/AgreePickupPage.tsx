@@ -10,7 +10,8 @@
  * 6. 展示商品标题与规格，商品标题可点击跳转闲鱼商品详情页
  */
 import { useEffect, useState } from 'react'
-import { AlertCircle, Check, CheckCircle, Copy, ExternalLink, Loader2, PackageCheck, ShieldCheck } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { AlertCircle, Check, CheckCircle, Copy, Download, ExternalLink, Loader2, PackageCheck, Search, ShieldCheck } from 'lucide-react'
 import { agreePickup, queryPickupOrder, type PickupOrderView } from '@/api/agreePickup'
 import { copyToClipboard } from '@/utils/clipboard'
 import { useUIStore } from '@/store/uiStore'
@@ -90,6 +91,27 @@ export function AgreePickupPage() {
       addToast({ type: 'error', message: '复制失败，请长按内容手动复制' })
     }
   }
+
+  // 下载提货内容为 txt（Blob + 临时 a[download]，HTTP 环境兼容，不依赖 showSaveFilePicker）
+  const handleDownloadTxt = () => {
+    if (!content) return
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `订单${orderNo}-卡密.txt`
+    document.body.appendChild(a)
+    a.click()
+    // Firefox/部分 WebView 在 click 同步完成后才异步发起下载，过早 revoke 会中止下载
+    setTimeout(() => {
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    }, 100)
+    addToast({ type: 'success', message: '卡密文件已开始下载' })
+  }
+
+  // 提货内容非空行数（≥2 行时展示「下载txt」入口）
+  const contentLineCount = content ? content.split('\n').filter((line) => line.trim()).length : 0
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-600 via-blue-500 to-indigo-600 flex items-center justify-center p-4">
@@ -173,24 +195,37 @@ export function AgreePickupPage() {
                 <div className="flex items-center justify-between mb-2">
                   <p className="text-sm font-medium text-slate-700 dark:text-slate-300">提货内容</p>
                   {content && (
-                    <button
-                      type="button"
-                      onClick={handleCopyContent}
-                      title="复制提货内容"
-                      className="inline-flex items-center gap-1 px-2 py-1 -mr-1 rounded text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 active:bg-blue-100 dark:active:bg-blue-900/50 transition-colors"
-                    >
-                      {copied ? (
-                        <>
-                          <Check className="w-4 h-4 text-green-500" />
-                          已复制
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-4 h-4" />
-                          复制
-                        </>
+                    <div className="flex items-center gap-1 -mr-1">
+                      <button
+                        type="button"
+                        onClick={handleCopyContent}
+                        title="复制提货内容"
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 active:bg-blue-100 dark:active:bg-blue-900/50 transition-colors"
+                      >
+                        {copied ? (
+                          <>
+                            <Check className="w-4 h-4 text-green-500" />
+                            已复制
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-4 h-4" />
+                            复制
+                          </>
+                        )}
+                      </button>
+                      {contentLineCount >= 2 && (
+                        <button
+                          type="button"
+                          onClick={handleDownloadTxt}
+                          title="下载提货内容为 txt 文件"
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 active:bg-blue-100 dark:active:bg-blue-900/50 transition-colors"
+                        >
+                          <Download className="w-4 h-4" />
+                          下载txt
+                        </button>
                       )}
-                    </button>
+                    </div>
                   )}
                 </div>
                 {content ? (
@@ -205,8 +240,20 @@ export function AgreePickupPage() {
           )}
         </div>
 
-        {/* 底部提示 */}
-        <div className="px-6 py-3 bg-slate-50 dark:bg-slate-700/50 border-t border-slate-100 dark:border-slate-700">
+        {/* 底部：查询按钮列表 + 提示 */}
+        <div className="px-6 py-3 bg-slate-50 dark:bg-slate-700/50 border-t border-slate-100 dark:border-slate-700 flex flex-col gap-2.5">
+          {/* 商品配置了查询按钮时逐个渲染，点击跳转通用查询页并自动执行对应按钮 */}
+          {orderNo && (order?.query_buttons?.length ?? 0) > 0 &&
+            order!.query_buttons!.map((btn, idx) => (
+              <Link
+                key={idx}
+                to={`/query?orderNo=${encodeURIComponent(orderNo)}&button=${idx}`}
+                className="flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-lg border border-blue-200 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-300 text-sm font-medium hover:bg-blue-100 dark:hover:bg-blue-900/40 active:bg-blue-200 transition-colors"
+              >
+                <Search className="w-4 h-4" />
+                {btn.name}
+              </Link>
+            ))}
           <p className="text-xs text-slate-600 dark:text-slate-300 text-center">
             本页面用于订单提货确认，请确认信息无误后再点击同意
           </p>

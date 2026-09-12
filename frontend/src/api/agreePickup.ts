@@ -21,6 +21,8 @@ export interface PickupOrderView {
   item_url: string | null
   already_agreed: boolean
   content: string | null
+  /** 商品配置的查询按钮（只含名称），无配置为空数组 */
+  query_buttons?: { name: string }[]
 }
 
 export interface PickupAgreeResult {

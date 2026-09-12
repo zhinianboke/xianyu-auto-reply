@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, memo } from 'react';
 import {
   Alert,
   View,
@@ -10,19 +10,205 @@ import {
   ScrollView,
   Image,
   ActivityIndicator,
+  Switch,
   useColorScheme,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { Card, EmptyState, Badge, Loading } from '@/components/ui';
-import { Package, Ticket } from 'lucide-react-native';
+import { Card, EmptyState, Badge, Loading, Input } from '@/components/ui';
+import {
+  Package,
+  Ticket,
+  Search,
+  X,
+  CheckCircle2,
+  Circle,
+  Pencil,
+} from 'lucide-react-native';
 import { colors, spacing, typography, radius } from '@/lib/theme';
-import { getXianyuItems, type XianyuItem } from '@/api/wrappers/items';
+import {
+  getXianyuItems,
+  syncXianyuItemsFromAccount,
+  batchOfflineXianyuItems,
+  batchDeleteItemRecords,
+  setItemMultiSpec,
+  setItemMultiQuantityDelivery,
+  type XianyuItem,
+} from '@/api/wrappers/items';
 import { batchDeleteItems } from '@/api/wrappers/item-edit';
+import { batchClearItemRelations } from '@/api/wrappers/card-relation';
 import { getAccountOptions, type AccountOption } from '@/api/wrappers/accounts';
 import { ItemCardRelationModal } from '@/components/card-relation/ItemCardRelationModal';
 
 const PAGE_SIZE = 20;
+
+/** 列表筛选 chips 定义（对应 GET /paginated 的布尔筛选参数） */
+const FILTER_CHIPS: Array<{
+  key: 'polished' | 'multiSpec' | 'multiQty';
+  label: string;
+}> = [
+  { key: 'polished', label: '已擦亮' },
+  { key: 'multiSpec', label: '多规格' },
+  { key: 'multiQty', label: '多数量发货' },
+];
+
+type BatchAction = '' | 'offline' | 'delete' | 'clear';
+
+type FlagKind = 'spec' | 'qty';
+
+interface ItemRowProps {
+  item: XianyuItem;
+  selectMode: boolean;
+  checked: boolean;
+  onPressRow: (item: XianyuItem) => void;
+  onLongPressRow: (item: XianyuItem) => void;
+  onToggleFlag: (item: XianyuItem, kind: FlagKind, value: boolean) => Promise<void>;
+  onEdit: (item: XianyuItem) => void;
+  onOpenRelation: (item: XianyuItem) => void;
+}
+
+/**
+ * 商品列表项（React.memo 避免列表滚动/无关状态变化时重渲染）。
+ * 底部快捷操作区：多规格/多数量发货开关 + 编辑入口；
+ * 开关行与卡片主点击区域手势隔离（onStartShouldSetResponder 吞掉行内空白处触摸）。
+ */
+const ItemRow = memo(function ItemRow({
+  item,
+  selectMode,
+  checked,
+  onPressRow,
+  onLongPressRow,
+  onToggleFlag,
+  onEdit,
+  onOpenRelation,
+}: ItemRowProps) {
+  const scheme = useColorScheme();
+  const c = colors[scheme === 'dark' ? 'dark' : 'light'];
+  // 单个商品的标记切换 in-flight 锁：请求期间禁用两个开关，防止并发乱序
+  const [flagBusy, setFlagBusy] = useState(false);
+
+  const toggleFlag = useCallback(
+    async (kind: FlagKind, value: boolean) => {
+      if (flagBusy) return;
+      setFlagBusy(true);
+      try {
+        await onToggleFlag(item, kind, value);
+      } finally {
+        setFlagBusy(false);
+      }
+    },
+    [flagBusy, item, onToggleFlag],
+  );
+
+  const renderFlagToggle = (kind: FlagKind, label: string, value: boolean) => (
+    <Pressable
+      onPress={() => toggleFlag(kind, !value)}
+      disabled={flagBusy}
+      accessibilityRole="button"
+      accessibilityState={{ checked: value, disabled: flagBusy }}
+      style={({ pressed }) => [styles.flagToggle, { opacity: pressed || flagBusy ? 0.6 : 1 }]}
+    >
+      {/* pointerEvents=none：触控统一由外层 44px Pressable 处理，避免 Switch 双重触发 */}
+      <View pointerEvents="none">
+        <Switch
+          value={value}
+          disabled={flagBusy}
+          trackColor={{ false: c.border, true: c.primary }}
+        />
+      </View>
+      <Text style={[styles.flagToggleLabel, { color: c.text }]}>{label}</Text>
+    </Pressable>
+  );
+
+  return (
+    <Pressable
+      onPress={() => onPressRow(item)}
+      onLongPress={() => onLongPressRow(item)}
+      style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+    >
+      <Card style={[styles.card, selectMode && checked && { borderColor: c.primary, borderWidth: 1 }]}>
+        <View style={styles.cardRow}>
+          {selectMode ? (
+            <View style={styles.checkWrap}>
+              {checked ? (
+                <CheckCircle2 size={22} stroke={c.primary} />
+              ) : (
+                <Circle size={22} stroke={c.border} />
+              )}
+            </View>
+          ) : null}
+          {item.image ? (
+            <Image
+              source={{ uri: item.image }}
+              style={[styles.thumb, { backgroundColor: c.surfaceAlt }]}
+            />
+          ) : (
+            <View style={[styles.thumb, { backgroundColor: c.surfaceAlt }]}>
+              <Package size={24} stroke={c.textMuted} />
+            </View>
+          )}
+          <View style={styles.body}>
+            <Text
+              style={[styles.title, { color: c.text }]}
+              numberOfLines={2}
+            >
+              {item.title || '无标题'}
+            </Text>
+            <View style={styles.metaRow}>
+              <Text style={[styles.price, { color: c.warning }]} numberOfLines={1}>
+                {item.price ? `¥${item.price}` : '价格未知'}
+              </Text>
+              {item.status ? (
+                <Badge label={item.status} variant="info" />
+              ) : null}
+              {item.quantity !== null && item.quantity !== '' && item.quantity !== undefined ? (
+                <Text style={[styles.qty, { color: c.textMuted }]} numberOfLines={1}>
+                  库存 {item.quantity}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        </View>
+        {!selectMode ? (
+          <>
+            {/* 快捷操作区：开关 + 编辑；行容器吞掉空白处触摸，不触发卡片点击/长按 */}
+            <View
+              onStartShouldSetResponder={() => true}
+              style={[styles.quickRow, { borderTopColor: c.borderLight }]}
+            >
+              <View style={styles.quickLeft}>
+                {renderFlagToggle('spec', '多规格', Boolean(item.is_multi_spec))}
+                {renderFlagToggle('qty', '多数量发货', Boolean(item.multi_quantity_delivery))}
+              </View>
+              <Pressable
+                onPress={() => onEdit(item)}
+                accessibilityLabel="编辑商品"
+                accessibilityRole="button"
+                style={({ pressed }) => [
+                  styles.editBtn,
+                  { borderColor: c.border, backgroundColor: c.surface, opacity: pressed ? 0.6 : 1 },
+                ]}
+              >
+                <Pencil size={14} stroke={c.primary} />
+                <Text style={[styles.editBtnText, { color: c.primary }]}>编辑</Text>
+              </Pressable>
+            </View>
+            <Pressable
+              onPress={() => onOpenRelation(item)}
+              style={({ pressed }) => [
+                styles.actionRow,
+                { borderColor: c.borderLight, opacity: pressed ? 0.6 : 1 },
+              ]}
+            >
+              <Ticket size={14} stroke={c.primary} />
+              <Text style={[styles.actionText, { color: c.primary }]}>关联卡券</Text>
+            </Pressable>
+          </>
+        ) : null}
+      </Card>
+    </Pressable>
+  );
+});
 
 export default function ItemsScreen() {
   const scheme = useColorScheme();
@@ -44,9 +230,39 @@ export default function ItemsScreen() {
   // 关联卡券弹窗：当前正在关联卡券的商品，非空即表示弹窗打开
   const [relationItem, setRelationItem] = useState<XianyuItem | null>(null);
 
+  // 搜索与筛选（keyword 输入防抖后生效）
+  const [keywordInput, setKeywordInput] = useState('');
+  const [keyword, setKeyword] = useState('');
+  const [filterPolished, setFilterPolished] = useState(false);
+  const [filterMultiSpec, setFilterMultiSpec] = useState(false);
+  const [filterMultiQty, setFilterMultiQty] = useState(false);
+
+  // 批量选择模式：selectedKeys 以 cookie_id::item_id 为键
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [batchBusy, setBatchBusy] = useState<BatchAction>('');
+
+  // 商品同步：'one'=当前选中账号，'all'=全部账号
+  const [syncing, setSyncing] = useState<'' | 'one' | 'all'>('');
+
   // 切换账号会触发两次 loadItems（useEffect 依赖变更 + selectedAccountId 传入），
   // 用 ref 记录最新请求序号，丢弃过期响应
   const reqSeqRef = useRef(0);
+
+  // loadItems 通过 ref 读取最新筛选条件，避免筛选状态变化时重建回调导致拉取中断
+  const filtersRef = useRef({ keyword: '', polished: false, multiSpec: false, multiQty: false });
+  filtersRef.current = {
+    keyword,
+    polished: filterPolished,
+    multiSpec: filterMultiSpec,
+    multiQty: filterMultiQty,
+  };
+
+  // 搜索关键字 500ms 防抖
+  useEffect(() => {
+    const t = setTimeout(() => setKeyword(keywordInput.trim()), 500);
+    return () => clearTimeout(t);
+  }, [keywordInput]);
 
   const loadAccounts = useCallback(async () => {
     try {
@@ -62,6 +278,7 @@ export default function ItemsScreen() {
       const append = opts?.append ?? false;
       const targetPage = opts?.fromPage ?? 1;
       const seq = ++reqSeqRef.current;
+      const f = filtersRef.current;
 
       if (append) {
         setLoadingMore(true);
@@ -70,7 +287,12 @@ export default function ItemsScreen() {
       }
       setError(null);
       try {
-        const res = await getXianyuItems(targetPage, PAGE_SIZE, accountId || undefined);
+        const res = await getXianyuItems(targetPage, PAGE_SIZE, accountId || undefined, {
+          keyword: f.keyword || undefined,
+          isPolished: f.polished || undefined,
+          isMultiSpec: f.multiSpec || undefined,
+          multiQuantityDelivery: f.multiQty || undefined,
+        });
         if (seq !== reqSeqRef.current) return; // 已被后续请求覆盖
         console.log('[ITEMS] API返回', res.items.length, '条, item_ids:', res.items.map(i => i.item_id));
         setItems((prev) => {
@@ -112,7 +334,7 @@ export default function ItemsScreen() {
   useEffect(() => {
     setLoading(true);
     loadItems(selectedAccountId);
-  }, [selectedAccountId, loadItems]);
+  }, [selectedAccountId, keyword, filterPolished, filterMultiSpec, filterMultiQty, loadItems]);
 
   const handleRefresh = useCallback(() => {
     loadItems(selectedAccountId);
@@ -120,9 +342,91 @@ export default function ItemsScreen() {
 
   const handleLoadMore = useCallback(() => {
     if (loadingMore || refreshing || loading) return;
+    if (total === 0) return;
     if (totalPages > 0 && page >= totalPages) return;
     loadItems(selectedAccountId, { append: true, fromPage: page + 1 });
-  }, [loadingMore, refreshing, loading, totalPages, page, selectedAccountId, loadItems]);
+  }, [loadingMore, refreshing, loading, total, totalPages, page, selectedAccountId, loadItems]);
+
+  // ==================== 商品同步 ====================
+
+  const handleSync = useCallback(
+    async (scope: 'one' | 'all') => {
+      if (syncing) return;
+      if (scope === 'one' && !selectedAccountId) {
+        Alert.alert('提示', '请先在顶部选择要同步的账号');
+        return;
+      }
+      setSyncing(scope);
+      try {
+        const res = await syncXianyuItemsFromAccount(scope === 'one' ? selectedAccountId : undefined);
+        const failed = res.failed_accounts ?? [];
+        const lines: string[] = [`获取 ${res.total_count} 件商品，新增/更新 ${res.saved_count} 件`];
+        if (scope === 'all' && res.account_count != null) {
+          lines.push(
+            `账号：成功 ${res.success_account_count ?? 0}/${res.account_count} 个`,
+          );
+        }
+        if (failed.length > 0) {
+          const preview = failed.slice(0, 5).join('\n');
+          lines.push(
+            `失败账号 ${failed.length} 个：\n${preview}${failed.length > 5 ? `\n...等共 ${failed.length} 个` : ''}`,
+          );
+        }
+        Alert.alert('同步完成', lines.join('\n'));
+        loadItems(selectedAccountId);
+      } catch (e) {
+        Alert.alert('同步失败', (e as Error).message || '未知错误');
+      } finally {
+        setSyncing('');
+      }
+    },
+    [syncing, selectedAccountId, loadItems],
+  );
+
+  // ==================== 批量选择 ====================
+
+  const itemKey = useCallback(
+    (it: XianyuItem) => `${it.cookie_id}::${it.item_id}`,
+    [],
+  );
+
+  const selectedItems = useMemo(
+    () => items.filter((it) => selectedKeys.has(itemKey(it))),
+    [items, selectedKeys, itemKey],
+  );
+
+  const allSelected = items.length > 0 && selectedItems.length === items.length;
+
+  const exitSelectMode = useCallback(() => {
+    setSelectMode(false);
+    setSelectedKeys(new Set());
+  }, []);
+
+  const toggleSelectMode = useCallback(() => {
+    if (selectMode) exitSelectMode();
+    else setSelectMode(true);
+  }, [selectMode, exitSelectMode]);
+
+  const toggleItem = useCallback((it: XianyuItem) => {
+    setSelectedKeys((prev) => {
+      const key = `${it.cookie_id}::${it.item_id}`;
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const enterSelectWith = useCallback((it: XianyuItem) => {
+    setSelectMode(true);
+    setSelectedKeys(new Set([`${it.cookie_id}::${it.item_id}`]));
+  }, []);
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedKeys(
+      allSelected ? new Set() : new Set(items.map((it) => `${it.cookie_id}::${it.item_id}`)),
+    );
+  }, [allSelected, items]);
 
   const handleEdit = useCallback(
     (item: XianyuItem) => {
@@ -164,65 +468,247 @@ export default function ItemsScreen() {
       Alert.alert(item.title || '无标题', undefined, [
         { text: '编辑', onPress: () => handleEdit(item) },
         { text: '删除', style: 'destructive', onPress: () => handleDelete(item) },
+        { text: '批量选择', onPress: () => enterSelectWith(item) },
         { text: '取消', style: 'cancel' },
       ]);
     },
-    [handleEdit, handleDelete],
+    [handleEdit, handleDelete, enterSelectWith],
   );
+
+  // ==================== 批量操作 ====================
+
+  /** 批量下架：按归属账号分组，逐账号用其 Cookie 调闲鱼接口 */
+  const handleBatchOffline = useCallback(() => {
+    const targets = selectedItems;
+    if (targets.length === 0 || batchBusy) return;
+    const groups = new Map<string, string[]>();
+    let orphan = 0;
+    for (const it of targets) {
+      if (!it.cookie_id) {
+        orphan += 1;
+        continue;
+      }
+      const arr = groups.get(it.cookie_id);
+      if (arr) arr.push(it.item_id);
+      else groups.set(it.cookie_id, [it.item_id]);
+    }
+    Alert.alert(
+      '批量下架',
+      `将通过各账号 Cookie 下架选中的 ${targets.length} 件商品（涉及 ${groups.size} 个账号）${orphan ? `，${orphan} 件未指定账号无法下架` : ''}。下架不会删除本地记录，确定继续吗？`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '下架',
+          style: 'destructive',
+          onPress: async () => {
+            setBatchBusy('offline');
+            try {
+              let suc = 0;
+              let fail = 0;
+              const failedIds: string[] = [];
+              const errors: string[] = [];
+              for (const [cookieId, ids] of groups) {
+                try {
+                  const r = await batchOfflineXianyuItems(cookieId, ids);
+                  suc += r.suc_count;
+                  fail += r.fail_count;
+                  failedIds.push(...r.failed_item_ids);
+                } catch (e) {
+                  errors.push(`账号 ${cookieId}：${(e as Error).message || '下架失败'}`);
+                }
+              }
+              const lines = [`成功下架 ${suc} 件${fail ? `，失败 ${fail} 件` : ''}`];
+              if (orphan) lines.push(`已跳过 ${orphan} 件未指定账号的商品`);
+              if (failedIds.length > 0) {
+                lines.push(
+                  `失败商品：${failedIds.slice(0, 5).join('、')}${failedIds.length > 5 ? ` 等共 ${failedIds.length} 个` : ''}`,
+                );
+              }
+              if (errors.length > 0) lines.push(errors.slice(0, 3).join('\n'));
+              Alert.alert(suc > 0 ? '下架完成' : '下架失败', lines.join('\n'));
+              setSelectedKeys(new Set());
+              loadItems(selectedAccountId);
+            } finally {
+              setBatchBusy('');
+            }
+          },
+        },
+      ],
+    );
+  }, [selectedItems, batchBusy, selectedAccountId, loadItems]);
+
+  /** 批量删除本地记录（不影响闲鱼平台） */
+  const handleBatchDeleteRecords = useCallback(() => {
+    const targets = selectedItems;
+    if (targets.length === 0 || batchBusy) return;
+    Alert.alert(
+      '批量删除本地记录',
+      `将删除选中的 ${targets.length} 件商品的本地记录（不影响闲鱼平台在售商品），确定继续吗？`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '删除',
+          style: 'destructive',
+          onPress: async () => {
+            setBatchBusy('delete');
+            try {
+              const res = await batchDeleteItemRecords(
+                targets.map((it) => ({ cookie_id: it.cookie_id || null, item_id: it.item_id })),
+              );
+              Alert.alert('删除完成', res.message || `已删除 ${targets.length} 条本地记录`);
+              setSelectedKeys(new Set());
+              loadItems(selectedAccountId);
+            } catch (e) {
+              Alert.alert('删除失败', (e as Error).message || '未知错误');
+            } finally {
+              setBatchBusy('');
+            }
+          },
+        },
+      ],
+    );
+  }, [selectedItems, batchBusy, selectedAccountId, loadItems]);
+
+  /** 批量清空选中商品的卡券关联（不删除卡券本身） */
+  const handleBatchClearRelations = useCallback(() => {
+    const targets = selectedItems;
+    if (targets.length === 0 || batchBusy) return;
+    const itemIds = Array.from(new Set(targets.map((it) => it.item_id)));
+    Alert.alert(
+      '批量清空关联卡券',
+      `将清空选中 ${targets.length} 件商品的卡券关联（不删除卡券本身），确定继续吗？`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '清空',
+          style: 'destructive',
+          onPress: async () => {
+            setBatchBusy('clear');
+            try {
+              await batchClearItemRelations(itemIds);
+              Alert.alert('操作完成', `已清空 ${targets.length} 件商品的卡券关联`);
+              setSelectedKeys(new Set());
+              loadItems(selectedAccountId);
+            } catch (e) {
+              Alert.alert('操作失败', (e as Error).message || '未知错误');
+            } finally {
+              setBatchBusy('');
+            }
+          },
+        },
+      ],
+    );
+  }, [selectedItems, batchBusy, loadItems, selectedAccountId]);
 
   const accountLabel = (acc: AccountOption) => acc.remark || acc.id;
 
-  const renderItem = ({ item }: { item: XianyuItem }) => (
+  const openRelation = useCallback((it: XianyuItem) => setRelationItem(it), []);
+
+  /**
+   * 快捷开关：更新单个商品的多规格/多数量发货标记（本地库标记，供列表筛选）。
+   * 乐观更新 items，失败回滚并 Alert；行内 busy 锁在 ItemRow 内部。
+   */
+  const handleToggleItemFlag = useCallback(
+    async (target: XianyuItem, kind: FlagKind, value: boolean) => {
+      const key = itemKey(target);
+      const patchWith =
+        (v: boolean) =>
+        (it: XianyuItem): XianyuItem =>
+          itemKey(it) !== key
+            ? it
+            : kind === 'spec'
+              ? { ...it, is_multi_spec: v }
+              : { ...it, multi_quantity_delivery: v };
+      setItems((prev) => prev.map(patchWith(value)));
+      try {
+        if (kind === 'spec') await setItemMultiSpec(target.cookie_id, target.item_id, value);
+        else await setItemMultiQuantityDelivery(target.cookie_id, target.item_id, value);
+      } catch (e) {
+        // 回滚到 target 快照里的原始值
+        setItems((prev) =>
+          prev.map((it) =>
+            itemKey(it) === key
+              ? {
+                  ...it,
+                  is_multi_spec: target.is_multi_spec,
+                  multi_quantity_delivery: target.multi_quantity_delivery,
+                }
+              : it,
+          ),
+        );
+        Alert.alert('操作失败', (e as Error).message || '未知错误');
+      }
+    },
+    [itemKey],
+  );
+
+  const handlePressRow = useCallback(
+    (it: XianyuItem) => (selectMode ? toggleItem(it) : handleEdit(it)),
+    [selectMode, toggleItem, handleEdit],
+  );
+  const handleLongPressRow = useCallback(
+    (it: XianyuItem) => (selectMode ? toggleItem(it) : handleLongPress(it)),
+    [selectMode, toggleItem, handleLongPress],
+  );
+
+  const renderItem = useCallback(
+    ({ item }: { item: XianyuItem }) => (
+      <ItemRow
+        item={item}
+        selectMode={selectMode}
+        checked={selectedKeys.has(itemKey(item))}
+        onPressRow={handlePressRow}
+        onLongPressRow={handleLongPressRow}
+        onToggleFlag={handleToggleItemFlag}
+        onEdit={handleEdit}
+        onOpenRelation={openRelation}
+      />
+    ),
+    [
+      selectMode,
+      selectedKeys,
+      itemKey,
+      handlePressRow,
+      handleLongPressRow,
+      handleToggleItemFlag,
+      handleEdit,
+      openRelation,
+    ],
+  );
+
+  /** 顶部工具条小按钮（同步/批量） */
+  const renderToolChip = (opts: {
+    label: string;
+    onPress: () => void;
+    disabled?: boolean;
+    loading?: boolean;
+    active?: boolean;
+  }) => (
     <Pressable
-      onPress={() => handleEdit(item)}
-      onLongPress={() => handleLongPress(item)}
-      style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+      onPress={opts.onPress}
+      disabled={opts.disabled || opts.loading}
+      style={[
+        styles.toolChip,
+        {
+          borderColor: opts.active ? c.primary : c.border,
+          backgroundColor: opts.active ? c.primary : c.surface,
+          opacity: opts.disabled && !opts.loading ? 0.4 : 1,
+        },
+      ]}
     >
-      <Card style={styles.card}>
-        <View style={styles.cardRow}>
-          {item.image ? (
-            <Image
-              source={{ uri: item.image }}
-              style={[styles.thumb, { backgroundColor: c.surfaceAlt }]}
-            />
-          ) : (
-            <View style={[styles.thumb, { backgroundColor: c.surfaceAlt }]}>
-              <Package size={24} stroke={c.textMuted} />
-            </View>
-          )}
-          <View style={styles.body}>
-            <Text
-              style={[styles.title, { color: c.text }]}
-              numberOfLines={2}
-            >
-              {item.title || '无标题'}
-            </Text>
-            <View style={styles.metaRow}>
-              <Text style={[styles.price, { color: c.warning }]} numberOfLines={1}>
-                {item.price ? `¥${item.price}` : '价格未知'}
-              </Text>
-              {item.status ? (
-                <Badge label={item.status} variant="info" />
-              ) : null}
-              {item.quantity !== null && item.quantity !== '' && item.quantity !== undefined ? (
-                <Text style={[styles.qty, { color: c.textMuted }]} numberOfLines={1}>
-                  库存 {item.quantity}
-                </Text>
-              ) : null}
-            </View>
-          </View>
-        </View>
-        <Pressable
-          onPress={() => setRelationItem(item)}
-          style={({ pressed }) => [
-            styles.actionRow,
-            { borderColor: c.borderLight, opacity: pressed ? 0.6 : 1 },
+      {opts.loading ? (
+        <ActivityIndicator size="small" color={opts.active ? '#FFFFFF' : c.primary} />
+      ) : (
+        <Text
+          style={[
+            styles.toolChipText,
+            { color: opts.active ? '#FFFFFF' : c.text },
           ]}
+          numberOfLines={1}
         >
-          <Ticket size={14} stroke={c.primary} />
-          <Text style={[styles.actionText, { color: c.primary }]}>关联卡券</Text>
-        </Pressable>
-      </Card>
+          {opts.label}
+        </Text>
+      )}
     </Pressable>
   );
 
@@ -277,16 +763,124 @@ export default function ItemsScreen() {
         <Text style={[styles.countText, { color: c.textMuted }]}>
           共 {total} 件
         </Text>
+
+        {/* 同步 / 批量工具条 */}
+        <View style={styles.toolbar}>
+          {renderToolChip({
+            label: '同步本账号',
+            onPress: () => handleSync('one'),
+            disabled: !selectedAccountId || syncing !== '',
+            loading: syncing === 'one',
+          })}
+          {renderToolChip({
+            label: '同步全部',
+            onPress: () => handleSync('all'),
+            disabled: syncing !== '',
+            loading: syncing === 'all',
+          })}
+          {renderToolChip({
+            label: selectMode ? '退出批量' : '批量选择',
+            onPress: toggleSelectMode,
+            active: selectMode,
+          })}
+        </View>
+
+        {/* 搜索框 */}
+        <View style={[styles.searchRow, { borderColor: c.border }]}>
+          <Search size={16} stroke={c.textMuted} />
+          <Input
+            value={keywordInput}
+            onChangeText={setKeywordInput}
+            placeholder="搜索商品ID / 标题 / 详情"
+            placeholderTextColor={c.textMuted}
+            style={styles.searchInput}
+            returnKeyType="search"
+          />
+          {keywordInput ? (
+            <Pressable onPress={() => setKeywordInput('')} hitSlop={8}>
+              <X size={16} stroke={c.textMuted} />
+            </Pressable>
+          ) : null}
+        </View>
+
+        {/* 筛选 chips */}
+        <View style={styles.filterRow}>
+          {FILTER_CHIPS.map((chip) => {
+            const active =
+              chip.key === 'polished'
+                ? filterPolished
+                : chip.key === 'multiSpec'
+                  ? filterMultiSpec
+                  : filterMultiQty;
+            const setActive = (v: boolean) => {
+              if (chip.key === 'polished') setFilterPolished(v);
+              else if (chip.key === 'multiSpec') setFilterMultiSpec(v);
+              else setFilterMultiQty(v);
+            };
+            return (
+              <Pressable
+                key={chip.key}
+                onPress={() => setActive(!active)}
+                style={[
+                  styles.filterChip,
+                  {
+                    borderColor: active ? c.primary : c.border,
+                    backgroundColor: active ? c.primary : c.surface,
+                  },
+                ]}
+              >
+                <Text style={[styles.filterChipText, { color: active ? '#FFFFFF' : c.text }]}>
+                  {chip.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        {/* 批量操作条（仅选择模式显示） */}
+        {selectMode ? (
+          <View style={styles.selectBar}>
+            <Text style={[styles.selectCount, { color: c.text }]}>
+              已选 {selectedKeys.size} 件
+            </Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.selectActions}>
+              {renderToolChip({
+                label: allSelected ? '取消全选' : '全选',
+                onPress: toggleSelectAll,
+              })}
+              {renderToolChip({
+                label: '下架',
+                onPress: handleBatchOffline,
+                loading: batchBusy === 'offline',
+                disabled: batchBusy !== '' && batchBusy !== 'offline',
+              })}
+              {renderToolChip({
+                label: '删记录',
+                onPress: handleBatchDeleteRecords,
+                loading: batchBusy === 'delete',
+                disabled: batchBusy !== '' && batchBusy !== 'delete',
+              })}
+              {renderToolChip({
+                label: '清关联',
+                onPress: handleBatchClearRelations,
+                loading: batchBusy === 'clear',
+                disabled: batchBusy !== '' && batchBusy !== 'clear',
+              })}
+              {renderToolChip({ label: '退出', onPress: exitSelectMode })}
+            </ScrollView>
+          </View>
+        ) : null}
       </View>
 
       <FlatList
         data={items}
-        keyExtractor={(item) => `${item.cookie_id}-${item.item_id}-${item.id}`}
+        keyExtractor={(item) => itemKey(item)}
         renderItem={renderItem}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
         contentContainerStyle={styles.list}
+        keyboardShouldPersistTaps="handled"
         onEndReached={handleLoadMore}
-        onEndReachedThreshold={0.3}
+        onEndReachedThreshold={0.5}
         ListEmptyComponent={
           error ? (
             <EmptyState
@@ -300,7 +894,13 @@ export default function ItemsScreen() {
             <EmptyState
               icon={Package}
               title="暂无商品"
-              message={selectedAccountId ? '该账号暂无已发布商品' : '暂无已发布商品'}
+              message={
+                keyword || filterPolished || filterMultiSpec || filterMultiQty
+                  ? '没有符合条件的商品，试试调整搜索或筛选'
+                  : selectedAccountId
+                    ? '该账号暂无已发布商品'
+                    : '暂无已发布商品'
+              }
             />
           )
         }
@@ -346,9 +946,67 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.xs,
   },
-  list: { padding: spacing.lg, gap: spacing.md },
+  toolbar: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+  },
+  toolChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 36,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.full,
+    borderWidth: 1,
+  },
+  toolChipText: { ...typography.small, fontWeight: '600' },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderWidth: 1,
+    borderRadius: radius.md,
+  },
+  searchInput: {
+    flex: 1,
+    minHeight: 40,
+    borderWidth: 0,
+    paddingHorizontal: 0,
+    paddingVertical: spacing.xs,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+  },
+  filterChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.full,
+    borderWidth: 1,
+  },
+  filterChipText: { ...typography.small },
+  selectBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+  },
+  selectCount: { ...typography.small, fontWeight: '600' },
+  selectActions: { gap: spacing.sm, paddingVertical: 2 },
+  list: { padding: spacing.lg, paddingBottom: 80, gap: spacing.md },
   card: { padding: spacing.md },
   cardRow: { flexDirection: 'row', gap: spacing.md },
+  checkWrap: { alignItems: 'center', justifyContent: 'center' },
   thumb: {
     width: 56,
     height: 56,
@@ -372,6 +1030,36 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xs,
   },
   actionText: { ...typography.small, fontWeight: '600' },
+  quickRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    paddingTop: spacing.xs,
+    borderTopWidth: 1,
+  },
+  quickLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexShrink: 1 },
+  flagToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    minHeight: 44,
+    paddingRight: spacing.xs,
+  },
+  flagToggleLabel: { ...typography.small },
+  editBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    minHeight: 44,
+    minWidth: 44,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+  },
+  editBtnText: { ...typography.small, fontWeight: '600' },
   footer: { paddingVertical: spacing.lg, alignItems: 'center' },
   footerText: { ...typography.small, textAlign: 'center', paddingVertical: spacing.md },
 });

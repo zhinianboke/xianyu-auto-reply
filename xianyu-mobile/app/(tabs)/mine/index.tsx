@@ -45,6 +45,8 @@ import {
   SlidersHorizontal,
   Clock,
   Database,
+  BellRing,
+  ScanSearch,
 } from 'lucide-react-native';
 
 type MenuItem = { label: string; icon: typeof User; onPress: () => void; adminOnly?: boolean };
@@ -89,6 +91,7 @@ export default function MineScreen() {
       title: '运营',
       items: [
         { label: '公告', icon: Megaphone, onPress: () => router.push('/(tabs)/mine/announcements') },
+        { label: '弹窗公告', icon: BellRing, onPress: () => router.push('/(tabs)/mine/popup-announcements'), adminOnly: true },
         { label: '数据分析', icon: BarChart3, onPress: () => router.push('/(tabs)/mine/data-analysis') },
         { label: '风控日志', icon: Shield, onPress: () => router.push('/(tabs)/mine/risk-logs') },
         { label: '反馈', icon: MessageCircle, onPress: () => router.push('/(tabs)/mine/feedback') },
@@ -103,6 +106,7 @@ export default function MineScreen() {
         { label: '上新监控', icon: Radar, onPress: () => router.push('/(tabs)/mine/listing-monitor') },
         { label: '监控分类', icon: FolderTree, onPress: () => router.push('/(tabs)/mine/monitor-categories') },
         { label: '监控日志', icon: ScrollText, onPress: () => router.push('/(tabs)/mine/monitor-logs') },
+        { label: '采集商品', icon: ScanSearch, onPress: () => router.push('/(tabs)/mine/monitor-items') },
         { label: '兜底账号', icon: Users, onPress: () => router.push('/(tabs)/mine/monitor-fallback') },
         { label: '商品发布', icon: ShoppingCart, onPress: () => router.push('/(tabs)/mine/product-publish') },
         { label: '商品管理', icon: Package, onPress: () => router.push('/(tabs)/mine/items') },
