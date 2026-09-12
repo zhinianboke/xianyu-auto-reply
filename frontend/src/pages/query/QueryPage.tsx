@@ -16,6 +16,7 @@ import {
   ChevronUp,
   KeyRound,
   Loader2,
+  Megaphone,
   Receipt,
   Search,
   User,
@@ -184,6 +185,14 @@ export function QueryPage() {
         </div>
 
         <div className="p-6 flex flex-col gap-5">
+          {/* 使用提醒：引导会 API 的用户走聊天关键词查询，减少本页面的多 IP 使用 */}
+          <div className="flex items-start gap-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-4 py-3">
+            <Megaphone className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+              会查 API 的朋友请尽量使用 API 查询：在闲鱼聊天框发送「余额」即可获取 API 查询方法。多 IP 使用本页面对账号没有益处，此查询页面提供给不会查询的朋友操作。
+            </p>
+          </div>
+
           {/* 订单号输入 */}
           <div>
             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
