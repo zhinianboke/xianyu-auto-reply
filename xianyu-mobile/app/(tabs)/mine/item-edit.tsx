@@ -251,6 +251,8 @@ export default function ItemEditScreen() {
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // 平台详情（鱼小铺 seller-detail）失败原因：非空时基础信息降级为本地只读，不阻塞本地配置卡片
+  const [platformError, setPlatformError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const [title, setTitle] = useState('');
@@ -323,6 +325,10 @@ export default function ItemEditScreen() {
     }
     setLoading(true);
     setLoadError(null);
+    setPlatformError(null);
+    // 平台详情（seller-detail）依赖鱼小铺：失败（如账号未开通鱼小铺）只降级「基础信息」，
+    // 不再整页报错——发货设置/卡券关联/默认回复/AI提示词/查询配置都是本地配置，照常可用
+    let platformFailed = false;
     try {
       const { form } = await getSellerItemDetail(cookieId, itemId);
       setTitle(form.title ?? '');
@@ -336,37 +342,46 @@ export default function ItemEditScreen() {
       }
       setPostage(form.postage != null ? String(form.postage) : '');
       setSupportPickup(Boolean(form.support_pickup));
-      // 本地库详情：取多规格明细（含 sku_id）与列表筛选标记；失败不阻塞编辑表单
-      try {
-        const { item } = await getXianyuItemDetail(cookieId, itemId);
-        const skus = item.item_sku_list ?? [];
-        if (skus.length > 0) {
-          setIsMultiSpecItem(true);
-          setPriceSkus(
-            skus.map((sku: XianyuItemSku) => ({
-              skuId: sku.sku_id,
-              label:
-                (sku.specs ?? []).map((s) => `${s.name}：${s.value}`).join('，') || sku.sku_id,
-              price: sku.price != null ? String(sku.price) : '',
-              quantity: sku.quantity != null ? String(sku.quantity) : '',
-            })),
-          );
-        } else {
-          setIsMultiSpecItem(false);
-          setPriceSkus([]);
+    } catch (e) {
+      platformFailed = true;
+      setPlatformError((e as Error).message || '获取平台商品详情失败');
+    }
+    // 本地库详情：取多规格明细（含 sku_id）与列表筛选标记；失败不阻塞编辑表单。
+    // 平台详情失败时用本地记录回填标题/价格/库存/主图（xy_catalog_items 有这些字段）
+    try {
+      const { item } = await getXianyuItemDetail(cookieId, itemId);
+      if (platformFailed) {
+        if (item.title) setTitle(item.title);
+        if (item.price) setPrice(item.price);
+        if (item.quantity !== null && item.quantity !== undefined && item.quantity !== '') {
+          setQuantity(String(item.quantity));
         }
-        setFlagMultiSpec(Boolean(item.is_multi_spec));
-        setFlagMultiQty(Boolean(item.multi_quantity_delivery));
-      } catch {
-        // 本地详情缺失时退化为单规格快捷改价（用表单价格/库存）
+        if (item.image) setImages([item.image]);
+      }
+      const skus = item.item_sku_list ?? [];
+      if (skus.length > 0) {
+        setIsMultiSpecItem(true);
+        setPriceSkus(
+          skus.map((sku: XianyuItemSku) => ({
+            skuId: sku.sku_id,
+            label:
+              (sku.specs ?? []).map((s) => `${s.name}：${s.value}`).join('，') || sku.sku_id,
+            price: sku.price != null ? String(sku.price) : '',
+            quantity: sku.quantity != null ? String(sku.quantity) : '',
+          })),
+        );
+      } else {
         setIsMultiSpecItem(false);
         setPriceSkus([]);
       }
-    } catch (e) {
-      setLoadError((e as Error).message || '加载商品详情失败');
-    } finally {
-      setLoading(false);
+      setFlagMultiSpec(Boolean(item.is_multi_spec));
+      setFlagMultiQty(Boolean(item.multi_quantity_delivery));
+    } catch {
+      // 本地详情缺失时退化为单规格快捷改价（用表单价格/库存）
+      setIsMultiSpecItem(false);
+      setPriceSkus([]);
     }
+    setLoading(false);
   }, [cookieId, itemId]);
 
   useEffect(() => {
@@ -436,7 +451,7 @@ export default function ItemEditScreen() {
   }
 
   async function handleSave() {
-    if (!cookieId || !itemId) return;
+    if (!cookieId || !itemId || platformError) return;
     if (!title.trim()) {
       Alert.alert('提示', '请输入商品标题');
       return;
@@ -497,7 +512,7 @@ export default function ItemEditScreen() {
 
   /** 单规格快捷改价：仅提交价格与库存（PUT /items/{cookie_id}/{item_id}/price） */
   async function handleQuickPriceSave() {
-    if (!cookieId || !itemId || priceSaving) return;
+    if (!cookieId || !itemId || priceSaving || platformError) return;
     const priceNum = parseFloat(price);
     if (!price.trim() || Number.isNaN(priceNum) || priceNum <= 0) {
       Alert.alert('提示', '价格需大于0');
@@ -528,7 +543,7 @@ export default function ItemEditScreen() {
 
   /** 多规格快捷改价：提交每个 SKU 的价格与库存 */
   async function handleSkuPriceSave() {
-    if (!cookieId || !itemId || priceSaving) return;
+    if (!cookieId || !itemId || priceSaving || platformError) return;
     for (const sku of priceSkus) {
       const p = parseFloat(sku.price);
       if (!sku.price || Number.isNaN(p) || p <= 0) {
@@ -686,6 +701,19 @@ export default function ItemEditScreen() {
           expanded={expanded.basic}
           onToggle={() => toggleSection('basic')}
         >
+          {platformError ? (
+            <View
+              style={[
+                styles.platformBanner,
+                { backgroundColor: c.surfaceAlt, borderLeftColor: c.warning },
+              ]}
+            >
+              <Text style={[styles.platformBannerText, { color: c.textSecondary }]}>
+                {platformError}，平台信息不可编辑，下方为本地信息
+              </Text>
+            </View>
+          ) : null}
+
           <View style={styles.group}>
             <Text style={[styles.label, { color: c.textSecondary }]}>标题</Text>
             <Input
@@ -693,6 +721,7 @@ export default function ItemEditScreen() {
               onChangeText={setTitle}
               maxLength={200}
               multiline
+              editable={!platformError}
               placeholder="请输入商品标题"
             />
 
@@ -704,6 +733,7 @@ export default function ItemEditScreen() {
               onChangeText={setDescription}
               maxLength={5000}
               multiline
+              editable={!platformError}
               placeholder="请输入商品描述"
               style={styles.descriptionInput}
             />
@@ -715,6 +745,7 @@ export default function ItemEditScreen() {
               value={price}
               onChangeText={setPrice}
               keyboardType="decimal-pad"
+              editable={!platformError}
               placeholder="0.00"
             />
 
@@ -725,6 +756,7 @@ export default function ItemEditScreen() {
               value={originalPrice}
               onChangeText={setOriginalPrice}
               keyboardType="decimal-pad"
+              editable={!platformError}
               placeholder="0.00"
             />
 
@@ -735,6 +767,7 @@ export default function ItemEditScreen() {
               value={quantity}
               onChangeText={setQuantity}
               keyboardType="number-pad"
+              editable={!platformError}
               placeholder="1"
             />
 
@@ -744,6 +777,7 @@ export default function ItemEditScreen() {
                 variant="secondary"
                 onPress={handleQuickPriceSave}
                 loading={priceSaving}
+                disabled={Boolean(platformError)}
                 style={styles.quickPriceBtn}
               />
             ) : null}
@@ -765,6 +799,7 @@ export default function ItemEditScreen() {
                       value={sku.price}
                       onChangeText={(v) => updateSkuRow(idx, 'price', v)}
                       keyboardType="decimal-pad"
+                      editable={!platformError}
                       placeholder="价格"
                       style={styles.skuInput}
                     />
@@ -772,6 +807,7 @@ export default function ItemEditScreen() {
                       value={sku.quantity}
                       onChangeText={(v) => updateSkuRow(idx, 'quantity', v)}
                       keyboardType="number-pad"
+                      editable={!platformError}
                       placeholder="库存"
                       style={styles.skuInput}
                     />
@@ -782,6 +818,7 @@ export default function ItemEditScreen() {
                 label="保存全部规格价格"
                 onPress={handleSkuPriceSave}
                 loading={priceSaving}
+                disabled={Boolean(platformError)}
                 style={styles.quickPriceBtn}
               />
             </View>
@@ -816,11 +853,13 @@ export default function ItemEditScreen() {
                   <Pressable
                     key={opt.value}
                     onPress={() => setShippingMethod(opt.value)}
+                    disabled={Boolean(platformError)}
                     style={[
                       styles.chip,
                       {
                         backgroundColor: selected ? c.primary : c.background,
                         borderColor: selected ? c.primary : c.border,
+                        opacity: platformError ? 0.5 : 1,
                       },
                     ]}
                   >
@@ -840,6 +879,7 @@ export default function ItemEditScreen() {
                   value={postage}
                   onChangeText={setPostage}
                   keyboardType="decimal-pad"
+                  editable={!platformError}
                   placeholder="0.00"
                 />
               </>
@@ -850,6 +890,7 @@ export default function ItemEditScreen() {
               <Switch
                 value={supportPickup}
                 onValueChange={setSupportPickup}
+                disabled={Boolean(platformError)}
                 trackColor={{ false: c.border, true: c.primary }}
               />
             </View>
@@ -859,6 +900,7 @@ export default function ItemEditScreen() {
             label="保存修改"
             onPress={handleSave}
             loading={saving}
+            disabled={Boolean(platformError)}
             style={styles.saveBtn}
           />
         </CollapsibleSection>
@@ -1264,6 +1306,14 @@ const styles = StyleSheet.create({
     paddingTop: spacing.sm,
   },
   group: { gap: spacing.xs, marginTop: spacing.sm },
+  platformBanner: {
+    marginTop: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.sm,
+    borderLeftWidth: 3,
+  },
+  platformBannerText: { ...typography.small, lineHeight: 18 },
   label: { ...typography.caption },
   descriptionInput: { minHeight: 100, textAlignVertical: 'top' },
   textArea: { minHeight: 100, textAlignVertical: 'top', paddingVertical: spacing.sm },

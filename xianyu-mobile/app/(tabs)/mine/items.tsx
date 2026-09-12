@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, memo } from 'react';
 import {
   Alert,
   View,
@@ -10,6 +10,7 @@ import {
   ScrollView,
   Image,
   ActivityIndicator,
+  Switch,
   useColorScheme,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -22,6 +23,7 @@ import {
   X,
   CheckCircle2,
   Circle,
+  Pencil,
 } from 'lucide-react-native';
 import { colors, spacing, typography, radius } from '@/lib/theme';
 import {
@@ -29,6 +31,8 @@ import {
   syncXianyuItemsFromAccount,
   batchOfflineXianyuItems,
   batchDeleteItemRecords,
+  setItemMultiSpec,
+  setItemMultiQuantityDelivery,
   type XianyuItem,
 } from '@/api/wrappers/items';
 import { batchDeleteItems } from '@/api/wrappers/item-edit';
@@ -49,6 +53,162 @@ const FILTER_CHIPS: Array<{
 ];
 
 type BatchAction = '' | 'offline' | 'delete' | 'clear';
+
+type FlagKind = 'spec' | 'qty';
+
+interface ItemRowProps {
+  item: XianyuItem;
+  selectMode: boolean;
+  checked: boolean;
+  onPressRow: (item: XianyuItem) => void;
+  onLongPressRow: (item: XianyuItem) => void;
+  onToggleFlag: (item: XianyuItem, kind: FlagKind, value: boolean) => Promise<void>;
+  onEdit: (item: XianyuItem) => void;
+  onOpenRelation: (item: XianyuItem) => void;
+}
+
+/**
+ * 商品列表项（React.memo 避免列表滚动/无关状态变化时重渲染）。
+ * 底部快捷操作区：多规格/多数量发货开关 + 编辑入口；
+ * 开关行与卡片主点击区域手势隔离（onStartShouldSetResponder 吞掉行内空白处触摸）。
+ */
+const ItemRow = memo(function ItemRow({
+  item,
+  selectMode,
+  checked,
+  onPressRow,
+  onLongPressRow,
+  onToggleFlag,
+  onEdit,
+  onOpenRelation,
+}: ItemRowProps) {
+  const scheme = useColorScheme();
+  const c = colors[scheme === 'dark' ? 'dark' : 'light'];
+  // 单个商品的标记切换 in-flight 锁：请求期间禁用两个开关，防止并发乱序
+  const [flagBusy, setFlagBusy] = useState(false);
+
+  const toggleFlag = useCallback(
+    async (kind: FlagKind, value: boolean) => {
+      if (flagBusy) return;
+      setFlagBusy(true);
+      try {
+        await onToggleFlag(item, kind, value);
+      } finally {
+        setFlagBusy(false);
+      }
+    },
+    [flagBusy, item, onToggleFlag],
+  );
+
+  const renderFlagToggle = (kind: FlagKind, label: string, value: boolean) => (
+    <Pressable
+      onPress={() => toggleFlag(kind, !value)}
+      disabled={flagBusy}
+      accessibilityRole="button"
+      accessibilityState={{ checked: value, disabled: flagBusy }}
+      style={({ pressed }) => [styles.flagToggle, { opacity: pressed || flagBusy ? 0.6 : 1 }]}
+    >
+      {/* pointerEvents=none：触控统一由外层 44px Pressable 处理，避免 Switch 双重触发 */}
+      <View pointerEvents="none">
+        <Switch
+          value={value}
+          disabled={flagBusy}
+          trackColor={{ false: c.border, true: c.primary }}
+        />
+      </View>
+      <Text style={[styles.flagToggleLabel, { color: c.text }]}>{label}</Text>
+    </Pressable>
+  );
+
+  return (
+    <Pressable
+      onPress={() => onPressRow(item)}
+      onLongPress={() => onLongPressRow(item)}
+      style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+    >
+      <Card style={[styles.card, selectMode && checked && { borderColor: c.primary, borderWidth: 1 }]}>
+        <View style={styles.cardRow}>
+          {selectMode ? (
+            <View style={styles.checkWrap}>
+              {checked ? (
+                <CheckCircle2 size={22} stroke={c.primary} />
+              ) : (
+                <Circle size={22} stroke={c.border} />
+              )}
+            </View>
+          ) : null}
+          {item.image ? (
+            <Image
+              source={{ uri: item.image }}
+              style={[styles.thumb, { backgroundColor: c.surfaceAlt }]}
+            />
+          ) : (
+            <View style={[styles.thumb, { backgroundColor: c.surfaceAlt }]}>
+              <Package size={24} stroke={c.textMuted} />
+            </View>
+          )}
+          <View style={styles.body}>
+            <Text
+              style={[styles.title, { color: c.text }]}
+              numberOfLines={2}
+            >
+              {item.title || '无标题'}
+            </Text>
+            <View style={styles.metaRow}>
+              <Text style={[styles.price, { color: c.warning }]} numberOfLines={1}>
+                {item.price ? `¥${item.price}` : '价格未知'}
+              </Text>
+              {item.status ? (
+                <Badge label={item.status} variant="info" />
+              ) : null}
+              {item.quantity !== null && item.quantity !== '' && item.quantity !== undefined ? (
+                <Text style={[styles.qty, { color: c.textMuted }]} numberOfLines={1}>
+                  库存 {item.quantity}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        </View>
+        {!selectMode ? (
+          <>
+            {/* 快捷操作区：开关 + 编辑；行容器吞掉空白处触摸，不触发卡片点击/长按 */}
+            <View
+              onStartShouldSetResponder={() => true}
+              style={[styles.quickRow, { borderTopColor: c.borderLight }]}
+            >
+              <View style={styles.quickLeft}>
+                {renderFlagToggle('spec', '多规格', Boolean(item.is_multi_spec))}
+                {renderFlagToggle('qty', '多数量发货', Boolean(item.multi_quantity_delivery))}
+              </View>
+              <Pressable
+                onPress={() => onEdit(item)}
+                accessibilityLabel="编辑商品"
+                accessibilityRole="button"
+                style={({ pressed }) => [
+                  styles.editBtn,
+                  { borderColor: c.border, backgroundColor: c.surface, opacity: pressed ? 0.6 : 1 },
+                ]}
+              >
+                <Pencil size={14} stroke={c.primary} />
+                <Text style={[styles.editBtnText, { color: c.primary }]}>编辑</Text>
+              </Pressable>
+            </View>
+            <Pressable
+              onPress={() => onOpenRelation(item)}
+              style={({ pressed }) => [
+                styles.actionRow,
+                { borderColor: c.borderLight, opacity: pressed ? 0.6 : 1 },
+              ]}
+            >
+              <Ticket size={14} stroke={c.primary} />
+              <Text style={[styles.actionText, { color: c.primary }]}>关联卡券</Text>
+            </Pressable>
+          </>
+        ) : null}
+      </Card>
+    </Pressable>
+  );
+});
 
 export default function ItemsScreen() {
   const scheme = useColorScheme();
@@ -442,74 +602,79 @@ export default function ItemsScreen() {
 
   const accountLabel = (acc: AccountOption) => acc.remark || acc.id;
 
-  const renderItem = ({ item }: { item: XianyuItem }) => {
-    const key = itemKey(item);
-    const checked = selectedKeys.has(key);
-    return (
-      <Pressable
-        onPress={() => (selectMode ? toggleItem(item) : handleEdit(item))}
-        onLongPress={() => (selectMode ? toggleItem(item) : handleLongPress(item))}
-        style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-      >
-        <Card style={[styles.card, selectMode && checked && { borderColor: c.primary, borderWidth: 1 }]}>
-          <View style={styles.cardRow}>
-            {selectMode ? (
-              <View style={styles.checkWrap}>
-                {checked ? (
-                  <CheckCircle2 size={22} stroke={c.primary} />
-                ) : (
-                  <Circle size={22} stroke={c.border} />
-                )}
-              </View>
-            ) : null}
-            {item.image ? (
-              <Image
-                source={{ uri: item.image }}
-                style={[styles.thumb, { backgroundColor: c.surfaceAlt }]}
-              />
-            ) : (
-              <View style={[styles.thumb, { backgroundColor: c.surfaceAlt }]}>
-                <Package size={24} stroke={c.textMuted} />
-              </View>
-            )}
-            <View style={styles.body}>
-              <Text
-                style={[styles.title, { color: c.text }]}
-                numberOfLines={2}
-              >
-                {item.title || '无标题'}
-              </Text>
-              <View style={styles.metaRow}>
-                <Text style={[styles.price, { color: c.warning }]} numberOfLines={1}>
-                  {item.price ? `¥${item.price}` : '价格未知'}
-                </Text>
-                {item.status ? (
-                  <Badge label={item.status} variant="info" />
-                ) : null}
-                {item.quantity !== null && item.quantity !== '' && item.quantity !== undefined ? (
-                  <Text style={[styles.qty, { color: c.textMuted }]} numberOfLines={1}>
-                    库存 {item.quantity}
-                  </Text>
-                ) : null}
-              </View>
-            </View>
-          </View>
-          {!selectMode ? (
-            <Pressable
-              onPress={() => setRelationItem(item)}
-              style={({ pressed }) => [
-                styles.actionRow,
-                { borderColor: c.borderLight, opacity: pressed ? 0.6 : 1 },
-              ]}
-            >
-              <Ticket size={14} stroke={c.primary} />
-              <Text style={[styles.actionText, { color: c.primary }]}>关联卡券</Text>
-            </Pressable>
-          ) : null}
-        </Card>
-      </Pressable>
-    );
-  };
+  const openRelation = useCallback((it: XianyuItem) => setRelationItem(it), []);
+
+  /**
+   * 快捷开关：更新单个商品的多规格/多数量发货标记（本地库标记，供列表筛选）。
+   * 乐观更新 items，失败回滚并 Alert；行内 busy 锁在 ItemRow 内部。
+   */
+  const handleToggleItemFlag = useCallback(
+    async (target: XianyuItem, kind: FlagKind, value: boolean) => {
+      const key = itemKey(target);
+      const patchWith =
+        (v: boolean) =>
+        (it: XianyuItem): XianyuItem =>
+          itemKey(it) !== key
+            ? it
+            : kind === 'spec'
+              ? { ...it, is_multi_spec: v }
+              : { ...it, multi_quantity_delivery: v };
+      setItems((prev) => prev.map(patchWith(value)));
+      try {
+        if (kind === 'spec') await setItemMultiSpec(target.cookie_id, target.item_id, value);
+        else await setItemMultiQuantityDelivery(target.cookie_id, target.item_id, value);
+      } catch (e) {
+        // 回滚到 target 快照里的原始值
+        setItems((prev) =>
+          prev.map((it) =>
+            itemKey(it) === key
+              ? {
+                  ...it,
+                  is_multi_spec: target.is_multi_spec,
+                  multi_quantity_delivery: target.multi_quantity_delivery,
+                }
+              : it,
+          ),
+        );
+        Alert.alert('操作失败', (e as Error).message || '未知错误');
+      }
+    },
+    [itemKey],
+  );
+
+  const handlePressRow = useCallback(
+    (it: XianyuItem) => (selectMode ? toggleItem(it) : handleEdit(it)),
+    [selectMode, toggleItem, handleEdit],
+  );
+  const handleLongPressRow = useCallback(
+    (it: XianyuItem) => (selectMode ? toggleItem(it) : handleLongPress(it)),
+    [selectMode, toggleItem, handleLongPress],
+  );
+
+  const renderItem = useCallback(
+    ({ item }: { item: XianyuItem }) => (
+      <ItemRow
+        item={item}
+        selectMode={selectMode}
+        checked={selectedKeys.has(itemKey(item))}
+        onPressRow={handlePressRow}
+        onLongPressRow={handleLongPressRow}
+        onToggleFlag={handleToggleItemFlag}
+        onEdit={handleEdit}
+        onOpenRelation={openRelation}
+      />
+    ),
+    [
+      selectMode,
+      selectedKeys,
+      itemKey,
+      handlePressRow,
+      handleLongPressRow,
+      handleToggleItemFlag,
+      handleEdit,
+      openRelation,
+    ],
+  );
 
   /** 顶部工具条小按钮（同步/批量） */
   const renderToolChip = (opts: {
@@ -709,7 +874,7 @@ export default function ItemsScreen() {
 
       <FlatList
         data={items}
-        keyExtractor={(item) => `${item.cookie_id}-${item.item_id}-${item.id}`}
+        keyExtractor={(item) => itemKey(item)}
         renderItem={renderItem}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
         contentContainerStyle={styles.list}
@@ -865,6 +1030,36 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xs,
   },
   actionText: { ...typography.small, fontWeight: '600' },
+  quickRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    paddingTop: spacing.xs,
+    borderTopWidth: 1,
+  },
+  quickLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexShrink: 1 },
+  flagToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    minHeight: 44,
+    paddingRight: spacing.xs,
+  },
+  flagToggleLabel: { ...typography.small },
+  editBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    minHeight: 44,
+    minWidth: 44,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+  },
+  editBtnText: { ...typography.small, fontWeight: '600' },
   footer: { paddingVertical: spacing.lg, alignItems: 'center' },
   footerText: { ...typography.small, textAlign: 'center', paddingVertical: spacing.md },
 });
