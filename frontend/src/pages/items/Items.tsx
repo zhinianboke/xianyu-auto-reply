@@ -1,9 +1,10 @@
 ﻿import { useEffect, useState, useRef } from 'react'
-import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink, Tag } from 'lucide-react'
+import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink, Tag, ListChecks } from 'lucide-react'
 import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, updateItemPrice, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
 import { getAccountDetails } from '@/api/accounts'
 import { batchClearItemRelations } from '@/api/cards'
 import { ItemCardRelationModal } from './ItemCardRelationModal'
+import { ItemQueryConfigModal } from './ItemQueryConfigModal'
 import SellerItemEditModal from './SellerItemEditModal'
 import { useUIStore } from '@/store/uiStore'
 import { PageLoading } from '@/components/common/Loading'
@@ -106,6 +107,8 @@ export function Items() {
   const [aiPromptContent, setAiPromptContent] = useState('')
   const [loadingAiPrompt, setLoadingAiPrompt] = useState(false)
   const [savingAiPrompt, setSavingAiPrompt] = useState(false)
+  // 查询配置弹窗状态
+  const [queryConfigItem, setQueryConfigItem] = useState<Item | null>(null)
 
   // 批量新增AI提示词弹窗状态
   const [showBatchAiPromptModal, setShowBatchAiPromptModal] = useState(false)
@@ -1453,6 +1456,7 @@ export function Items() {
                   <th className="min-w-[110px] text-center">关联卡券</th>
                   <th className="min-w-[110px] text-center">默认回复</th>
                   <th className="min-w-[110px] text-center">AI提示词</th>
+                  <th className="min-w-[110px] text-center">查询配置</th>
                   <th className="min-w-[170px]">创建时间</th>
                   <th className="min-w-[170px]">更新时间</th>
                   <th className="sticky right-0 bg-slate-50 dark:bg-slate-800 min-w-[70px]">操作</th>
@@ -1461,7 +1465,7 @@ export function Items() {
             <tbody>
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={18}>
+                  <td colSpan={19}>
                     <div className="empty-state py-8">
                       <Package className="empty-state-icon" />
                       <p className="text-gray-500">暂无商品数据</p>
@@ -1616,6 +1620,22 @@ export function Items() {
                         {item.has_ai_prompt ? '已配置' : '未配置'}
                       </button>
                     </td>
+                    <td>
+                      <button
+                        onClick={() => {
+                          // 账号被删后残留的孤儿商品没有 cookie_id，无法定位配置归属，直接提示
+                          if (!item.cookie_id) {
+                            return addToast({ type: 'warning', message: '该商品缺少所属账号，无法配置查询功能' })
+                          }
+                          setQueryConfigItem(item)
+                        }}
+                        className="px-2 py-1 rounded text-xs font-medium transition-colors flex items-center gap-1 bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400"
+                        title="点击配置查询按钮"
+                      >
+                        <ListChecks className="w-3 h-3" />
+                        配置
+                      </button>
+                    </td>
                     <td className="text-gray-500 text-xs">
                       {item.created_at ? new Date(item.created_at).toLocaleString() : '-'}
                     </td>
@@ -1715,6 +1735,17 @@ export function Items() {
             setRelationItem(null)
             loadItems()
           }}
+        />
+      )}
+
+      {/* 查询配置弹窗 */}
+      {queryConfigItem && (
+        <ItemQueryConfigModal
+          cookieId={queryConfigItem.cookie_id}
+          itemId={queryConfigItem.item_id}
+          itemName={queryConfigItem.item_title || queryConfigItem.title || queryConfigItem.item_id}
+          onClose={() => setQueryConfigItem(null)}
+          onSaved={() => setQueryConfigItem(null)}
         />
       )}
 

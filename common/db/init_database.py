@@ -2079,6 +2079,7 @@ class DatabaseInitializer:
             ("fee_payer", "VARCHAR(32) COMMENT '手续费支付方式：distributor-分销主支付，dealer-分销商支付'", "is_dockable"),
             ("min_price", "VARCHAR(32) COMMENT '最低售价'", "fee_payer"),
             ("dock_visibility", "VARCHAR(32) DEFAULT NULL COMMENT '对接可见性：public-所有人可见，dealer_only-仅分销商可见'", "min_price"),
+            ("auto_delist_on_soldout", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '售罄自动下架开关'", "dock_visibility"),
         ],
         "xy_dock_records": [
             ("delivery_count", "INT NOT NULL DEFAULT 0 COMMENT '发货次数'", "remark"),

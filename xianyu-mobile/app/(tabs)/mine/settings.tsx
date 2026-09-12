@@ -8,6 +8,7 @@ import {
   Pressable,
   Alert,
   ActivityIndicator,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useColorScheme } from 'react-native';
@@ -45,10 +46,11 @@ import {
   EyeOff,
   CalendarClock,
   Wallet,
+  Bell,
 } from 'lucide-react-native';
 
 /** 设置项类型 */
-type FieldType = 'switch' | 'input' | 'toggle' | 'secret';
+type FieldType = 'switch' | 'input' | 'toggle' | 'secret' | 'textarea';
 
 interface SettingDef {
   key: string;
@@ -679,6 +681,24 @@ export default function SettingsScreen() {
                                     );
                                   })}
                                 </View>
+                              </View>
+                            ) : def.type === 'textarea' ? (
+                              <View style={styles.inputField}>
+                                <Text style={[styles.fieldLabel, { color: c.text }]}>
+                                  {def.label}
+                                </Text>
+                                <TextInput
+                                  value={value}
+                                  onChangeText={(t) => setSettingValue(def.key, t)}
+                                  onEndEditing={() => handleInputBlur(def)}
+                                  placeholder={def.placeholder}
+                                  placeholderTextColor={c.textMuted}
+                                  multiline
+                                  numberOfLines={4}
+                                  autoCapitalize="none"
+                                  autoCorrect={false}
+                                  style={[styles.input, { minHeight: 96, textAlignVertical: 'top' }]}
+                                />
                               </View>
                             ) : (
                               <View style={styles.inputField}>

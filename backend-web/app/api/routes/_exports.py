@@ -45,6 +45,7 @@ from . import (
     goofish_crawler,
     health,
     items,
+    item_query,
     keywords,
     message,
     message_filters,
@@ -173,6 +174,10 @@ api_router.include_router(refund_cancel.router, prefix="/refund-cancel", tags=["
 api_router.include_router(agree_deliver.router, prefix="/agree-deliver", tags=["同意后发货配置"])
 # 同意后发货提货页（公开接口，无需登录）
 api_router.include_router(agree_pickup.router, prefix="/agree-pickup", tags=["同意后发货提货页"])
+# 商品通用查询配置（管理端，需登录；与 ai-prompt 端点同挂 /items 下）
+api_router.include_router(item_query.admin_router, prefix="/items", tags=["商品查询配置"])
+# 商品通用查询（公开接口，无需登录）
+api_router.include_router(item_query.public_router, prefix="/item-query", tags=["商品通用查询"])
 api_router.include_router(upload.router, prefix="/upload", tags=["文件上传"])
 api_router.include_router(qrcode.router, tags=["群二维码"])  # 已定义prefix="/qrcode"
 
