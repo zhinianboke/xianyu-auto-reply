@@ -32,6 +32,7 @@ from common.models.xy_order import XYOrder
 from common.db.session import async_session_maker
 from common.db.redis_client import distributed_lock
 from common.utils.default_reply_api import call_reply_api
+from common.utils.notification_template import render_notification_template
 
 from app.services.xianyu.resource_manager import pause_manager
 from app.services.xianyu.auto_reply_log_service import AutoReplyLogService
@@ -1004,6 +1005,17 @@ class AutoReplyService:
             if item_id:
                 notification_content += f"商品ID: {item_id}\n"
             notification_content += f"时间: {msg_time}"
+            template_context = {
+                "account": account_desc,
+                "account_id": self.cookie_id,
+                "account_remark": remark or "未知",
+                "buyer_nick": send_user_name or "未知",
+                "buyer_id": send_user_id or "未知",
+                "message": send_message or "",
+                "item_id": item_id or "未知",
+                "chat_id": chat_id or "未知",
+                "time": msg_time or time.strftime('%Y-%m-%d %H:%M:%S'),
+            }
             
             # 发送通知到各渠道
             for notification in notifications:
@@ -1029,23 +1041,29 @@ class AutoReplyService:
                     )
                     
                     config_data = parse_notification_config(channel_config)
+                    channel_message = render_notification_template(
+                        config_data,
+                        "chat",
+                        template_context,
+                        notification_content,
+                    )
                     
                     if channel_type in ('dingtalk', 'ding_talk'):
-                        await send_dingtalk_notification(config_data, notification_content)
+                        await send_dingtalk_notification(config_data, channel_message)
                     elif channel_type in ('feishu', 'lark'):
-                        await send_feishu_notification(config_data, notification_content)
+                        await send_feishu_notification(config_data, channel_message)
                     elif channel_type == 'bark':
-                        await send_bark_notification(config_data, notification_content)
+                        await send_bark_notification(config_data, channel_message)
                     elif channel_type == 'email':
-                        await send_email_notification(config_data, notification_content)
+                        await send_email_notification(config_data, channel_message)
                     elif channel_type == 'webhook':
-                        await send_webhook_notification(config_data, notification_content)
+                        await send_webhook_notification(config_data, channel_message)
                     elif channel_type in ('wechat', 'wechat_work'):
-                        await send_wechat_notification(config_data, notification_content)
+                        await send_wechat_notification(config_data, channel_message)
                     elif channel_type == 'telegram':
-                        await send_telegram_notification(config_data, notification_content)
+                        await send_telegram_notification(config_data, channel_message)
                     elif channel_type == 'pushplus':
-                        await send_pushplus_notification(config_data, notification_content)
+                        await send_pushplus_notification(config_data, channel_message)
                     else:
                         logger.warning(f"【{self.cookie_id}】不支持的通知渠道类型: {channel_type}")
                         

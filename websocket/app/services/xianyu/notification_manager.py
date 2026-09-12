@@ -11,6 +11,7 @@
 import time
 import asyncio
 import hashlib
+from decimal import Decimal, InvalidOperation
 from loguru import logger
 
 from common.utils.notification_utils import (
@@ -26,6 +27,7 @@ from common.utils.notification_utils import (
 )
 from common.services.token_api_mode import TOKEN_API_NAMES
 from common.utils.text_utils import safe_str
+from common.utils.notification_template import render_notification_template
 
 
 class NotificationManager:
@@ -92,7 +94,7 @@ class NotificationManager:
                         remaining_seconds = int(self.notification_cooldown - time_since_last)
                         logger.warning(f"📱 通知在冷却期内（剩余 {remaining_seconds} 秒），跳过重复发送")
                         return
-                
+
                 self.last_notification_time[notification_hash] = current_time
                 
                 # 清理过期记录
@@ -131,14 +133,30 @@ class NotificationManager:
                              f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
 
             # 发送通知到各渠道
-            await self._send_to_channels(notifications, notification_msg)
+            await self._send_to_channels(
+                notifications,
+                notification_msg,
+                template_type="chat",
+                template_context={
+                    "account": account_desc,
+                    "account_id": self.cookie_id,
+                    "account_remark": remark or "未知",
+                    "buyer_nick": send_user_name or "未知",
+                    "buyer_id": send_user_id or "未知",
+                    "message": send_message or "",
+                    "item_id": item_id or "未知",
+                    "chat_id": chat_id or "未知",
+                    "time": time.strftime('%Y-%m-%d %H:%M:%S'),
+                },
+            )
 
         except Exception as e:
             logger.error(f"📱 处理消息通知失败: {self._safe_str(e)}")
 
     async def send_delivery_failure_notification(self, send_user_name: str, send_user_id: str,
-                                                  item_id: str, error_message: str, chat_id: str = None):
-        """发送自动发货失败通知"""
+                                                  item_id: str, error_message: str, chat_id: str = None,
+                                                  order_id: str = None):
+        """发送自动发货结果通知。"""
         try:
             from common.db.compat import db_manager
 
@@ -171,19 +189,62 @@ class NotificationManager:
             except Exception as e:
                 logger.warning(f"获取账号详情失败: {e}")
 
-            # 构建通知内容（与旧框架保持一致）
+            buyer_nick = send_user_name or "未知"
+            amount = "未知"
+            quantity = "未知"
+            if order_id:
+                try:
+                    order = db_manager.get_order_by_id(order_id, self.cookie_id)
+                    if order:
+                        buyer_nick = (
+                            order.get("buyer_fish_nick")
+                            or order.get("buyer_nick")
+                            or buyer_nick
+                        )
+                        raw_amount = order.get("amount")
+                        if raw_amount is not None:
+                            amount = f"¥{Decimal(str(raw_amount)):.2f}"
+                        if order.get("quantity") is not None:
+                            quantity = str(order["quantity"])
+                except (InvalidOperation, ValueError, TypeError) as e:
+                    logger.warning(f"读取订单 {order_id} 的通知金额或数量失败: {self._safe_str(e)}")
+                except Exception as e:
+                    logger.warning(f"读取订单 {order_id} 的通知信息失败: {self._safe_str(e)}")
+
+            # 构建通知内容
             account_desc = f"{self.cookie_id}({remark})" if remark else self.cookie_id
             notification_message = f"🚨 自动发货通知\n\n" \
                                  f"闲鱼账号: {account_desc}\n" \
-                                 f"买家: {send_user_name} (ID: {send_user_id})\n" \
-                                 f"商品ID: {item_id}\n" \
+                                 f"买家: {buyer_nick} (ID: {send_user_id or '未知'})\n" \
+                                 f"订单金额: {amount}\n" \
+                                 f"购买数量: {quantity}\n" \
+                                 f"商品ID: {item_id or '未知'}\n" \
                                  f"聊天ID: {chat_id or '未知'}\n" \
                                  f"结果: {error_message}\n" \
                                  f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n" \
                                  f"请及时处理！"
 
             # 发送通知到各渠道
-            await self._send_to_channels(notifications, notification_message)
+            await self._send_to_channels(
+                notifications,
+                notification_message,
+                template_type="delivery",
+                template_context={
+                    "account": account_desc,
+                    "account_id": self.cookie_id,
+                    "account_remark": remark or "未知",
+                    "buyer_nick": buyer_nick,
+                    "buyer_id": send_user_id or "未知",
+                    "message": "",
+                    "item_id": item_id or "未知",
+                    "chat_id": chat_id or "未知",
+                    "time": time.strftime('%Y-%m-%d %H:%M:%S'),
+                    "order_id": order_id or "未知",
+                    "amount": amount,
+                    "quantity": quantity,
+                    "result": error_message or "未知",
+                },
+            )
 
         except Exception as e:
             logger.error(f"发送自动发货通知异常: {self._safe_str(e)}")
@@ -280,7 +341,24 @@ class NotificationManager:
             else:
                 notification_msg = f"{notification_title}\n\n闲鱼账号: {account_desc}\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n详情: {error_message}\n\n请检查账号状态。\n"
 
-            notification_sent = await self._send_to_channels(notifications, notification_msg, attachment_path)
+            notification_sent = await self._send_to_channels(
+                notifications,
+                notification_msg,
+                attachment_path,
+                template_type="account",
+                template_context={
+                    "account": account_desc,
+                    "account_id": self.cookie_id,
+                    "account_remark": remark or "未知",
+                    "title": notification_title,
+                    "notification_type": notification_type,
+                    "detail": error_message or "未知",
+                    "chat_id": chat_id or "未知",
+                    "verification_url": verification_url or "",
+                    "verification_info": f"验证链接: {verification_url}" if verification_url else "",
+                    "time": time.strftime('%Y-%m-%d %H:%M:%S'),
+                },
+            )
 
             if notification_sent:
                 self.last_notification_time[notification_type] = current_time
@@ -336,7 +414,8 @@ class NotificationManager:
                 return True
         return False
 
-    async def _send_to_channels(self, notifications: list, message: str, attachment_path: str = None) -> bool:
+    async def _send_to_channels(self, notifications: list, message: str, attachment_path: str = None,
+                                template_type: str = None, template_context: dict = None) -> bool:
         """发送通知到各个渠道
         
         Args:
@@ -361,30 +440,36 @@ class NotificationManager:
             try:
                 config_data = parse_notification_config(channel_config)
                 logger.info(f"📱 解析后配置: {config_data}")
+                channel_message = render_notification_template(
+                    config_data,
+                    template_type,
+                    template_context or {},
+                    message,
+                ) if template_type else message
 
                 if channel_type in ('ding_talk', 'dingtalk'):
-                    await send_dingtalk_notification(config_data, message)
+                    await send_dingtalk_notification(config_data, channel_message)
                     notification_sent = True
                 elif channel_type in ('feishu', 'lark'):
-                    await send_feishu_notification(config_data, message)
+                    await send_feishu_notification(config_data, channel_message)
                     notification_sent = True
                 elif channel_type == 'bark':
-                    await send_bark_notification(config_data, message)
+                    await send_bark_notification(config_data, channel_message)
                     notification_sent = True
                 elif channel_type == 'email':
-                    await send_email_notification(config_data, message, attachment_path)
+                    await send_email_notification(config_data, channel_message, attachment_path)
                     notification_sent = True
                 elif channel_type == 'webhook':
-                    await send_webhook_notification(config_data, message)
+                    await send_webhook_notification(config_data, channel_message)
                     notification_sent = True
                 elif channel_type in ('wechat', 'wechat_work'):
-                    await send_wechat_notification(config_data, message)
+                    await send_wechat_notification(config_data, channel_message)
                     notification_sent = True
                 elif channel_type == 'telegram':
-                    await send_telegram_notification(config_data, message)
+                    await send_telegram_notification(config_data, channel_message)
                     notification_sent = True
                 elif channel_type == 'pushplus':
-                    await send_pushplus_notification(config_data, message)
+                    await send_pushplus_notification(config_data, channel_message)
                     notification_sent = True
                 else:
                     logger.warning(f"不支持的通知渠道类型: {channel_type}")
