@@ -1411,6 +1411,7 @@ class DatabaseInitializer:
                 brand VARCHAR(100) DEFAULT NULL COMMENT '品牌',
                 `condition` VARCHAR(20) DEFAULT '全新' COMMENT '成色',
                 remark VARCHAR(500) DEFAULT NULL COMMENT '备注（仅内部使用）',
+                item_config JSON DEFAULT NULL COMMENT '商品列表配置(发布回写用)',
                 is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -1965,6 +1966,7 @@ class DatabaseInitializer:
             ("postage", "DECIMAL(8,2) DEFAULT 0 COMMENT '邮费，0表示包邮'", "support_pickup"),
             ("address_expected_text", "VARCHAR(200) DEFAULT NULL COMMENT '所在地选择时的期望文本'", "address"),
             ("is_deleted", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）'", "remark"),
+            ("item_config", "JSON DEFAULT NULL COMMENT '商品列表配置(发布回写用)'", "remark"),
         ],
         "xy_listing_monitor_tasks": [
             ("monitor_type", "VARCHAR(20) NOT NULL DEFAULT 'listing' COMMENT '监控类型：listing-上新监控，price_drop-降价监控'", "owner_id"),
@@ -2079,6 +2081,7 @@ class DatabaseInitializer:
             ("fee_payer", "VARCHAR(32) COMMENT '手续费支付方式：distributor-分销主支付，dealer-分销商支付'", "is_dockable"),
             ("min_price", "VARCHAR(32) COMMENT '最低售价'", "fee_payer"),
             ("dock_visibility", "VARCHAR(32) DEFAULT NULL COMMENT '对接可见性：public-所有人可见，dealer_only-仅分销商可见'", "min_price"),
+            ("auto_delist_on_soldout", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '售罄自动下架开关'", "dock_visibility"),
         ],
         "xy_dock_records": [
             ("delivery_count", "INT NOT NULL DEFAULT 0 COMMENT '发货次数'", "remark"),

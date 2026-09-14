@@ -294,6 +294,82 @@ export async function importAccounts(fileUri: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// 手动添加账号 + AI 模型在线拉取
+// ---------------------------------------------------------------------------
+
+/**
+ * 手动粘贴 Cookie 添加账号。
+ * 后端 body 为 AccountCreate { id, value }：id=账号唯一标识，value=Cookie 原文；
+ * 创建接口不接收备注，备注需添加后通过 updateAccountRemark 单独设置。
+ * 注意：后端对"账号已存在"等业务失败仍返回 200 + { success: false }，需透传给调用方。
+ */
+export async function createAccountByCookie(
+  accountId: string,
+  cookie: string,
+): Promise<{ success: boolean; message?: string }> {
+  const client = await getApiClient();
+  const { data, error } = (await (client.POST as any)('/api/v1/cookies', {
+    body: { id: accountId, value: cookie },
+  })) as {
+    data?: { success?: boolean; message?: string };
+    error?: unknown;
+  };
+  if (error) throw await extractError(error);
+  return { success: data?.success ?? true, message: data?.message };
+}
+
+/** AI 模型选项（后端 normalize_model_options 输出 { id, name }） */
+export interface AiModelOption {
+  id: string;
+  name: string;
+}
+
+/** 在线拉取 AI 模型列表（POST /api/v1/ai-reply-settings/models）。
+ *  dashscope_app 不支持自动获取；失败时后端返回 success=false + 空列表。 */
+export async function fetchAiModels(params: {
+  provider_type: string;
+  base_url: string;
+  api_key: string;
+}): Promise<{ success: boolean; message?: string; models: AiModelOption[] }> {
+  const client = await getApiClient();
+  const { data, error } = (await (client.POST as any)(
+    '/api/v1/ai-reply-settings/models',
+    { body: params },
+  )) as {
+    data?: { success?: boolean; message?: string; models?: unknown };
+    error?: unknown;
+  };
+  if (error) throw await extractError(error);
+  const body = data ?? {};
+  const raw = (body as { models?: unknown }).models;
+  const models: AiModelOption[] = Array.isArray(raw)
+    ? raw
+        .map((m): AiModelOption | null => {
+          if (typeof m === 'string') {
+            const id = m.trim();
+            return id ? { id, name: id } : null;
+          }
+          if (m && typeof m === 'object') {
+            const o = m as Record<string, unknown>;
+            const id = String(o.id ?? o.name ?? o.model ?? '').trim();
+            if (!id) return null;
+            const name = String(
+              o.display_name ?? o.displayName ?? o.name ?? id,
+            ).trim();
+            return { id, name: name || id };
+          }
+          return null;
+        })
+        .filter((m): m is AiModelOption => m != null)
+    : [];
+  return {
+    success: (body as { success?: boolean }).success ?? true,
+    message: (body as { message?: string }).message,
+    models,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 默认回复设置（每个闲鱼账号独立配置）
 // 后端路由前缀: /api/v1/default-replies
 // ---------------------------------------------------------------------------

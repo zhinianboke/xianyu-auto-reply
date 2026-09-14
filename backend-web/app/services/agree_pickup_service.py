@@ -6,7 +6,7 @@
    （不存在 / 不匹配 均返回明确中文提示）
 2. 买家点击「同意」：Redis 锁串行 + 幂等 → 调 websocket 内部接口触发真实发货并返回卡券内容
 3. 回显商品信息：商品标题（商品表 xy_items，缺失时用自动回复日志记录的标题兜底）
-   + 闲鱼商品详情页地址
+   + 闲鱼商品详情页地址 + 商品展示入口链接（xy_catalog_items.metadata_json.display_links）
 
 说明：
 - 本层为无认证公开接口的业务实现，仅读取展示所需的最小订单信息，不下发敏感字段。
@@ -19,9 +19,13 @@ from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from loguru import logger
 
 from app.services.websocket_client import websocket_client
+from app.services.item_query_service import ItemQueryService
 from common.db.redis_client import release_delivery_lock, try_acquire_delivery_lock
+from common.models.xy_account import XYAccount
+from common.models.xy_catalog_item import XYCatalogItem
 from common.models.xy_order import XYOrder
 from common.services.order_service import OrderService
 from common.utils.xianyu_utils import canonical_goofish_item_url
@@ -57,12 +61,20 @@ class AgreePickupService:
         return True, "", order
 
     @staticmethod
-    def _order_view(order: XYOrder, item_title: str = "") -> Dict[str, Any]:
+    def _order_view(
+        order: XYOrder,
+        item_title: str = "",
+        query_buttons: Optional[list] = None,
+        display_links: Optional[list] = None,
+    ) -> Dict[str, Any]:
         """提货页可展示的订单信息（最小必要字段）
 
         Args:
             order: 订单对象
             item_title: 商品标题（由调用方查商品表取得，取不到传空字符串）
+            query_buttons: 商品配置的通用查询按钮（只含 name 字段；无配置传空列表）
+            display_links: 商品配置的展示入口（完整内容含 name/type/url/title/content/note，
+                均为展示文案不敏感，可下发；无配置传空列表）
         Returns:
             提货页展示字段字典
         """
@@ -80,7 +92,73 @@ class AgreePickupService:
             "already_agreed": bool(order.agree_deliver_agreed),
             # 已同意时回显发货内容，未同意时不下发
             "content": order.delivery_content if order.agree_deliver_agreed else None,
+            "query_buttons": query_buttons or [],
+            # 展示入口不做 enabled 过滤：该体系没有启用开关，数组里有就展示
+            "display_links": display_links or [],
         }
+
+    async def _load_query_buttons(self, order: XYOrder) -> Tuple[list, list]:
+        """读取商品配置的通用查询按钮与展示入口链接（display_links）。
+
+        查询按钮含启用标记（只取 name/enabled 下发给买家）：
+        停用的按钮也会下发（enabled=False），提货页据此隐藏跳转按钮本身，
+        但保留工具下载/API 等配套入口的展示。
+        任何异常都按空数组处理，不阻断提货主流程。
+
+        Returns:
+            (query_buttons, display_links)
+        """
+        try:
+            buttons = await ItemQueryService(self.session).get_buttons_for_item(
+                order.owner_id, order.item_id or ""
+            )
+            query_buttons = [
+                {"name": button.get("name") or "查询", "enabled": button.get("enabled", True) is not False}
+                for button in buttons
+            ]
+        except Exception as e:
+            logger.warning(f"[同意提货] 查询按钮配置读取失败 order={order.order_no}: {e}")
+            query_buttons = []
+
+        display_links = await self._load_display_links(order)
+        return query_buttons, display_links
+
+    async def _load_display_links(self, order: XYOrder) -> list:
+        """读取商品配置的展示入口链接（metadata_json.display_links），完整内容下发给买家。
+
+        name/type/url/title/content/note 均为展示文案，不含敏感信息；
+        不做 enabled 过滤（该体系没有启用开关，数组里有就展示）。
+        任何异常都按空数组处理，不阻断提货主流程。
+        """
+        try:
+            if not order.item_id:
+                return []
+            result = await self.session.execute(
+                select(XYCatalogItem).where(
+                    XYCatalogItem.owner_id == order.owner_id,
+                    XYCatalogItem.item_id == order.item_id,
+                )
+            )
+            item = result.scalars().first()
+            if not item:
+                return []
+            links = (item.metadata_json or {}).get("display_links")
+            if not isinstance(links, list):
+                return []
+            # 按契约过滤脏数据（绕过管理接口写入的缺字段项），避免前端渲染出空弹窗
+            valid = []
+            for link in links:
+                if not isinstance(link, dict):
+                    continue
+                link_type = link.get("type")
+                if link_type == "link" and link.get("url"):
+                    valid.append(link)
+                elif link_type == "text" and link.get("title") and link.get("content"):
+                    valid.append(link)
+            return valid
+        except Exception as e:
+            logger.warning(f"[同意提货] 展示入口配置读取失败 order={order.order_no}: {e}")
+            return []
 
     async def query_order(
         self, order_no: str, order_id: str
@@ -93,7 +171,8 @@ class AgreePickupService:
         item_title = await OrderService(self.session).resolve_item_title(
             order.owner_id, order.item_id or ""
         )
-        return True, "查询成功", self._order_view(order, item_title)
+        query_buttons, display_links = await self._load_query_buttons(order)
+        return True, "查询成功", self._order_view(order, item_title, query_buttons, display_links)
 
     async def agree(
         self, order_no: str, order_id: str
@@ -131,6 +210,23 @@ class AgreePickupService:
                 return False, "发货失败，请稍后重试或联系卖家", None
             success = bool(resp.get("success"))
             msg = resp.get("message") or ("发货成功" if success else "发货失败，请稍后重试或联系卖家")
+
+            # 发卡成功后按账号配置主动提醒买家确认收货（账号级 agree_pickup_notice_*，默认关闭）
+            if success and order.account_id and order.chat_id:
+                try:
+                    acct_result = await self.session.execute(
+                        select(XYAccount).where(XYAccount.account_id == order.account_id)
+                    )
+                    account = acct_result.scalars().first()
+                    if account and account.agree_pickup_notice_enabled:
+                        content = (account.agree_pickup_notice_content or "").strip()
+                        if content:
+                            await websocket_client.send_message(
+                                order.account_id, order.chat_id, content
+                            )
+                except Exception as e:
+                    logger.error(f"[同意提货] 确认收货提醒发送失败 order={real_order_no}: {e}")
+
             return success, msg, resp.get("data")
         finally:
             await release_delivery_lock(lock_result)

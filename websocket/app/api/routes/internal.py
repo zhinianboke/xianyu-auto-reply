@@ -29,7 +29,6 @@ from common.services.risk_control_log_query_service import (
     get_account_risk_control_lock,
 )
 from common.services.token_renewal_cache_service import (
-    delete_token_cache,
     mark_token_cache_expired,
     upsert_token_cache,
     write_renewed_token_cache,
@@ -326,10 +325,11 @@ async def restart_account(account_id: str, request: StartAccountRequest = None):
                     logger.warning(f"解析Cookie获取unb失败: {parse_e}")
                     unb = ""
 
-            # 3) 用正确的 unb 作为唯一 user_id 删除 Token 缓存
+            # 3) 用正确的 unb 作为 user_id 标记 Token 缓存失效
             if unb:
-                invalidation = await delete_token_cache(
+                invalidation = await mark_token_cache_expired(
                     token_user_id=unb,
+                    invalidate_valid_cache=True,
                 )
                 logger.info(
                     f"账号重启前{invalidation.message}: "
@@ -2122,6 +2122,16 @@ async def _deliver_order_impl(request: DeliverOrderRequest):
             # ---- 3. 多张之间间隔 1 秒（即使发送失败也间隔，避免风控） ----
             if quantity > 1 and i < quantity - 1:
                 await asyncio.sleep(1)
+
+        # 售罄守卫：data 卡库存被消费后检查（自带开关/类型判断，异常只记日志）
+        if card.type == 'data':
+            try:
+                from common.db.session import async_session_maker as _sg_asm
+                from common.services.stock_guard_service import delist_card_if_empty
+                async with _sg_asm() as _sg_session:
+                    await delist_card_if_empty(_sg_session, request.card_id, trigger="delivery_internal")
+            except Exception as _sg_e:
+                logger.warning(f"【内部API】售罄守卫异常(忽略): {_sg_e}")
 
         # 没有获取到任何内容：双重保险（前面已 return，这里防御性兜底）
         if not raw_contents:

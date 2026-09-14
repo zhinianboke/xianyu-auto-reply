@@ -745,6 +745,9 @@ class OrderService:
             self.session.add(new_order)
             await self.session.commit()
             logger.info(f"订单 {order_no} 创建成功")
+            # 售罄守卫：新订单计入待发货后检查该商品绑定卡券（内部自捕获异常，不影响下单）
+            from common.services.stock_guard_service import check_item_cards_after_order
+            await check_item_cards_after_order(self.session, item_id or "", trigger="order_create_msg")
             return True
             
         except Exception as e:
@@ -1370,6 +1373,16 @@ class OrderService:
                 )
                 await self.session.execute(update_stmt)
                 await self.session.commit()
+                # 售罄守卫：状态/数量被同步修正后（如待付款→待发货、件数1→N）重查绑定卡券
+                # （内部自捕获异常，不影响订单同步主流程）
+                eff_status = update_values.get('status', existing.status)
+                from common.services.stock_guard_service import PENDING_STATUSES, check_item_cards_after_order
+                if eff_status in PENDING_STATUSES:
+                    await check_item_cards_after_order(
+                        self.session,
+                        update_values.get('item_id') or existing.item_id or "",
+                        trigger="order_update_sync",
+                    )
                 return 'updated'
             return 'skipped'
         else:
@@ -1394,6 +1407,9 @@ class OrderService:
             self.session.add(new_order)
             try:
                 await self.session.commit()
+                # 售罄守卫：新订单计入待发货后检查该商品绑定卡券（内部自捕获异常，不影响下单）
+                from common.services.stock_guard_service import check_item_cards_after_order
+                await check_item_cards_after_order(self.session, parsed.get('item_id', ''), trigger="order_create_sync")
                 return 'inserted'
             except IntegrityError:
                 # 并发兜底：(account_id, order_no) 唯一约束命中，说明另一个任务

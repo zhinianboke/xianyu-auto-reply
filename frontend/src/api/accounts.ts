@@ -608,6 +608,8 @@ export interface AgreeDeliverConfig {
   enabled: boolean                 // 是否开启同意后发货
   notify_message?: string | null   // 通知用户信息（文本域）
   pickup_url?: string | null       // 提货URL
+  pickup_notice_enabled?: boolean  // 提货后通知：买家同意提货发卡后主动提醒确认收货（默认关闭）
+  pickup_notice_content?: string | null // 提货后通知内容
 }
 
 export interface AgreeDeliverConfigResponse {

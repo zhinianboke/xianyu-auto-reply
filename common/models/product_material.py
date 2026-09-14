@@ -54,4 +54,5 @@ class ProductMaterial(TimestampMixin, Base):
     brand: Mapped[str | None] = mapped_column(String(100), comment="品牌")
     condition: Mapped[str] = mapped_column(String(20), default="全新", comment="成色：全新/99新/95新等")
     remark: Mapped[str | None] = mapped_column(String(500), comment="备注（仅内部使用，不发布到闲鱼）")
+    item_config: Mapped[dict | None] = mapped_column("item_config", JSON, comment="商品列表配置(发布回写用)")
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, comment="是否已删除（软删除）")

@@ -124,23 +124,35 @@ export interface MessageNotificationBinding {
   enabled: boolean;
 }
 
-/** 获取消息通知绑定列表 */
+/**
+ * 获取消息通知绑定列表。
+ * 后端 GET /message-notifications 返回以 cookie_id 为键的字典：
+ * `{ [cookie_id]: [{ id, channel_id, enabled, channel_name, channel_type, channel_config }] }`，
+ * cookie_id 只存在于外层键，需在展开时写入每条绑定的 account_id。
+ */
 export async function getMessageNotifications(): Promise<MessageNotificationBinding[]> {
   const client = await getApiClient();
-  const { data } = (await (client.GET as any)('/api/v1/message-notifications', {
-    params: { query: { page: 1, page_size: 200 } },
-  })) as { data?: unknown; error?: unknown };
-  return extractArray<MessageNotificationBinding>(
-    data,
-    (raw) =>
-      ({
-        id: Number(raw.id ?? 0),
-        account_id: String(raw.account_id ?? raw.cookie_id ?? ''),
-        channel_id: Number(raw.channel_id ?? 0),
-        channel_name: raw.channel_name != null ? String(raw.channel_name) : undefined,
-        enabled: Boolean(raw.enabled ?? true),
-      }) as MessageNotificationBinding,
-  );
+  const { data } = (await (client.GET as any)('/api/v1/message-notifications')) as {
+    data?: unknown;
+    error?: unknown;
+  };
+  const body = unwrap<Record<string, unknown>>(data);
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return [];
+  const result: MessageNotificationBinding[] = [];
+  for (const [cookieId, group] of Object.entries(body)) {
+    if (!Array.isArray(group)) continue;
+    for (const raw of group) {
+      const r = (raw ?? {}) as Record<string, unknown>;
+      result.push({
+        id: Number(r.id ?? 0),
+        account_id: String(r.account_id ?? cookieId),
+        channel_id: Number(r.channel_id ?? 0),
+        channel_name: r.channel_name != null ? String(r.channel_name) : undefined,
+        enabled: Boolean(r.enabled ?? true),
+      });
+    }
+  }
+  return result;
 }
 
 /** 新建消息通知绑定 */
@@ -166,13 +178,23 @@ export async function createMessageNotification(
   return null;
 }
 
-/** 更新绑定（启停） */
-export async function updateMessageNotification(
-  id: number,
+/**
+ * 新增/更新消息通知绑定（upsert 语义）。
+ * 后端无 PUT /message-notifications/{id}（405），
+ * 统一用 POST /message-notifications/{cookie_id}，body `{ channel_id, enabled }`：
+ * 已存在同账号同渠道的绑定时更新 enabled，否则新建（notifications.py set_message_notification）。
+ */
+export async function upsertMessageNotification(
+  cookieId: string,
+  channelId: number,
   enabled: boolean,
 ): Promise<void> {
   const client = await getApiClient();
-  await (client.PUT as any)(`/api/v1/message-notifications/${id}`, { body: { enabled } });
+  const { error } = (await (client.POST as any)(
+    `/api/v1/message-notifications/${cookieId}`,
+    { body: { channel_id: channelId, enabled } },
+  )) as { data?: unknown; error?: unknown };
+  if (error) throw await extractError(error);
 }
 
 /** 删除绑定 */
