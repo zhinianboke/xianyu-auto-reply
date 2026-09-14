@@ -65,8 +65,8 @@ export function EmptyState({
 const styles = StyleSheet.create({
   container: {
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: spacing.xxxl,
+    justifyContent: 'flex-start',
+    paddingVertical: spacing.xxl,
     paddingHorizontal: spacing.xl,
     gap: spacing.sm,
   },

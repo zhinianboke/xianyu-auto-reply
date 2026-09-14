@@ -454,7 +454,7 @@ const styles = StyleSheet.create({
   unreadText: { color: '#FFF', fontSize: 10, fontWeight: '600' },
   empty: { alignItems: 'center', justifyContent: 'center', paddingVertical: 28 },
   emptyText: { ...typography.body },
-  emptyList: { flex: 1, justifyContent: 'center' },
+  emptyList: { flex: 1 },
   // 底部留白避让 tab 栏（tab 高 56 + 安全区，80 在部分设备不够导致最后会话覆盖 tab bar）
   convList: { paddingBottom: 150 },
   loadingMore: { textAlign: 'center', padding: spacing.md },
