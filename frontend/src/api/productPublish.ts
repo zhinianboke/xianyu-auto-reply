@@ -121,6 +121,8 @@ export interface MaterialItemConfig {
   default_reply: string
   ai_prompt: string
   query_buttons: QueryButton[]
+  display_links?: QueryButton[] | any[]
+  page_hint?: string
 }
 
 /** 从商品列表项采集出的素材草稿 */

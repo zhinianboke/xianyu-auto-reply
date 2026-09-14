@@ -87,6 +87,8 @@ async def apply_to_item(session: AsyncSession, material: Any, account_id: str, i
     default_reply = (item_config.get("default_reply") or "").strip()
     ai_prompt = item_config.get("ai_prompt")
     query_buttons = item_config.get("query_buttons") or []
+    display_links = item_config.get("display_links") or []
+    page_hint = item_config.get("page_hint") or ""
 
     # 1. upsert xy_catalog_items
     try:
@@ -104,6 +106,8 @@ async def apply_to_item(session: AsyncSession, material: Any, account_id: str, i
             metadata = dict(catalog_item.metadata_json or {})
             metadata["multi_quantity_delivery"] = multi_quantity_delivery
             metadata["query_buttons"] = query_buttons
+            metadata["display_links"] = display_links
+            metadata["page_hint"] = page_hint
             catalog_item.metadata_json = metadata
             flag_modified(catalog_item, "metadata_json")
         else:
@@ -112,6 +116,8 @@ async def apply_to_item(session: AsyncSession, material: Any, account_id: str, i
             new_metadata = {
                 "multi_quantity_delivery": multi_quantity_delivery,
                 "query_buttons": query_buttons,
+                "display_links": display_links,
+                "page_hint": page_hint,
             }
             new_item = XYCatalogItem(
                 owner_id=owner_id,

@@ -74,6 +74,10 @@ export interface MaterialItemConfig {
   ai_prompt: string;
   /** 查询按钮配置（结构同商品 metadata_json.query_buttons） */
   query_buttons: QueryButton[];
+  /** 展示入口配置（结构同商品 metadata_json.display_links） */
+  display_links?: any[];
+  /** 查询页提示文案（存 metadata_json.page_hint） */
+  page_hint?: string;
 }
 
 /** 素材创建入参（对齐后端 MaterialCreateRequest，只暴露移动端用到的字段） */

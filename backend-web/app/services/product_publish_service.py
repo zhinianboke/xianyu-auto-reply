@@ -357,6 +357,8 @@ class ProductMaterialService:
                 "default_reply": default_reply_content or "",
                 "ai_prompt": catalog_item.ai_prompt or "",
                 "query_buttons": metadata.get("query_buttons") or [],
+                "display_links": metadata.get("display_links") or [],
+                "page_hint": metadata.get("page_hint") or "",
             },
         }
 
