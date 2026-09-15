@@ -343,10 +343,10 @@ export function Dashboard() {
                     <span className="text-sm text-slate-500 dark:text-slate-400">金额汇总</span>
                   </div>
                   <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">¥{orderSummary.total_amount.toFixed(2)}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">有效订单总额</p>
+                  <p className="text-xs text-slate-400 mt-0.5">待发货+待确认金额</p>
                 </div>
               </div>
-              {/* 进度条示意各状态占比 */}
+              {/* 进度条示意各状态占比（待发货+待确认） */}
               {orderSummary.total_amount > 0 && (
                 <div className="mt-4">
                   <div className="flex h-2 rounded-full overflow-hidden bg-slate-100 dark:bg-slate-700">
@@ -364,18 +364,10 @@ export function Dashboard() {
                         title="待确认"
                       />
                     )}
-                    {orderSummary.pending_rate.amount > 0 && (
-                      <div
-                        className="bg-purple-500"
-                        style={{ width: `${(orderSummary.pending_rate.amount / orderSummary.total_amount) * 100}%` }}
-                        title="待评价"
-                      />
-                    )}
                   </div>
                   <div className="flex items-center gap-4 mt-1.5 text-xs text-slate-400">
                     <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" />待发货</span>
                     <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />待确认</span>
-                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-purple-500" />待评价</span>
                   </div>
                 </div>
               )}

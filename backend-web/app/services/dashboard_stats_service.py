@@ -450,10 +450,11 @@ class DashboardStatsService:
                     ),
                     0,
                 ).label("pending_rate_amount"),
+                # 金额汇总 = 待发货 + 待确认（待评价不计入）
                 func.coalesce(
                     func.sum(
                         case(
-                            (XYOrder.status.notin_(self.CLOSED_ORDER_STATUSES), XYOrder.amount),
+                            (XYOrder.status.in_(self.PENDING_SHIP_STATUSES + self.PENDING_CONFIRM_STATUSES), XYOrder.amount),
                             else_=0,
                         )
                     ),
