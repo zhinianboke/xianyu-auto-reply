@@ -8,7 +8,7 @@
  */
 import { useState, useEffect, useRef } from 'react'
 import { User, RefreshCw, Wallet, Plus, Key, Link2, Copy, RotateCcw, Save, Package, X, ScrollText, ArrowUpFromLine, Upload, QrCode, Eye, EyeOff, CalendarClock } from 'lucide-react'
-import { getUserSetting, updateUserSetting, createCardSecretKey, changePassword, getDockCode, resetDockCode, getSecretKey, resetSecretKey, uploadPaymentQrcode, getSystemSettings, getCurrentUserProfile } from '@/api/settings'
+import { getUserSetting, updateUserSetting, createCardSecretKey, changePassword, getDockCode, resetDockCode, getSecretKey, resetSecretKey, uploadPaymentQrcode, getSystemSettings, getCurrentUserProfile, testLocationChatRemoteApi } from '@/api/settings'
 import { createWithdraw, getSettlementRecords, type SettlementRecord } from '@/api/payment'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
@@ -43,6 +43,9 @@ const PAYMENT_QRCODE_KEY = 'payment_qrcode'
 const PAYMENT_TYPE_KEY = 'payment_type'
 // 对接卡密秘钥的 key（按用户存储，用于「分销卡券」页面对接上游卡券系统）
 const CARD_SECRET_KEY = 'distribution.card_secret_key'
+const LOCATION_CHAT_REMOTE_URL_KEY = 'location_chat.remote_url'
+const LOCATION_CHAT_REMOTE_SECRET_KEY = 'location_chat.remote_secret_key'
+const DEFAULT_LOCATION_CHAT_REMOTE_URL = 'https://api.xianyushop.shop/api/external/invoke'
 
 export function PersonalSettings() {
   const { addToast } = useUIStore()
@@ -104,6 +107,11 @@ export function PersonalSettings() {
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [changingPassword, setChangingPassword] = useState(false)
+  const [activeTab, setActiveTab] = useState<'basic' | 'remote'>('basic')
+  const [locationRemoteUrl, setLocationRemoteUrl] = useState('')
+  const [locationRemoteSecretKey, setLocationRemoteSecretKey] = useState('')
+  const [testingLocationRemote, setTestingLocationRemote] = useState(false)
+  const [savingLocationRemote, setSavingLocationRemote] = useState(false)
 
   // 加载个人设置
   const loadSettings = async () => {
@@ -143,6 +151,10 @@ export function PersonalSettings() {
       if (cardKeyResult.success && cardKeyResult.value !== undefined) {
         setCardSecretKey(cardKeyResult.value)
       }
+      const locationUrlResult = await getUserSetting(LOCATION_CHAT_REMOTE_URL_KEY)
+      setLocationRemoteUrl(locationUrlResult.value || DEFAULT_LOCATION_CHAT_REMOTE_URL)
+      const locationSecretResult = await getUserSetting(LOCATION_CHAT_REMOTE_SECRET_KEY)
+      setLocationRemoteSecretKey(locationSecretResult.value || '')
       // 加载当前用户到期日
       try {
         const profile = await getCurrentUserProfile()
@@ -485,6 +497,57 @@ export function PersonalSettings() {
     }
   }
 
+  const handleTestLocationRemote = async () => {
+    const url = locationRemoteUrl.trim()
+    const secretKey = locationRemoteSecretKey.trim()
+    if (!url || !secretKey) {
+      addToast({ type: 'warning', message: '请输入远程URL和秘钥' })
+      return
+    }
+    try {
+      setTestingLocationRemote(true)
+      const result = await testLocationChatRemoteApi(url, secretKey)
+      if (result.success || result.data?.status_code === 200) {
+        addToast({ type: 'success', message: '测试成功' })
+      } else {
+        addToast({ type: 'error', message: result.message || '测试失败' })
+      }
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { detail?: string; message?: string } }; message?: string }
+      addToast({ type: 'error', message: err?.response?.data?.detail || err?.response?.data?.message || err?.message || '测试失败' })
+    } finally {
+      setTestingLocationRemote(false)
+    }
+  }
+
+  const handleSaveLocationRemote = async () => {
+    const url = locationRemoteUrl.trim()
+    const secretKey = locationRemoteSecretKey.trim()
+    if (!url || !secretKey) {
+      addToast({ type: 'warning', message: '请输入远程URL和秘钥' })
+      return
+    }
+    try {
+      setSavingLocationRemote(true)
+      const [urlResult, secretResult] = await Promise.all([
+        updateUserSetting(LOCATION_CHAT_REMOTE_URL_KEY, url, '位置聊天远程URL'),
+        updateUserSetting(LOCATION_CHAT_REMOTE_SECRET_KEY, secretKey, '位置聊天远程秘钥'),
+      ])
+      if (!urlResult.success || !secretResult.success) {
+        addToast({ type: 'error', message: urlResult.message || secretResult.message || '保存失败' })
+        return
+      }
+      setLocationRemoteUrl(url)
+      setLocationRemoteSecretKey(secretKey)
+      addToast({ type: 'success', message: '位置聊天远程配置已保存' })
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { detail?: string; message?: string } }; message?: string }
+      addToast({ type: 'error', message: err?.response?.data?.detail || err?.response?.data?.message || err?.message || '保存失败' })
+    } finally {
+      setSavingLocationRemote(false)
+    }
+  }
+
   if (loading) {
     return <PageLoading />
   }
@@ -504,6 +567,16 @@ export function PersonalSettings() {
       </div>
 
       {/* 账户信息 */}
+      <div className="flex gap-1 border-b border-slate-200 dark:border-slate-700">
+        <button type="button" onClick={() => setActiveTab('basic')} className={`border-b-2 px-4 py-2 text-sm font-medium transition ${activeTab === 'basic' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'}`}>
+          基础设置
+        </button>
+        <button type="button" onClick={() => setActiveTab('remote')} className={`border-b-2 px-4 py-2 text-sm font-medium transition ${activeTab === 'remote' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'}`}>
+          远程URL配置
+        </button>
+      </div>
+
+      <div className={activeTab === 'basic' ? 'space-y-4' : 'hidden'}>
       <div className="vben-card">
         <div className="vben-card-header">
           <h2 className="vben-card-title">
@@ -892,6 +965,44 @@ export function PersonalSettings() {
       </div>
 
       {/* 重置对接码确认弹窗 */}
+      </div>
+
+      {activeTab === 'remote' && (
+        <div className="vben-card">
+          <div className="vben-card-header">
+            <h2 className="vben-card-title">
+              <Link2 className="w-4 h-4" />
+              位置聊天配置
+            </h2>
+          </div>
+          <div className="vben-card-body space-y-5">
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              配置位置消息生成接口，用于测试远程服务是否能够正常生成位置聊天报文。
+            </p>
+            <div className="space-y-4">
+              <div className="input-group">
+                <label className="input-label">远程URL</label>
+                <input type="url" value={locationRemoteUrl} onChange={(e) => setLocationRemoteUrl(e.target.value)} placeholder={DEFAULT_LOCATION_CHAT_REMOTE_URL} className="input-ios" />
+              </div>
+              <div className="input-group">
+                <label className="input-label">秘钥</label>
+                <input type="password" value={locationRemoteSecretKey} onChange={(e) => setLocationRemoteSecretKey(e.target.value)} placeholder="请输入远程接口秘钥" className="input-ios" autoComplete="off" />
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button type="button" onClick={handleTestLocationRemote} disabled={testingLocationRemote || savingLocationRemote} className="btn-ios-secondary">
+                  {testingLocationRemote ? <ButtonLoading /> : <RefreshCw className="w-4 h-4" />}
+                  测试
+                </button>
+                <button type="button" onClick={handleSaveLocationRemote} disabled={savingLocationRemote || testingLocationRemote} className="btn-ios-primary">
+                  {savingLocationRemote ? <ButtonLoading /> : <Save className="w-4 h-4" />}
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <ConfirmModal
         isOpen={resetConfirmOpen}
         title="重置对接码"

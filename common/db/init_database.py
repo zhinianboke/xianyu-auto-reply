@@ -585,8 +585,13 @@ class DatabaseInitializer:
                 account_id BIGINT COMMENT '关联账号ID',
                 keyword VARCHAR(120) NOT NULL COMMENT '关键词',
                 reply_content TEXT COMMENT '回复内容',
-                reply_type VARCHAR(16) COMMENT '回复类型(text/image)',
+                reply_type VARCHAR(32) COMMENT '回复类型(text/image/external_contact)',
                 image_url VARCHAR(512) COMMENT '图片URL',
+                location_name VARCHAR(255) COMMENT '站外联系方式定位名称',
+                location_longitude VARCHAR(32) COMMENT '站外联系方式经度',
+                location_latitude VARCHAR(32) COMMENT '站外联系方式纬度',
+                location_title VARCHAR(128) COMMENT '站外联系方式位置标题',
+                location_subtitle VARCHAR(255) COMMENT '站外联系方式位置副标题',
                 item_id VARCHAR(64) COMMENT '商品ID',
                 priority INT DEFAULT 100 COMMENT '优先级',
                 is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用',
@@ -706,11 +711,16 @@ class DatabaseInitializer:
                 account_id VARCHAR(80) NOT NULL COMMENT '账号标识',
                 item_id VARCHAR(64) DEFAULT NULL COMMENT '商品ID(空为账号默认回复)',
                 enabled TINYINT(1) DEFAULT 0 COMMENT '是否启用',
-                reply_type VARCHAR(16) DEFAULT 'text' COMMENT '回复类型：text-文本(可附带图片)，api-接口',
+                reply_type VARCHAR(32) DEFAULT 'text' COMMENT '回复类型：text-文本，api-接口，external_contact-站外联系方式',
                 reply_content TEXT COMMENT '回复内容',
                 reply_image VARCHAR(512) COMMENT '回复图片URL',
                 api_url VARCHAR(1024) DEFAULT NULL COMMENT 'API地址(reply_type=api时POST此地址)',
                 api_timeout INT DEFAULT 80 COMMENT 'API请求超时时间(秒)',
+                location_name VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式定位名称',
+                location_longitude VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式经度',
+                location_latitude VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式纬度',
+                location_title VARCHAR(128) DEFAULT NULL COMMENT '站外联系方式位置标题',
+                location_subtitle VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式位置副标题',
                 reply_once TINYINT(1) DEFAULT 0 COMMENT '只回复一次',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -1938,6 +1948,13 @@ class DatabaseInitializer:
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
     COLUMN_MIGRATIONS = {
+        "xy_keyword_rules": [
+            ("location_name", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式定位名称'", "image_url"),
+            ("location_longitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式经度'", "location_name"),
+            ("location_latitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式纬度'", "location_longitude"),
+            ("location_title", "VARCHAR(128) DEFAULT NULL COMMENT '站外联系方式位置标题'", "location_latitude"),
+            ("location_subtitle", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式位置副标题'", "location_title"),
+        ],
         "xy_recharge_orders": [
             ("order_type", "VARCHAR(20) NOT NULL DEFAULT 'recharge' COMMENT '订单类型：recharge-余额充值，ad-广告申请付款'", "amount"),
         ],
@@ -2102,9 +2119,14 @@ class DatabaseInitializer:
         "xy_default_replies": [
             ("item_id", "VARCHAR(64) DEFAULT NULL COMMENT '商品ID'", "account_id"),
             ("reply_image", "VARCHAR(512) COMMENT '回复图片URL'", "reply_content"),
-            ("reply_type", "VARCHAR(16) DEFAULT 'text' COMMENT '回复类型：text-文本(可附带图片)，api-接口'", "enabled"),
+            ("reply_type", "VARCHAR(32) DEFAULT 'text' COMMENT '回复类型：text-文本，api-接口，external_contact-站外联系方式'", "enabled"),
             ("api_url", "VARCHAR(1024) DEFAULT NULL COMMENT 'API地址(reply_type=api时POST此地址)'", "reply_image"),
             ("api_timeout", "INT DEFAULT 80 COMMENT 'API请求超时时间(秒)'", "api_url"),
+            ("location_name", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式定位名称'", "api_timeout"),
+            ("location_longitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式经度'", "location_name"),
+            ("location_latitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式纬度'", "location_longitude"),
+            ("location_title", "VARCHAR(128) DEFAULT NULL COMMENT '站外联系方式位置标题'", "location_latitude"),
+            ("location_subtitle", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式位置副标题'", "location_title"),
         ],
         "xy_default_reply_records": [
             ("item_id", "VARCHAR(64) DEFAULT NULL COMMENT '商品ID'", "account_id"),
@@ -2272,6 +2294,22 @@ class DatabaseInitializer:
                         """)
                         result = await conn.execute(check_sql)
                         exists = result.scalar() > 0
+
+                        # Existing installations may have the original VARCHAR(16) reply type.
+                        # Expand it before storing external_contact.
+                        if exists and table_name == "xy_default_replies" and col_name == "reply_type":
+                            length_result = await conn.execute(text("""
+                                SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS
+                                WHERE TABLE_SCHEMA = DATABASE()
+                                AND TABLE_NAME = 'xy_default_replies'
+                                AND COLUMN_NAME = 'reply_type'
+                            """))
+                            current_length = length_result.scalar()
+                            if current_length and current_length < 32:
+                                await conn.execute(text(
+                                    "ALTER TABLE xy_default_replies MODIFY COLUMN reply_type VARCHAR(32) DEFAULT 'text' COMMENT 'reply type'"
+                                ))
+                                logger.info("Expanded xy_default_replies.reply_type to VARCHAR(32)")
                         
                         if not exists:
                             # 添加字段

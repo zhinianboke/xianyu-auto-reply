@@ -196,7 +196,7 @@ export function TokenApiModeSetting({
 
       {selectedMode === 'remote' && (
         <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-700 dark:border-sky-900/70 dark:bg-sky-950/30 dark:text-sky-300">
-          <p>优先使用本地网页端接口，本地网页端接口获取失败才会调用远程接口获取</p>
+          <p>无有效缓存时直接调用远程接口获取 Token</p>
           <p className="mt-1">
             秘钥请到{' '}
             <a

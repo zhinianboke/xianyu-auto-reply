@@ -103,6 +103,14 @@ async def update_single_keyword(
             target_keyword=payload.keyword,
             target_reply=payload.reply,
             target_item_id=payload.item_id,
+            target_type=payload.type,
+            location={
+                "location_name": payload.location_name,
+                "location_longitude": payload.location_longitude,
+                "location_latitude": payload.location_latitude,
+                "location_title": payload.location_title,
+                "location_subtitle": payload.location_subtitle,
+            },
         )
     except ValueError as exc:
         return ApiResponse(success=False, message=str(exc))
@@ -131,14 +139,20 @@ async def export_keywords(
     workbook = Workbook()
     worksheet = workbook.active
     worksheet.title = "关键词数据"
-    worksheet.append(["关键词", "商品ID", "关键词内容"])
+    worksheet.append(["关键词", "商品ID", "关键词内容", "回复类型", "定位名称", "经度", "纬度", "位置标题", "位置副标题"])
 
     for kw in keywords:
-        if kw.get("type", "text") == "text":
+        if kw.get("type", "text") in {"text", "external_contact"}:
             worksheet.append([
                 kw["keyword"],
                 kw.get("item_id") or "",
                 kw["reply"],
+                kw.get("type", "text"),
+                kw.get("location_name") or "",
+                kw.get("location_longitude") or "",
+                kw.get("location_latitude") or "",
+                kw.get("location_title") or "",
+                kw.get("location_subtitle") or "",
             ])
 
     output = io.BytesIO()
@@ -194,6 +208,11 @@ async def import_keywords(
         raise HTTPException(status_code=400, detail=f"Excel文件缺少必要的列: {', '.join(missing_columns)}")
 
     column_index = {name: header.index(name) for name in required_columns}
+    optional_columns = {
+        name: header.index(name) for name in (
+            "回复类型", "定位名称", "经度", "纬度", "位置标题", "位置副标题"
+        ) if name in header
+    }
 
     # 处理导入数据
     import_data = []
@@ -206,6 +225,12 @@ async def import_keywords(
         item_id = str(item_id_cell).strip() if item_id_cell is not None else ""
         reply = str(reply_cell).strip() if reply_cell is not None else ""
 
+        def optional_value(name: str) -> str:
+            index = optional_columns.get(name)
+            if index is None or len(row) <= index or row[index] is None:
+                return ""
+            return str(row[index]).strip()
+
         if item_id.endswith(".0"):
             item_id = item_id[:-2]
 
@@ -215,7 +240,13 @@ async def import_keywords(
         import_data.append({
             "keyword": keyword,
             "reply": reply,
-            "item_id": item_id
+            "item_id": item_id,
+            "type": optional_value("回复类型") or "text",
+            "location_name": optional_value("定位名称"),
+            "location_longitude": optional_value("经度"),
+            "location_latitude": optional_value("纬度"),
+            "location_title": optional_value("位置标题"),
+            "location_subtitle": optional_value("位置副标题"),
         })
     
     if not import_data:

@@ -2,7 +2,7 @@
 自动回复服务
 
 功能:
-1. 关键词匹配回复(支持商品ID优先、图片类型)
+1. 关键词匹配回复(支持商品ID优先、图片和站外联系方式类型)
 2. AI回复
 3. 默认回复(支持只回复一次)
 4. 暂停状态检查
@@ -28,10 +28,16 @@ from common.models.xy_account import XYAccount
 from common.models.xy_keyword_rule import XYKeywordRule
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.default_reply import DefaultReply, DefaultReplyRecord
+from common.models.user_setting import UserSetting
 from common.models.xy_order import XYOrder
 from common.db.session import async_session_maker
 from common.db.redis_client import distributed_lock
 from common.utils.default_reply_api import call_reply_api
+from common.services.remote_location_message_api import (
+    RemoteLocationMessageError,
+    fetch_remote_location_message,
+)
+from common.utils.default_reply_location import validate_external_contact_fields
 
 from app.services.xianyu.resource_manager import pause_manager
 from app.services.xianyu.auto_reply_log_service import AutoReplyLogService
@@ -45,7 +51,7 @@ class AutoReplyService:
     2. 检查消息过滤(跳过自动回复)
     3. 检查暂停状态
     4. 检查消息等待时间(去重)
-    5. 关键词匹配(支持商品ID优先、图片类型)
+        5. 关键词匹配(支持商品ID优先、图片和站外联系方式类型)
     6. AI回复
     7. 默认回复(支持只回复一次)
     """
@@ -96,6 +102,14 @@ class AutoReplyService:
         '[我已付款，请添加自提信息]',
         '我已付款，请添加自提信息',
     ]
+
+    # Same-scope keyword priority. Item-specific rules are still evaluated
+    # before common rules by get_keyword_reply().
+    KEYWORD_REPLY_TYPE_PRIORITY = {
+        "image": 30,
+        "external_contact": 20,
+        "text": 10,
+    }
     
     def __init__(self, cookie_id: str, xianyu_instance):
         """
@@ -367,6 +381,12 @@ class AutoReplyService:
     
     # ==================== 系统消息检查功能（参照旧框架message_handler_core.py） ====================
     
+    async def _unmark_chat_processed(self, chat_id: str, send_message: str) -> None:
+        """发送失败时撤销本次临时去重标记，允许后续消息重试。"""
+        dedup_key = f"{chat_id}_{send_message}"
+        async with self._processed_messages_lock:
+            self._processed_messages.pop(dedup_key, None)
+
     def is_system_message_to_skip(self, send_message: str) -> bool:
         """检查是否为需要跳过自动回复的系统消息
         
@@ -702,13 +722,55 @@ class AutoReplyService:
                     if pause_manager.is_chat_paused(chat_id, self.cookie_id):
                         logger.info(f"【{self.cookie_id}】自动回复延迟结束，但检测到会话 {chat_id} 已被人工介入暂停，放弃发送回复")
                         log_payload["process_status"] = "skipped"
+                        if isinstance(reply, dict) and reply.get("_reply_mode") == "external_contact":
+                            await self._unmark_chat_processed(chat_id, send_message)
                         log_payload["decision_reason"] = "chat_paused_after_delay"
                         return
                     
                     # 检查是否是图片发送指令
                     # 格式：__IMAGE_SEND__|类型标识|image_url
                     # 类型标识：KW:keyword（关键词）、DR:item_id（默认回复）、空（不需要更新）
-                    if reply.startswith("__IMAGE_SEND__"):
+                    if isinstance(reply, dict) and reply.get("_reply_mode") == "external_contact":
+                        try:
+                            external_result = await self.xianyu_instance.send_raw_message(
+                                websocket=websocket,
+                                message=reply.get("message"),
+                            )
+                        except Exception as send_exc:  # noqa: BLE001
+                            external_result = {
+                                "success": False,
+                                "mode": "external_contact",
+                                "error_message": str(send_exc),
+                            }
+                        send_results.append(
+                            external_result
+                            or self._build_empty_send_result("external_contact", "remote_location_message")
+                        )
+                        if not external_result or not external_result.get("success"):
+                            await self._unmark_chat_processed(chat_id, send_message)
+                        if (
+                            external_result
+                            and external_result.get("success")
+                            and reply.get("reply_once")
+                            and chat_id
+                        ):
+                            try:
+                                async with async_session_maker() as record_session:
+                                    await self._record_user_replied(
+                                        record_session,
+                                        self.cookie_id,
+                                        chat_id,
+                                        reply.get("settings_item_id"),
+                                    )
+                                logger.info(
+                                    f"【{self.cookie_id}】记录站外联系方式默认回复: "
+                                    f"chat_id={chat_id}, item_id={reply.get('settings_item_id')}"
+                                )
+                            except Exception as record_exc:  # noqa: BLE001
+                                logger.warning(
+                                    f"【{self.cookie_id}】记录站外联系方式 reply_once 失败: {record_exc}"
+                                )
+                    elif reply.startswith("__IMAGE_SEND__"):
                         # 解析图片发送指令：去掉前缀后格式为 |类型标识|image_url
                         content = reply.replace("__IMAGE_SEND__", "")
                         # 去掉开头的 | 后分割
@@ -1065,10 +1127,11 @@ class AutoReplyService:
         chat_id: str,
         item_id: Optional[str] = None,
         msg_time: str = "",
-    ) -> Optional[str]:
+    ) -> Optional[Any]:
         """获取自动回复(主入口)
         
-        按优先级: 关键词 > AI > 默认回复
+        按优先级: 商品级关键词 > 通用关键词；同一范围内图片 > 站外联系方式 > 文本；
+        未命中关键词后再依次尝试 AI 和默认回复
         
         Args:
             send_user_name: 发送者用户名
@@ -1094,7 +1157,7 @@ class AutoReplyService:
             
             async with async_session_maker() as session:
                 keyword_reply = await self.get_keyword_reply(
-                    session, send_user_name, send_user_id, send_message, item_id
+                    session, send_user_name, send_user_id, send_message, item_id, chat_id
                 )
                 if keyword_reply:
                     if keyword_reply == "EMPTY_REPLY":
@@ -1141,12 +1204,13 @@ class AutoReplyService:
         send_user_id: str,
         send_message: str,
         item_id: Optional[str] = None,
-    ) -> Optional[str]:
+        chat_id: str = "",
+    ) -> Optional[Any]:
         """获取关键词匹配回复
         
         支持:
         - 商品ID优先匹配
-        - 图片类型关键词
+        - 图片、站外联系方式类型关键词
         - 变量替换
         
         Args:
@@ -1170,7 +1234,11 @@ class AutoReplyService:
                 logger.debug(f"账号 {self.cookie_id} 没有配置关键词")
                 return None
             
-            msg_lower = send_message.lower()
+            msg_lower = send_message.casefold()
+            # The database order is only a storage order. Sort matching rules
+            # explicitly so overlapping triggers do not depend on keyword text
+            # or database collation.
+            keywords = self._sort_keywords_for_message(keywords, msg_lower)
             
             if item_id:
                 for kw in keywords:
@@ -1180,9 +1248,13 @@ class AutoReplyService:
                     kw_item_id = kw.get("item_id", "")
                     kw_type = kw.get("type", "text")
                     image_url = kw.get("image_url", "")
-                    matched_keyword = next((line for line in keyword_lines if line.lower() in msg_lower), "")
+                    matched_keyword = max(
+                        (line for line in keyword_lines if line.casefold() in msg_lower),
+                        key=len,
+                        default="",
+                    )
                     
-                    if kw_item_id == item_id and matched_keyword:
+                    if str(kw_item_id) == str(item_id) and matched_keyword:
                         logger.info(f"商品ID关键词匹配成功: 商品{item_id} '{matched_keyword}' (类型: {kw_type})")
                         if reply_trace is not None:
                             reply_trace["reply_strategy"] = "keyword"
@@ -1202,6 +1274,21 @@ class AutoReplyService:
                                     reply_trace["reply_text"] = image_reply
                                     reply_trace["reply_segments"] = self._build_text_reply_segments(image_reply)
                             return image_reply
+
+                        if kw_type == "external_contact":
+                            external_reply = await self._do_external_contact_default_reply(
+                                session=session,
+                                settings=kw,
+                                settings_item_id=None,
+                                chat_id=chat_id,
+                                send_user_id=send_user_id,
+                                reply_trace=reply_trace,
+                            )
+                            if external_reply:
+                                if reply_trace is not None:
+                                    reply_trace["matched_rule_type"] = "keyword_item_external_contact"
+                                return external_reply
+                            return "EMPTY_REPLY"
                         
                         if not reply or not reply.strip():
                             logger.info(f"商品ID关键词 '{matched_keyword}' 回复内容为空,不进行回复")
@@ -1236,7 +1323,11 @@ class AutoReplyService:
                 kw_item_id = kw.get("item_id", "")
                 kw_type = kw.get("type", "text")
                 image_url = kw.get("image_url", "")
-                matched_keyword = next((line for line in keyword_lines if line.lower() in msg_lower), "")
+                matched_keyword = max(
+                    (line for line in keyword_lines if line.casefold() in msg_lower),
+                    key=len,
+                    default="",
+                )
 
                 if not kw_item_id and matched_keyword:
                     logger.info(f"通用关键词匹配成功: '{matched_keyword}' (类型: {kw_type})")
@@ -1257,6 +1348,21 @@ class AutoReplyService:
                                 reply_trace["reply_text"] = image_reply
                                 reply_trace["reply_segments"] = self._build_text_reply_segments(image_reply)
                         return image_reply
+
+                    if kw_type == "external_contact":
+                        external_reply = await self._do_external_contact_default_reply(
+                            session=session,
+                            settings=kw,
+                            settings_item_id=None,
+                            chat_id=chat_id,
+                            send_user_id=send_user_id,
+                            reply_trace=reply_trace,
+                        )
+                        if external_reply:
+                            if reply_trace is not None:
+                                reply_trace["matched_rule_type"] = "keyword_common_external_contact"
+                            return external_reply
+                        return "EMPTY_REPLY"
 
                     if not reply or not reply.strip():
                         logger.info(f"通用关键词 '{matched_keyword}' 回复内容为空,不进行回复")
@@ -1315,12 +1421,52 @@ class AutoReplyService:
                     "keyword": rule.keyword,
                     "reply": rule.reply_content or "",
                     "item_id": rule.item_id or "",
-                    "type": "image" if rule_type == "image" else "text",
+                    "type": rule_type,
                     "image_url": rule.image_url or "",
                     "item_title": item_title or "",
+                    "location_name": rule.location_name or "",
+                    "location_longitude": rule.location_longitude or "",
+                    "location_latitude": rule.location_latitude or "",
+                    "location_title": rule.location_title or "",
+                    "location_subtitle": rule.location_subtitle or "",
                 }
             )
         return keywords
+
+    @classmethod
+    def _sort_keywords_for_message(cls, keywords: list[dict], message_folded: str) -> list[dict]:
+        """Sort rules by explicit reply priority for one incoming message.
+
+        Item-specific rules remain ahead of common rules because
+        ``get_keyword_reply`` evaluates those scopes in separate loops. Within
+        either scope, images win over external-contact replies, which win over
+        text. A longer matching line is more specific and wins within the same
+        reply type. The original list index is the deterministic final tie
+        breaker.
+        """
+        ranked: list[tuple[int, int, int, dict]] = []
+        for index, keyword_rule in enumerate(keywords):
+            lines = [
+                line.strip()
+                for line in str(keyword_rule.get("keyword") or "").splitlines()
+                if line.strip()
+            ]
+            matching_lengths = [
+                len(line)
+                for line in lines
+                if line.casefold() in message_folded
+            ]
+            match_length = max(matching_lengths, default=0)
+            reply_type = str(keyword_rule.get("type") or "text").casefold()
+            type_priority = cls.KEYWORD_REPLY_TYPE_PRIORITY.get(reply_type, 10)
+            ranked.append((
+                -type_priority if match_length else 0,
+                -match_length if match_length else 0,
+                index,
+                keyword_rule,
+            ))
+        ranked.sort(key=lambda entry: (entry[0], entry[1], entry[2]))
+        return [entry[3] for entry in ranked]
     
     async def _handle_image_keyword(self, keyword: str, image_url: str) -> str:
         """处理图片类型关键词
@@ -1433,6 +1579,114 @@ class AutoReplyService:
             reply_trace.setdefault("context_snapshot", {})["default_reply_api_url"] = api_url
         return api_reply
 
+    async def _get_location_chat_settings(self, session: AsyncSession) -> dict[str, str]:
+        """读取当前账号所属用户的远程位置聊天配置。"""
+        account = await self._get_account(session)
+        owner_id = getattr(account, "owner_id", None) or getattr(self.xianyu_instance, "user_id", None)
+        if owner_id is None:
+            return {}
+        stmt = select(UserSetting.key, UserSetting.value).where(
+            UserSetting.user_id == owner_id,
+            UserSetting.key.in_(("location_chat.remote_url", "location_chat.remote_secret_key")),
+        )
+        result = await session.execute(stmt)
+        return {str(key): str(value or "") for key, value in result.all()}
+
+    async def _do_external_contact_default_reply(
+        self,
+        session: AsyncSession,
+        settings: dict,
+        settings_item_id: Optional[str],
+        chat_id: str,
+        send_user_id: str,
+        reply_trace: Optional[dict],
+    ) -> Optional[dict]:
+        """通过远程接口获取完整位置 LWP 报文，不在本地生成报文。"""
+        location_settings = await self._get_location_chat_settings(session)
+        remote_url = location_settings.get("location_chat.remote_url", "").strip()
+        remote_secret_key = location_settings.get("location_chat.remote_secret_key", "").strip()
+        location_name = str(settings.get("location_name") or "").strip()
+        longitude = str(settings.get("location_longitude") or "").strip()
+        latitude = str(settings.get("location_latitude") or "").strip()
+        title = str(settings.get("location_title") or "").strip()
+        subtitle = str(settings.get("location_subtitle") or "").strip()
+        sender_user_id = str(getattr(self.xianyu_instance, "myid", self.cookie_id) or "").strip()
+
+        if not chat_id or not send_user_id or not sender_user_id:
+            error = "位置消息缺少会话或用户标识"
+            logger.warning(f"【{self.cookie_id}】{error}")
+            if reply_trace is not None:
+                reply_trace["process_status"] = "skipped"
+                reply_trace["decision_reason"] = "external_contact_config_invalid"
+                reply_trace.setdefault("context_snapshot", {})["external_contact_error"] = error
+            return None
+
+        validation_error = validate_external_contact_fields(
+            remote_url=remote_url,
+            location_name=location_name,
+            longitude=longitude,
+            latitude=latitude,
+            title=title,
+            subtitle=subtitle,
+        )
+        if validation_error:
+            logger.warning(f"【{self.cookie_id}】站外联系方式默认回复配置无效: {validation_error}")
+            if reply_trace is not None:
+                reply_trace["process_status"] = "skipped"
+                reply_trace["decision_reason"] = "external_contact_config_invalid"
+                reply_trace.setdefault("context_snapshot", {})["external_contact_error"] = validation_error
+            return None
+        if not remote_secret_key:
+            error = "个人设置中未配置位置聊天秘钥"
+            logger.warning(f"【{self.cookie_id}】{error}")
+            if reply_trace is not None:
+                reply_trace["process_status"] = "skipped"
+                reply_trace["decision_reason"] = "external_contact_config_invalid"
+                reply_trace.setdefault("context_snapshot", {})["external_contact_error"] = error
+            return None
+
+        try:
+            result = await fetch_remote_location_message(
+                url=remote_url,
+                secret_key=remote_secret_key,
+                chat_id=chat_id,
+                send_user_id=send_user_id,
+                sender_user_id=sender_user_id,
+                longitude=longitude,
+                latitude=latitude,
+                title=title,
+                subtitle=subtitle,
+            )
+        except RemoteLocationMessageError as exc:
+            logger.warning(f"【{self.cookie_id}】获取站外联系方式位置报文失败: {exc}")
+            if reply_trace is not None:
+                reply_trace["process_status"] = "skipped"
+                reply_trace["decision_reason"] = "external_contact_remote_failed"
+                reply_trace.setdefault("context_snapshot", {})["external_contact_error"] = str(exc)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(f"【{self.cookie_id}】获取站外联系方式位置报文异常")
+            if reply_trace is not None:
+                reply_trace["process_status"] = "failed"
+                reply_trace["decision_reason"] = "external_contact_remote_failed"
+                reply_trace.setdefault("context_snapshot", {})["external_contact_error"] = str(exc)
+            return None
+
+        message = result.get("message") if isinstance(result, dict) else None
+        if not isinstance(message, dict):
+            logger.warning(f"【{self.cookie_id}】远程位置接口未返回有效 data.message")
+            return None
+        if reply_trace is not None:
+            reply_trace["reply_mode"] = "external_contact"
+            reply_trace["reply_segments"] = [{"mode": "external_contact", "content": title}]
+            reply_trace.setdefault("context_snapshot", {})["external_contact_remote_url"] = remote_url
+        return {
+            "_reply_mode": "external_contact",
+            "message": message,
+            "reply_once": bool(settings.get("reply_once", False)),
+            "settings_item_id": settings_item_id,
+        }
+
     async def get_default_reply(
         self,
         session: AsyncSession,
@@ -1442,7 +1696,7 @@ class AutoReplyService:
         chat_id: str,
         item_id: Optional[str] = None,
         msg_time: str = "",
-    ) -> Optional[str]:
+    ) -> Optional[Any]:
         """获取默认回复
         
         支持:
@@ -1491,6 +1745,16 @@ class AutoReplyService:
             reply_type = settings.get("reply_type", "text") or "text"
             reply_content = settings.get("reply_content", "")
             reply_image = settings.get("reply_image", "")
+
+            if reply_type == "external_contact":
+                return await self._do_external_contact_default_reply(
+                    session=session,
+                    settings=settings,
+                    settings_item_id=settings_item_id,
+                    chat_id=chat_id,
+                    send_user_id=send_user_id,
+                    reply_trace=reply_trace,
+                )
 
             # API 类型：调用外部接口获取回复内容，失败则不回复
             if reply_type == "api":
@@ -1705,6 +1969,11 @@ class AutoReplyService:
                     "reply_image": reply.reply_image or "",
                     "api_url": getattr(reply, "api_url", "") or "",
                     "api_timeout": getattr(reply, "api_timeout", 80) or 80,
+                    "location_name": getattr(reply, "location_name", "") or "",
+                    "location_longitude": getattr(reply, "location_longitude", "") or "",
+                    "location_latitude": getattr(reply, "location_latitude", "") or "",
+                    "location_title": getattr(reply, "location_title", "") or "",
+                    "location_subtitle": getattr(reply, "location_subtitle", "") or "",
                     "reply_once": reply.reply_once,
                     "item_id": item_id,
                 }
@@ -1726,6 +1995,11 @@ class AutoReplyService:
             "reply_image": reply.reply_image or "",
             "api_url": getattr(reply, "api_url", "") or "",
             "api_timeout": getattr(reply, "api_timeout", 80) or 80,
+            "location_name": getattr(reply, "location_name", "") or "",
+            "location_longitude": getattr(reply, "location_longitude", "") or "",
+            "location_latitude": getattr(reply, "location_latitude", "") or "",
+            "location_title": getattr(reply, "location_title", "") or "",
+            "location_subtitle": getattr(reply, "location_subtitle", "") or "",
             "reply_once": reply.reply_once,
             "item_id": None,
         }

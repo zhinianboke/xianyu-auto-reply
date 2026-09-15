@@ -9,7 +9,7 @@ import { searchAmapInputTips, type AmapInputTip } from '@/api/publishAddresses'
 interface AddressPickerModalProps {
   open: boolean
   currentValue: string
-  onSelect: (address: string, expectedText?: string) => void
+  onSelect: (address: string, expectedText?: string, location?: string) => void
   onClose: () => void
 }
 
@@ -91,7 +91,7 @@ export function AddressPickerModal({ open, currentValue, onSelect, onClose }: Ad
 
   const selectAddress = (item: AmapInputTip) => {
     if (!item.location.trim()) return
-    onSelect(item.search_keyword || item.name, item.expected_text || item.name)
+    onSelect(item.search_keyword || item.name, item.expected_text || item.name, item.location)
   }
 
   return (

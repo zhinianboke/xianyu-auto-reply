@@ -41,7 +41,7 @@ TOKEN_API_NAMES = {
 # 接口方式 -> 中文名称，用于日志与提示
 TOKEN_API_MODE_LABELS = {
     TOKEN_API_MODE_WEB: "网页接口",
-    TOKEN_API_MODE_REMOTE: "本地网页端优先（失败后远程接口）",
+    TOKEN_API_MODE_REMOTE: "远程接口（直接调用）",
 }
 
 

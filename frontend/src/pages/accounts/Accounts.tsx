@@ -12,12 +12,30 @@ import { useAuthStore } from '@/store/authStore'
 import { useMenuVisibilityStore } from '@/store/menuVisibilityStore'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
+import LocationContactReplyFields, { DEFAULT_LOCATION_TITLE, type LocationContactReplyValue } from '@/pages/common/LocationContactReplyFields'
+import { getUserSetting } from '@/api/settings'
 import { DeliveryBlockRulesModal } from './DeliveryBlockRulesModal'
 import { RefundCancelModal } from './RefundCancelModal'
 import { AgreeDeliverModal } from './AgreeDeliverModal'
 import type { AccountDetail } from '@/types'
 
 type ModalType = 'qrcode' | 'password' | 'manual' | 'edit' | 'default-reply' | 'ai-settings' | 'proxy-settings' | 'message-expire-time' | 'reply-delay' | 'face-verification' | 'confirm-receipt' | 'auto-rate' | 'delivery-disabled' | 'refund-cancel' | 'agree-deliver' | null
+type DefaultReplyType = 'text' | 'api' | 'external_contact'
+
+const normalizeDefaultReplyType = (replyType: unknown): DefaultReplyType => {
+  if (replyType === 'api' || replyType === 'external_contact') {
+    return replyType
+  }
+  return 'text'
+}
+
+const EMPTY_LOCATION_REPLY: LocationContactReplyValue = {
+  location_name: '',
+  location_longitude: '',
+  location_latitude: '',
+  location_title: DEFAULT_LOCATION_TITLE,
+  location_subtitle: '',
+}
 
 interface AccountWithKeywordCount extends AccountDetail {
   keywordCount?: number
@@ -121,9 +139,10 @@ export function Accounts() {
   const [defaultReplyImage, setDefaultReplyImage] = useState('')
   const [defaultReplyEnabled, setDefaultReplyEnabled] = useState(false)
   const [defaultReplyOnce, setDefaultReplyOnce] = useState(false)
-  const [defaultReplyType, setDefaultReplyType] = useState<'text' | 'api'>('text')
+  const [defaultReplyType, setDefaultReplyType] = useState<DefaultReplyType>('text')
   const [defaultReplyApiUrl, setDefaultReplyApiUrl] = useState('')
   const [defaultReplyApiTimeout, setDefaultReplyApiTimeout] = useState(80)
+  const [defaultReplyLocation, setDefaultReplyLocation] = useState<LocationContactReplyValue>(EMPTY_LOCATION_REPLY)
   const [defaultReplySaving, setDefaultReplySaving] = useState(false)
   const [defaultReplyImageUploading, setDefaultReplyImageUploading] = useState(false)
   const defaultReplyImageInputRef = useRef<HTMLInputElement>(null)
@@ -1117,6 +1136,7 @@ export function Accounts() {
     setDefaultReplyType('text')
     setDefaultReplyApiUrl('')
     setDefaultReplyApiTimeout(80)
+    setDefaultReplyLocation(EMPTY_LOCATION_REPLY)
     setActiveModal('default-reply')
     
     // 加载当前默认回复
@@ -1126,9 +1146,16 @@ export function Accounts() {
       setDefaultReplyImage(result.reply_image || '')
       setDefaultReplyEnabled(result.enabled || false)
       setDefaultReplyOnce(result.reply_once || false)
-      setDefaultReplyType((result.reply_type as 'text' | 'api') || 'text')
+      setDefaultReplyType(normalizeDefaultReplyType(result.reply_type))
       setDefaultReplyApiUrl(result.api_url || '')
       setDefaultReplyApiTimeout(result.api_timeout || 80)
+      setDefaultReplyLocation({
+        location_name: result.location_name || '',
+        location_longitude: result.location_longitude || '',
+        location_latitude: result.location_latitude || '',
+        location_title: result.location_title || DEFAULT_LOCATION_TITLE,
+        location_subtitle: result.location_subtitle || '',
+      })
     } catch {
       // ignore
     }
@@ -1139,6 +1166,23 @@ export function Accounts() {
     if (defaultReplyType === 'api' && !defaultReplyApiUrl.trim()) {
       addToast({ type: 'warning', message: '请输入 API 地址' })
       return
+    }
+    if (defaultReplyType === 'external_contact') {
+      const [remoteUrl, remoteSecret] = await Promise.all([
+        getUserSetting('location_chat.remote_url'),
+        getUserSetting('location_chat.remote_secret_key'),
+      ])
+      if (!remoteUrl.success || !remoteUrl.value?.trim() || !remoteSecret.success || !remoteSecret.value?.trim()) {
+        addToast({ type: 'warning', message: '请先到个人设置的远程URL配置中填写位置聊天远程URL和秘钥' })
+        return
+      }
+      if (!defaultReplyLocation.location_name || !defaultReplyLocation.location_longitude || !defaultReplyLocation.location_latitude) {
+        addToast({ type: 'warning', message: '请选择带经纬度的定位信息' })
+        return
+      }
+      if (!defaultReplyLocation.location_title.trim()) {
+        setDefaultReplyLocation((current) => ({ ...current, location_title: DEFAULT_LOCATION_TITLE }))
+      }
     }
     
     try {
@@ -1151,7 +1195,8 @@ export function Accounts() {
         defaultReplyImage,
         defaultReplyType,
         defaultReplyApiUrl,
-        defaultReplyApiTimeout
+        defaultReplyApiTimeout,
+        { ...defaultReplyLocation, location_title: defaultReplyLocation.location_title.trim() || DEFAULT_LOCATION_TITLE }
       )
       if (result.success) {
         addToast({ type: 'success', message: '默认回复已保存' })
@@ -3277,6 +3322,7 @@ export function Accounts() {
                   {([
                     { value: 'text', label: '默认回复' },
                     { value: 'api', label: 'API接口' },
+                    { value: 'external_contact', label: '站外联系方式' },
                   ] as const).map((opt) => (
                     <button
                       key={opt.value}
@@ -3344,8 +3390,15 @@ export function Accounts() {
                 </>
               )}
 
+              {defaultReplyType === 'external_contact' && (
+                <LocationContactReplyFields
+                  value={defaultReplyLocation}
+                  onChange={setDefaultReplyLocation}
+                />
+              )}
+
               {/* 文本回复内容（API 类型时隐藏） */}
-              {defaultReplyType !== 'api' && (
+              {defaultReplyType === 'text' && (
               <div className="input-group">
                 <label className="input-label">默认回复内容</label>
                 <textarea
@@ -3361,7 +3414,7 @@ export function Accounts() {
               )}
 
               {/* 图片上传（默认回复类型显示，与文本一起） */}
-              {defaultReplyType !== 'api' && (
+              {defaultReplyType === 'text' && (
               <div className="input-group">
                 <label className="input-label">回复图片（可选）</label>
                 <input
@@ -3416,7 +3469,7 @@ export function Accounts() {
               )}
 
               {/* 变量说明（API 类型时隐藏） */}
-              {defaultReplyType !== 'api' && (
+              {defaultReplyType === 'text' && (
               <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
                 <p className="text-xs text-blue-600 dark:text-blue-400">
                   <strong>支持变量：</strong><br />
@@ -3592,6 +3645,17 @@ export function Accounts() {
                           {aiProviderType === 'anthropic' && '无需补全 /v1/messages'}
                           {aiProviderType === 'gemini' && '无需补全 /v1beta/models'}
                           {aiProviderType === 'dashscope_app' && '请填入完整的 .../apps/{app_id}/completion 地址'}
+                        </p>
+                        <p className="text-xs text-red-500 dark:text-red-400 mt-1">
+                          推荐AI：{' '}
+                          <a
+                            href="https://api.momentsofus.cn/sign-up?aff=dAM9"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="underline hover:text-red-600 dark:hover:text-red-300"
+                          >
+                            https://api.momentsofus.cn/sign-up?aff=dAM9
+                          </a>
                         </p>
                       </div>
                       <div className="input-group">

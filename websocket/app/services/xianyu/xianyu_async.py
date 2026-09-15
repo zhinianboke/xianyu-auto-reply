@@ -1983,6 +1983,48 @@ class XianyuAsync:
                 "error_message": str(e),
             }
 
+    async def send_raw_message(self, websocket, message: dict):
+        """将远程接口返回的完整 LWP JSON 原样转发到闲鱼 WebSocket。"""
+        if not isinstance(message, dict):
+            return {
+                "success": False,
+                "mode": "external_contact",
+                "error_message": "远程位置接口未返回有效消息报文",
+            }
+
+        headers = message.get("headers")
+        mid = headers.get("mid") if isinstance(headers, dict) else None
+        send_future = None
+        try:
+            # 这里只序列化远程返回对象，不补充或修改任何 LWP 字段。
+            msg_str = json.dumps(message, ensure_ascii=False)
+            if mid:
+                try:
+                    loop = asyncio.get_running_loop()
+                    send_future = loop.create_future()
+                    self._pending_mid_futures[str(mid)] = send_future
+                except Exception as reg_exc:  # noqa: BLE001
+                    logger.warning(f"【{self.cookie_id}】注册远程位置报文响应检测失败: {self._safe_str(reg_exc)}")
+
+            await websocket.send(msg_str)
+            logger.info(f"【{self.cookie_id}】已转发远程位置消息报文: mid={mid or 'unknown'}")
+            return {
+                "success": True,
+                "mode": "external_contact",
+                "mid": str(mid) if mid else None,
+                "send_future": send_future,
+            }
+        except Exception as exc:  # noqa: BLE001
+            if mid:
+                self._pending_mid_futures.pop(str(mid), None)
+            logger.error(f"【{self.cookie_id}】转发远程位置消息报文失败: {exc}")
+            return {
+                "success": False,
+                "mode": "external_contact",
+                "mid": str(mid) if mid else None,
+                "error_message": str(exc),
+            }
+
     async def wait_send_reject_reason(
         self,
         send_future: "asyncio.Future",
