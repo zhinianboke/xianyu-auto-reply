@@ -155,8 +155,8 @@ class WebSocketServiceClient:
         """
         url = f"{self.base_url}/internal/accounts/{account_id}/create-chat"
         try:
-            # create-chat 遇 code:400 会触发「刷新 token + 断线重连 + 重试」，最坏约 73s，
-            # 故单独放宽超时到 90s；且该操作有副作用（会关闭并重建连接），不可安全重试，
+            # create-chat 遇明确的 Token/Session 失效会触发「刷新 token + 断线重连 + 重试」，
+            # 最坏约 73s；故单独放宽超时到 90s。该操作有副作用（会关闭并重建连接），不可安全重试，
             # 显式 max_retries=1 避免超时后重复触发 create-chat 与重连叠加。
             response = await self.http_client.post(url, json={
                 "buyer_id": buyer_id,
