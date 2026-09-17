@@ -108,7 +108,8 @@ class AmapInputTipsService:
 
         try:
             body = await asyncio.wait_for(
-                get_http_client().get(
+                get_http_client().request(
+                    "GET",
                     AMAP_INPUTTIPS_URL,
                     params=params,
                     headers=headers,

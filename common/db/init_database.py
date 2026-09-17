@@ -27,6 +27,7 @@ from common.db.default_publish_addresses import (
     REMOVED_PUBLISH_ADDRESS_PREFIXES,
     build_default_publish_addresses,
 )
+from common.db.auto_relist_schema import ensure_auto_relist_schema
 from common.db.session import async_engine, async_session_maker
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.security import generate_secret_key, get_password_hash
@@ -480,6 +481,13 @@ class DatabaseInitializer:
             1200,
             True,
             "定时扫描卡券与素材库专属图片目录，删除已删除对象遗留的孤儿图片（仅清理各自目录，不影响其它功能图片）",
+        ),
+        (
+            "auto_relist_scan",
+            "商品自动续售",
+            5,
+            True,
+            "检测已成交并完成发货的商品，确认旧商品下架后使用原素材自动续售",
         ),
     )
     
@@ -2180,6 +2188,10 @@ class DatabaseInitializer:
                 with suppress_db_warnings():
                     # 1. 创建所有表
                     await self.create_all_tables()
+
+                    # 自动续售表和发布日志关联字段独立幂等迁移，避免依赖旧版本 DDL 顺序。
+                    async with ddl_connection() as conn:
+                        await ensure_auto_relist_schema(conn, get_beijing_now_naive())
 
                     # 2. 创建默认管理员用户
                     await self.create_default_admin()

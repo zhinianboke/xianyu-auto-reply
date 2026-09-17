@@ -51,13 +51,17 @@ class PublishMediaError(RuntimeError):
     """媒体读取、上传或平台响应异常。"""
 
 
-def _resolve_local_path(value: str, static_root: Path | None) -> Path:
+def _resolve_local_path(value: str, static_root: Path | str | None) -> Path:
     """解析接口请求中的本地路径，禁止把不存在的路径传给上传接口。"""
-    normalized = value.strip()
+    normalized = value.strip().replace("\\", "/")  # 统一路径分隔符为正斜杠
     if normalized.startswith("/static/") or normalized.startswith("static/"):
         relative = normalized.lstrip("/").replace("static/", "", 1)
-        if static_root:
-            root = static_root
+        # 仅信任“绝对路径”的 static_root（Docker 共享卷）。相对值（如各服务 .env 里的
+        # "static"）会因每个服务工作目录不同而指向各自目录：scheduler 续售发布时会落到
+        # scheduler/static，读不到 backend-web 上传的图片。相对值一律忽略，统一回退到项目内
+        # backend-web/static 共享目录，与人脸验证截图保持同一份存储。
+        if static_root and Path(static_root).is_absolute():
+            root = Path(static_root)
         else:
             repo_or_backend = Path(__file__).resolve().parents[2]
             root = repo_or_backend / "static" if repo_or_backend.name == "backend-web" else repo_or_backend / "backend-web" / "static"

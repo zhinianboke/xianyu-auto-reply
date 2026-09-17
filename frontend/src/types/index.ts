@@ -330,6 +330,7 @@ export interface SystemSettings {
 // API 响应类型
 export interface ApiResponse<T = unknown> {
   success: boolean
+  code?: number
   message?: string
   data?: T
   // 后端兼容字段

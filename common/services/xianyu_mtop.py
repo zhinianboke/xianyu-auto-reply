@@ -288,10 +288,16 @@ async def mtop_call(
             "error": ret_msg or "调用失败", "cookies_str": current_cookies,
         }
 
-    # 尝试次数耗尽（令牌刷新仍失败或网络异常）
+    # 尝试次数耗尽。请求异常表示最后一次请求可能已经到达平台，调用方不能
+    # 把它当成可安全重试的明确失败，发布链路需要进入人工对账状态。
+    request_status_unknown = bool(last_error)
     return {
-        "success": False, "account_invalid": False, "res": None,
-        "error": last_error or "调用失败，重试次数过多", "cookies_str": current_cookies,
+        "success": False,
+        "account_invalid": False,
+        "res": None,
+        "error": last_error or "调用失败，重试次数过多",
+        "cookies_str": current_cookies,
+        "_request_status_unknown": request_status_unknown,
     }
 
 

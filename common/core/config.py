@@ -88,6 +88,10 @@ class BaseConfig(BaseSettings):
     # 通过环境变量 BACKUP_DIR 配置，禁止写死 localhost / 绝对路径
     backup_dir: str = Field(default="backups", alias="BACKUP_DIR")
 
+    # 静态文件目录（Docker 环境通过共享卷挂载，本地回退到 static）
+    # 通过环境变量 STATIC_DIR 配置，禁止写死绝对路径
+    static_dir: str = Field(default="static", alias="STATIC_DIR")
+
     # IM Token 缓存（xy_token_cache 表）的基础随机过期时间区间（小时）。
     # 基础 TTL 取值后还会追加 1~5 小时的秒级随机偏移，进一步分散到期时间。
     # 未配置时基础区间默认 5~10 小时；配置非法（<=0 或 min>max）时回退默认。

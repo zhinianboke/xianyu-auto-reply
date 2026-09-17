@@ -352,15 +352,17 @@ class ItemService:
         max_pages: int | None = None,
         stop_when_page_all_existing: bool = False,
         required_title_keyword: str | None = None,
+        fail_on_lock_error: bool = False,
     ) -> dict[str, Any]:
-        """抓取指定账号全部商品并入库（账号级加锁入口）
+        """抓取指定账号全部商品并入库（账号级加锁入口）。
 
         通过 Redis 账号级互斥锁，保证同一账号同一时刻只有一个商品同步流程在
         拉取 + 落库，避免「定时获取闲鱼商品任务」与「商品管理页手动触发同步」
-        并发 upsert 同一商品。Redis 不可用时降级为无锁执行，由 xy_catalog_items
-        的 (account_id, item_id) 唯一约束 + 保存时的冲突重试做最终兜底。
+        并发 upsert 同一商品。``fail_on_lock_error=False`` 时保持普通同步任务的
+        无锁兼容降级；自动续售确认链路传入 True，Redis 锁不可用时返回可见失败。
         """
         lock_name = f"item_sync:{account.account_id}"
+        execution_started = False
         try:
             async with distributed_lock(
                 lock_name, expire=300, blocking=True, timeout=8
@@ -380,6 +382,7 @@ class ItemService:
                         "page_size": page_size,
                         "saved_count": 0,
                     }
+                execution_started = True
                 return await self._fetch_all_items_from_account_impl(
                     account=account,
                     page_size=page_size,
@@ -388,6 +391,21 @@ class ItemService:
                     required_title_keyword=required_title_keyword,
                 )
         except Exception as exc:
+            if execution_started:
+                logger.error(f"账号[{account.account_id}]商品同步执行失败: {exc}")
+                return {"success": False, "message": f"账号商品同步失败: {exc}"}
+            if fail_on_lock_error:
+                logger.error(f"账号[{account.account_id}]商品同步锁不可用，自动续售本轮暂停: {exc}")
+                return {
+                    "success": False,
+                    "lock_error": True,
+                    "message": "账号商品同步锁不可用，稍后重试",
+                    "items": [],
+                    "total_count": 0,
+                    "total_pages": 0,
+                    "page_size": page_size,
+                    "saved_count": 0,
+                }
             # Redis 不可用等异常时降级为无锁执行，靠唯一约束兜底防止重复入库
             logger.warning(
                 f"账号[{account.account_id}]商品同步获取锁异常，降级无锁执行"

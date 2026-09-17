@@ -21,9 +21,12 @@ export interface FetchItemsSummaryResponse extends ApiResponse {
 }
 
 // 获取商品列表
-export const getItems = async (cookieId?: string): Promise<{ success: boolean; data: Item[] }> => {
+export const getItems = async (cookieId?: string): Promise<{ success: boolean; data: Item[]; message?: string }> => {
   const url = cookieId ? `${ITEM_PREFIX}/cookie/${cookieId}` : ITEM_PREFIX
-  const result = await get<{ items?: Item[] } | Item[]>(url)
+  const result = await get<{ items?: Item[]; success?: boolean; message?: string } | Item[]>(url)
+  if (!Array.isArray(result) && result.success === false) {
+    return { success: false, data: [], message: result.message || '商品列表加载失败' }
+  }
   // 后端返回 { items: [...] } 或直接返回数组
   const items = Array.isArray(result) ? result : (result.items || [])
   return { success: true, data: items }

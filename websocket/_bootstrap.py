@@ -77,20 +77,12 @@ async def lifespan(app: FastAPI):
         logger.error("数据库连接失败，服务退出")
         sys.exit(1)
 
-    # 独立启动时也执行幂等数据库自检，确保令牌持久化所需的系统设置表存在。
+    # 只读取 backend 已准备好的服务间 API 令牌，WebSocket 不负责数据库初始化。
     try:
-        from common.db.init_database import init_database
-        await init_database()
+        from common.utils.internal_token_service import load_internal_api_token
+        await load_internal_api_token(settings)
     except Exception as e:
-        logger.error(f"数据库初始化失败: {e}")
-        raise
-
-    # 从数据库加载或自动初始化服务间 API 令牌。
-    try:
-        from common.utils.internal_token_service import ensure_internal_api_token
-        await ensure_internal_api_token(settings)
-    except Exception as e:
-        logger.error(f"内部 API 令牌初始化失败: {e}")
+        logger.error(f"内部 API 令牌加载失败: {e}")
         raise
 
     cleanup_result = await fail_processing_risk_control_logs_on_restart()

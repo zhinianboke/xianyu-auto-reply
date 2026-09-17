@@ -145,6 +145,68 @@ export interface ProductMaterial {
   remark?: string | null
   created_at: string
   updated_at: string
+  auto_relist?: AutoRelistRule | null
+  auto_relist_can_configure?: boolean
+  auto_relist_owner_id?: number
+}
+
+export interface AutoRelistRule {
+  id: number
+  material_id: number
+  owner_id: number
+  account_id: string
+  current_item_id: string
+  card_id: number
+  enabled: boolean
+  delay_seconds: number
+  status: 'active' | 'disabled' | 'waiting' | 'retrying' | 'error' | 'paused'
+  status_text?: string
+  version: number
+  retry_count: number
+  next_retry_at?: string | null
+  last_order_no?: string | null
+  last_order_id?: number | null
+  last_order_updated_at?: string | null
+  last_old_item_id?: string | null
+  last_new_item_id?: string | null
+  last_error?: string | null
+  paused_reason?: string | null
+  last_relisted_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  can_configure?: boolean
+  publish_state?: string
+  result_unknown?: boolean
+}
+
+export interface AutoRelistEvent {
+  id: number
+  rule_id?: number
+  material_id?: number
+  owner_id?: number
+  account_id?: string
+  order_no: string
+  old_item_id: string
+  new_item_id?: string | null
+  status: string
+  status_text?: string
+  publish_state: string
+  result_unknown: boolean
+  attempt_count: number
+  error_message?: string | null
+  reconcile_message?: string | null
+  publish_request_id?: string | null
+  next_retry_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface AutoRelistEventPage {
+  list: AutoRelistEvent[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
 }
 
 export interface MaterialCreateParams {
@@ -340,6 +402,59 @@ export const deleteMaterial = (id: number): Promise<ApiResponse> =>
 /** 批量删除素材 */
 export const batchDeleteMaterials = (ids: number[]): Promise<ApiResponse> =>
   post(`${PREFIX}/materials/batch-delete`, { ids })
+
+/** 查询素材自动续售规则。 */
+export const getAutoRelistRule = (materialId: number): Promise<ApiResponse<AutoRelistRule | null>> =>
+  get(`${PREFIX}/materials/${materialId}/auto-relist`)
+
+/** 保存素材自动续售规则。 */
+export const saveAutoRelistRule = (
+  materialId: number,
+  params: {
+    account_id?: string | null
+    current_item_id?: string | null
+    card_id?: number | null
+    enabled: boolean
+    delay_seconds: number
+    expected_version?: number | null
+  },
+): Promise<ApiResponse<AutoRelistRule>> => put(`${PREFIX}/materials/${materialId}/auto-relist`, params)
+
+/** 分页查询自动续售记录。 */
+export const getAutoRelistEvents = (
+  materialId: number,
+  page = 1,
+  pageSize = 20,
+): Promise<ApiResponse<AutoRelistEventPage>> =>
+  get(`${PREFIX}/materials/${materialId}/auto-relist/events?page=${page}&page_size=${pageSize}`)
+
+/** 管理员集中查询自动续售事件，可按状态筛选。 */
+export const getAllAutoRelistEvents = (
+  page = 1,
+  pageSize = 20,
+  status?: string,
+): Promise<ApiResponse<AutoRelistEventPage>> => {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  if (status?.trim()) params.set('status', status.trim())
+  return get(`${PREFIX}/auto-relist/events?${params.toString()}`)
+}
+
+/** 人工确认未知发布结果，后端验证商品归属后仅安排本地关联迁移。 */
+export const reconcileAutoRelistEvent = (
+  materialId: number,
+  eventId: number,
+  params: { outcome: 'published' | 'not_published'; new_item_id?: string },
+): Promise<ApiResponse<AutoRelistEvent>> =>
+  post(`${PREFIX}/materials/${materialId}/auto-relist/events/${eventId}/reconcile`, {
+    ...params,
+  })
+
+/** 将发布结果未知的续售记录标记为本次失败，并重新排队发布当前订单。 */
+export const markAutoRelistEventFailed = (
+  materialId: number,
+  eventId: number,
+): Promise<ApiResponse<AutoRelistEvent>> =>
+  post(`${PREFIX}/materials/${materialId}/auto-relist/events/${eventId}/mark-failed`)
 
 // ==================== 发布接口 ====================
 

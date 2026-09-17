@@ -91,6 +91,7 @@ class XianyuDirectPublisher:
                 "item_url": None,
                 "account_invalid": bool(response.get("account_invalid")),
                 "cookies_str": response.get("cookies_str") or cookie,
+                "_request_status_unknown": bool(response.get("_request_status_unknown")),
             }
         item_id, item_url = _find_item_reference(response.get("res"))
         if item_id:

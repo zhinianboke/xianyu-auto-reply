@@ -515,6 +515,7 @@ class OrderService:
         与 update_order_delivery_info 的区别：
           - 不修改 status：因为订单已经被卖家主动关闭（status 已由关闭流程更新），
             这里再标记为 'shipped' 会导致与闲鱼平台真实状态冲突
+          - 写入 card_only_delivered：标记只发卡券流程已完成，供自动续售识别该场景
           - 不清空 delivery_fail_reason：保留 pre_delivery_check_and_close 写入的
             "禁止发货原因"，便于后续追溯为什么走了 card_only 流程
 
@@ -534,6 +535,7 @@ class OrderService:
                 delivery_content = delivery_content[:1997] + "..."
 
             values = {
+                "card_only_delivered": True,
                 "delivery_method": delivery_method,
                 "delivery_content": delivery_content,
             }
