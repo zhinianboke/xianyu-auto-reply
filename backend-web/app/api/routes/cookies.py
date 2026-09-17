@@ -948,23 +948,6 @@ async def get_account_stats(
     )
 
 
-@router.get("/stats/order-summary", response_model=ApiResponse)
-async def get_order_status_summary(
-    current_user: User = Depends(deps.get_current_active_user),
-    session = Depends(deps.get_db_session),
-) -> ApiResponse:
-    """获取按订单状态分类的汇总（待发货 / 待确认 / 待评价 的笔数与金额 + 金额总计）
-
-    - 普通用户：仅汇总该用户名下所有账号的订单
-    - 管理员：汇总全局所有订单
-    - 排除已关闭/已退款订单
-    """
-    owner_id, _ = resolve_owner_scope(current_user)
-    summary = await DashboardStatsService(session).get_order_status_summary(owner_id=owner_id)
-
-    return ApiResponse(success=True, message="获取订单状态汇总成功", data=summary)
-
-
 @router.get("/stats/order-trend", response_model=ApiResponse)
 async def get_order_amount_trend(
     current_user: User = Depends(deps.get_current_active_user),

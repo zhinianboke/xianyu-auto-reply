@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Activity, Calendar, MessageSquare, RefreshCw, Shield, ShoppingCart, Users, Package, Clock, DollarSign, ChevronDown, ChevronUp, ExternalLink, TrendingUp, CheckCircle } from 'lucide-react'
-import { getAccountStats, getOrderStatusSummary, type OrderStatusSummary } from '@/api/accounts'
+import { Activity, Calendar, MessageSquare, RefreshCw, Shield, ShoppingCart, Users, Package, Clock, DollarSign, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
+import { getAccountStats } from '@/api/accounts'
 import { type AdminStats, type TodayStats, getAdminStats, getTodayStats } from '@/api/admin'
 import { getPublicAds, type Advertisement } from '@/api/advertisements'
 import { useUIStore } from '@/store/uiStore'
@@ -30,7 +30,6 @@ export function Dashboard() {
   const { isAuthenticated, token, _hasHydrated, user } = useAuthStore()
   const [statsLoading, setStatsLoading] = useState(true)
   const [adminStatsLoading, setAdminStatsLoading] = useState(true)
-  const [orderSummaryLoading, setOrderSummaryLoading] = useState(true)
   const [adsLoading, setAdsLoading] = useState(true)
   const [stats, setStats] = useState<DashboardStats>({
     totalAccounts: 0,
@@ -45,7 +44,6 @@ export function Dashboard() {
   })
   const [adminStats, setAdminStats] = useState<AdminStats | null>(null)
   const [todayStats, setTodayStats] = useState<TodayStats | null>(null)
-  const [orderSummary, setOrderSummary] = useState<OrderStatusSummary | null>(null)
   const [adsData, setAdsData] = useState<AdsData>({ carousel: [], text: [] })
   const [carouselIndex, setCarouselIndex] = useState(0)
   const [expandedTextAds, setExpandedTextAds] = useState<Set<number>>(new Set())
@@ -73,19 +71,6 @@ export function Dashboard() {
       addToast({ type: 'error', message: '加载统计数据失败' })
     } finally {
       setStatsLoading(false)
-    }
-  }
-
-  /** 加载订单状态汇总 */
-  const loadOrderSummary = async () => {
-    try {
-      setOrderSummaryLoading(true)
-      const result = await getOrderStatusSummary()
-      setOrderSummary(result)
-    } catch {
-      // ignore — 仪表盘不弹错误
-    } finally {
-      setOrderSummaryLoading(false)
     }
   }
 
@@ -135,7 +120,6 @@ export function Dashboard() {
     
     // 异步独立加载各个模块，不互相等待
     loadStats()
-    loadOrderSummary()
     loadAdminStats()
     loadAds()
   }
@@ -287,94 +271,6 @@ export function Dashboard() {
           })
         )}
       </div>
-
-      {/* 订单概况 — 所有用户可见 */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.15, duration: 0.3 }}
-        className="vben-card"
-      >
-        <div className="vben-card-header">
-          <h2 className="vben-card-title flex items-center gap-2">
-            <TrendingUp className="w-4 h-4" />
-            订单概况
-          </h2>
-        </div>
-        <div className="vben-card-body">
-          {orderSummaryLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
-            </div>
-          ) : orderSummary ? (
-            <>
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                {/* 待发货 */}
-                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Package className="w-4 h-4 text-blue-500" />
-                    <span className="text-sm text-slate-500 dark:text-slate-400">待发货</span>
-                  </div>
-                  <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{orderSummary.pending_ship.count}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">¥{orderSummary.pending_ship.amount.toFixed(2)}</p>
-                </div>
-                {/* 待确认 */}
-                <div className="p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-100 dark:border-amber-800">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Clock className="w-4 h-4 text-amber-500" />
-                    <span className="text-sm text-slate-500 dark:text-slate-400">待确认</span>
-                  </div>
-                  <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">{orderSummary.pending_confirm.count}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">¥{orderSummary.pending_confirm.amount.toFixed(2)}</p>
-                </div>
-                {/* 待评价 */}
-                <div className="p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-100 dark:border-purple-800">
-                  <div className="flex items-center gap-2 mb-2">
-                    <CheckCircle className="w-4 h-4 text-purple-500" />
-                    <span className="text-sm text-slate-500 dark:text-slate-400">待评价</span>
-                  </div>
-                  <p className="text-2xl font-bold text-purple-600 dark:text-purple-400">{orderSummary.pending_rate.count}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">¥{orderSummary.pending_rate.amount.toFixed(2)}</p>
-                </div>
-                {/* 金额汇总 */}
-                <div className="p-3 bg-emerald-50 dark:bg-emerald-900/20 rounded-lg border border-emerald-100 dark:border-emerald-800">
-                  <div className="flex items-center gap-2 mb-2">
-                    <DollarSign className="w-4 h-4 text-emerald-500" />
-                    <span className="text-sm text-slate-500 dark:text-slate-400">金额汇总</span>
-                  </div>
-                  <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">¥{orderSummary.total_amount.toFixed(2)}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">待发货+待确认金额</p>
-                </div>
-              </div>
-              {/* 进度条示意各状态占比（待发货+待确认） */}
-              {orderSummary.total_amount > 0 && (
-                <div className="mt-4">
-                  <div className="flex h-2 rounded-full overflow-hidden bg-slate-100 dark:bg-slate-700">
-                    {orderSummary.pending_ship.amount > 0 && (
-                      <div
-                        className="bg-blue-500"
-                        style={{ width: `${(orderSummary.pending_ship.amount / orderSummary.total_amount) * 100}%` }}
-                        title="待发货"
-                      />
-                    )}
-                    {orderSummary.pending_confirm.amount > 0 && (
-                      <div
-                        className="bg-amber-500"
-                        style={{ width: `${(orderSummary.pending_confirm.amount / orderSummary.total_amount) * 100}%` }}
-                        title="待确认"
-                      />
-                    )}
-                  </div>
-                  <div className="flex items-center gap-4 mt-1.5 text-xs text-slate-400">
-                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" />待发货</span>
-                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />待确认</span>
-                  </div>
-                </div>
-              )}
-            </>
-          ) : null}
-        </div>
-      </motion.div>
 
       {/* 广告模块 */}
       <motion.div

@@ -776,16 +776,14 @@ export default function CardsScreen() {
         contentContainerStyle={styles.list}
       />
 
-      {/* 新建/编辑表单（底部抽屉） */}
-      <Modal visible={modalVisible} transparent animationType="slide" onRequestClose={closeModal}>
-        <KeyboardAvoidingView
-          style={styles.modalOverlay}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
-          <Pressable style={styles.modalBackdrop} onPress={closeModal} />
-          <View style={[styles.modalSheet, { backgroundColor: c.surface }]}>
-            <View style={[styles.modalHandle, { backgroundColor: c.border }]} />
-            <View style={styles.modalHeader}>
+      {/* 新建/编辑表单（全屏页，底部抽屉在部分机型上滚动/键盘避让异常导致无法录入） */}
+      <Modal visible={modalVisible} animationType="slide" onRequestClose={closeModal}>
+        <SafeAreaView style={[styles.formPage, { backgroundColor: c.background }]}>
+          <KeyboardAvoidingView
+            style={styles.formFlex}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <View style={[styles.formHeader, { borderBottomColor: c.border }]}>
               <Text style={[styles.modalTitle, { color: c.text }]}>
                 {editing ? '编辑卡券' : '新建卡券'}
               </Text>
@@ -795,7 +793,7 @@ export default function CardsScreen() {
             </View>
 
             <ScrollView
-              style={styles.modalScroll}
+              style={styles.formFlex}
               contentContainerStyle={styles.modalBody}
               keyboardShouldPersistTaps="handled"
             >
@@ -1186,7 +1184,7 @@ export default function CardsScreen() {
               </Collapsible>
             </ScrollView>
 
-            <View style={[styles.modalFooter, { borderTopColor: c.border }]}>
+            <View style={[styles.modalFooter, { borderTopColor: c.border, backgroundColor: c.surface }]}>
               <Button label="取消" variant="ghost" onPress={closeModal} style={styles.modalBtn} />
               <Button
                 label="保存"
@@ -1196,8 +1194,8 @@ export default function CardsScreen() {
                 style={styles.modalBtn}
               />
             </View>
-          </View>
-        </KeyboardAvoidingView>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
       </Modal>
 
       {/* 长按操作菜单 */}
@@ -1239,7 +1237,7 @@ export default function CardsScreen() {
             style={[styles.detailSheet, { backgroundColor: c.surface }]}
             onPress={() => {}}
           >
-            <View style={[styles.modalHeader, { paddingHorizontal: spacing.lg }]}>
+            <View style={[styles.formHeader, { borderBottomWidth: 0, paddingHorizontal: spacing.lg }]}>
               <Text style={[styles.modalTitle, { color: c.text }]} numberOfLines={1}>
                 {detail?.name || '卡券详情'}
               </Text>
@@ -1484,28 +1482,20 @@ const styles = StyleSheet.create({
   cardDesc: { ...typography.small },
   cardMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginTop: 2 },
 
-  // Modal
-  modalOverlay: { flex: 1, justifyContent: 'flex-end' },
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
-  modalSheet: {
-    maxHeight: '88%',
-    borderTopLeftRadius: radius.xl,
-    borderTopRightRadius: radius.xl,
-    overflow: 'hidden',
-    flexDirection: 'column',
-  },
-  modalHandle: { width: 36, height: 4, borderRadius: 2, alignSelf: 'center', marginTop: spacing.sm },
-  modalHeader: {
+  // 新建/编辑全屏表单页
+  formPage: { flex: 1 },
+  formFlex: { flex: 1 },
+  formHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   modalTitle: { ...typography.heading },
   modalClose: { fontSize: 22, paddingHorizontal: spacing.xs },
-  modalScroll: { flex: 1, paddingHorizontal: spacing.lg },
-  modalBody: { paddingBottom: spacing.lg, gap: spacing.xs },
+  modalBody: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.xl, gap: spacing.xs },
   modalFooter: {
     flexDirection: 'row',
     gap: spacing.sm,
