@@ -987,6 +987,9 @@ export function PersonalSettings() {
               <div className="input-group">
                 <label className="input-label">秘钥</label>
                 <input type="password" value={locationRemoteSecretKey} onChange={(e) => setLocationRemoteSecretKey(e.target.value)} placeholder="请输入远程接口秘钥" className="input-ios" autoComplete="off" />
+                <p className="text-xs text-red-500 mt-2">
+                  秘钥请到 <a className="underline" href="https://api.xianyushop.shop" target="_blank" rel="noopener noreferrer">https://api.xianyushop.shop</a> 网站的接口列表 “通过定位进行聊天” 接口获取
+                </p>
               </div>
               <div className="flex flex-wrap gap-3">
                 <button type="button" onClick={handleTestLocationRemote} disabled={testingLocationRemote || savingLocationRemote} className="btn-ios-secondary">
