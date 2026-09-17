@@ -2227,7 +2227,12 @@ class OrderStatusChecker:
             
             # 分析订单状态
             can_rate, reason, order_status = self._analyze_can_rate(status_nodes)
-            
+
+            # 交易成功后回写本地状态：收货往往发生在订单同步(已发货)之后，
+            # 仅靠同步任务无法把 status 更新为 completed，这里顺带校正
+            if can_rate or '交易成功' in order_status:
+                await self._sync_order_status_to_completed(order_id)
+
             return {
                 'success': True,
                 'can_rate': can_rate,
@@ -2436,7 +2441,33 @@ class OrderStatusChecker:
                 logger.info(f"订单 {order_id} 状态已更新为 cancelled（交易关闭）")
         except Exception as e:
             logger.error(f"更新订单 {order_id} 状态失败: {e}")
-    
+
+    async def _sync_order_status_to_completed(self, order_id: str) -> None:
+        """交易成功后回写本地订单状态为 completed
+
+        收货通常发生在订单同步(已发货)之后，同步任务不会持续轮询已发货订单，
+        导致本地 status 停留在 shipped。在评价判定发现已交易成功时顺带校正，
+        保证统计/列表口径正确。
+
+        Args:
+            order_id: 订单号
+        """
+        try:
+            from common.db.session import async_session_maker
+
+            async with async_session_maker() as session:
+                stmt = (
+                    update(XYOrder)
+                    .where(XYOrder.order_no == order_id, XYOrder.status != "completed")
+                    .values(status="completed")
+                )
+                result = await session.execute(stmt)
+                await session.commit()
+                if result.rowcount:
+                    logger.info(f"订单 {order_id} 状态已校正为 completed（交易成功）")
+        except Exception as e:
+            logger.error(f"校正订单 {order_id} 状态为 completed 失败: {e}")
+
     def _analyze_can_ship(self, status_nodes: list) -> tuple:
         """分析订单状态节点，判断是否可以发货
         
