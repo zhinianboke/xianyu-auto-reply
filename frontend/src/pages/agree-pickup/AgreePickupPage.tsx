@@ -10,8 +10,10 @@
  * 6. 展示商品标题与规格，商品标题可点击跳转闲鱼商品详情页
  */
 import { useEffect, useState } from 'react'
-import { AlertCircle, Check, CheckCircle, Copy, ExternalLink, Loader2, PackageCheck, ShieldCheck } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { AlertCircle, Check, CheckCircle, Copy, Download, ExternalLink, FileText, Loader2, PackageCheck, Search, ShieldCheck, X } from 'lucide-react'
 import { agreePickup, queryPickupOrder, type PickupOrderView } from '@/api/agreePickup'
+import type { DisplayLink } from '@/api/itemQuery'
 import { copyToClipboard } from '@/utils/clipboard'
 import { useUIStore } from '@/store/uiStore'
 
@@ -29,6 +31,19 @@ export function AgreePickupPage() {
 
   const [orderNo, setOrderNo] = useState('')
   const [orderId, setOrderId] = useState('')
+  // 文本类展示入口的弹窗状态：activeTextLink 为当前打开的入口配置
+  const [activeTextLink, setActiveTextLink] = useState<DisplayLink | null>(null)
+  const [textCopied, setTextCopied] = useState(false)
+
+  // 从提货内容中提取 Cookie（"Cookie："后的完整字符串），用于展示入口 {cookie} 占位符替换
+  const deliveredCookie = (() => {
+    if (!content) return ''
+    for (const line of content.split('\n')) {
+      const m = line.match(/Cookie[：:]\s*(.+)$/)
+      if (m && m[1].trim()) return m[1].trim()
+    }
+    return ''
+  })()
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -86,6 +101,52 @@ export function AgreePickupPage() {
       setCopied(true)
       addToast({ type: 'success', message: '提货内容已复制' })
       setTimeout(() => setCopied(false), 2000)
+    } else {
+      addToast({ type: 'error', message: '复制失败，请长按内容手动复制' })
+    }
+  }
+
+  // 下载提货内容为 txt（Blob + 临时 a[download]，HTTP 环境兼容，不依赖 showSaveFilePicker）
+  const handleDownloadTxt = () => {
+    if (!content) return
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `订单${orderNo}-卡密.txt`
+    document.body.appendChild(a)
+    a.click()
+    // Firefox/部分 WebView 在 click 同步完成后才异步发起下载，过早 revoke 会中止下载
+    setTimeout(() => {
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    }, 100)
+    addToast({ type: 'success', message: '卡密文件已开始下载' })
+  }
+
+  // 提货内容非空行数（≥2 行时展示「下载txt」入口）
+  const contentLineCount = content ? content.split('\n').filter((line) => line.trim()).length : 0
+
+  // 底部工具区数据：展示入口（商品配置驱动）+ 启用中的查询按钮
+  const displayLinks = order?.display_links ?? []
+  const enabledQueryButtons = (order?.query_buttons ?? []).filter((btn) => btn.enabled !== false)
+  // 两者都没有时整个底部工具区不渲染
+  const showFooterTools = displayLinks.length > 0 || (orderNo !== '' && enabledQueryButtons.length > 0)
+
+  // 文本入口内容渲染：把 {cookie} 替换为发货内容中提取的 Cookie（未提取到时保留占位符，提示买家自行填入）
+  const renderDisplayText = (entry: DisplayLink): string => {
+    if (entry.type !== 'text') return ''
+    return deliveredCookie ? entry.content.split('{cookie}').join(deliveredCookie) : entry.content
+  }
+
+  // 复制文本入口内容（复制的是 {cookie} 替换后的文本）
+  const handleCopyTextLink = async () => {
+    if (!activeTextLink || activeTextLink.type !== 'text') return
+    const ok = await copyToClipboard(renderDisplayText(activeTextLink))
+    if (ok) {
+      setTextCopied(true)
+      addToast({ type: 'success', message: '内容已复制' })
+      setTimeout(() => setTextCopied(false), 2000)
     } else {
       addToast({ type: 'error', message: '复制失败，请长按内容手动复制' })
     }
@@ -173,24 +234,37 @@ export function AgreePickupPage() {
                 <div className="flex items-center justify-between mb-2">
                   <p className="text-sm font-medium text-slate-700 dark:text-slate-300">提货内容</p>
                   {content && (
-                    <button
-                      type="button"
-                      onClick={handleCopyContent}
-                      title="复制提货内容"
-                      className="inline-flex items-center gap-1 px-2 py-1 -mr-1 rounded text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 active:bg-blue-100 dark:active:bg-blue-900/50 transition-colors"
-                    >
-                      {copied ? (
-                        <>
-                          <Check className="w-4 h-4 text-green-500" />
-                          已复制
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-4 h-4" />
-                          复制
-                        </>
+                    <div className="flex items-center gap-1 -mr-1">
+                      <button
+                        type="button"
+                        onClick={handleCopyContent}
+                        title="复制提货内容"
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 active:bg-blue-100 dark:active:bg-blue-900/50 transition-colors"
+                      >
+                        {copied ? (
+                          <>
+                            <Check className="w-4 h-4 text-green-500" />
+                            已复制
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-4 h-4" />
+                            复制
+                          </>
+                        )}
+                      </button>
+                      {contentLineCount >= 2 && (
+                        <button
+                          type="button"
+                          onClick={handleDownloadTxt}
+                          title="下载提货内容为 txt 文件"
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 active:bg-blue-100 dark:active:bg-blue-900/50 transition-colors"
+                        >
+                          <Download className="w-4 h-4" />
+                          下载txt
+                        </button>
                       )}
-                    </button>
+                    </div>
                   )}
                 </div>
                 {content ? (
@@ -205,13 +279,96 @@ export function AgreePickupPage() {
           )}
         </div>
 
-        {/* 底部提示 */}
-        <div className="px-6 py-3 bg-slate-50 dark:bg-slate-700/50 border-t border-slate-100 dark:border-slate-700">
-          <p className="text-xs text-slate-600 dark:text-slate-300 text-center">
-            本页面用于订单提货确认，请确认信息无误后再点击同意
-          </p>
-        </div>
+        {/* 底部：展示入口（商品配置驱动）+ 查询按钮列表 + 提示；两者都没有时整个工具区不渲染 */}
+        {showFooterTools && (
+          <div className="px-6 py-3 bg-slate-50 dark:bg-slate-700/50 border-t border-slate-100 dark:border-slate-700 flex flex-col gap-2.5">
+            {/* 展示入口：type=link 新窗口打开外链（note 显示在按钮右侧）；type=text 打开内容弹窗 */}
+            {displayLinks.map((entry, idx) =>
+              entry.type === 'link' ? (
+                <a
+                  key={idx}
+                  href={entry.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-between gap-2 w-full px-4 py-2.5 rounded-lg border border-blue-200 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-300 text-sm font-medium hover:bg-blue-100 dark:hover:bg-blue-900/40 active:bg-blue-200 transition-colors"
+                >
+                  <span className="flex items-center gap-2">
+                    <Download className="w-4 h-4 flex-shrink-0" />
+                    {entry.name}
+                  </span>
+                  {entry.note && (
+                    <span className="text-xs text-blue-500 dark:text-blue-400">{entry.note}</span>
+                  )}
+                </a>
+              ) : (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => {
+                    setActiveTextLink(entry)
+                    setTextCopied(false)
+                  }}
+                  className="flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700/30 text-slate-600 dark:text-slate-300 text-sm font-medium hover:bg-slate-100 dark:hover:bg-slate-700/60 active:bg-slate-200 transition-colors"
+                >
+                  <FileText className="w-4 h-4" />
+                  {entry.name}
+                </button>
+              ),
+            )}
+            {/* 查询按钮跳转：只渲染启用中的按钮（点击跳转通用查询页，由买家手动点击执行） */}
+            {orderNo &&
+              enabledQueryButtons.map((btn, idx) => (
+                <Link
+                  key={idx}
+                  to={`/query?orderNo=${encodeURIComponent(orderNo)}`}
+                  className="flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-lg border border-blue-200 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-300 text-sm font-medium hover:bg-blue-100 dark:hover:bg-blue-900/40 active:bg-blue-200 transition-colors"
+                >
+                  <Search className="w-4 h-4" />
+                  {btn.name}
+                </Link>
+              ))}
+            <p className="text-xs text-slate-600 dark:text-slate-300 text-center">
+              本页面用于订单提货确认，请确认信息无误后再点击同意
+            </p>
+          </div>
+        )}
       </div>
+
+      {/* 文本类展示入口弹窗：标题/内容来自商品配置，{cookie} 已替换为发货内容中的 Cookie */}
+      {activeTextLink && activeTextLink.type === 'text' && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setActiveTextLink(null)}
+        >
+          <div
+            className="w-full max-w-sm max-h-[85vh] overflow-y-auto bg-white dark:bg-slate-800 rounded-2xl shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-slate-700">
+              <h2 className="text-base font-bold text-slate-800 dark:text-slate-100">{activeTextLink.title}</h2>
+              <button
+                type="button"
+                onClick={() => setActiveTextLink(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
+                aria-label="关闭"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="px-5 py-4 flex flex-col gap-4 text-sm">
+              <pre className="whitespace-pre-wrap break-words bg-slate-50 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-800 dark:text-slate-200 max-h-72 overflow-auto">{renderDisplayText(activeTextLink)}</pre>
+              <button
+                type="button"
+                onClick={handleCopyTextLink}
+                className="flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-lg bg-blue-500 hover:bg-blue-600 active:bg-blue-700 text-white text-sm font-medium transition-colors"
+              >
+                {textCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                {textCopied ? '已复制' : '复制内容'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

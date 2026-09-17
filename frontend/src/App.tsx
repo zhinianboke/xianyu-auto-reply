@@ -60,6 +60,7 @@ const SharedScanPage = React.lazy(() => import('@/pages/shared-scan/SharedScanPa
 
 // 同意后发货 - 买家提货页（无需登录，公开访问）
 const AgreePickupPage = React.lazy(() => import('@/pages/agree-pickup/AgreePickupPage').then(m => ({ default: m.AgreePickupPage })))
+const QueryPage = React.lazy(() => import('@/pages/query/QueryPage').then(m => ({ default: m.QueryPage })))
 
 // 商品发布页面懒加载
 const ProductMaterials = React.lazy(() => import('@/pages/product-publish/ProductMaterials').then(m => ({ default: m.ProductMaterials })))
@@ -110,6 +111,12 @@ function PageLoading() {
       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
     </div>
   )
+}
+
+// 旧余额查询路径重定向到通用查询页（保留 query string）
+function BalanceQueryRedirect() {
+  const location = useLocation()
+  return <Navigate to={`/query${location.search}`} replace />
 }
 
 // 免责声明同意状态的 key
@@ -327,6 +334,9 @@ function App() {
           <Route path="/shared-scan-page" element={<SharedScanPage />} />
           {/* 同意后发货提货页：无需登录，公开访问 */}
           <Route path="/agree-pickup" element={<AgreePickupPage />} />
+          {/* 商品通用查询页：无需登录，公开访问；旧余额查询路径重定向（保留 query string） */}
+          <Route path="/query" element={<QueryPage />} />
+          <Route path="/balance-query" element={<BalanceQueryRedirect />} />
 
           {/* Protected routes */}
           <Route

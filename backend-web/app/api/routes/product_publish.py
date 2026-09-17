@@ -121,6 +121,7 @@ class MaterialCreateRequest(BaseModel):
     brand: Optional[str] = Field(None, max_length=100, description="品牌")
     condition: str = Field("全新", description="成色")
     remark: Optional[str] = Field(None, max_length=500, description="备注（内部使用）")
+    item_config: Optional[Dict[str, Any]] = Field(None, description="商品列表配置(发布回写用)")
 
     @model_validator(mode="after")
     def normalize_delivery_method(self) -> "MaterialCreateRequest":
@@ -160,6 +161,7 @@ class MaterialUpdateRequest(BaseModel):
     brand: Optional[str] = Field(None, max_length=100)
     condition: Optional[str] = Field(None, max_length=20)
     remark: Optional[str] = Field(None, max_length=500)
+    item_config: Optional[Dict[str, Any]] = Field(None, description="商品列表配置(发布回写用)")
 
     @model_validator(mode="after")
     def normalize_delivery_method(self) -> "MaterialUpdateRequest":
@@ -437,6 +439,20 @@ async def delete_material(
     if not deleted:
         return ApiResponse(success=False, message="素材不存在或无权删除")
     return ApiResponse(success=True, message="素材已移出素材库")
+
+
+@router.get("/materials/collect-from-item/{item_id}", response_model=ApiResponse)
+async def collect_material_from_item(
+    item_id: str,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """从已有商品列表项采集素材草稿（含完整 item_config 配置）。"""
+    owner_id = None if _is_admin(current_user) else current_user.id
+    data = await ProductMaterialService(session).collect_from_item(item_id, owner_id)
+    if not data:
+        return ApiResponse(success=False, message="未找到该商品列表项")
+    return ApiResponse(success=True, message="采集成功", data=data)
 
 
 # ==================== 发布接口 ====================

@@ -44,7 +44,7 @@ from common.schemas.account import (
 )
 from common.schemas.common import ApiResponse
 from common.services.ai_provider_service import read_ai_enabled
-from common.services.token_renewal_cache_service import delete_token_cache
+from common.services.token_renewal_cache_service import mark_token_cache_expired
 from common.utils.auth_scope import resolve_owner_scope
 from common.utils.xianyu_utils import close_account_notice
 from app.services.account_service import AccountService
@@ -635,11 +635,12 @@ async def clear_token_cache_batch(
             continue
 
         try:
-            # 1. 删除Token缓存（WebSocket侧 user_id=unb，聊天侧 user_id=chat_unb）
+            # 1. 标记Token缓存失效（WebSocket侧 user_id=unb，聊天侧 user_id=chat_unb）
             invalidation_messages: list[str] = []
             for token_user_id in (unb, f"chat_{unb}"):
-                invalidation = await delete_token_cache(
+                invalidation = await mark_token_cache_expired(
                     token_user_id=token_user_id,
+                    invalidate_valid_cache=True,
                 )
                 if not invalidation.success:
                     raise RuntimeError(invalidation.message)
@@ -945,6 +946,23 @@ async def get_account_stats(
         message="获取统计数据成功",
         data=stats,
     )
+
+
+@router.get("/stats/order-summary", response_model=ApiResponse)
+async def get_order_status_summary(
+    current_user: User = Depends(deps.get_current_active_user),
+    session = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """获取按订单状态分类的汇总（待发货 / 待确认 / 待评价 的笔数与金额 + 金额总计）
+
+    - 普通用户：仅汇总该用户名下所有账号的订单
+    - 管理员：汇总全局所有订单
+    - 排除已关闭/已退款订单
+    """
+    owner_id, _ = resolve_owner_scope(current_user)
+    summary = await DashboardStatsService(session).get_order_status_summary(owner_id=owner_id)
+
+    return ApiResponse(success=True, message="获取订单状态汇总成功", data=summary)
 
 
 @router.get("/stats/order-trend", response_model=ApiResponse)

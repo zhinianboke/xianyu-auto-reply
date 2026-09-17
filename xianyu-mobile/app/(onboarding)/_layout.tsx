@@ -14,6 +14,9 @@ export default function OnboardingLayout() {
         headerTitleStyle: { ...typography.heading },
         headerShadowVisible: false,
         headerBackButtonDisplayMode: 'minimal',
+        // 安卓全屏手势返回
+        gestureEnabled: true,
+        fullScreenGestureEnabled: true,
       }}
     >
       {/* 服务器配置页启用头部+返回按钮：从「我的」进入时可返回，首启无上一级则退出（可接受） */}

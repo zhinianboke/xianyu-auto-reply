@@ -16,6 +16,7 @@ export interface CardData {
   delivery_count?: number  // 发货次数
   price?: string | null     // 对接价格
   is_dockable?: boolean    // 是否可对接
+  auto_delist_on_soldout?: boolean  // 售罄自动下架开关（仅data类型）
   fee_payer?: string | null  // 手续费支付方式：distributor/dealer
   min_price?: string | null  // 最低售价
   dock_visibility?: string | null  // 对接可见性：public-所有人可见，dealer_only-仅分销商可见
