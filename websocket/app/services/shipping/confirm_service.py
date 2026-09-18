@@ -13,13 +13,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import aiohttp
 from loguru import logger
 
 from app.services.shipping.base import BaseShippingService
+from common.utils.image_uploader import ImageUploader
 from common.utils.xianyu_utils import generate_sign, trans_cookies
 
 
@@ -40,6 +43,8 @@ class ConfirmShippingService(BaseShippingService):
         item_id: Optional[str] = None,
         retry_count: int = 0,
         trade_text: Optional[str] = None,
+        pic_list: Optional[list[str]] = None,
+        _prepared_pic_list: Optional[list[str]] = None,
     ) -> Dict[str, Any]:
         """自动确认发货
         
@@ -48,6 +53,7 @@ class ConfirmShippingService(BaseShippingService):
             item_id: 商品ID(可选,用于Token刷新)
             retry_count: 当前重试次数
             trade_text: 无需邮寄凭证内容
+            pic_list: 无需邮寄凭证图片 URL 列表
             
         Returns:
             结果字典,包含success或error字段
@@ -85,14 +91,38 @@ class ConfirmShippingService(BaseShippingService):
             'sessionOption': 'AutoLoginOnly',
         }
 
-        # 未传凭证时保持原请求内容不变，避免影响现有确认发货流程。
+        # 无需邮寄凭证支持文字和图片。保留空凭证时的历史请求结构，
+        # 避免影响没有配置凭证的现有确认发货流程。
         normalized_trade_text = trade_text.strip() if isinstance(trade_text, str) else ""
-        if normalized_trade_text:
+        normalized_pic_list = [
+            str(url).strip()
+            for url in (pic_list or [])
+            if isinstance(url, str) and url.strip()
+        ]
+        if normalized_pic_list:
+            if _prepared_pic_list is None:
+                prepared_pic_list = await self._prepare_pic_list(normalized_pic_list)
+                if not prepared_pic_list:
+                    logger.error(
+                        f"【{self.account_id}】卡券凭证图片上传失败，停止确认发货,订单ID: {order_id}"
+                    )
+                    return {
+                        "error": "卡券凭证图片上传失败，未调用确认发货接口",
+                        "order_id": order_id,
+                    }
+                normalized_pic_list = prepared_pic_list
+            else:
+                normalized_pic_list = [
+                    str(url).strip()
+                    for url in _prepared_pic_list
+                    if isinstance(url, str) and url.strip()
+                ]
+        if normalized_trade_text or normalized_pic_list:
             data_val = json.dumps(
                 {
                     "orderId": order_id,
                     "tradeText": normalized_trade_text,
-                    "picList": [],
+                    "picList": normalized_pic_list,
                     "newUnconsign": True,
                 },
                 ensure_ascii=False,
@@ -143,7 +173,12 @@ class ConfirmShippingService(BaseShippingService):
                     
                     # 重试
                     return await self.auto_confirm(
-                        order_id, item_id, retry_count + 1, trade_text=normalized_trade_text
+                        order_id,
+                        item_id,
+                        retry_count + 1,
+                        trade_text=normalized_trade_text,
+                        pic_list=normalized_pic_list,
+                        _prepared_pic_list=normalized_pic_list,
                     )
 
         except Exception as e:
@@ -154,10 +189,70 @@ class ConfirmShippingService(BaseShippingService):
             if retry_count < 2:
                 logger.info(f"【{self.account_id}】网络异常,准备重试...")
                 return await self.auto_confirm(
-                    order_id, item_id, retry_count + 1, trade_text=normalized_trade_text
+                    order_id,
+                    item_id,
+                    retry_count + 1,
+                    trade_text=normalized_trade_text,
+                    pic_list=normalized_pic_list,
+                    _prepared_pic_list=normalized_pic_list,
                 )
 
             return {"error": f"网络异常: {self._safe_str(e)}", "order_id": order_id}
+
+    async def _prepare_pic_list(self, pic_list: list[str]) -> Optional[list[str]]:
+        """Convert card image references into Goofish CDN URLs for picList."""
+        prepared_urls: list[str] = []
+        uploader = ImageUploader(self.cookies_str)
+
+        try:
+            async with uploader:
+                for original_url in pic_list:
+                    original_url = str(original_url).strip()
+                    logger.info(
+                        f"【{self.account_id}】发货凭证原始图片 URL: {original_url}"
+                    )
+
+                    local_path = self._resolve_local_image_path(original_url)
+                    if local_path:
+                        cdn_url = await uploader.upload_image(local_path)
+                    else:
+                        cdn_url = await uploader.upload_image_url(original_url)
+
+                    if not cdn_url:
+                        logger.error(
+                            f"【{self.account_id}】发货凭证图片上传失败，原始 URL: {original_url}"
+                        )
+                        return None
+
+                    logger.info(
+                        f"【{self.account_id}】发货凭证图片上传后的 CDN URL: {cdn_url}"
+                    )
+                    prepared_urls.append(cdn_url)
+        except Exception as e:
+            logger.error(f"【{self.account_id}】准备发货凭证图片异常: {self._safe_str(e)}")
+            return None
+
+        return prepared_urls
+
+    @staticmethod
+    def _resolve_local_image_path(image_url: str) -> Optional[str]:
+        """Resolve v2 card references saved under backend-web/static."""
+        if os.path.isfile(image_url):
+            return image_url
+        if not image_url.startswith(('/static/uploads/', 'static/uploads/')):
+            return None
+
+        static_dir = os.environ.get('STATIC_DIR', '')
+        if static_dir:
+            static_root = Path(static_dir)
+            if not static_root.is_absolute():
+                static_root = Path.cwd() / static_root
+        else:
+            static_root = Path(__file__).resolve().parents[4] / 'backend-web' / 'static'
+
+        relative_path = image_url.lstrip('/').replace('static/', '', 1)
+        local_path = static_root / relative_path
+        return str(local_path) if local_path.is_file() else None
 
     def _build_headers(self) -> Dict[str, str]:
         """构建请求头
