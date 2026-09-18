@@ -135,8 +135,6 @@ class AutoReplyService:
         self._processed_messages: Dict[str, float] = {}  # (chat_id + send_message) -> 最后回复时间
         self._processed_messages_lock = asyncio.Lock()
         self._processed_messages_max_size = 10000
-        self._message_expire_time: Optional[int] = None  # 从数据库加载
-        self._message_expire_time_loaded = False
         self._reply_trace_var: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
             f"auto_reply_trace_{cookie_id}",
             default=None,
@@ -267,25 +265,22 @@ class AutoReplyService:
     # ==================== 消息去重功能(参照旧框架reply_scheduler.py) ====================
     
     async def _load_message_expire_time(self) -> int:
-        """从数据库加载消息等待时间配置"""
-        if self._message_expire_time_loaded and self._message_expire_time is not None:
-            return self._message_expire_time
-        
+        """实时从数据库加载消息等待时间配置
+
+        每次调用都重新查库，保证账号管理中修改消息等待时间后实时生效，无需重启账号。
+        """
         try:
-            from common.db.compat import db_manager
-            expire_time = db_manager.get_cookie_message_expire_time(self.cookie_id)
-            if expire_time is not None and expire_time >= 0:
-                self._message_expire_time = expire_time
-                self._message_expire_time_loaded = True
-                logger.info(f"【{self.cookie_id}】加载消息等待时间配置: {expire_time}秒")
-                return expire_time
-            self._message_expire_time = 3600
-            self._message_expire_time_loaded = True
-            return 3600
+            async with async_session_maker() as session:
+                stmt = select(XYAccount.message_expire_time).where(
+                    XYAccount.account_id == self.cookie_id
+                )
+                result = await session.execute(stmt)
+                expire_time = result.scalar_one_or_none()
+                if expire_time is not None and expire_time >= 0:
+                    return expire_time
+                return 3600
         except Exception as e:
             logger.warning(f"【{self.cookie_id}】加载消息等待时间配置失败: {e}，使用默认值3600秒")
-            self._message_expire_time = 3600
-            self._message_expire_time_loaded = True
             return 3600
     
     async def _load_reply_delay(self) -> int:

@@ -1680,8 +1680,10 @@ export function Accounts() {
 
   // ==================== 消息等待时间设置 ====================
   const openMessageExpireTimeModal = (account: AccountWithKeywordCount) => {
-    setMessageExpireTimeAccount(account)
-    setMessageExpireTime(account.message_expire_time || 3600)
+    // 从最新的 accounts 列表中获取账号数据，确保使用最新值
+    const latestAccount = accounts.find(a => a.id === account.id) || account
+    setMessageExpireTimeAccount(latestAccount)
+    setMessageExpireTime(latestAccount.message_expire_time ?? 3600)
     setActiveModal('message-expire-time')
   }
 
@@ -1705,14 +1707,18 @@ export function Accounts() {
 
   const handleSaveMessageExpireTime = async () => {
     if (!messageExpireTimeAccount) return
-    
+
     try {
       setMessageExpireTimeSaving(true)
       const result = await updateAccountMessageExpireTime(messageExpireTimeAccount.id, messageExpireTime)
       if (result.success) {
+        // 更新本地账号列表中的 message_expire_time
+        setAccounts(prev => prev.map(a =>
+          a.id === messageExpireTimeAccount.id ? { ...a, message_expire_time: messageExpireTime } : a
+        ))
         addToast({ type: 'success', message: '相同消息等待时间已保存' })
         closeModal()
-        loadAccounts()
+        await loadAccounts()
       } else {
         addToast({ type: 'error', message: result.message || '保存失败' })
       }
