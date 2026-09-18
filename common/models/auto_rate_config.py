@@ -24,4 +24,7 @@ class AutoRateConfig(TimestampMixin, Base):
     rate_type: Mapped[str] = mapped_column(String(20), default="text", comment="评价类型: text-固定文字, api-API获取")
     text_content: Mapped[str | None] = mapped_column(Text, comment="固定评价文字内容")
     api_url: Mapped[str | None] = mapped_column(String(512), comment="API地址")
+    # 好评后自动发送消息（#232）：评价买家成功后，把配置的致谢/售后内容私聊发给买家
+    thanks_enabled: Mapped[bool] = mapped_column(Boolean, default=False, comment="好评后自动发送消息开关")
+    thanks_content: Mapped[str | None] = mapped_column(Text, comment="好评后发送的消息内容")
 
