@@ -541,15 +541,25 @@ class RedeliveryTask:
                 return False, "订单缺少商品ID", cookie_string
             if not order.buyer_id:
                 return False, "订单缺少买家ID", cookie_string
+            
+            # 占位chat_id（此前创建会话失败时写入的）不能用于发货，
+            # 但创建失败的原因多为临时性（WebSocket服务重启/账号短暂离线等），
+            # 视为缺失并允许重试，避免订单被占位ID永久卡死（#282）
+            if order.chat_id and order.chat_id.startswith("FAILED_"):
+                logger.info(
+                    f"[定时补发货] 订单 {order_no} chat_id为占位值({order.chat_id})，清空后重试创建会话"
+                )
+                order.chat_id = None
+            
             # 订单缺少会话ID时，先调用 WebSocket 服务自动创建会话并回写，再继续发货
             if not order.chat_id:
                 chat_ok, chat_error = await self._ensure_chat_id(session, order)
                 if not chat_ok:
+                    # 创建失败已重新写入占位chat_id；加入冷却队列限制重试频率
+                    # （冷却期内跳过该订单，到期后下个批次自动重试），
+                    # 替代此前"占位ID永久跳过"的做法，临时故障恢复后订单可自动恢复发货
+                    add_order_to_cooldown(order_no)
                     return False, chat_error or "订单缺少会话ID", cookie_string
-            
-            # 占位chat_id（创建会话失败时写入的）不能用于发货
-            if order.chat_id and order.chat_id.startswith("FAILED_"):
-                return False, "会话创建失败（占位ID），跳过发货", cookie_string
             
             # 检查是否有匹配的卡券
             card = await self._get_matching_card(session, order)
@@ -759,9 +769,9 @@ class RedeliveryTask:
                 error_msg = result.get("message", "创建会话失败")
                 logger.warning(
                     f"[定时补发货] 订单 {order.order_no} 创建会话失败: {error_msg}，"
-                    f"写入占位chat_id避免重复尝试"
+                    f"写入占位chat_id，冷却期后重试"
                 )
-                # 写入占位chat_id，避免下次定时任务再次尝试创建
+                # 写入占位chat_id标记创建失败；调用方会将订单加入冷却队列，冷却到期后重试创建
                 placeholder_chat_id = f"FAILED_{order.buyer_id}"
                 from common.services.order_service import OrderService
                 order_svc = OrderService(session)
@@ -773,9 +783,9 @@ class RedeliveryTask:
             if not new_chat_id:
                 logger.warning(
                     f"[定时补发货] 订单 {order.order_no} 创建会话响应缺少 chat_id: {result}，"
-                    f"写入占位chat_id避免重复尝试"
+                    f"写入占位chat_id，冷却期后重试"
                 )
-                # 写入占位chat_id，避免下次定时任务再次尝试创建
+                # 写入占位chat_id标记创建失败；调用方会将订单加入冷却队列，冷却到期后重试创建
                 placeholder_chat_id = f"FAILED_{order.buyer_id}"
                 from common.services.order_service import OrderService
                 order_svc = OrderService(session)
