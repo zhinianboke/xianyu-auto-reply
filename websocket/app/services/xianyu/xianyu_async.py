@@ -1730,6 +1730,19 @@ class XianyuAsync:
             
             send_result = await self.send_msg(websocket, chat_id, recipient_id, content)
             if send_result.get("success"):
+                # 等待服务端响应，识别是否被安全拦截（与 Scheduler/Backend 路径逻辑对齐）
+                send_future = send_result.get("send_future")
+                mid = send_result.get("mid")
+                if send_future:
+                    reject_reason = await self.wait_send_reject_reason(send_future, mid, timeout=10.0)
+                    if reject_reason:
+                        # 被拦截，不标记去重，保留错误日志供排查
+                        logger.warning(
+                            f"[{msg_time}] 【{self.cookie_id}】订单 {order_id} 好评后消息被拦截: {reject_reason}"
+                        )
+                        return
+
+                # 成功发送或超时未确认（服务端无响应），均视为已发出，标记去重避免重复发送
                 await mark_order_thanks_sent(order_id)
                 logger.info(f"[{msg_time}] 【好评后消息发出】订单 {order_id}: {content[:50]}...")
             else:
