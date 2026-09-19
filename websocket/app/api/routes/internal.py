@@ -55,6 +55,8 @@ class SendMessageRequest(BaseModel):
     """发送消息请求"""
     chat_id: str
     message: str
+    # 接收方（买家）用户ID；缺省时发送协议里的接收人会变成 None@goofish，买家收不到
+    to_user_id: str | None = None
     # 是否等待服务端发送结果（识别 CSI_FORBID 等安全拦截）。默认 False 保持既有调用方零影响。
     wait_result: bool = False
     wait_timeout: float = 10.0
@@ -984,11 +986,19 @@ async def send_message(account_id: str, request: SendMessageRequest):
                 "data": None,
             }
         
+        if not request.to_user_id:
+            return {
+                "success": False,
+                "code": 400,
+                "message": "缺少接收方用户ID(to_user_id)",
+                "data": None,
+            }
+
         # 发送消息
         send_result = await instance.send_msg(
             websocket=instance.ws,
             chat_id=request.chat_id,
-            send_user_id=None,  # 由实例内部获取
+            send_user_id=request.to_user_id,
             content=request.message,
         )
 
