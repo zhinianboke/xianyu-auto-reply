@@ -257,6 +257,9 @@ export function Accounts() {
   const [autoRateTextContent, setAutoRateTextContent] = useState('')
   const [autoRateApiUrl, setAutoRateApiUrl] = useState('')
   const [autoRateSaving, setAutoRateSaving] = useState(false)
+  // 好评后自动发送消息（#232）
+  const [autoRateThanksEnabled, setAutoRateThanksEnabled] = useState(false)
+  const [autoRateThanksContent, setAutoRateThanksContent] = useState('')
 
   // 禁止发货设置状态
   const [deliveryDisabledAccount, setDeliveryDisabledAccount] = useState<AccountWithKeywordCount | null>(null)
@@ -1878,6 +1881,8 @@ export function Accounts() {
     setAutoRateType('text')
     setAutoRateTextContent('不错的买家')
     setAutoRateApiUrl('')
+    setAutoRateThanksEnabled(false)
+    setAutoRateThanksContent('')
     setActiveModal('auto-rate')
     
     try {
@@ -1887,6 +1892,8 @@ export function Accounts() {
         setAutoRateType(result.data.rate_type || 'text')
         setAutoRateTextContent(result.data.text_content || '不错的买家')
         setAutoRateApiUrl(result.data.api_url || '')
+        setAutoRateThanksEnabled(result.data.thanks_enabled || false)
+        setAutoRateThanksContent(result.data.thanks_content || '')
       }
     } catch {
       // 忽略错误，使用默认值
@@ -1907,6 +1914,10 @@ export function Accounts() {
         return
       }
     }
+    if (autoRateThanksEnabled && !autoRateThanksContent.trim()) {
+      addToast({ type: 'warning', message: '请填写好评后发送的消息内容' })
+      return
+    }
     
     try {
       setAutoRateSaving(true)
@@ -1915,6 +1926,8 @@ export function Accounts() {
         rate_type: autoRateType,
         text_content: autoRateTextContent,
         api_url: autoRateApiUrl,
+        thanks_enabled: autoRateThanksEnabled,
+        thanks_content: autoRateThanksContent,
       })
       if (result.success) {
         addToast({ type: 'success', message: '自动评价配置已保存' })
@@ -4582,6 +4595,41 @@ export function Accounts() {
                 </div>
               )}
 
+              {/* 好评后自动发送消息（#232） */}
+              <div className="flex items-center justify-between py-3 border-b border-slate-100 dark:border-slate-700">
+                <div>
+                  <p className="font-medium text-slate-900 dark:text-slate-100">好评后自动发送消息</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">需同时启用自动评价；评价买家成功后自动发送下方配置的消息</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAutoRateThanksEnabled(!autoRateThanksEnabled)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    autoRateThanksEnabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      autoRateThanksEnabled ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {autoRateThanksEnabled && (
+                <div className="input-group">
+                  <label className="input-label">好评后发送的消息内容</label>
+                  <textarea
+                    value={autoRateThanksContent}
+                    onChange={(e) => setAutoRateThanksContent(e.target.value)}
+                    placeholder="例如：感谢您的支持！有问题随时联系我，欢迎下次光临~"
+                    className="input-ios min-h-[80px] resize-none"
+                    maxLength={500}
+                  />
+                  <p className="input-hint">{autoRateThanksContent.length}/500</p>
+                </div>
+              )}
+
               {/* 使用说明 */}
               <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
                 <p className="text-xs text-blue-600 dark:text-blue-400">
@@ -4589,7 +4637,8 @@ export function Accounts() {
                   • 当收到「快给ta一个评价吧」消息时，系统会自动评价买家<br />
                   • 固定文字：使用您设置的固定评价内容<br />
                   • API获取：请求API地址，将返回内容作为评价内容<br />
-                  • 评价成功后会自动更新订单的评价状态
+                  • 评价成功后会自动更新订单的评价状态<br />
+                  • 开启「好评后自动发送消息」后，评价买家成功会自动发送配置的消息，每个订单仅发送一次
                 </p>
               </div>
             </div>

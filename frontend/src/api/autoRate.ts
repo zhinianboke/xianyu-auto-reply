@@ -9,6 +9,9 @@ export interface AutoRateConfig {
   rate_type: 'text' | 'api'
   text_content?: string
   api_url?: string
+  // 好评后自动发送消息（#232）
+  thanks_enabled?: boolean
+  thanks_content?: string
 }
 
 // 获取自动评价配置

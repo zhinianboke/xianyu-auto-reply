@@ -445,6 +445,113 @@ async def update_order_rated_status(order_no: str, is_rated: bool = True) -> boo
         return False
 
 
+async def get_thanks_message_content(account_id: str) -> Optional[str]:
+    """根据账号配置获取"好评后自动发送消息"的内容（#232）
+
+    Args:
+        account_id: 账号ID
+
+    Returns:
+        消息内容；未启用好评后消息、内容为空或获取失败时返回None
+    """
+    try:
+        from common.db.session import async_session_maker
+        from common.models.auto_rate_config import AutoRateConfig
+        from sqlalchemy import select
+
+        async with async_session_maker() as session:
+            stmt = select(AutoRateConfig).where(AutoRateConfig.account_id == account_id)
+            result = await session.execute(stmt)
+            config = result.scalars().first()
+
+            if not config or not config.thanks_enabled:
+                return None
+
+            content = (config.thanks_content or "").strip()
+            if not content:
+                logger.warning(f"账号 {account_id} 已启用好评后消息，但消息内容为空，跳过发送")
+                return None
+            return content
+
+    except Exception as e:
+        logger.error(f"获取好评后消息配置失败: account_id={account_id}, error={e}")
+        return None
+
+
+async def get_order_buyer_id(order_no: str) -> Optional[str]:
+    """查询订单的买家ID（好评后消息收件人解析用，#232）
+
+    评价请求为系统卡片消息，其 send_user_id 不一定是买家；
+    发送消息前优先用订单表中的买家ID作为收件人。
+
+    Args:
+        order_no: 订单号
+
+    Returns:
+        买家ID；订单不存在或查询失败返回None
+    """
+    try:
+        from common.db.session import async_session_maker
+        from common.models.xy_order import XYOrder
+        from sqlalchemy import select
+
+        async with async_session_maker() as session:
+            stmt = select(XYOrder.buyer_id).where(XYOrder.order_no == order_no)
+            result = await session.execute(stmt)
+            buyer_id = result.scalar_one_or_none()
+            return buyer_id or None
+    except Exception as e:
+        logger.error(f"查询订单买家ID失败: order_no={order_no}, error={e}")
+        return None
+
+
+async def is_order_thanks_sent(order_no: str) -> bool:
+    """检查订单是否已发送过好评后消息（防重复发送）
+
+    Args:
+        order_no: 订单号
+
+    Returns:
+        True表示已发送过；订单不存在或查询失败返回False
+    """
+    try:
+        from common.db.session import async_session_maker
+        from common.models.xy_order import XYOrder
+        from sqlalchemy import select
+
+        async with async_session_maker() as session:
+            stmt = select(XYOrder.is_thanks_sent).where(XYOrder.order_no == order_no)
+            result = await session.execute(stmt)
+            return bool(result.scalar_one_or_none())
+    except Exception as e:
+        logger.error(f"查询好评后消息发送状态失败: order_no={order_no}, error={e}")
+        return False
+
+
+async def mark_order_thanks_sent(order_no: str) -> bool:
+    """标记订单已发送好评后消息
+
+    Args:
+        order_no: 订单号
+
+    Returns:
+        是否更新成功
+    """
+    try:
+        from common.db.session import async_session_maker
+        from common.models.xy_order import XYOrder
+        from sqlalchemy import update
+
+        async with async_session_maker() as session:
+            stmt = update(XYOrder).where(XYOrder.order_no == order_no).values(is_thanks_sent=True)
+            result = await session.execute(stmt)
+            await session.commit()
+            return result.rowcount > 0
+    except Exception as e:
+        logger.error(f"标记好评后消息发送状态失败: order_no={order_no}, error={e}")
+        return False
+
+
 async def check_item_belongs_to_account(account_id: str, item_id: str) -> bool:
     """检查商品是否属于指定账号
     

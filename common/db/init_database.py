@@ -1046,6 +1046,8 @@ class DatabaseInitializer:
                 rate_type VARCHAR(20) DEFAULT 'text' COMMENT '评价类型',
                 text_content TEXT COMMENT '固定评价文字内容',
                 api_url VARCHAR(512) COMMENT 'API地址',
+                thanks_enabled TINYINT(1) DEFAULT 0 COMMENT '好评后自动发送消息开关',
+                thanks_content TEXT COMMENT '好评后发送的消息内容',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 UNIQUE KEY uk_account_id (account_id)
@@ -2090,10 +2092,15 @@ class DatabaseInitializer:
             ("delivery_fail_reason", "VARCHAR(2000) COMMENT '发货失败原因'", "delivery_content"),
             ("source", "VARCHAR(32) COMMENT '数据来源：fetch_xianyu-获取闲鱼订单按钮'", "metadata"),
             ("is_red_flower", "TINYINT(1) DEFAULT 0 COMMENT '是否已求小红花'", "is_rated"),
+            ("is_thanks_sent", "TINYINT(1) DEFAULT 0 COMMENT '是否已发送好评后消息'", "is_red_flower"),
             ("is_unregistered", "TINYINT(1) DEFAULT 0 COMMENT '是否已请求注销接口'", "is_red_flower"),
             ("unregister_error_reason", "VARCHAR(500) DEFAULT NULL COMMENT '注销接口错误原因'", "is_unregistered"),
             ("agree_deliver_agreed", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '同意后发货-买家是否已点击同意'", "card_only_delivered"),
             ("agree_deliver_agreed_at", "DATETIME DEFAULT NULL COMMENT '同意后发货-买家点击同意时间'", "agree_deliver_agreed"),
+        ],
+        "xy_auto_rate_configs": [
+            ("thanks_enabled", "TINYINT(1) DEFAULT 0 COMMENT '好评后自动发送消息开关'", "api_url"),
+            ("thanks_content", "TEXT COMMENT '好评后发送的消息内容'", "thanks_enabled"),
         ],
         "xy_cards": [
             ("delivery_count", "INT DEFAULT 0 COMMENT '发货次数'", "delay_seconds"),

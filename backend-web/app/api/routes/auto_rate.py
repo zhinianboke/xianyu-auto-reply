@@ -12,6 +12,7 @@ import asyncio
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +35,9 @@ class AutoRateConfigOut(BaseModel):
     rate_type: str = "text"  # text 或 api
     text_content: str | None = None
     api_url: str | None = None
+    # 好评后自动发送消息（#232）
+    thanks_enabled: bool = False
+    thanks_content: str | None = None
 
 
 class AutoRateConfigUpdate(BaseModel):
@@ -42,6 +46,9 @@ class AutoRateConfigUpdate(BaseModel):
     rate_type: str = "text"
     text_content: str | None = None
     api_url: str | None = None
+    # 好评后自动发送消息（#232）
+    thanks_enabled: bool = False
+    thanks_content: str | None = None
 
 
 @router.get("/{account_id}")
@@ -72,6 +79,8 @@ async def get_auto_rate_config(
                 rate_type=config.rate_type or "text",
                 text_content=config.text_content,
                 api_url=config.api_url,
+                thanks_enabled=bool(config.thanks_enabled),
+                thanks_content=config.thanks_content,
             )
         }
     else:
@@ -84,6 +93,8 @@ async def get_auto_rate_config(
                 rate_type="text",
                 text_content="不错的买家",
                 api_url=None,
+                thanks_enabled=False,
+                thanks_content=None,
             )
         }
 
@@ -113,6 +124,14 @@ async def update_auto_rate_config(
         if config_update.rate_type == "api" and not config_update.api_url:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请填写API地址")
     
+    # 好评后消息（#232）：开启时必须填写内容；未开启时清空内容避免残留
+    thanks_content = (config_update.thanks_content or "").strip() or None
+    if config_update.thanks_enabled:
+        if not thanks_content:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请填写好评后发送的消息内容")
+    else:
+        thanks_content = None
+    
     # 查询或创建配置
     stmt = select(AutoRateConfig).where(AutoRateConfig.account_id == account_id)
     result = await db.execute(stmt)
@@ -124,6 +143,8 @@ async def update_auto_rate_config(
         config.rate_type = config_update.rate_type
         config.text_content = config_update.text_content
         config.api_url = config_update.api_url
+        config.thanks_enabled = config_update.thanks_enabled
+        config.thanks_content = thanks_content
     else:
         # 创建
         config = AutoRateConfig(
@@ -132,12 +153,75 @@ async def update_auto_rate_config(
             rate_type=config_update.rate_type,
             text_content=config_update.text_content,
             api_url=config_update.api_url,
+            thanks_enabled=config_update.thanks_enabled,
+            thanks_content=thanks_content,
         )
         db.add(config)
 
     await db.commit()
 
     return ApiResponse(success=True, message="保存成功")
+
+
+async def _send_thanks_after_rate(db: AsyncSession, account_id: str, order_id: str) -> None:
+    """批量补评价成功后自动向买家发送配置的致谢消息（#232）
+
+    与 websocket 实时评价、定时补评价路径共用订单 is_thanks_sent 标记去重；
+    任何失败仅记录日志，不影响批量评价结果。
+    """
+    try:
+        from common.models.xy_order import XYOrder
+        from common.services.rate_service import (
+            get_thanks_message_content, is_order_thanks_sent, mark_order_thanks_sent,
+        )
+        from app.services.websocket_client import websocket_client
+
+        content = await get_thanks_message_content(account_id)
+        if not content:
+            return
+        if await is_order_thanks_sent(order_id):
+            return
+
+        stmt = select(XYOrder).where(XYOrder.order_no == order_id)
+        result = await db.execute(stmt)
+        order = result.scalars().first()
+        if not order or not order.buyer_id or not order.item_id:
+            logger.warning(f"[批量补评价] 订单 {order_id} 缺少买家/商品信息，跳过好评后消息")
+            return
+
+        create_result = await websocket_client.create_chat(
+            account_id=account_id,
+            buyer_id=str(order.buyer_id),
+            item_id=str(order.item_id),
+        )
+        if not isinstance(create_result, dict) or not create_result.get("success"):
+            logger.warning(f"[批量补评价] 订单 {order_id} 创建会话失败，跳过好评后消息")
+            return
+        chat_id = (create_result.get("data") or {}).get("chat_id")
+        if not chat_id:
+            logger.warning(f"[批量补评价] 订单 {order_id} 创建会话响应缺少 chat_id，跳过好评后消息")
+            return
+
+        # 直接按内部接口契约发送（websocket_client.send_message 的字段与内部接口不一致，见 #326）
+        send_res = await websocket_client.http_client.post(
+            f"{websocket_client.base_url}/internal/accounts/{account_id}/send-message",
+            json={"chat_id": chat_id, "message": content, "wait_result": True},
+        )
+        if not isinstance(send_res, dict) or not send_res.get("success"):
+            logger.warning(f"[批量补评价] 订单 {order_id} 好评后消息发送失败: {send_res}")
+            return
+
+        data = send_res.get("data") or {}
+        if (data.get("send_status") or "unknown") == "failed":
+            logger.warning(
+                f"[批量补评价] 订单 {order_id} 好评后消息被拦截: {data.get('send_fail_reason')}"
+            )
+            return
+
+        await mark_order_thanks_sent(order_id)
+        logger.info(f"[批量补评价] 订单 {order_id} 好评后消息已发送")
+    except Exception as e:
+        logger.warning(f"[批量补评价] 订单 {order_id} 好评后消息发送异常: {e}")
 
 
 class BatchRateRequest(BaseModel):
@@ -263,6 +347,8 @@ async def batch_rate_orders(
                     
                     if rate_result.get('success'):
                         account_result["rated_count"] += 1
+                        # 好评后自动发送致谢消息（#232），失败不影响批量评价结果
+                        await _send_thanks_after_rate(db, account_id, order_id)
                     else:
                         account_result["failed_count"] += 1
                         logger.warning(
