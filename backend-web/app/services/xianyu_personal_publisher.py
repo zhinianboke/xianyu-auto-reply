@@ -146,7 +146,7 @@ class XianyuPersonalPublisher:
         image_items: list[dict[str, Any]] = []
         for index, image in enumerate(images[:9], 1):
             try:
-                uploaded = await upload_publish_image(text(image), cookie, static_root=self.static_root)
+                uploaded = await upload_publish_image(text(image), cookie, static_root=self.static_root, account_id=account_id)
             except PublishMediaError as exc:
                 raise DirectPublishError(f"第 {index} 张图片上传失败：{exc}") from exc
             uploaded["major"] = index == 1

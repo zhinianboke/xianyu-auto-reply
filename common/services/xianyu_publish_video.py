@@ -149,8 +149,8 @@ async def _extract_video_cover(content: bytes, name: str) -> tuple[bytes, int, i
     return await asyncio.to_thread(_extract_video_cover_sync, content, Path(name).suffix)
 
 
-async def _upload_video_cover(content: bytes, name: str, cookie: str) -> str:
-    """上传视频首帧封面并返回闲鱼图片地址。"""
+async def _upload_video_cover(content: bytes, name: str, cookie: str, account_id: str | None = None) -> str:
+    """上传视频首帧封面并返回闲鱼图片地址（按账号代理）。"""
     try:
         cover_item = await upload_publish_image_content(
             content,
@@ -158,6 +158,7 @@ async def _upload_video_cover(content: bytes, name: str, cookie: str) -> str:
             cookie,
             content_type="image/jpeg",
             source=f"视频封面:{name}",
+            account_id=account_id,
         )
     except PublishMediaError as exc:
         raise PublishVideoError(f"视频封面上传失败：{exc}") from exc
@@ -365,7 +366,7 @@ async def upload_publish_video(
                 file_id = _text(second_model.get("fileId"))
                 oss_url = _text(second_model.get("ossUrl"))
                 if file_id and oss_url:
-                    cover_url = await _upload_video_cover(cover_content, name, cookie)
+                    cover_url = await _upload_video_cover(cover_content, name, cookie, account_id)
                     return _video_payload(video, file_id, oss_url, width, height, cover_url), cookie
         else:
             logger.warning(f"闲鱼视频秒传检查失败，继续分片上传：account_id={account_id}, error={second_result.get('error')}")
@@ -450,7 +451,7 @@ async def upload_publish_video(
     oss_url = _text(model.get("ossUrl"))
     if not file_id or not oss_url:
         raise PublishVideoError("视频上传完成接口未返回 fileId 或 ossUrl")
-    cover_url = await _upload_video_cover(cover_content, name, cookie)
+    cover_url = await _upload_video_cover(cover_content, name, cookie, account_id)
     return _video_payload(video, file_id, oss_url, width, height, cover_url), cookie
 
 
