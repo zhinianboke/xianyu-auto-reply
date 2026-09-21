@@ -78,10 +78,10 @@ type SettingCategory =
  */
 const SETTING_DEFS: SettingDef[] = [
   // 基础设置
-  { key: 'allow_registration', label: '允许注册', type: 'switch', category: '基础设置' },
-  { key: 'enable_login_captcha', label: '登录验证码', type: 'switch', category: '基础设置' },
+  { key: 'registration_enabled', label: '允许注册', type: 'switch', category: '基础设置' },
+  { key: 'login_captcha_enabled', label: '登录验证码', type: 'switch', category: '基础设置' },
   { key: 'show_default_login_info', label: '显示默认登录信息', type: 'switch', category: '基础设置' },
-  { key: 'log_retention_days', label: '日志保留天数', type: 'input', category: '基础设置', numeric: true, placeholder: '如 30' },
+  { key: 'log.retention_days', label: '日志保留天数', type: 'input', category: '基础设置', numeric: true, placeholder: '如 30' },
   { key: 'account.face_verify_timeout_disable', label: '人脸验证超时自动禁用', type: 'switch', category: '基础设置' },
   {
     key: 'password_login.mode',
@@ -102,7 +102,7 @@ const SETTING_DEFS: SettingDef[] = [
   { key: 'smtp_sender', label: '发件人', type: 'input', category: 'SMTP配置', placeholder: '发件人名称' },
   // Token 获取方式
   {
-    key: 'token_method',
+    key: 'token.api_mode',
     label: '获取方式',
     type: 'toggle',
     category: 'Token获取方式',
@@ -112,8 +112,8 @@ const SETTING_DEFS: SettingDef[] = [
       { value: 'remote', label: '远程' },
     ],
   },
-  { key: 'remote_token_url', label: '远程URL', type: 'input', category: 'Token获取方式', placeholder: '远程 Token 服务地址' },
-  { key: 'remote_token_key', label: '密钥', type: 'secret', category: 'Token获取方式', placeholder: '远程服务密钥' },
+  { key: 'token.remote_url', label: '远程URL', type: 'input', category: 'Token获取方式', placeholder: '远程 Token 服务地址' },
+  { key: 'token.remote_secret_key', label: '密钥', type: 'secret', category: 'Token获取方式', placeholder: '远程服务密钥' },
   // 密码登录远程配置（仅当 password_login.mode === 'protocol' 时展示）
   { key: 'password_login.remote_url', label: '远程URL', type: 'input', category: '密码登录远程配置', placeholder: 'https://api.xianyushop.shop/api/external/invoke' },
   { key: 'password_login.remote_secret_key', label: '秘钥', type: 'secret', category: '密码登录远程配置', placeholder: '远程服务密钥' },

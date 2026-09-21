@@ -155,22 +155,59 @@ export async function resetPassword(
   return data as { success: boolean; message?: string };
 }
 
-/** 获取极验滑块配置（challenge / gt / new_captcha） */
+/**
+ * 获取极验滑块配置（challenge / gt / new_captcha / offline）。
+ *
+ * 后端返回两层信封结构：{ success, code, message, data: { success, gt, challenge, new_captcha } }。
+ * 此前实现直接读取外层，导致 gt/challenge 恒为 undefined、SDK 卡在“加载验证码”。
+ * 这里统一解包到内层 data，并做参数完整性校验（缺参数立即抛错，避免静默卡死）。
+ * 内层 success === 0 表示极验宕机降级模式（离线本地验证）。
+ */
 export async function getGeetestConfig(): Promise<{
   challenge: string;
   gt: string;
   new_captcha: boolean;
+  offline: boolean;
 }> {
   const client = await getApiClient();
   const { data, error } = (await (client.GET as any)(
     '/api/v1/geetest/register',
   )) as {
-    data?: { challenge: string; gt: string; new_captcha: boolean };
+    data?: {
+      data?: {
+        success?: number;
+        gt?: string;
+        challenge?: string;
+        new_captcha?: boolean;
+      };
+      gt?: string;
+      challenge?: string;
+      new_captcha?: boolean;
+    };
     error?: unknown;
   };
 
   if (error) throw await extractError(error);
-  return data as { challenge: string; gt: string; new_captcha: boolean };
+
+  // 解包信封：优先取内层 data；若内层缺少 gt/challenge 则回退外层（兼容未来结构调整）
+  const envelope = (data ?? {}) as Record<string, any>;
+  const inner =
+    envelope.data && (envelope.data.gt || envelope.data.challenge)
+      ? envelope.data
+      : envelope;
+
+  const gt = inner.gt as string | undefined;
+  const challenge = inner.challenge as string | undefined;
+  if (!gt || !challenge) {
+    throw new Error('验证码参数不完整，请重试');
+  }
+
+  return {
+    gt,
+    challenge,
+    new_captcha: inner.new_captcha !== false,
+    offline: inner.success === 0,
+  };
 }
 
 /** 校验极验滑动结果 */
