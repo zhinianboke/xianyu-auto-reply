@@ -110,10 +110,11 @@ async def execute_single_publish(
     log_svc = PublishLogService(session)
     address_svc = PublishAddressService(session)
 
-    # 自动续售发布是不可回滚的外部副作用。已有成功结果直接复用，
-    # 进行中或未知结果不得再次调用平台接口。
+    # 只有自动续售发布才启用幂等与未知结果对账保护。
+    # 手工单品发布必须优先执行，不得被自动续售历史状态拦截。
+    is_auto_relist_publish = source_event_id is not None
     existing_log = None
-    if publish_request_id:
+    if is_auto_relist_publish and publish_request_id:
         existing_log = await log_svc.get_by_request_id(publish_request_id)
         if existing_log:
             if existing_log.status == "success" and existing_log.item_id:
@@ -216,15 +217,16 @@ async def execute_single_publish(
             # 并发调用同一请求号时，唯一约束只允许一个日志获胜；
             # 另一方必须读取已有状态，不能继续调用平台接口。
             await session.rollback()
-            existing_log = await log_svc.get_by_request_id(publish_request_id or "")
-            if existing_log:
-                return {
-                    "success": existing_log.status == "success" and bool(existing_log.item_id),
-                    "unknown": existing_log.status != "failed",
-                    "message": "发布请求已有记录，结果需要对账后再处理",
-                    "item_id": existing_log.item_id,
-                    "log_id": existing_log.id,
-                }
+            if is_auto_relist_publish and publish_request_id:
+                existing_log = await log_svc.get_by_request_id(publish_request_id)
+                if existing_log:
+                    return {
+                        "success": existing_log.status == "success" and bool(existing_log.item_id),
+                        "unknown": existing_log.status != "failed",
+                        "message": "发布请求已有记录，结果需要对账后再处理",
+                        "item_id": existing_log.item_id,
+                        "log_id": existing_log.id,
+                    }
             raise
 
     result = None
@@ -279,18 +281,18 @@ async def execute_single_publish(
         if refreshed_cookies and refreshed_cookies != account.cookie:
             account.cookie = refreshed_cookies
             refreshed_cookie = refreshed_cookies
-        publish_unknown = publish_call_started and bool(
+        publish_unknown = is_auto_relist_publish and publish_call_started and bool(
             result and (result.get("unknown") or result.get("_request_status_unknown"))
         )
     except Exception as exc:
         pub_error = exc
         # 一旦进入平台发布调用，异常无法证明平台未产生副作用；即使异常类型
         # 不是常见网络错误，也必须进入人工对账，避免自动续售重复上架。
-        publish_unknown = publish_call_started
+        publish_unknown = is_auto_relist_publish and publish_call_started
         logger.error(f"单品发布异常: {exc}")
 
     if not isinstance(result, dict):
-        publish_unknown = publish_call_started
+        publish_unknown = is_auto_relist_publish and publish_call_started
         result = {"success": False, "message": "发布接口未返回有效结果"}
 
     # 手动发布失败或商品列表没有发生变化时，后续流程可能不会提交调用方会话；
@@ -349,7 +351,7 @@ async def execute_single_publish(
             # 自动续售必须拿到平台商品 ID 才能继续本地迁移和切换监听商品。
             # 平台返回成功但缺少 ID（或返回失败却带有 ID）都无法证明副作用状态，
             # 统一保留为未知结果，禁止后续再次调用发布接口。
-            ambiguous_result = bool(publish_request_id) and (
+            ambiguous_result = is_auto_relist_publish and bool(publish_request_id) and (
                 (publish_success and not result_item_id)
                 or (not publish_success and bool(result_item_id))
             )
@@ -383,7 +385,7 @@ async def execute_single_publish(
             )
     except Exception as db_err:
         logger.error(f"更新发布日志失败: {db_err}")
-        if publish_request_id:
+        if is_auto_relist_publish and publish_request_id:
             # 外部平台结果已返回，但本地日志状态无法确认，自动续售不得把它当作
             # 可安全重试的明确失败，否则可能重复上架。
             return {

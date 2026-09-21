@@ -28,6 +28,7 @@ from common.models.xy_account import XYAccount
 from common.models.xy_keyword_rule import XYKeywordRule
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.default_reply import DefaultReply, DefaultReplyRecord
+from common.models.auto_reply_message_log import XYAutoReplyMessageLog
 from common.models.user_setting import UserSetting
 from common.models.xy_order import XYOrder
 from common.db.session import async_session_maker
@@ -2233,7 +2234,19 @@ class AutoReplyService:
     async def _pause_ai_reply_after_manual_message(
         self, chat_id: str, item_id: str, log_payload: Dict[str, Any]
     ) -> bool:
-        """人工回复后，按账号、买家和商品维度暂停 AI 回复。"""
+        """人工回复后，按账号、买家和商品维度暂停 AI 回复。
+
+        暂停上下文优先取内存中最近一次买家消息；内存缺失（服务重启、卖家主动
+        发起会话等）时，从自动回复日志表按会话反查最近一条真实买家消息兜底。
+
+        Args:
+            chat_id: 会话ID
+            item_id: 本次人工消息携带的商品ID（可能为空）
+            log_payload: 当前消息日志载体，用于写入暂停上下文快照
+        Returns:
+            True 表示已成功设置 AI 暂停；False 表示未开启开关或无法定位买家上下文，
+            此时调用方应回退到原有的整会话暂停逻辑。
+        """
         try:
             from app.services.xianyu.ai_reply_engine import get_ai_reply_engine
 
@@ -2246,20 +2259,80 @@ class AutoReplyService:
                 return False
 
             pause_minutes = int(settings.get("manual_reply_ai_pause_minutes", 10) or 10)
+            # 1. 优先使用内存中最近一次买家消息上下文
             paused_context = pause_manager.pause_ai_reply_for_manual_message(
                 chat_id, self.cookie_id, item_id, pause_minutes
             )
-            if paused_context:
-                buyer_id, paused_item_id = paused_context
-                log_payload.setdefault("context_snapshot", {}).update({
-                    "manual_reply_ai_pause_minutes": pause_minutes,
-                    "manual_reply_ai_pause_buyer_id": buyer_id,
-                    "manual_reply_ai_pause_item_id": paused_item_id,
-                })
+            # 2. 内存未命中时，从日志表反查最近一条买家消息兜底
+            if not paused_context:
+                fallback = await self._lookup_buyer_context_from_db(chat_id, item_id)
+                if fallback:
+                    buyer_id, fallback_item_id = fallback
+                    paused_context = pause_manager.pause_ai_reply(
+                        self.cookie_id, buyer_id, fallback_item_id, pause_minutes
+                    )
+
+            if not paused_context:
+                logger.info(
+                    f"【{self.cookie_id}】人工回复 AI 暂停未生效：会话 {chat_id} 无可用买家上下文，"
+                    f"回退为整会话暂停"
+                )
+                return False
+
+            buyer_id, paused_item_id = paused_context
+            log_payload.setdefault("context_snapshot", {}).update({
+                "manual_reply_ai_pause_minutes": pause_minutes,
+                "manual_reply_ai_pause_buyer_id": buyer_id,
+                "manual_reply_ai_pause_item_id": paused_item_id,
+            })
             return True
         except Exception as e:
             logger.warning(f"【{self.cookie_id}】设置人工回复 AI 暂停失败: {e}")
             return False
+
+    async def _lookup_buyer_context_from_db(
+        self, chat_id: str
+    ) -> tuple[str, str]:
+        """从自动回复日志表兜底反查会话最近一次的真实买家上下文。
+
+        用于内存上下文缺失（服务重启、卖家主动发起会话等）时，
+        仍能按买家+商品维度精确暂停 AI。
+
+        Args:
+            chat_id: 会话ID
+        Returns:
+            (buyer_id, item_id)；查不到时返回 ("", "")
+        """
+        normalized_chat_id = str(chat_id or "").strip()
+        if not normalized_chat_id:
+            return "", ""
+        try:
+            myid = getattr(self.xianyu_instance, "myid", self.cookie_id)
+            async with async_session_maker() as session:
+                # 取该账号该会话中，最近一条由买家（非卖家自己）发来的消息
+                stmt = (
+                    select(
+                        XYAutoReplyMessageLog.sender_user_id,
+                        XYAutoReplyMessageLog.item_id,
+                    )
+                    .where(
+                        XYAutoReplyMessageLog.account_id == self.cookie_id,
+                        XYAutoReplyMessageLog.chat_id == normalized_chat_id,
+                        XYAutoReplyMessageLog.sender_user_id != myid,
+                    )
+                    .order_by(XYAutoReplyMessageLog.created_at.desc())
+                    .limit(1)
+                )
+                result = await session.execute(stmt)
+                row = result.first()
+            if not row:
+                return "", ""
+            buyer_id = str(row[0] or "").strip()
+            item_id = str(row[1] or "").strip()
+            return buyer_id, item_id
+        except Exception as e:
+            logger.warning(f"【{self.cookie_id}】从数据库反查买家上下文失败: {e}")
+            return "", ""
 
     async def _check_user_has_orders(self, session: AsyncSession, buyer_user_id: str) -> bool:
         """检查指定买家在当前账号下是否有订单记录

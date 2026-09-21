@@ -173,4 +173,6 @@ def run_server():
         host=listen_host,
         port=settings.service_port,
         reload=reload_enabled,
+        # 保留公共日志工具配置，确保 Uvicorn 日志也进入普通日志和 error.log。
+        log_config=None,
     )

@@ -52,31 +52,53 @@ class AutoReplyPauseManager:
             time.time(),
         )
 
+    def pause_ai_reply(
+        self, cookie_id: str, buyer_id: str, item_id: str, pause_minutes: int
+    ) -> tuple[str, str] | None:
+        """按明确的账号、买家、商品维度暂停 AI 回复（内存/数据库两条路径共用）。
+
+        Args:
+            cookie_id: 账号标识
+            buyer_id: 买家用户ID
+            item_id: 商品ID
+            pause_minutes: 暂停时长（分钟）
+        Returns:
+            成功时返回 (buyer_id, item_id)，参数不合法时返回 None
+        """
+        normalized_buyer_id = str(buyer_id or "").strip()
+        normalized_item_id = str(item_id or "").strip()
+        if not normalized_buyer_id or not normalized_item_id or pause_minutes <= 0:
+            return None
+
+        pause_until = time.time() + pause_minutes * 60
+        self.paused_ai_contexts[(cookie_id, normalized_buyer_id, normalized_item_id)] = pause_until
+        end_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(pause_until))
+        logger.info(
+            f"【{cookie_id}】人工回复后暂停 AI：buyer_id={normalized_buyer_id}, item_id={normalized_item_id}, "
+            f"时长={pause_minutes}分钟，恢复时间: {end_time}"
+        )
+        return normalized_buyer_id, normalized_item_id
+
     def pause_ai_reply_for_manual_message(
         self, chat_id: str, cookie_id: str, item_id: str, pause_minutes: int
     ) -> tuple[str, str] | None:
-        """按当前会话的买家和商品，暂停该精确维度的 AI 回复。"""
+        """按当前会话内存中记录的买家和商品，暂停该精确维度的 AI 回复。
+
+        仅使用内存上下文；内存缺失（如服务重启、卖家主动发起会话）时返回 None，
+        由调用方决定是否从数据库兜底反查。
+        """
         normalized_chat_id = str(chat_id or "").strip()
         context = self.buyer_contexts.get((cookie_id, normalized_chat_id))
         if not context:
             logger.info(
-                f"【{cookie_id}】人工回复 AI 暂停未生效：未找到会话 {normalized_chat_id} 的买家上下文"
+                f"【{cookie_id}】人工回复 AI 暂停内存未命中：未找到会话 {normalized_chat_id} 的买家上下文"
             )
             return None
 
         buyer_id, remembered_item_id, _ = context
+        # item_id 优先取本次消息的，缺失时回退到内存记录的买家消息商品
         target_item_id = str(item_id or remembered_item_id).strip()
-        if not buyer_id or not target_item_id or pause_minutes <= 0:
-            return None
-
-        pause_until = time.time() + pause_minutes * 60
-        self.paused_ai_contexts[(cookie_id, buyer_id, target_item_id)] = pause_until
-        end_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(pause_until))
-        logger.info(
-            f"【{cookie_id}】人工回复后暂停 AI：buyer_id={buyer_id}, item_id={target_item_id}, "
-            f"时长={pause_minutes}分钟，恢复时间: {end_time}"
-        )
-        return buyer_id, target_item_id
+        return self.pause_ai_reply(cookie_id, buyer_id, target_item_id, pause_minutes)
 
     def get_remaining_ai_pause_time(
         self, cookie_id: str, buyer_id: str, item_id: str

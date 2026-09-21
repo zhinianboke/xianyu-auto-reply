@@ -381,7 +381,7 @@ async def request_im_token_with_fallback(
     device_id: str,
     *,
     api_mode: str = DEFAULT_TOKEN_API_MODE,
-    timeout_seconds: int = 30,
+    timeout_seconds: int = 600,
     log_tag: str = "",
 ) -> ImTokenApiResult:
     """按系统设置调用 Token 接口。
