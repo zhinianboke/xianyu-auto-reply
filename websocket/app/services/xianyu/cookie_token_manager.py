@@ -36,6 +36,10 @@ from common.services.token_api_mode import (
     get_token_api_mode_label,
     load_token_api_mode,
 )
+from common.services.token_request_lock import (
+    TokenRequestLockError,
+    token_request_lock,
+)
 from common.services.captcha.concurrency import run_browser_task
 from common.services.captcha.slider_mode import (
     SLIDER_MODE_REAL_MOUSE,
@@ -1068,7 +1072,41 @@ class CookieTokenManager:
 
     # ==================== Token刷新核心逻辑 ====================
 
-    async def refresh_token(self, captcha_retry_count: int = 0, token_expiry_retry_count: int = 0):
+    async def refresh_token(
+        self,
+        captcha_retry_count: int = 0,
+        token_expiry_retry_count: int = 0,
+    ):
+        """在账号级 Redis 锁内执行完整 Token 刷新流程。
+
+        Args:
+            captcha_retry_count: 滑块验证重试次数。
+            token_expiry_retry_count: 令牌过期重试次数。
+        Returns:
+            可用 Token；刷新失败或锁不可用时返回 None。
+        """
+        account_identifier = self.myid or self.cookie_id
+        try:
+            async with token_request_lock(account_identifier):
+                return await self._refresh_token_with_lock(
+                    captcha_retry_count,
+                    token_expiry_retry_count,
+                )
+        except TokenRequestLockError as exc:
+            logger.error(f"【{self.cookie_id}】{exc}")
+            self.current_token = None
+            self.last_token_refresh_status = "failed_token_request_lock"
+            await self.send_token_refresh_notification(
+                str(exc),
+                "token_request_lock_failed",
+            )
+            return None
+
+    async def _refresh_token_with_lock(
+        self,
+        captcha_retry_count: int = 0,
+        token_expiry_retry_count: int = 0,
+    ):
         """刷新token
         
         Args:
@@ -1151,6 +1189,13 @@ class CookieTokenManager:
                     self._startup_expired_cache_available = False
                 if cached:
                     return await self._use_cached_token(cached)
+                if not getattr(self, "_last_cache_lookup_succeeded", True):
+                    self.last_token_refresh_status = "skipped_cache_lookup_failed"
+                    logger.warning(
+                        f"【{self.cookie_id}】Token缓存复查失败，"
+                        "本次未调用Token接口，等待下次轮询"
+                    )
+                    return self.current_token
 
             should_skip_refresh, existing_token = (
                 await self._get_processing_risk_control_skip_result("Token刷新")
@@ -1274,7 +1319,7 @@ class CookieTokenManager:
                 if refresh_result is True:
                     # 刷新成功，清除旧缓存并重新获取token
                     await self._delete_cached_token()
-                    return await self.refresh_token(captcha_retry_count + 1)
+                    return await self._refresh_token_with_lock(captcha_retry_count + 1)
                 if refresh_result == "skipped_cooldown":
                     # 密码登录冷却期内跳过：包括「上次登录冷却 300 秒内」与「账密错误
                     # 冷却 5 小时内」两种确定性可恢复状态。账号本身一切正常，只是
@@ -1360,7 +1405,9 @@ class CookieTokenManager:
                         # 滑块验证成功后，清除旧缓存并重新获取token
                         self._clear_refetch_state()
                         await self._delete_cached_token()
-                        return await self.refresh_token(captcha_retry_count=captcha_retry_count + 1)
+                        return await self._refresh_token_with_lock(
+                            captcha_retry_count=captcha_retry_count + 1
+                        )
                     logger.error(f"【{self.cookie_id}】滑块验证失败")
                     self._clear_refetch_state()
                     notification_sent = True
@@ -1383,7 +1430,7 @@ class CookieTokenManager:
                     ret_value = res_json.get('ret', []) or []
                     logger.warning(f"【{self.cookie_id}】检测到令牌过期，准备重试一次: {ret_value}")
                     await asyncio.sleep(0.5)
-                    return await self.refresh_token(
+                    return await self._refresh_token_with_lock(
                         captcha_retry_count=captcha_retry_count,
                         token_expiry_retry_count=token_expiry_retry_count + 1,
                     )

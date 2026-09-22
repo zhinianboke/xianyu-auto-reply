@@ -40,7 +40,12 @@ from common.services.token_api_mode import (
     get_token_api_mode_label,
     load_token_api_mode,
 )
+from common.services.token_request_lock import (
+    TokenRequestLockError,
+    token_request_lock,
+)
 from common.services.token_renewal_cache_service import (
+    get_reusable_token_cache,
     get_token_renewal_cutoff,
     write_renewed_token_cache,
 )
@@ -263,6 +268,49 @@ class TokenRenewalTask:
         return merged_cookies_str
 
     async def _renew_candidate(
+        self,
+        candidate: TokenRenewalCandidate,
+    ) -> TokenRenewalResult:
+        """串行续期单个账号，并在持锁后复查数据库缓存。
+
+        Args:
+            candidate: 本轮扫描得到的 Token 续期候选。
+        Returns:
+            已被其他流程续期时直接返回成功，否则返回本次续期结果。
+        """
+        try:
+            async with token_request_lock(candidate.user_id):
+                cache_lookup = await get_reusable_token_cache(
+                    token_user_id=candidate.user_id,
+                    cache_id=candidate.cache_id,
+                    valid_after=get_token_renewal_cutoff(),
+                )
+                if not cache_lookup.success:
+                    message = f"{cache_lookup.message}，本次未调用Token接口"
+                    logger.error(
+                        f"【{self.task_name}】【{candidate.account_id}】{message}"
+                    )
+                    return self._failed_result(candidate, message)
+                if cache_lookup.reusable:
+                    message = f"{cache_lookup.message}，本次未调用Token接口"
+                    logger.info(
+                        f"【{self.task_name}】【{candidate.account_id}】{message}"
+                    )
+                    return TokenRenewalResult(
+                        candidate=candidate,
+                        success=True,
+                        message=message,
+                        renew_expire_at=cache_lookup.effective_expire_at,
+                    )
+                return await self._renew_candidate_with_lock(candidate)
+        except TokenRequestLockError as exc:
+            message = str(exc)
+            logger.error(
+                f"【{self.task_name}】【{candidate.account_id}】{message}"
+            )
+            return self._failed_result(candidate, message)
+
+    async def _renew_candidate_with_lock(
         self,
         candidate: TokenRenewalCandidate,
     ) -> TokenRenewalResult:
