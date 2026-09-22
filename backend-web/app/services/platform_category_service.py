@@ -152,9 +152,9 @@ def _parse_candidates(response: dict[str, Any]) -> list[dict[str, Any]]:
                 continue
             transport = value.get("transportData") if isinstance(value.get("transportData"), dict) else {}
             channel_cat_id = _as_text(value.get("channelCatId")) or _as_text(transport.get("channelCateId"))
-            channel_cat_name = _as_text(value.get("channelCatName")) or _as_text(transport.get("channelCateName"))
             cat_id = _as_text(value.get("catId")) or _as_text(transport.get("catId"))
             cat_name = _as_text(value.get("catName")) or _value_name(value, transport)
+            channel_cat_name = _as_text(value.get("channelCatName")) or _as_text(transport.get("channelCateName")) or cat_name
             leaf_id = _as_text(value.get("leafId")) or _as_text(transport.get("leafId"))
             tb_cat_id = _as_text(value.get("tbCatId")) or _as_text(transport.get("tbCatId"))
             normalized_value = {
@@ -199,6 +199,11 @@ def _apply_category_predict_result(
     """
     data = response.get("data") or {}
     result = data.get("categoryPredictResult") if isinstance(data, dict) else None
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except json.JSONDecodeError:
+            return candidates
     if not isinstance(result, dict):
         return candidates
 
@@ -209,21 +214,47 @@ def _apply_category_predict_result(
     if not any((cat_id, cat_name, channel_cat_id, tb_cat_id)):
         return candidates
 
-    for candidate in candidates:
-        matches = (
-            bool(channel_cat_id and candidate.get("channel_cat_id") == channel_cat_id)
-            or bool(tb_cat_id and candidate.get("tb_cat_id") == tb_cat_id)
-            or bool(cat_id and candidate.get("cat_id") == cat_id)
-            or bool(cat_name and candidate.get("cat_name") == cat_name)
+    identifier_fields = (
+        (channel_cat_id, "channel_cat_id", 8),
+        (tb_cat_id, "tb_cat_id", 4),
+        (cat_id, "cat_id", 2),
+    )
+
+    def match_score(candidate: dict[str, Any]) -> int:
+        """已有标识必须全部一致，并优先选择匹配信息最完整的候选。"""
+        score = 0
+        for result_value, candidate_field, weight in identifier_fields:
+            candidate_value = _as_text(candidate.get(candidate_field))
+            if not result_value or not candidate_value:
+                continue
+            if candidate_value != result_value:
+                return -1
+            score += weight
+        candidate_name = _as_text(candidate.get("cat_name"))
+        if cat_name and candidate_name:
+            if candidate_name == cat_name:
+                score += 1
+            elif score == 0:
+                return -1
+        return score
+
+    scored_candidates = [(match_score(candidate), candidate) for candidate in candidates]
+    best_score, matched_candidate = max(
+        scored_candidates,
+        key=lambda item: item[0],
+        default=(-1, None),
+    )
+    if best_score <= 0:
+        matched_candidate = None
+    if matched_candidate:
+        for candidate in candidates:
+            candidate["is_selected"] = candidate is matched_candidate
+        matched_candidate["cat_id"] = matched_candidate.get("cat_id") or cat_id or None
+        matched_candidate["cat_name"] = matched_candidate.get("cat_name") or cat_name or None
+        matched_candidate["channel_cat_id"] = (
+            matched_candidate.get("channel_cat_id") or channel_cat_id or None
         )
-        if not matches:
-            continue
-        candidate["cat_id"] = candidate.get("cat_id") or cat_id or None
-        candidate["cat_name"] = candidate.get("cat_name") or cat_name or None
-        candidate["channel_cat_id"] = candidate.get("channel_cat_id") or channel_cat_id or None
-        candidate["tb_cat_id"] = candidate.get("tb_cat_id") or tb_cat_id or None
-        candidate["is_selected"] = True
-        break
+        matched_candidate["tb_cat_id"] = matched_candidate.get("tb_cat_id") or tb_cat_id or None
     return candidates
 
 

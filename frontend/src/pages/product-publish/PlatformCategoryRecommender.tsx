@@ -14,7 +14,11 @@ import {
 } from '@/api/productPublish'
 import type { PublishForm } from './publishTypes'
 import PlatformAttributesEditor, { PlatformOptionField } from './PlatformAttributesEditor'
-import { isCompleteCategoryCandidate, mergeCategoryCandidate } from './categoryUtils'
+import {
+  bestMatchingCategoryCandidate,
+  isCompleteCategoryCandidate,
+  mergeCategoryCandidate,
+} from './categoryUtils'
 
 interface PlatformCategoryRecommenderProps {
   form: PublishForm
@@ -54,12 +58,13 @@ function candidateLabel(candidate: PlatformCategoryCandidate) {
 }
 
 function candidatePatch(candidate: PlatformCategoryCandidate): Partial<PublishForm> {
+  const categoryName = candidateLabel(candidate)
   return {
-    category: candidateLabel(candidate),
+    category: categoryName,
     platform_category_id: candidate.cat_id || '',
-    platform_category_name: candidate.cat_name || '',
+    platform_category_name: candidate.cat_name || categoryName,
     platform_channel_category_id: candidate.channel_cat_id || '',
-    platform_channel_category_name: candidate.channel_cat_name || '',
+    platform_channel_category_name: candidate.channel_cat_name || categoryName,
     platform_leaf_id: candidate.leaf_id || '',
     platform_tb_category_id: candidate.tb_cat_id || '',
     platform_category_path: candidate.path || [],
@@ -117,27 +122,6 @@ function propertiesFromAttributes(attributes: PlatformMaterialAttribute[]): Plat
   }))
 }
 
-function samePath(left: PublishForm['platform_category_path'], right: PlatformCategoryCandidate['path']) {
-  return left.length === right.length && left.every((item, index) => item.id === right[index]?.id && item.name === right[index]?.name)
-}
-
-function sameCandidate(left: PlatformCategoryCandidate | undefined, right: PlatformCategoryCandidate) {
-  if (!left) return false
-  if (left.channel_cat_id && right.channel_cat_id) return left.channel_cat_id === right.channel_cat_id
-  if (left.tb_cat_id && right.tb_cat_id) return left.tb_cat_id === right.tb_cat_id
-  if (left.path?.length && right.path?.length) return samePath(left.path, right.path)
-  // catId 在闲鱼接口中可能被多个频道末级分类复用，只有没有更具体 ID 时才能兜底比较。
-  return Boolean(
-    !left.channel_cat_id
-      && !right.channel_cat_id
-      && !left.tb_cat_id
-      && !right.tb_cat_id
-      && left.cat_id
-      && right.cat_id
-      && left.cat_id === right.cat_id,
-  )
-}
-
 function transportData(value: PlatformCategoryCardValue) {
   const transport = value.transportData
   return transport && typeof transport === 'object' && !Array.isArray(transport)
@@ -145,31 +129,64 @@ function transportData(value: PlatformCategoryCardValue) {
     : {}
 }
 
-function candidateMatchesCardValue(candidate: PlatformCategoryCandidate, value: PlatformCategoryCardValue) {
+function cardValueName(value: PlatformCategoryCardValue, transport: Record<string, unknown>) {
+  const directName = asText(value.catName)
+    || asText(value.text)
+    || asText(transport.valueName)
+    || asText(transport.text)
+    || asText(value.channelCatName)
+    || asText(transport.channelCateName)
+  if (directName) return directName
+  const properties = asText(value.properties) || asText(transport.properties)
+  return properties.includes('##') ? properties.split('##').at(-1)?.trim() || '' : ''
+}
+
+function cardValueMatchScore(candidate: PlatformCategoryCandidate, value: PlatformCategoryCardValue) {
   const transport = transportData(value)
   const channelCatId = asText(value.channelCatId) || asText(transport.channelCateId)
   const tbCatId = asText(value.tbCatId) || asText(transport.tbCatId)
-  const catName = asText(value.catName) || asText(transport.valueName)
-  if (candidate.channel_cat_id && channelCatId) return candidate.channel_cat_id === channelCatId
-  if (candidate.tb_cat_id && tbCatId) return candidate.tb_cat_id === tbCatId
-  if (candidate.channel_cat_id || candidate.tb_cat_id) return false
-  if (candidate.cat_id && asText(value.catId)) return candidate.cat_id === asText(value.catId)
-  return Boolean(candidate.cat_name && candidate.cat_name === catName)
+  const catId = asText(value.catId) || asText(transport.catId)
+  const idPairs = [
+    [candidate.channel_cat_id, channelCatId, 8],
+    [candidate.tb_cat_id, tbCatId, 4],
+    [candidate.cat_id, catId, 2],
+  ] as const
+  let score = 0
+  for (const [candidateValue, cardValue, weight] of idPairs) {
+    if (!candidateValue || !cardValue) continue
+    if (candidateValue !== cardValue) return -1
+    score += weight
+  }
+  const candidateName = candidate.cat_name || candidate.channel_cat_name
+  if (candidateName && candidateName === cardValueName(value, transport)) score += 1
+  return score
 }
 
 function buildCategorySelection(cards: PlatformCategoryCardData[], candidate: PlatformCategoryCandidate): CategorySelectionRequest {
   const categoryName = candidate.cat_name || candidate.channel_cat_name || ''
   const channelCategoryId = candidate.channel_cat_id || ''
   let selectedLabel: Record<string, unknown> | null = null
+  let selectedValue: PlatformCategoryCardValue | undefined
+  let bestScore = 0
+
+  for (const card of cards) {
+    if (asText(card.propertyId) !== '-10000' || !Array.isArray(card.valuesList)) continue
+    for (const value of card.valuesList) {
+      const score = cardValueMatchScore(candidate, value)
+      if (score <= bestScore) continue
+      selectedValue = value
+      bestScore = score
+    }
+  }
 
   const currentCardList = cards.map((card) => {
-    if (card.propertyId !== '-10000' || !Array.isArray(card.valuesList)) return card
+    if (asText(card.propertyId) !== '-10000' || !Array.isArray(card.valuesList)) return card
 
     const valuesList = card.valuesList.map((value) => {
-      const selected = candidateMatchesCardValue(candidate, value)
+      const selected = value === selectedValue
       const transport = transportData(value)
       const valueChannelId = asText(value.channelCatId) || asText(transport.channelCateId) || channelCategoryId
-      const valueCategoryName = asText(value.catName) || asText(value.channelCatName) || categoryName
+      const valueCategoryName = cardValueName(value, transport) || categoryName
       const properties = valueChannelId ? `-10000##分类:${valueChannelId}##${valueCategoryName}` : asText(value.properties)
 
       const nextTransport = {
@@ -278,14 +295,15 @@ export function PlatformCategoryRecommender({ form, onChange, categoryLocked = f
         }
 
         const returnedCandidates = response.data.candidates
-        const preferredCandidate = returnedCandidates.find((candidate) => candidate.is_selected && isCompleteCategoryCandidate(candidate))
-          || returnedCandidates.find((candidate) => sameCandidate({
+        const completeCandidates = returnedCandidates.filter(isCompleteCategoryCandidate)
+        const preferredCandidate = completeCandidates.find((candidate) => candidate.is_selected)
+          || bestMatchingCategoryCandidate({
             cat_id: form.platform_category_id,
             channel_cat_id: form.platform_channel_category_id,
             tb_cat_id: form.platform_tb_category_id,
             path: form.platform_category_path,
-          }, candidate) && isCompleteCategoryCandidate(candidate))
-          || returnedCandidates.find(isCompleteCategoryCandidate)
+          }, completeCandidates)
+          || completeCandidates[0]
 
         setCandidates(returnedCandidates)
         setProperties(response.data.properties || [])
@@ -314,6 +332,10 @@ export function PlatformCategoryRecommender({ form, onChange, categoryLocked = f
     const title = form.title.trim()
     const description = form.description.trim()
     const selection = buildCategorySelection(cardList, candidate)
+    if (!selection.selected_list.length) {
+      setError('所选分类无法与平台分类卡匹配，请重新获取分类后再试')
+      return
+    }
     const version = ++requestVersion.current
     setLoading(true)
     setError('')
@@ -334,7 +356,7 @@ export function PlatformCategoryRecommender({ form, onChange, categoryLocked = f
       }
 
       const refreshedCandidates = response.data.candidates
-      const matchedCandidate = refreshedCandidates.find((item) => sameCandidate(item, candidate))
+      const matchedCandidate = bestMatchingCategoryCandidate(candidate, refreshedCandidates)
         || refreshedCandidates.find((item) => item.is_selected)
       const refreshedCandidate = matchedCandidate
         ? mergeCategoryCandidate(candidate, matchedCandidate)
@@ -364,12 +386,12 @@ export function PlatformCategoryRecommender({ form, onChange, categoryLocked = f
     setRetryNonce((value) => value + 1)
   }
 
-  const selectedCandidate = candidates.find((candidate) => sameCandidate({
+  const selectedCandidate = bestMatchingCategoryCandidate({
     cat_id: form.platform_category_id,
     channel_cat_id: form.platform_channel_category_id,
     tb_cat_id: form.platform_tb_category_id,
     path: form.platform_category_path,
-  }, candidate))
+  }, candidates)
   const selectedIndex = selectedCandidate ? String(candidates.indexOf(selectedCandidate)) : ''
 
   const updateAttributes = (platformAttributes: PlatformMaterialAttribute[]) => {
