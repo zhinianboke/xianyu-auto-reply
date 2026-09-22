@@ -63,6 +63,20 @@ def _as_bool(value: Any) -> bool:
     return bool(value)
 
 
+def _value_name(value: dict[str, Any], transport: dict[str, Any]) -> str:
+    """兼容分类卡和属性卡中不同版本的选项显示字段。"""
+    direct_name = (
+        _as_text(value.get("valueName"))
+        or _as_text(value.get("text"))
+        or _as_text(transport.get("valueName"))
+        or _as_text(transport.get("text"))
+    )
+    if direct_name:
+        return direct_name
+    properties = _as_text(value.get("properties")) or _as_text(transport.get("properties"))
+    return properties.rsplit("##", 1)[-1].strip() if "##" in properties else ""
+
+
 def _build_path(value: dict[str, Any]) -> list[dict[str, str]]:
     """根据响应中实际存在的 channelCatN 字段动态构建分类路径。"""
     path: list[dict[str, str]] = []
@@ -139,14 +153,18 @@ def _parse_candidates(response: dict[str, Any]) -> list[dict[str, Any]]:
             transport = value.get("transportData") if isinstance(value.get("transportData"), dict) else {}
             channel_cat_id = _as_text(value.get("channelCatId")) or _as_text(transport.get("channelCateId"))
             channel_cat_name = _as_text(value.get("channelCatName")) or _as_text(transport.get("channelCateName"))
-            cat_name = _as_text(value.get("catName")) or _as_text(transport.get("valueName"))
+            cat_id = _as_text(value.get("catId")) or _as_text(transport.get("catId"))
+            cat_name = _as_text(value.get("catName")) or _value_name(value, transport)
+            leaf_id = _as_text(value.get("leafId")) or _as_text(transport.get("leafId"))
             tb_cat_id = _as_text(value.get("tbCatId")) or _as_text(transport.get("tbCatId"))
             normalized_value = {
                 **transport,
                 **value,
+                "catId": cat_id,
                 "channelCatId": channel_cat_id,
                 "channelCatName": channel_cat_name,
                 "catName": cat_name,
+                "leafId": leaf_id,
                 "tbCatId": tb_cat_id,
             }
             path = _build_path(normalized_value)
@@ -156,11 +174,11 @@ def _parse_candidates(response: dict[str, Any]) -> list[dict[str, Any]]:
                 continue
             candidates.append(
                 {
-                    "cat_id": _as_text(value.get("catId")) or None,
+                    "cat_id": cat_id or None,
                     "cat_name": cat_name or None,
                     "channel_cat_id": channel_cat_id or None,
                     "channel_cat_name": channel_cat_name or None,
-                    "leaf_id": _as_text(value.get("leafId")) or None,
+                    "leaf_id": leaf_id or None,
                     "tb_cat_id": tb_cat_id or None,
                     "path": path,
                     "score": value.get("score"),
@@ -232,7 +250,7 @@ def _parse_properties(response: dict[str, Any]) -> list[dict[str, Any]]:
                 continue
             transport = value.get("transportData") if isinstance(value.get("transportData"), dict) else {}
             value_id = _as_text(value.get("valueId")) or _as_text(transport.get("valueId"))
-            value_name = _as_text(value.get("valueName")) or _as_text(transport.get("valueName"))
+            value_name = _value_name(value, transport)
             if not value_name:
                 continue
             channel_cat_id = _as_text(value.get("channelCatId")) or _as_text(transport.get("channelCateId"))

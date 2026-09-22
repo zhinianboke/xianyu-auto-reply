@@ -196,8 +196,9 @@ export function PlatformAttributesEditor({ properties, attributes, candidate, on
       {visibleProperties.map((property) => {
         const selectedValues = selectedByProperty.get(property.property_id) || []
         const selected = selectedValues[0]
-        // 属性选项带有频道/淘宝分类 ID 时，只显示当前分类的选项，不能用旧分类选项兜底。
-        const options = property.options.filter((option) => optionMatchesCandidate(option, candidate))
+        const matchedOptions = property.options.filter((option) => optionMatchesCandidate(option, candidate))
+        // 本次分类推荐返回的属性已经与当前请求绑定；平台 ID 口径不一致时不能把整组有效选项过滤为空。
+        const options = matchedOptions.length > 0 ? matchedOptions : property.options
         const selectedOptions = options.filter((option) => selectedValues.some((attribute) =>
           (option.value_id && option.value_id === attribute.value_id)
           || option.value_name === attribute.value_name,

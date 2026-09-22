@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import get_current_active_user, get_db_session
-from app.services.product_publish_service import MaterialSpecificationError, ProductMaterialService
+from app.services.product_publish_service import MaterialValidationError, ProductMaterialService
 from app.services.account_service import AccountService
 from app.services.platform_category_service import CategoryRecommendationError, PlatformCategoryService
 from app.services.publish_batch_status_service import PublishBatchStatusService
@@ -357,8 +357,12 @@ async def create_material(
     """创建商品素材"""
     svc = ProductMaterialService(session)
     try:
-        material = await svc.create(current_user.id, req.model_dump())
-    except MaterialSpecificationError as exc:
+        material = await svc.create(
+            current_user.id,
+            req.model_dump(),
+            require_complete_category=True,
+        )
+    except MaterialValidationError as exc:
         return ApiResponse(success=False, message=str(exc))
     return ApiResponse(success=True, message="素材创建成功", data={"id": material.id})
 
@@ -672,8 +676,9 @@ async def update_material(
             # 只忽略请求中未出现的字段；显式传入的空数组、False 或 null 都要保存，
             # 否则编辑素材时清空规格/属性会被旧值覆盖。
             req.model_dump(exclude_unset=True),
+            require_complete_category=True,
         )
-    except MaterialSpecificationError as exc:
+    except MaterialValidationError as exc:
         return ApiResponse(success=False, message=str(exc))
     if not updated:
         return ApiResponse(success=False, message="素材不存在或无权修改")

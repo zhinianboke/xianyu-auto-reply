@@ -13,6 +13,7 @@ import { getApiErrorMessage } from '@/utils/apiError'
 import ProductPublishForm from './ProductPublishForm'
 import ProductVideoUploader from './ProductVideoUploader'
 import MaterialPickerModal from './MaterialPickerModal'
+import { hasCompletePlatformCategory } from './categoryUtils'
 import { buildSkuKey, findDuplicateSpecificationValue, type ProductSpecification, type PublishForm, type SkuRow } from './publishTypes'
 
 const PERSONAL_SELLER_DEFAULT_STOCK = 1
@@ -195,6 +196,7 @@ export function ProductPublish() {
     if (form.description.length > 1500) return addToast({ type: 'warning', message: '商品描述不能超过1500字' })
     if (!form.price || parseFloat(form.price) <= 0) return addToast({ type: 'warning', message: '请填写有效价格' })
     if (imagePaths.length === 0) return addToast({ type: 'warning', message: '请至少上传一张商品图片' })
+    if (!hasCompletePlatformCategory(form)) return addToast({ type: 'warning', message: '平台商品分类信息不完整，请重新选择完整分类' })
     if (!accountCapability.is_fish_shop && (form.specifications.length > 0 || form.sku_rows.length > 0)) return addToast({ type: 'warning', message: '普通卖家账号不能发布多规格和独立库存商品，请改用无规格素材或鱼小铺账号' })
     if (!accountCapability.is_fish_shop && form.shipping_method === 'template') return addToast({ type: 'warning', message: '普通卖家账号不支持运费模板，请重新选择发货方式' })
     if (accountCapability.is_fish_shop) {

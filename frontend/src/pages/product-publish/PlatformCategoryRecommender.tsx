@@ -14,6 +14,7 @@ import {
 } from '@/api/productPublish'
 import type { PublishForm } from './publishTypes'
 import PlatformAttributesEditor, { PlatformOptionField } from './PlatformAttributesEditor'
+import { isCompleteCategoryCandidate, mergeCategoryCandidate } from './categoryUtils'
 
 interface PlatformCategoryRecommenderProps {
   form: PublishForm
@@ -277,20 +278,20 @@ export function PlatformCategoryRecommender({ form, onChange, categoryLocked = f
         }
 
         const returnedCandidates = response.data.candidates
-        const preferredCandidate = returnedCandidates.find((candidate) => candidate.is_selected && candidate.channel_cat_id && candidate.tb_cat_id)
+        const preferredCandidate = returnedCandidates.find((candidate) => candidate.is_selected && isCompleteCategoryCandidate(candidate))
           || returnedCandidates.find((candidate) => sameCandidate({
             cat_id: form.platform_category_id,
             channel_cat_id: form.platform_channel_category_id,
             tb_cat_id: form.platform_tb_category_id,
             path: form.platform_category_path,
-          }, candidate) && candidate.channel_cat_id && candidate.tb_cat_id)
-          || returnedCandidates.find((candidate) => candidate.channel_cat_id && candidate.tb_cat_id)
+          }, candidate) && isCompleteCategoryCandidate(candidate))
+          || returnedCandidates.find(isCompleteCategoryCandidate)
 
         setCandidates(returnedCandidates)
         setProperties(response.data.properties || [])
         setCardList(response.data.card_list || [])
         if (!preferredCandidate) {
-          setError('接口返回的分类缺少发布所需的分类 ID，请点击重试')
+          setError('接口返回的分类信息不完整，请重新选择分类或点击重试')
           return
         }
         onChange({ ...candidatePatch(preferredCandidate), platform_attributes: [], brand: '', condition: '全新' })
@@ -333,11 +334,20 @@ export function PlatformCategoryRecommender({ form, onChange, categoryLocked = f
       }
 
       const refreshedCandidates = response.data.candidates
-      const refreshedCandidate = refreshedCandidates.find((item) => sameCandidate(item, candidate)) || candidate
-      setCandidates(refreshedCandidates)
+      const matchedCandidate = refreshedCandidates.find((item) => sameCandidate(item, candidate))
+        || refreshedCandidates.find((item) => item.is_selected)
+      const refreshedCandidate = matchedCandidate
+        ? mergeCategoryCandidate(candidate, matchedCandidate)
+        : candidate
+      setCandidates(matchedCandidate
+        ? refreshedCandidates.map((item) => item === matchedCandidate ? refreshedCandidate : item)
+        : refreshedCandidates)
       setProperties(response.data.properties || [])
       setCardList(response.data.card_list || selection.current_card_list)
       onChange({ ...candidatePatch(refreshedCandidate), platform_attributes: [], brand: '', condition: '全新' })
+      if (!isCompleteCategoryCandidate(refreshedCandidate)) {
+        setError('当前分类缺少发布所需的分类 ID，请重新选择其他分类')
+      }
     } catch {
       if (version === requestVersion.current) setError('分类切换请求失败，请点击重试')
     } finally {
