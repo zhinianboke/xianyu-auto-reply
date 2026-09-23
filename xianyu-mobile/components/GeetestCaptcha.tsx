@@ -305,10 +305,18 @@ function buildCaptchaHtml(cfg: GeetestConfig, isDark: boolean): string {
         showStartButton(captchaObj);
         captchaObj.onSuccess(function() {
           var result = captchaObj.getValidate();
-          if (!result) return;
+          if (
+            !result ||
+            !result.geetest_challenge ||
+            !result.geetest_validate ||
+            !result.geetest_seccode
+          ) {
+            postError('验证码结果不完整，请重新完成验证');
+            return;
+          }
           post({
             type: 'success',
-            challenge: CHALLENGE,
+            challenge: result.geetest_challenge,
             validate: result.geetest_validate,
             seccode: result.geetest_seccode
           });

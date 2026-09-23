@@ -477,7 +477,7 @@ export default function LoginScreen() {
               disabled={!!geetestResult}
             />
           )}
-          {tab === 'account' && captchaEnabled && !geetestResult && (
+          {(tab === 'account' || tab === 'email') && captchaEnabled && !geetestResult && (
             <Pressable onPress={() => setCaptchaInline(true)} style={{ alignSelf: 'center' }}>
               <Text style={[styles.link, { color: c.primary }]}>
                 拖不动滑块？点这里换一种方式重试

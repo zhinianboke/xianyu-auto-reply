@@ -39,7 +39,7 @@ class BackendWebConfig(BaseConfig):
     # 此处 default 仅作占位，运行期会被数据库中的值覆盖。
     jwt_secret_key: str = Field(default="change-me", repr=False)
     jwt_algorithm: str = Field(default="HS256")
-    access_token_expire_minutes: int = Field(default=30)
+    access_token_expire_minutes: int = Field(default=1440)
     refresh_token_expire_minutes: int = Field(default=60 * 24 * 7)
     
     # CORS配置

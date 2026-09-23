@@ -217,11 +217,17 @@ export async function validateGeetest(
   seccode: string,
 ): Promise<void> {
   const client = await getApiClient();
-  const { error } = (await (client.POST as any)('/api/v1/geetest/validate', {
+  const { data, error } = (await (client.POST as any)('/api/v1/geetest/validate', {
     body: { challenge, validate, seccode },
-  })) as { error?: unknown };
+  })) as {
+    data?: { success?: boolean; message?: string };
+    error?: unknown;
+  };
 
   if (error) throw await extractError(error);
+  if (!data?.success) {
+    throw new Error(data?.message || '验证码校验失败，请重新完成验证');
+  }
 }
 
 /** 获取公共系统设置（login_captcha_enabled / registration_enabled 等） */

@@ -205,7 +205,7 @@ class ServiceManager:
             f"REDIS_DB={config['redis_db']}\n"
             f"BACKEND_WEB_PORT=8089\n"
             f"JWT_ALGORITHM=HS256\n"
-            f"ACCESS_TOKEN_EXPIRE_MINUTES=30\n"
+            f"ACCESS_TOKEN_EXPIRE_MINUTES=1440\n"
             f"REFRESH_TOKEN_EXPIRE_MINUTES=10080\n"
             f"INTERNAL_API_TOKEN={internal_api_token}\n"
             f"CORS_ORIGINS=*\n"
