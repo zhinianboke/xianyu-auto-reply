@@ -58,7 +58,7 @@ TEMPLATE_VARIABLES = {
 _PLACEHOLDER_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
 
 
-def validate_notification_template(template: str, template_type: str) -> str | None:
+def validate_notification_template(template: Any, template_type: str) -> str | None:
     """校验通知模板；返回错误说明，合法时返回 ``None``。"""
     if template_type not in TEMPLATE_CONFIG_KEYS:
         return f"不支持的通知模板类型: {template_type}"
@@ -74,6 +74,29 @@ def validate_notification_template(template: str, template_type: str) -> str | N
     unknown_variables = sorted({match.group(1) for match in matches} - allowed_variables)
     if unknown_variables:
         return f"不支持的占位符: {', '.join(unknown_variables)}"
+    return None
+
+
+def validate_notification_templates(config_data: Mapping[str, Any] | None) -> str | None:
+    """校验渠道配置中所有已填写的通知模板。"""
+    if not config_data:
+        return None
+
+    template_labels = {
+        "chat": "聊天消息",
+        "delivery": "自动发货",
+        "account": "账号异常",
+    }
+    for template_type, config_key in TEMPLATE_CONFIG_KEYS.items():
+        if config_key not in config_data or config_data[config_key] is None:
+            continue
+
+        validation_error = validate_notification_template(
+            config_data[config_key],
+            template_type,
+        )
+        if validation_error:
+            return f"{template_labels[template_type]}模板无效：{validation_error}"
     return None
 
 

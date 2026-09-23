@@ -287,11 +287,15 @@ export function NotificationChannels() {
 
   const handleToggleEnabled = async (channel: NotificationChannel) => {
     try {
-      await updateNotificationChannel(channel.id, {
+      const result = await updateNotificationChannel(channel.id, {
         name: channel.name,
         config: channel.config,
         enabled: !channel.enabled,
       })
+      if (!result.success) {
+        addToast({ type: 'error', message: result.message || '操作失败' })
+        return
+      }
       addToast({ type: 'success', message: channel.enabled ? '渠道已禁用' : '渠道已启用' })
       loadChannels()
     } catch {
@@ -413,13 +417,14 @@ export function NotificationChannels() {
         enabled: formEnabled,
       }
 
-      if (editingChannel) {
-        await updateNotificationChannel(editingChannel.id, data)
-        addToast({ type: 'success', message: '渠道已更新' })
-      } else {
-        await addNotificationChannel(data)
-        addToast({ type: 'success', message: '渠道已添加' })
+      const result = editingChannel
+        ? await updateNotificationChannel(editingChannel.id, data)
+        : await addNotificationChannel(data)
+      if (!result.success) {
+        addToast({ type: 'error', message: result.message || '保存失败' })
+        return
       }
+      addToast({ type: 'success', message: editingChannel ? '渠道已更新' : '渠道已添加' })
 
       closeModal()
       loadChannels()
