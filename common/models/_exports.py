@@ -63,6 +63,11 @@ from common.models.xy_delivery_block_rule import XYDeliveryBlockRule
 from common.models.xy_personal_blacklist import XYPersonalBlacklist
 from common.models.xy_platform_blacklist import XYPlatformBlacklist
 from common.models.chat_quick_phrase import ChatQuickPhrase
+from common.models.ai_listing_config import AiListingConfig
+from common.models.ai_listing_task import AiListingTask, AiListingTaskItem
+from common.models.auto_relist_rule import AutoRelistRule
+from common.models.auto_relist_event import AutoRelistEvent
+from common.models.relist_association_migration import RelistAssociationMigration
 
 __all__ = [
     "User",
@@ -131,4 +136,10 @@ __all__ = [
     "XYPersonalBlacklist",
     "XYPlatformBlacklist",
     "ChatQuickPhrase",
+    "AiListingConfig",
+    "AiListingTask",
+    "AiListingTaskItem",
+    "AutoRelistRule",
+    "AutoRelistEvent",
+    "RelistAssociationMigration",
 ]

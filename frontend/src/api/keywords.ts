@@ -23,6 +23,12 @@ export const saveKeywords = (cookieId: string, keywords: Keyword[]): Promise<Api
       keyword: k.keyword,
       reply: k.reply || '',
       item_id: k.item_id || '',
+      type: k.type === 'external_contact' ? 'external_contact' : 'text',
+      location_name: k.location_name || '',
+      location_longitude: k.location_longitude || '',
+      location_latitude: k.location_latitude || '',
+      location_title: k.location_title || '',
+      location_subtitle: k.location_subtitle || '',
     }))
   return post(`${KEYWORD_PREFIX}/${cookieId}`, { keywords: textKeywords })
 }
@@ -42,7 +48,12 @@ export const addKeyword = async (cookieId: string, data: Partial<Keyword>): Prom
     keyword: data.keyword || '',
     reply: data.reply || '',
     item_id: data.item_id || '',
-    type: 'text',
+    type: data.type === 'external_contact' ? 'external_contact' : 'text',
+    location_name: data.location_name || '',
+    location_longitude: data.location_longitude || '',
+    location_latitude: data.location_latitude || '',
+    location_title: data.location_title || '',
+    location_subtitle: data.location_subtitle || '',
   } as Keyword)
   return saveKeywords(cookieId, keywords)
 }
@@ -64,6 +75,12 @@ export const updateKeyword = async (
     keyword: data.keyword || '',
     reply: data.reply || '',
     item_id: data.item_id || '',
+    type: data.type === 'external_contact' ? 'external_contact' : 'text',
+    location_name: data.location_name || '',
+    location_longitude: data.location_longitude || '',
+    location_latitude: data.location_latitude || '',
+    location_title: data.location_title || '',
+    location_subtitle: data.location_subtitle || '',
   })
 }
 
@@ -108,7 +125,12 @@ export const batchAddKeywords = async (cookieId: string, keywords: Partial<Keywo
     keyword: k.keyword || '',
     reply: k.reply || '',
     item_id: k.item_id || '',
-    type: 'text' as const,
+    type: k.type === 'external_contact' ? 'external_contact' as const : 'text' as const,
+    location_name: k.location_name || '',
+    location_longitude: k.location_longitude || '',
+    location_latitude: k.location_latitude || '',
+    location_title: k.location_title || '',
+    location_subtitle: k.location_subtitle || '',
   }))]
   return saveKeywords(cookieId, newKeywords)
 }
@@ -124,8 +146,16 @@ export const batchDeleteKeywords = async (cookieId: string, keywordIds: string[]
 const DEFAULT_REPLY_PREFIX = '/api/v1/default-replies'
 
 // 获取默认回复设置
-export const getDefaultReply = async (cookieId: string): Promise<{ default_reply: string; reply_image: string; enabled: boolean; reply_once: boolean; reply_type: string; api_url: string; api_timeout: number }> => {
-  const result = await get<{ enabled: boolean; reply_content: string; reply_image: string; reply_once: boolean; reply_type?: string; api_url?: string; api_timeout?: number }>(`${DEFAULT_REPLY_PREFIX}/${cookieId}`)
+export interface DefaultReplyLocationFields {
+  location_name: string
+  location_longitude: string
+  location_latitude: string
+  location_title: string
+  location_subtitle: string
+}
+
+export const getDefaultReply = async (cookieId: string): Promise<{ default_reply: string; reply_image: string; enabled: boolean; reply_once: boolean; reply_type: string; api_url: string; api_timeout: number } & DefaultReplyLocationFields> => {
+  const result = await get<{ enabled: boolean; reply_content: string; reply_image: string; reply_once: boolean; reply_type?: string; api_url?: string; api_timeout?: number } & Partial<DefaultReplyLocationFields>>(`${DEFAULT_REPLY_PREFIX}/${cookieId}`)
   return {
     default_reply: result.reply_content || '',
     reply_image: result.reply_image || '',
@@ -134,6 +164,11 @@ export const getDefaultReply = async (cookieId: string): Promise<{ default_reply
     reply_type: result.reply_type || 'text',
     api_url: result.api_url || '',
     api_timeout: result.api_timeout || 80,
+    location_name: result.location_name || '',
+    location_longitude: result.location_longitude || '',
+    location_latitude: result.location_latitude || '',
+    location_title: result.location_title || '',
+    location_subtitle: result.location_subtitle || '',
   }
 }
 
@@ -146,7 +181,8 @@ export const updateDefaultReply = async (
   replyImage: string = '',
   replyType: string = 'text',
   apiUrl: string = '',
-  apiTimeout: number = 80
+  apiTimeout: number = 80,
+  location: DefaultReplyLocationFields = { location_name: '', location_longitude: '', location_latitude: '', location_title: '', location_subtitle: '' }
 ): Promise<ApiResponse> => {
   return put(`${DEFAULT_REPLY_PREFIX}/${cookieId}`, {
     enabled,
@@ -156,6 +192,7 @@ export const updateDefaultReply = async (
     reply_type: replyType,
     api_url: apiUrl,
     api_timeout: apiTimeout,
+    ...location,
   })
 }
 

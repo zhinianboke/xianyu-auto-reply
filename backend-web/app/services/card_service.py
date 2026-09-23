@@ -38,7 +38,8 @@ class CardService:
     # 等大字段，避免一次性返回全部卡券时传输/读取超大内容）
     _LITE_COLUMNS = (
         Card.id, Card.user_id, Card.item_id, Card.name, Card.type,
-        Card.enabled, Card.delay_seconds, Card.delivery_count, Card.price,
+        Card.enabled, Card.delay_seconds, Card.use_no_logistics_form,
+        Card.delivery_count, Card.price,
         Card.is_dockable, Card.fee_payer, Card.min_price, Card.dock_visibility,
         Card.is_multi_spec, Card.spec_name, Card.spec_value,
         Card.created_at, Card.updated_at,
@@ -477,6 +478,7 @@ class CardService:
         description: Optional[str] = None,
         enabled: bool = True,
         delay_seconds: int = 0,
+        use_no_logistics_form: bool = False,
         price: Optional[str] = None,
         is_dockable: bool = False,
         fee_payer: Optional[str] = None,
@@ -502,6 +504,9 @@ class CardService:
         )
         if duplicate_msg:
             raise ValueError(duplicate_msg)
+
+        if use_no_logistics_form and card_type != "text":
+            raise ValueError("无需邮寄表单发货仅支持固定文字卡券")
         
         card = Card(
             user_id=user_id,
@@ -516,6 +521,7 @@ class CardService:
             description=description,
             enabled=enabled,
             delay_seconds=delay_seconds,
+            use_no_logistics_form=use_no_logistics_form,
             price=price,
             is_dockable=is_dockable,
             fee_payer=fee_payer,
@@ -553,6 +559,13 @@ class CardService:
         new_is_multi_spec = kwargs.get("is_multi_spec", card.is_multi_spec)
         new_spec_name = kwargs.get("spec_name", card.spec_name)
         new_spec_value = kwargs.get("spec_value", card.spec_value)
+        new_type = kwargs.get("type", card.type)
+        new_use_no_logistics_form = kwargs.get(
+            "use_no_logistics_form", card.use_no_logistics_form
+        )
+
+        if new_use_no_logistics_form and new_type != "text":
+            raise ValueError("无需邮寄表单发货仅支持固定文字卡券")
 
         # 检查重复（排除自身）
         duplicate_msg = await self.check_card_duplicate(
@@ -619,6 +632,7 @@ class CardService:
         description: Optional[str] = None,
         enabled: bool = True,
         delay_seconds: int = 0,
+        use_no_logistics_form: bool = False,
         price: Optional[str] = None,
         is_dockable: bool = False,
         fee_payer: Optional[str] = None,
@@ -638,6 +652,9 @@ class CardService:
         Returns:
             {"card_id": 新建卡券ID, "bindCount": 绑定商品数}
         """
+        if use_no_logistics_form and card_type != "text":
+            raise ValueError("无需邮寄表单发货仅支持固定文字卡券")
+
         # 1. 创建卡券（不设置 item_id，因为走关联表）
         card = Card(
             user_id=user_id,
@@ -652,6 +669,7 @@ class CardService:
             description=description,
             enabled=enabled,
             delay_seconds=delay_seconds,
+            use_no_logistics_form=use_no_logistics_form,
             price=price,
             is_dockable=is_dockable,
             fee_payer=fee_payer,
@@ -757,6 +775,7 @@ class CardService:
             "description": card.description,
             "enabled": card.enabled,
             "delay_seconds": card.delay_seconds,
+            "use_no_logistics_form": card.use_no_logistics_form,
             "delivery_count": card.delivery_count,
             "price": card.price,
             "is_dockable": card.is_dockable,
@@ -791,6 +810,7 @@ class CardService:
             "type": card.type,
             "enabled": card.enabled,
             "delay_seconds": card.delay_seconds,
+            "use_no_logistics_form": card.use_no_logistics_form,
             "delivery_count": card.delivery_count,
             "price": card.price,
             "is_dockable": card.is_dockable,
@@ -829,6 +849,7 @@ class CardService:
             "description": card.description,
             "enabled": card.enabled,
             "delay_seconds": card.delay_seconds,
+            "use_no_logistics_form": card.use_no_logistics_form,
             "delivery_count": card.delivery_count,
             "price": card.price,
             "is_dockable": card.is_dockable,

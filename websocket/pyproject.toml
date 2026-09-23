@@ -33,6 +33,9 @@ dependencies = [
     "idna>=3.6",
     "certifi>=2023.11.0",
     "python-dateutil>=2.8.0",
+    "python-jose[cryptography]==3.3.0",
+    "passlib[bcrypt]==1.7.4",
+    "bcrypt==5.0.0",
     "openai>=1.0.0",
     # 真实鼠标滑块引擎（可选，仅 Windows 有桌面环境使用；通过系统设置启用）。
     # 用环境标记限定仅 Windows 安装，避免 Linux/Docker 构建引入无效依赖。

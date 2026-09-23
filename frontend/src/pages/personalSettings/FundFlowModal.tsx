@@ -2,10 +2,10 @@
  * 个人资金流水弹窗
  *
  * 功能：在个人设置页的余额管理模块中，以弹窗形式展示当前用户的资金流水记录
- * 支持类型筛选、后端分页
+ * 支持类型、描述筛选和后端分页
  */
 import { useState, useEffect, useCallback } from 'react'
-import { RefreshCw, Wallet, X } from 'lucide-react'
+import { Loader2, RefreshCw, Wallet, X } from 'lucide-react'
 import { getFundFlows } from '@/api/distribution'
 import type { FundFlow } from '@/api/distribution'
 import { useUIStore } from '@/store/uiStore'
@@ -15,6 +15,16 @@ const FLOW_TYPE_MAP: Record<string, string> = {
   income: '收入',
   expense: '支出',
   fee: '手续费',
+}
+
+interface FundFlowFilters {
+  flowType: string
+  description: string
+}
+
+const EMPTY_FILTERS: FundFlowFilters = {
+  flowType: '',
+  description: '',
 }
 
 interface Props {
@@ -31,12 +41,14 @@ export function FundFlowModal({ visible, onClose }: Props) {
   const [pageSize, setPageSize] = useState(20)
   const [totalPages, setTotalPages] = useState(0)
   const [flowType, setFlowType] = useState('')
+  const [description, setDescription] = useState('')
+  const [appliedFilters, setAppliedFilters] = useState<FundFlowFilters>(EMPTY_FILTERS)
 
   // 加载数据
-  const loadData = useCallback(async (p: number = 1, ps: number = pageSize, type: string = flowType) => {
+  const loadData = useCallback(async (p: number, ps: number, filters: FundFlowFilters) => {
     setLoading(true)
     try {
-      const result = await getFundFlows(p, ps, type)
+      const result = await getFundFlows(p, ps, filters.flowType, '', filters.description)
       setFlows(result.list)
       setTotal(result.total)
       setPage(result.page)
@@ -47,42 +59,59 @@ export function FundFlowModal({ visible, onClose }: Props) {
     } finally {
       setLoading(false)
     }
-  }, [flowType, pageSize, addToast])
+  }, [addToast])
 
   // 弹窗打开时加载数据
   useEffect(() => {
     if (visible) {
       setFlowType('')
+      setDescription('')
+      setAppliedFilters(EMPTY_FILTERS)
       setPage(1)
-      loadData(1, 20, '')
+      setPageSize(20)
+      loadData(1, 20, EMPTY_FILTERS)
     }
-  }, [visible])
+  }, [visible, loadData])
 
-  // 类型筛选
+  // 类型筛选仅更新查询草稿
   const handleTypeChange = (type: string) => {
     setFlowType(type)
-    loadData(1, pageSize, type)
+  }
+
+  // 查询：提交当前筛选条件并回到第 1 页
+  const handleSearch = () => {
+    const filters = {
+      flowType,
+      description: description.trim(),
+    }
+    setAppliedFilters(filters)
+    loadData(1, pageSize, filters)
+  }
+
+  // 重置筛选条件并重新查询
+  const handleReset = () => {
+    setFlowType('')
+    setDescription('')
+    setAppliedFilters(EMPTY_FILTERS)
+    loadData(1, pageSize, EMPTY_FILTERS)
   }
 
   // 分页
   const handlePageChange = (newPage: number) => {
     if (newPage < 1 || newPage > totalPages) return
-    loadData(newPage, pageSize, flowType)
+    loadData(newPage, pageSize, appliedFilters)
   }
 
   const handlePageSizeChange = (newSize: number) => {
     setPageSize(newSize)
-    loadData(1, newSize, flowType)
+    loadData(1, newSize, appliedFilters)
   }
 
   if (!visible) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
-      <div
-        className="flex h-[80vh] w-full max-w-5xl flex-col rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="flex h-[80vh] w-full max-w-5xl flex-col rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900">
         {/* 弹窗头部 */}
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
@@ -90,38 +119,61 @@ export function FundFlowModal({ visible, onClose }: Props) {
             <p className="text-xs text-slate-500 dark:text-slate-400">查看资金变动明细记录</p>
           </div>
           <div className="flex items-center gap-2">
-            {/* 筛选 */}
-            <select
-              value={flowType}
-              onChange={(e) => handleTypeChange(e.target.value)}
-              className="input-ios w-auto py-1.5 px-3 text-sm"
-            >
-              <option value="">全部类型</option>
-              <option value="income">收入</option>
-              <option value="expense">支出</option>
-              <option value="fee">手续费</option>
-            </select>
-            <span className="text-sm text-gray-500">共 {total} 条</span>
-            <button
-              onClick={() => loadData(page, pageSize, flowType)}
-              className="btn-ios-secondary text-sm"
-              disabled={loading}
-            >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              刷新
-            </button>
             <button
               onClick={onClose}
               className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+              title="关闭"
             >
               <X className="h-5 w-5" />
             </button>
           </div>
         </div>
 
+        {/* 筛选 */}
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <select
+            value={flowType}
+            onChange={(e) => handleTypeChange(e.target.value)}
+            className="input-ios w-auto py-1.5 px-3 text-sm"
+          >
+            <option value="">全部类型</option>
+            <option value="income">收入</option>
+            <option value="expense">支出</option>
+            <option value="fee">手续费</option>
+          </select>
+          <input
+            type="text"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
+            maxLength={500}
+            placeholder="按描述模糊查询"
+            className="input-ios min-w-0 flex-1 py-1.5 px-3 text-sm sm:max-w-64"
+          />
+          <span className="text-sm text-gray-500">共 {total} 条</span>
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={handleSearch} className="btn-ios-primary text-sm" disabled={loading}>
+              查询
+            </button>
+            {(flowType || description) && (
+              <button onClick={handleReset} className="btn-ios-secondary text-sm text-red-500" disabled={loading}>
+                重置
+              </button>
+            )}
+            <button
+              onClick={() => loadData(page, pageSize, appliedFilters)}
+              className="btn-ios-secondary text-sm"
+              disabled={loading}
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              刷新
+            </button>
+          </div>
+        </div>
+
         {/* 表格 */}
         <div className="flex-1 overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
-          <div className="h-full overflow-auto">
+          <div className="table-scroll h-full">
             <table className="table-ios">
               <thead>
                 <tr>
@@ -140,7 +192,10 @@ export function FundFlowModal({ visible, onClose }: Props) {
                 {loading ? (
                   <tr>
                     <td colSpan={9}>
-                      <div className="py-10 text-center text-sm text-slate-500">加载中...</div>
+                      <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500">
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                        <span>加载中...</span>
+                      </div>
                     </td>
                   </tr>
                 ) : flows.length === 0 ? (

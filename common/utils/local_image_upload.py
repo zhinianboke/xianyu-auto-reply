@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from pathlib import Path
@@ -202,6 +203,94 @@ async def save_uploaded_image(
     return filepath, filename, content
 
 
+# ====== 字节流入口（AI 生成 / 远程下载等非 UploadFile 场景） ======
+
+
+def sniff_image_ext(content: bytes) -> Optional[str]:
+    """按文件头魔术字节判断图片真实格式，返回安全扩展名。
+
+    用于处理不可信来源（AI 图片接口、远程 URL 下载）的字节流：
+    不能依赖对方给的 ``Content-Type`` 或 URL 后缀，必须按内容判断，
+    避免把非图片内容写进对外可访问的静态目录。
+
+    Args:
+        content: 图片字节内容。
+
+    Returns:
+        以 ``.`` 开头的小写扩展名；无法识别为已知图片格式时返回 ``None``。
+    """
+    if not content or len(content) < 12:
+        return None
+    if content.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if content.startswith(b"GIF87a") or content.startswith(b"GIF89a"):
+        return ".gif"
+    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return ".webp"
+    if content.startswith(b"BM"):
+        return ".bmp"
+    return None
+
+
+async def save_image_bytes(
+    content: bytes,
+    upload_dir: Union[str, Path],
+    *,
+    filename_prefix: str = "",
+    ext: Optional[str] = None,
+    max_size: int = DEFAULT_MAX_SIZE,
+    short_uuid: bool = False,
+) -> Tuple[Path, str]:
+    """把图片字节写入本地静态目录：格式校验 → 大小校验 → 唯一文件名 → 写盘。
+
+    与 :func:`save_uploaded_image` 的区别是入口不是 FastAPI ``UploadFile``，
+    而是已经拿到手的字节内容（AI 图片接口返回的 base64、远程下载结果等），
+    但扩展名白名单、唯一命名、大小上限沿用同一套规则。
+    写盘放到线程池执行，避免阻塞事件循环。
+
+    Args:
+        content: 图片字节内容。
+        upload_dir: 保存目录，不存在时自动创建。
+        filename_prefix: 文件名前缀，留空则只用 UUID。
+        ext: 指定扩展名（含点）；为 ``None`` 时按魔术字节自动识别。
+        max_size: 最大字节数，``<= 0`` 表示不校验。
+        short_uuid: True 时使用 8 位短 UUID。
+
+    Returns:
+        ``(filepath, filename)``：已落盘文件的绝对路径与文件名，URL 拼接由调用方负责。
+
+    Raises:
+        ImageUploadError: 内容为空、超过大小上限或不是受支持的图片格式。
+    """
+    if not content:
+        raise ImageUploadError("图片内容为空")
+
+    if max_size and max_size > 0 and len(content) > max_size:
+        size_mb = max_size / (1024 * 1024)
+        size_text = f"{size_mb:.0f}" if size_mb.is_integer() else f"{size_mb:.1f}"
+        raise ImageUploadError(f"图片大小不能超过{size_text}MB")
+
+    resolved_ext = ext if ext in SAFE_IMAGE_EXTS else sniff_image_ext(content)
+    if not resolved_ext:
+        raise ImageUploadError("图片格式不受支持（仅支持 JPG/PNG/GIF/WEBP/BMP）")
+
+    upload_dir_path = Path(upload_dir)
+    upload_dir_path.mkdir(parents=True, exist_ok=True)
+
+    filename = build_unique_filename(
+        f"image{resolved_ext}",
+        prefix=filename_prefix,
+        short_uuid=short_uuid,
+    )
+    filepath = upload_dir_path / filename
+
+    await asyncio.to_thread(filepath.write_bytes, content)
+
+    return filepath, filename
+
+
 __all__ = [
     "ImageUploadError",
     "SAFE_IMAGE_EXTS",
@@ -212,4 +301,6 @@ __all__ = [
     "read_image_with_size_check",
     "build_unique_filename",
     "save_uploaded_image",
+    "sniff_image_ext",
+    "save_image_bytes",
 ]

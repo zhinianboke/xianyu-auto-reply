@@ -3,7 +3,7 @@
 
 功能：
 1. 定义关键词规则表结构（xy_keyword_rules）
-2. 支持文本和图片两种回复类型
+2. 支持文本、图片和站外联系方式三种回复类型
 3. 支持精确匹配和模糊匹配
 4. 可绑定到特定商品或作为通用规则
 """
@@ -36,8 +36,13 @@ class XYKeywordRule(TimestampMixin, Base):
     )
     keyword: Mapped[str] = mapped_column(String(120), nullable=False, comment='关键词')
     reply_content: Mapped[str | None] = mapped_column(Text, comment='回复内容')
-    reply_type: Mapped[str | None] = mapped_column(String(16), comment='回复类型(text/image)')
+    reply_type: Mapped[str | None] = mapped_column(String(32), comment='回复类型(text/image/external_contact)')
     image_url: Mapped[str | None] = mapped_column(String(512), comment='图片URL')
+    location_name: Mapped[str | None] = mapped_column(String(255), comment='站外联系方式定位名称')
+    location_longitude: Mapped[str | None] = mapped_column(String(32), comment='站外联系方式经度')
+    location_latitude: Mapped[str | None] = mapped_column(String(32), comment='站外联系方式纬度')
+    location_title: Mapped[str | None] = mapped_column(String(128), comment='站外联系方式位置标题')
+    location_subtitle: Mapped[str | None] = mapped_column(String(255), comment='站外联系方式位置副标题')
     item_id: Mapped[str | None] = mapped_column(String(64), comment='商品ID')
     priority: Mapped[int] = mapped_column(Integer, default=100, comment='优先级')
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, comment='是否启用')

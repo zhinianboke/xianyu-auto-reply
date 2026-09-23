@@ -16,42 +16,37 @@ from common.core.config import get_settings
 settings = get_settings()
 
 
-def _patch_asyncmy_ping():
-    """
-    兼容 asyncmy 新版本 ping() 方法签名变更
+def _patch_asyncmy_ping() -> None:
+    """兼容 SQLAlchemy 2.0.41 与 asyncmy 的 pool_pre_ping 调用签名。
 
-    新版 asyncmy (>=0.2.10) 移除了 ping(reconnect) 参数，
-    而 SQLAlchemy 的 pool_pre_ping 机制调用 ping(reconnect=True)，
-    导致 TypeError。直接 patch asyncmy 底层方法使其接受 reconnect 参数。
+    SQLAlchemy 的 MySQL 通用方言会无参调用适配层 ``ping()``，但该版本的
+    ``AsyncAdapt_asyncmy_connection.ping`` 要求必须传入 ``reconnect``。
+    仅为适配层补充默认值，不修改 asyncmy 驱动本身。
     """
     try:
-        import asyncmy.connection as _asyncmy_conn
+        import inspect
+        from sqlalchemy.dialects.mysql.asyncmy import AsyncAdapt_asyncmy_connection
 
-        _original = _asyncmy_conn.Connection.ping
+        original_ping = AsyncAdapt_asyncmy_connection.ping
 
         # 如果已经 patch 过，跳过
-        if getattr(_original, '_compat_patched', False):
+        if getattr(original_ping, "_compat_patched", False):
             return
 
-        # 检查是否需要 patch（新版本不接受 reconnect）
-        import inspect
         try:
-            sig = inspect.signature(_original)
-            if 'reconnect' in sig.parameters:
-                # 旧版本，无需 patch
+            reconnect = inspect.signature(original_ping).parameters.get("reconnect")
+            if reconnect is None or reconnect.default is not inspect.Parameter.empty:
                 return
         except (ValueError, TypeError):
-            # 无法检测签名，保险起见做 patch
-            pass
+            return
 
-        # 替换为兼容版本
-        async def _patched_ping(self, reconnect=True):
-            return await _original(self)
+        def patched_ping(self, reconnect=False):
+            return original_ping(self, reconnect)
 
-        _patched_ping._compat_patched = True
-        _asyncmy_conn.Connection.ping = _patched_ping
+        patched_ping._compat_patched = True
+        AsyncAdapt_asyncmy_connection.ping = patched_ping
 
-    except (ImportError, AttributeError, Exception):
+    except (ImportError, AttributeError):
         pass
 
 
@@ -72,32 +67,97 @@ def _compile_sql_with_params(statement, parameters):
     """
     try:
         sql_str = str(statement)
+
+        # SQL 回显用于排查问题，但不能把系统密钥写入日志。系统设置表中的
+        # 敏感键可能通过 ORM 参数绑定出现，先识别键再仅脱敏对应值。
+        sensitive_setting_keys = {
+            "security.internal_api_token",
+            "security.jwt_secret_key",
+            "admin_password_hash",
+            "password_login.remote_secret_key",
+            "token.remote_secret_key",
+        }
+
+        def _is_sensitive_key(value) -> bool:
+            return (
+                isinstance(value, str)
+                and value.strip().lower() in sensitive_setting_keys
+            )
+
+        def _contains_sensitive_key(value) -> bool:
+            if isinstance(value, dict):
+                return any(_contains_sensitive_key(item) for item in value.values())
+            if isinstance(value, (list, tuple)):
+                return any(_contains_sensitive_key(item) for item in value)
+            return _is_sensitive_key(value)
+
+        # SQLAlchemy 可能传入命名参数、扁平位置参数或 executemany 的参数列表。
+        # 统一成若干组，避免只处理某一种驱动的参数形态。
+        parameter_groups: list[dict | list | tuple] = []
+        if isinstance(parameters, dict):
+            parameter_groups = [parameters]
+        elif isinstance(parameters, (list, tuple)):
+            if any(isinstance(item, (dict, list, tuple)) for item in parameters):
+                parameter_groups = list(parameters)
+            else:
+                parameter_groups = [parameters]
+
+        lowered_sql = sql_str.lower()
+        query_targets_settings = "xy_system_settings" in lowered_sql
+        sensitive_query = query_targets_settings and (
+            any(_contains_sensitive_key(group) for group in parameter_groups)
+            or any(
+                f"'{key}'" in lowered_sql or f'"{key}"' in lowered_sql
+                for key in sensitive_setting_keys
+            )
+        )
+
+        def _format_value(value, parameter_name: str | None = None):
+            # 查询系统敏感设置时保留 setting key 便于定位，其他绑定值全部脱敏。
+            if (
+                sensitive_query
+                and parameter_name not in {"key", "setting_key"}
+                and not _is_sensitive_key(value)
+            ):
+                value = "***REDACTED***"
+            if isinstance(value, str):
+                return f"'{value}'"
+            if value is None:
+                return "NULL"
+            if isinstance(value, bool):
+                return "1" if value else "0"
+            if isinstance(value, bytes):
+                return f"X'{value.hex()}'"
+            return str(value)
         
-        if parameters:
-            if isinstance(parameters, dict):
-                # 字典参数
-                for key, value in parameters.items():
-                    if isinstance(value, str):
-                        value = f"'{value}'"
-                    elif value is None:
-                        value = "NULL"
-                    elif isinstance(value, bool):
-                        value = "1" if value else "0"
-                    elif isinstance(value, bytes):
-                        value = f"X'{value.hex()}'"
-                    sql_str = sql_str.replace(f":{key}", str(value))
-            elif isinstance(parameters, (list, tuple)):
-                # 位置参数
-                for param in parameters:
-                    if isinstance(param, dict):
-                        for key, value in param.items():
-                            if isinstance(value, str):
-                                value = f"'{value}'"
-                            elif value is None:
-                                value = "NULL"
-                            elif isinstance(value, bool):
-                                value = "1" if value else "0"
-                            sql_str = sql_str.replace(f":{key}", str(value), 1)
+        def _replace_named(sql: str, key: str, value) -> str:
+            formatted = _format_value(value, key)
+            # 支持 SQLAlchemy 文本 SQL 和 MySQL pyformat 两种命名占位符。
+            sql = sql.replace(f":{key}", formatted, 1)
+            return sql.replace(f"%({key})s", formatted, 1)
+
+        def _replace_positional(sql: str, values) -> str:
+            for value in values:
+                formatted = _format_value(value)
+                question_index = sql.find("?")
+                format_index = sql.find("%s")
+                indexes = [index for index in (question_index, format_index) if index >= 0]
+                if not indexes:
+                    break
+                index = min(indexes)
+                token_length = 1 if sql[index] == "?" else 2
+                sql = sql[:index] + formatted + sql[index + token_length:]
+            return sql
+
+        for group in parameter_groups:
+            if isinstance(group, dict):
+                for key, value in group.items():
+                    sql_str = _replace_named(sql_str, str(key), value)
+            elif isinstance(group, (list, tuple)):
+                sql_str = _replace_positional(sql_str, group)
+            # executemany 的参数组只需渲染第一组；占位符已耗尽时后续组不会污染日志。
+            if sql_str.find("?") < 0 and sql_str.find("%s") < 0 and len(parameter_groups) > 1:
+                break
         
         return sql_str
     except Exception:

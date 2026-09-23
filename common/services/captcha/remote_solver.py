@@ -18,7 +18,9 @@ from typing import Dict, Optional, Tuple
 import httpx
 from loguru import logger
 
+from common.core.config import get_settings
 from common.services.captcha.remote_timeout import get_remote_solve_timeout
+from common.utils.internal_auth import build_internal_auth_headers, is_internal_api_url
 
 
 async def solve_remote(
@@ -58,8 +60,22 @@ async def solve_remote(
     # 连接 8s 内必须建立，读取给足远程求解时间；超时/连不上 → 回退本机
     timeout = httpx.Timeout(get_remote_solve_timeout(browser_timeout), connect=8.0)
     try:
+        settings = get_settings()
+        allowed_internal_bases = tuple(
+            value
+            for value in (
+                getattr(settings, "websocket_service_url", ""),
+                getattr(settings, "backend_web_service_url", ""),
+                getattr(settings, "scheduler_service_url", ""),
+            )
+            if value
+        )
+        headers = {}
+        token = (getattr(settings, "internal_api_token", "") or "").strip()
+        if token and is_internal_api_url(remote_url, allowed_internal_bases):
+            headers = build_internal_auth_headers(token)
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(remote_url, json=payload)
+            resp = await client.post(remote_url, json=payload, headers=headers)
     except httpx.HTTPError as e:
         logger.warning(f"【{user_id}】远程过滑块超时/不可用，回退本机逻辑: {e}")
         return "fallback", None, str(e)

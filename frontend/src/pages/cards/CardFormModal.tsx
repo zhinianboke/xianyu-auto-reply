@@ -53,6 +53,7 @@ interface CardFormData {
   dataContent: string
   imageUrls: string[]
   delaySeconds: number
+  useNoLogisticsForm: boolean
   price: string
   isDockable: boolean
   feePayer: string
@@ -96,6 +97,7 @@ export function cardToFormData(card: CardData): CardFormData {
     dataContent: card.data_content || '',
     imageUrls: imageUrlsList,
     delaySeconds: card.delay_seconds || 0,
+    useNoLogisticsForm: card.use_no_logistics_form || false,
     price: card.price || '',
     isDockable: card.is_dockable || false,
     feePayer: card.fee_payer || '',
@@ -129,6 +131,7 @@ export const emptyCardFormData: CardFormData = {
   dataContent: '',
   imageUrls: [],
   delaySeconds: 0,
+  useNoLogisticsForm: false,
   price: '',
   isDockable: false,
   feePayer: '',
@@ -279,6 +282,7 @@ export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFor
         description: formData.description.trim() || undefined,
         enabled: true,
         delay_seconds: formData.delaySeconds,
+        use_no_logistics_form: formData.type === 'text' && formData.useNoLogisticsForm,
         price: formData.price.trim() || null,
         is_dockable: formData.isDockable,
         fee_payer: formData.isDockable ? formData.feePayer : null,
@@ -352,7 +356,10 @@ export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFor
                 <label className="input-label">卡券类型 <span className="text-red-500">*</span></label>
                 <Select
                   value={formData.type}
-                  onChange={(v) => updateField('type', v as CardFormData['type'])}
+                  onChange={(v) => {
+                    updateField('type', v as CardFormData['type'])
+                    if (v !== 'text') updateField('useNoLogisticsForm', false)
+                  }}
                   options={cardTypeOptions}
                 />
               </div>
@@ -472,6 +479,18 @@ export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFor
                     placeholder="请输入要发送的固定文字内容..."
                   />
                 </div>
+                <label className="mt-3 flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.useNoLogisticsForm}
+                    onChange={(e) => updateField('useNoLogisticsForm', e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded border-gray-300"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-gray-900 dark:text-white">填写到无需邮寄凭证</span>
+                    <span className="block text-xs text-gray-500 mt-0.5">开启后不再向买家发送卡券聊天消息</span>
+                  </span>
+                </label>
               </div>
             )}
 

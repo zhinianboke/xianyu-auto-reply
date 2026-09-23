@@ -34,6 +34,10 @@ from common.services.captcha.concurrency import (
     concurrency_manager,
     run_browser_task,
 )
+from common.utils.internal_auth import (
+    build_internal_auth_headers,
+    is_internal_api_url,
+)
 from common.utils.xianyu_utils import trans_cookies
 from common.utils.browser_utils import ensure_playwright_browser_path, get_chromium_executable_path
 
@@ -230,11 +234,19 @@ class CookieRenewBrowserService:
             renew_url = f"{base_url}/internal/cookies/browser-renew"
             logger.info(f"{log_prefix} 委托 WebSocket 服务执行浏览器续期: {renew_url}")
 
+            if not is_internal_api_url(renew_url, (base_url,)):
+                return CookieRenewBrowserResult(
+                    success=False,
+                    has_quick_enter=False,
+                    message="WebSocket服务地址不合法，无法委托浏览器续期",
+                )
+
             timeout = aiohttp.ClientTimeout(total=_BROWSER_RENEW_HTTP_TIMEOUT_SECONDS)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(
                     renew_url,
                     json={"account_id": account_id, "cookies_str": cookies_str},
+                    headers=build_internal_auth_headers(settings.internal_api_token),
                 ) as response:
                     if response.status != 200:
                         text = await response.text()

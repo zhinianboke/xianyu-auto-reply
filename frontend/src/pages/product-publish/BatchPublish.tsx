@@ -239,6 +239,7 @@ export function BatchPublish() {
               <div className="space-y-1 max-h-72 overflow-y-auto">
                 {accounts.map((a: any) => {
                   const checked = selectedAccounts.has(a.id)
+                  const enabled = a.enabled !== false
                   return (
                     <label key={a.id} className={`flex items-center gap-3 p-2.5 rounded-lg cursor-pointer transition-colors ${checked ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
                       <input type="checkbox" className="w-4 h-4 text-blue-600 rounded accent-blue-500"
@@ -249,7 +250,7 @@ export function BatchPublish() {
                         </p>
                         {a.note && <p className="text-xs text-slate-400 truncate">{a.id}</p>}
                       </div>
-                      {a.enabled !== false && <span className="badge-success flex-shrink-0">启用</span>}
+                      <span className={`${enabled ? 'badge-success' : 'badge-secondary'} flex-shrink-0`}>{enabled ? '已启动' : '未启动'}</span>
                     </label>
                   )
                 })}
@@ -281,6 +282,9 @@ export function BatchPublish() {
               <div className="space-y-1 max-h-72 overflow-y-auto">
                 {filteredMaterials.map(m => {
                   const checked = selectedMaterials.has(m.id)
+                  const specificationCount = (m.specifications || []).length
+                  const skuCount = (m.sku_rows || []).length
+                  const isMultiSpec = specificationCount > 0 || skuCount > 0
                   return (
                     <label key={m.id} className={`flex items-center gap-3 p-2.5 rounded-lg cursor-pointer transition-colors ${checked ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
                       <input type="checkbox" className="w-4 h-4 text-blue-600 rounded accent-blue-500"
@@ -292,7 +296,14 @@ export function BatchPublish() {
                       )}
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium truncate text-slate-800 dark:text-slate-100">{m.title}</p>
-                        <p className="text-xs text-amber-600">{m.price}</p>
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                          <span className="text-xs text-amber-600">{m.price}</span>
+                          {isMultiSpec ? (
+                            <span className="badge-info flex-shrink-0">多规格 · {specificationCount}类 / {skuCount}组合</span>
+                          ) : (
+                            <span className="badge-secondary flex-shrink-0">单规格</span>
+                          )}
+                        </div>
                       </div>
                     </label>
                   )

@@ -45,7 +45,8 @@ _TOKEN_EXPIRED_MARKERS = (
 )
 
 # 触发验证/被挤爆/机器检测等风控标志（命中则应切换账号重试）
-_VALIDATE_MARKERS = (
+# 对外公开：发布账号能力检测需要判断「失败是否属于风控」，直接复用本元组避免两处维护出现漂移
+VALIDATE_MARKERS = (
     "FAIL_SYS_USER_VALIDATE",
     "RGV587",
     "FAIL_SYS_ILLEGAL_ACCESS",
@@ -60,6 +61,25 @@ _VALIDATE_MARKERS = (
 
 # 单次调用内最大尝试次数（令牌刷新/网络异常重试）
 _MAX_ATTEMPTS = 3
+
+
+def extract_punish_url(res_json: Optional[Dict[str, Any]]) -> str:
+    """从 mtop 返回中提取风控验证（punish）链接。
+
+    触发验证类风控时，闲鱼在 data.url 下发 punish?x5secdata=... 验证链接，
+    调用方可凭该链接走远程过风控服务求解，拿到 x5sec 后重试。
+
+    Args:
+        res_json: mtop 接口原始返回 JSON
+    Returns:
+        punish 验证链接；无则返回空字符串
+    """
+    if not isinstance(res_json, dict):
+        return ""
+    data_node = res_json.get("data")
+    if not isinstance(data_node, dict):
+        return ""
+    return str(data_node.get("url") or "").strip()
 
 
 async def fetch_proxy_from_api(api_url: str, account_id: str = "") -> Optional[str]:
@@ -115,11 +135,18 @@ async def mtop_call(
     owner_id: Optional[int] = None,
     extra_params: Optional[Dict[str, str]] = None,
     proxy: Optional[str] = None,
+    app_key: str = "34839810",
+    origin: str = "https://www.goofish.com",
+    referer: str = "https://www.goofish.com/",
+    extra_headers: Optional[Dict[str, str]] = None,
+    form_field: str = "data",
+    request_method: str = "POST",
 ) -> Dict[str, Any]:
     """调用闲鱼 mtop 接口，统一处理令牌过期/Session过期/风控。
 
     Args:
         proxy: 代理地址URL（http://host:port 或 socks5://user:pass@host:port），空则直连。
+        request_method: mtop 请求方法，默认 POST；视频初始化等抓包为 GET 的接口可指定 GET。
 
     Returns:
         {
@@ -128,6 +155,7 @@ async def mtop_call(
           res: dict|None,          # 接口原始返回 JSON
           error: str,
           cookies_str: str,        # 可能因令牌刷新而更新，调用方应回写实例并用于后续请求
+          punish_url: str,         # 仅风控验证类失败时有值：punish 验证链接（可走远程过风控）
         }
     """
     current_cookies = cookies_str
@@ -145,13 +173,14 @@ async def mtop_call(
             }
 
         token = cookies.get("_m_h5_tk", "").split("_")[0] if cookies.get("_m_h5_tk") else ""
-        t = str(int(time.time()) * 1000)
+        # mtop 抓包使用当前毫秒时间戳参与签名，不能先截断到秒。
+        t = str(int(time.time() * 1000))
         data_val = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
-        sign = generate_sign(t, token, data_val)
+        sign = generate_sign(t, token, data_val, app_key=app_key)
 
         params = {
             "jsv": "2.7.2",
-            "appKey": "34839810",
+            "appKey": app_key,
             "t": t,
             "sign": sign,
             "v": version,
@@ -169,22 +198,43 @@ async def mtop_call(
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/x-www-form-urlencoded",
-            "Origin": "https://www.goofish.com",
-            "Referer": "https://www.goofish.com/",
+            "Origin": origin,
+            "Referer": referer,
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             ),
             "Cookie": current_cookies,
         }
+        if extra_headers:
+            headers.update(extra_headers)
 
         try:
             timeout = aiohttp.ClientTimeout(total=30)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 # 代理为 HTTP 代理（来自代理API的 http://host:port），aiohttp 原生支持，无需额外依赖
-                async with session.post(
-                    url, params=params, data={"data": data_val}, headers=headers, proxy=proxy or None
-                ) as resp:
+                method = request_method.upper()
+                if method == "GET":
+                    request = session.get(
+                        url,
+                        params={**params, form_field: data_val},
+                        headers=headers,
+                        proxy=proxy or None,
+                    )
+                elif method == "POST":
+                    request = session.post(
+                        url,
+                        params=params,
+                        data={form_field: data_val},
+                        headers=headers,
+                        proxy=proxy or None,
+                    )
+                else:
+                    return {
+                        "success": False, "account_invalid": False, "res": None,
+                        "error": f"不支持的 mtop 请求方法: {request_method}", "cookies_str": current_cookies,
+                    }
+                async with request as resp:
                     res_json = await resp.json(content_type=None)
                     set_cookies = extract_cookies_from_response(resp)
         except Exception as exc:  # noqa: BLE001
@@ -224,11 +274,12 @@ async def mtop_call(
                 "error": ret_msg or "Session过期", "cookies_str": current_cookies,
             }
 
-        # 触发验证/被挤爆等风控：切换账号
-        if any(marker in ret_msg for marker in _VALIDATE_MARKERS):
+        # 触发验证/被挤爆等风控：切换账号（同时回传 punish 验证链接，供远程过风控使用）
+        if any(marker in ret_msg for marker in VALIDATE_MARKERS):
             return {
                 "success": False, "account_invalid": True, "res": res_json,
                 "error": ret_msg or "触发验证/风控", "cookies_str": current_cookies,
+                "punish_url": extract_punish_url(res_json),
             }
 
         # 其他业务失败（商品下架/不可买等），不影响账号
@@ -237,11 +288,17 @@ async def mtop_call(
             "error": ret_msg or "调用失败", "cookies_str": current_cookies,
         }
 
-    # 尝试次数耗尽（令牌刷新仍失败或网络异常）
+    # 尝试次数耗尽。请求异常表示最后一次请求可能已经到达平台，调用方不能
+    # 把它当成可安全重试的明确失败，发布链路需要进入人工对账状态。
+    request_status_unknown = bool(last_error)
     return {
-        "success": False, "account_invalid": False, "res": None,
-        "error": last_error or "调用失败，重试次数过多", "cookies_str": current_cookies,
+        "success": False,
+        "account_invalid": False,
+        "res": None,
+        "error": last_error or "调用失败，重试次数过多",
+        "cookies_str": current_cookies,
+        "_request_status_unknown": request_status_unknown,
     }
 
 
-__all__ = ["mtop_call", "fetch_proxy_from_api"]
+__all__ = ["mtop_call", "fetch_proxy_from_api", "extract_punish_url", "VALIDATE_MARKERS"]

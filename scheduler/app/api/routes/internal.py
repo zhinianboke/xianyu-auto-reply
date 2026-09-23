@@ -9,7 +9,7 @@ Scheduler服务内部API路由
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from loguru import logger
 from pydantic import BaseModel
 
@@ -17,8 +17,13 @@ from app.services.scheduler.listing_monitor_task import listing_monitor_task_ser
 from app.services.scheduler_service import get_scheduler_service
 from common.services.account_cooldown import account_cooldown_manager
 from common.utils.time_utils import get_beijing_now_naive
+from app.api.deps import require_internal_auth
 
-router = APIRouter(prefix="/internal", tags=["internal"])
+router = APIRouter(
+    prefix="/internal",
+    tags=["internal"],
+    dependencies=[Depends(require_internal_auth)],
+)
 
 
 class LogRetentionRequest(BaseModel):
@@ -131,7 +136,7 @@ async def trigger_task(task_code: str):
     """
     try:
         # 验证任务代码
-        if task_code not in ["redelivery", "rate", "polish", "day_switch", "cleanup_browser_data", "fetch_orders", "fetch_pending_orders", "fetch_refund_orders", "fetch_items", "login_renew", "token_renewal", "cookies_refresh", "api_cookie_renew", "close_notice", "red_flower", "db_backup", "delivery_timeout", "listing_monitor", "seller_fill", "dm_send", "auto_order"]:
+        if task_code not in ["redelivery", "rate", "polish", "day_switch", "cleanup_browser_data", "cleanup_unconfigured_browser_data", "fetch_orders", "fetch_pending_orders", "fetch_refund_orders", "fetch_items", "login_renew", "token_renewal", "cookies_refresh", "api_cookie_renew", "close_notice", "red_flower", "db_backup", "delivery_timeout", "listing_monitor", "seller_fill", "dm_send", "auto_order", "image_cleanup", "auto_relist_scan"]:
             return {
                 "success": False,
                 "code": 400,

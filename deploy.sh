@@ -104,7 +104,7 @@ MAX_CAPTCHA_CONCURRENT=3
 # WebSocket 启动时是否自动连接账号
 AUTO_START_WEBSOCKET=true
 # 滑块验证 DrissionPage 兜底引擎（主引擎失败后重试）：开关 / 超时秒 / 无头
-CAPTCHA_DRISSIONPAGE_FALLBACK_ENABLED=true
+CAPTCHA_DRISSIONPAGE_FALLBACK_ENABLED=false
 CAPTCHA_DRISSIONPAGE_TIMEOUT=25
 CAPTCHA_DRISSIONPAGE_HEADLESS=true
 
@@ -156,6 +156,7 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
       - --max-connections=300
+      - --max-connect-errors=100000
       - --max-allowed-packet=256M
       - --default-time-zone=+08:00
     volumes:
@@ -216,6 +217,7 @@ services:
       - JWT_ALGORITHM=HS256
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
       - REFRESH_TOKEN_EXPIRE_MINUTES=${REFRESH_TOKEN_EXPIRE_MINUTES:-10080}
+      - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
       - CORS_ORIGINS=*
       - WEBSOCKET_SERVICE_URL=http://websocket:8090
       - SCHEDULER_SERVICE_URL=http://scheduler:8091
@@ -277,10 +279,11 @@ services:
       - MAX_CAPTCHA_CONCURRENT=${MAX_CAPTCHA_CONCURRENT:-3}
       - BROWSER_HEADLESS=true
       - AUTO_START_WEBSOCKET=${AUTO_START_WEBSOCKET:-true}
-      - CAPTCHA_DRISSIONPAGE_FALLBACK_ENABLED=${CAPTCHA_DRISSIONPAGE_FALLBACK_ENABLED:-true}
+      - CAPTCHA_DRISSIONPAGE_FALLBACK_ENABLED=${CAPTCHA_DRISSIONPAGE_FALLBACK_ENABLED:-false}
       - CAPTCHA_DRISSIONPAGE_TIMEOUT=${CAPTCHA_DRISSIONPAGE_TIMEOUT:-25}
       - CAPTCHA_DRISSIONPAGE_HEADLESS=${CAPTCHA_DRISSIONPAGE_HEADLESS:-true}
       - BACKEND_WEB_SERVICE_URL=http://backend-web:8089
+      - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
       - STATIC_DIR=/app/static
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SQL_ECHO=${SQL_ECHO:-false}
@@ -331,6 +334,7 @@ services:
       - RATE_INTERVAL=${RATE_INTERVAL:-20}
       - WEBSOCKET_SERVICE_URL=http://websocket:8090
       - BACKEND_WEB_SERVICE_URL=http://backend-web:8089
+      - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
       - STATIC_DIR=/app/static
       - BACKUP_DIR=/app/backups
       - LOG_LEVEL=${LOG_LEVEL:-INFO}

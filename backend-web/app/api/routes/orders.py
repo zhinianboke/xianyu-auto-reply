@@ -149,6 +149,7 @@ async def list_orders(
                 delivery_method=order.delivery_method or "",
                 delivery_content=order.delivery_content or "",
                 delivery_fail_reason=order.delivery_fail_reason or "",
+                card_only_delivered=bool(order.card_only_delivered),
                 delivery_send_status=(delivery_log or {}).get("send_status"),
                 delivery_send_fail_reason=(delivery_log or {}).get("send_fail_reason"),
                 is_agent_order=order.order_no in agent_order_nos,
@@ -316,6 +317,7 @@ async def get_order_detail(
             "delivery_method": order.delivery_method or "",
             "delivery_content": order.delivery_content or "",
             "delivery_fail_reason": order.delivery_fail_reason or "",
+            "card_only_delivered": bool(order.card_only_delivered),
             "delivery_send_status": (delivery_log or {}).get("send_status"),
             "delivery_send_fail_reason": (delivery_log or {}).get("send_fail_reason"),
             "is_agent_order": is_agent_order,
@@ -457,6 +459,14 @@ async def manual_delivery(
         owner_id, is_admin = resolve_owner_scope(current_user)
         if not is_admin and order.owner_id != current_user.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权操作此订单")
+
+        if order.card_only_delivered:
+            return ApiResponse(
+                success=False,
+                message="该订单已执行过只发卡券，本次未重复发送；如需确认平台发货，请关闭该开关后使用无物流发货",
+            )
+        if str(order.status or '').lower() in {'shipped', 'completed'}:
+            return ApiResponse(success=False, message="该订单已发货，本次未重复发送卡券")
         
         # 检查必要字段（chat_id 允许为空，后面会自动创建会话）
         if not order.account_id:
@@ -575,20 +585,55 @@ async def manual_delivery(
         card_type = card.get('type')
         logger.info(f"使用卡券: {card.get('name')} ({card_type})")
         
-        # 调用WebSocket服务的内部API进行发货
-        # 传递订单信息和卡券信息给WebSocket服务
-        # quantity 从订单表读取，>1 时让 internal API 循环发送 N 张卡券（多数量发货）
-        delivery_result = await websocket_client.deliver_order(
-            account_id=order.account_id,
-            order_no=request.order_no,
-            item_id=order.item_id,
-            buyer_id=order.buyer_id,
-            chat_id=order.chat_id,
-            card_id=card.get('id'),
-            is_bargain=order.is_bargain or False,
-            delivery_method="manual",
-            quantity=int(order.quantity) if order.quantity and order.quantity > 0 else 1,
-        )
+        # 调用WebSocket服务的内部API进行发货前获取订单级分布式锁。
+        # 自动发货和定时补发也使用同一把锁，避免多个入口同时消费卡券。
+        from common.db.redis_client import try_acquire_delivery_lock, release_delivery_lock
+        delivery_lock = None
+        redis_lock_acquired = False
+        try:
+            try:
+                delivery_lock = await try_acquire_delivery_lock(
+                    order.order_no,
+                    expire=120,
+                    holder_info=f"manual:{order.account_id}",
+                    wait_timeout=5,
+                )
+                if delivery_lock.success:
+                    redis_lock_acquired = True
+                elif delivery_lock.is_locked_by_other:
+                    return ApiResponse(
+                        success=False,
+                        message="订单正在被其他发货流程处理，请稍后再试",
+                    )
+                elif delivery_lock.has_error:
+                    logger.warning(
+                        f"手动发货获取Redis订单锁失败，降级继续: order_no={order.order_no}"
+                    )
+            except Exception as lock_err:
+                logger.warning(
+                    f"手动发货获取Redis订单锁异常，降级继续: order_no={order.order_no}, error={lock_err}"
+                )
+
+            # quantity 从订单表读取，>1 时让 internal API 循环发送 N 张卡券（多数量发货）
+            delivery_result = await websocket_client.deliver_order(
+                account_id=order.account_id,
+                order_no=request.order_no,
+                item_id=order.item_id,
+                buyer_id=order.buyer_id,
+                chat_id=order.chat_id,
+                card_id=card.get('id'),
+                is_bargain=order.is_bargain or False,
+                delivery_method="manual",
+                quantity=int(order.quantity) if order.quantity and order.quantity > 0 else 1,
+            )
+        finally:
+            if redis_lock_acquired and delivery_lock:
+                try:
+                    await release_delivery_lock(delivery_lock)
+                except Exception as release_err:
+                    logger.warning(
+                        f"手动发货释放Redis订单锁异常: order_no={order.order_no}, error={release_err}"
+                    )
         
         if not delivery_result.get('success'):
             error_msg = delivery_result.get('message', '发货失败')

@@ -17,6 +17,10 @@ from app.api.deps import get_db_session as get_db, get_current_active_user
 from common.models import User, UserRole
 from common.models.xy_account import XYAccount as Cookie
 from common.schemas.common import ApiResponse
+from common.utils.internal_auth import (
+    build_internal_auth_headers,
+    is_internal_api_url,
+)
 
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 router = APIRouter(prefix="/cookie-refresh", tags=["Cookie刷新管理"])
@@ -245,16 +249,38 @@ async def trigger_manual_refresh(
         try:
             import httpx
             from app.core.config import get_settings
-            
+
             settings = get_settings()
-            websocket_url = f"{settings.WEBSOCKET_SERVICE_URL}/internal/accounts/{account_id}/refresh-token"
-            
+            websocket_url = f"{settings.websocket_service_url}/internal/accounts/{account_id}/refresh-token"
+
+            if not is_internal_api_url(
+                websocket_url,
+                (settings.websocket_service_url,),
+            ):
+                return ApiResponse(
+                    success=False,
+                    message="WebSocket服务地址不合法，无法触发刷新",
+                    data=None,
+                )
+
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(websocket_url)
-                
-                if response.status_code == 200:
+                response = await client.post(
+                    websocket_url,
+                    headers=build_internal_auth_headers(settings.internal_api_token),
+                )
+
+                response_data = response.json()
+                response_success = (
+                    response.status_code == 200
+                    and isinstance(response_data, dict)
+                    and bool(response_data.get("success"))
+                )
+                if response_success:
                     logger.info(f"【Cookie刷新】成功触发WebSocket服务刷新: account_id={account_id}")
-                elif response.status_code == 404:
+                elif (
+                    response.status_code == 404
+                    or (isinstance(response_data, dict) and response_data.get("code") == 404)
+                ):
                     logger.warning(f"【Cookie刷新】账号未启动: account_id={account_id}")
                     return ApiResponse(
                         success=False,
@@ -262,10 +288,27 @@ async def trigger_manual_refresh(
                         data=None
                     )
                 else:
-                    logger.error(f"【Cookie刷新】WebSocket服务返回错误: {response.status_code}")
+                    message = (
+                        response_data.get("message")
+                        if isinstance(response_data, dict)
+                        else None
+                    )
+                    logger.error(
+                        f"【Cookie刷新】WebSocket服务返回业务错误: "
+                        f"status={response.status_code}, message={message or '未知错误'}"
+                    )
+                    return ApiResponse(
+                        success=False,
+                        message=message or "WebSocket服务未接受刷新请求，请稍后重试",
+                        data=None,
+                    )
         except Exception as e:
             logger.error(f"【Cookie刷新】调用WebSocket服务失败: {e}")
-            # 即使调用失败，也返回成功，因为WebSocket服务会自动刷新
+            return ApiResponse(
+                success=False,
+                message="调用WebSocket服务失败，请稍后重试",
+                data=None,
+            )
         
         return ApiResponse(
             success=True,

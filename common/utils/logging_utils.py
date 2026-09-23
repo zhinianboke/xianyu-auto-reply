@@ -3,7 +3,7 @@
 
 功能：
 1. 提供 InterceptHandler，将标准 logging 日志转发到 loguru
-2. 提供 setup_logging 函数，统一配置各服务的日志输出
+2. 提供 setup_logging 函数，统一配置各服务的普通日志与错误日志输出
 3. 提供 update_log_retention 函数，动态更新日志保留天数
 4. 提供 apply_db_log_retention 函数，从数据库读取日志保留天数并应用
 5. 提供 run_db_log_retention_sync 函数，支持日志保留天数运行时动态刷新和数据库轮询同步，便于系统设置修改后实时生效
@@ -22,13 +22,15 @@ from loguru import logger
 # 默认日志保留天数
 DEFAULT_LOG_RETENTION_DAYS = 7
 
-# 模块级变量：跟踪文件日志处理器，支持动态更新
+# 模块级变量：跟踪普通日志与错误日志处理器，支持动态更新
 _file_handler_id: int | None = None
+_error_file_handler_id: int | None = None
 _current_log_file: Path | None = None
 _current_retention_days: int = DEFAULT_LOG_RETENTION_DAYS
 
-# 文件日志格式（统一格式，避免重复定义）
+# 文件日志格式与轮转大小（普通日志和错误日志共用）
 _FILE_LOG_FORMAT = "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}"
+_FILE_LOG_ROTATION = "100 MB"
 
 
 class InterceptHandler(logging.Handler):
@@ -54,6 +56,37 @@ class InterceptHandler(logging.Handler):
         logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 
+def _add_file_handlers(log_file: Path, retention_days: int) -> tuple[int, int]:
+    """创建普通日志和错误日志处理器。
+
+    Args:
+        log_file: 普通日志文件路径。
+        retention_days: 日志文件保留天数。
+
+    Returns:
+        普通日志处理器 ID 和错误日志处理器 ID。
+    """
+    common_handler_id = logger.add(
+        log_file,
+        level="DEBUG",
+        format=_FILE_LOG_FORMAT,
+        rotation=_FILE_LOG_ROTATION,
+        retention=f"{retention_days} days",
+        encoding="utf-8",
+        enqueue=True,
+    )
+    error_handler_id = logger.add(
+        log_file.parent / "error.log",
+        level="ERROR",
+        format=_FILE_LOG_FORMAT,
+        rotation=_FILE_LOG_ROTATION,
+        retention=f"{retention_days} days",
+        encoding="utf-8",
+        enqueue=True,
+    )
+    return common_handler_id, error_handler_id
+
+
 def setup_logging(
     log_file: Path,
     log_level: str = "INFO",
@@ -62,7 +95,8 @@ def setup_logging(
 ) -> None:
     """统一配置服务日志
     
-    配置 loguru 的控制台和文件输出，并将标准 logging 转发到 loguru。
+    配置 loguru 的控制台、普通日志文件和 error.log，并将标准 logging 转发到 loguru。
+    error.log 仅记录 ERROR 及以上级别，但与普通日志使用相同的轮转大小和保留天数。
     
     Args:
         log_file: 日志文件路径
@@ -70,7 +104,7 @@ def setup_logging(
         third_party_loggers: 需要拦截的第三方库日志名称列表
         retention_days: 日志保留天数，默认 7 天
     """
-    global _file_handler_id, _current_log_file, _current_retention_days
+    global _file_handler_id, _error_file_handler_id, _current_log_file, _current_retention_days
     _current_log_file = log_file
     _current_retention_days = retention_days
 
@@ -88,15 +122,10 @@ def setup_logging(
         colorize=True,
     )
 
-    # 添加文件输出 - 记录所有级别的日志
-    _file_handler_id = logger.add(
+    # 普通日志记录 DEBUG 及以上级别；ERROR 及以上级别同时写入 error.log。
+    _file_handler_id, _error_file_handler_id = _add_file_handlers(
         log_file,
-        level="DEBUG",
-        format=_FILE_LOG_FORMAT,
-        rotation="100 MB",  # 日志文件达到100MB时轮转
-        retention=f"{retention_days} days",  # 根据配置保留日志
-        encoding="utf-8",
-        enqueue=True,  # 异步写入，提高性能
+        retention_days,
     )
 
     # 配置标准 logging 使用 InterceptHandler
@@ -126,14 +155,18 @@ def setup_logging(
 def update_log_retention(retention_days: int, log_applied: bool = True) -> bool:
     """动态更新日志文件保留天数
     
-    移除当前文件日志处理器，使用新的保留天数重新添加。
+    移除当前普通日志和错误日志处理器，使用新的保留天数重新添加。
     
     Args:
         retention_days: 新的日志保留天数（1~365）
     """
-    global _file_handler_id, _current_retention_days
+    global _file_handler_id, _error_file_handler_id, _current_retention_days
 
-    if _file_handler_id is None or _current_log_file is None:
+    if (
+        _file_handler_id is None
+        or _error_file_handler_id is None
+        or _current_log_file is None
+    ):
         logger.warning("日志文件处理器未初始化，无法更新保留天数")
         return False
 
@@ -145,21 +178,16 @@ def update_log_retention(retention_days: int, log_applied: bool = True) -> bool:
     if retention_days == _current_retention_days:
         return False
 
-    # 移除旧的文件处理器
-    try:
-        logger.remove(_file_handler_id)
-    except ValueError:
-        pass
+    # 移除旧处理器后统一重建，保证普通日志与错误日志策略始终一致。
+    for handler_id in (_file_handler_id, _error_file_handler_id):
+        try:
+            logger.remove(handler_id)
+        except ValueError:
+            pass
 
-    # 使用新的保留天数重新添加文件处理器
-    _file_handler_id = logger.add(
+    _file_handler_id, _error_file_handler_id = _add_file_handlers(
         _current_log_file,
-        level="DEBUG",
-        format=_FILE_LOG_FORMAT,
-        rotation="100 MB",
-        retention=f"{retention_days} days",
-        encoding="utf-8",
-        enqueue=True,
+        retention_days,
     )
     _current_retention_days = retention_days
     if log_applied:

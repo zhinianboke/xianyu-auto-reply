@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import warnings
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 
 from loguru import logger
 from sqlalchemy import text
@@ -27,9 +27,21 @@ from common.db.default_publish_addresses import (
     REMOVED_PUBLISH_ADDRESS_PREFIXES,
     build_default_publish_addresses,
 )
+from common.db.auto_relist_schema import ensure_auto_relist_schema
 from common.db.session import async_engine, async_session_maker
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.security import generate_secret_key, get_password_hash
+
+
+# 建表/改表时的锁等待上限（秒）。MySQL 的 lock_wait_timeout 默认 31536000 秒（一年），
+# 一旦某张表被别的事务或 ALTER 占着元数据锁，DDL 会无限挂住且没有任何日志，
+# 收敛成 30 秒后报错，让启动日志能直接看出是锁冲突。
+DDL_LOCK_WAIT_TIMEOUT_SECONDS = 30
+
+# 多服务（backend-web / scheduler / websocket 等）同时启动时，用 MySQL 命名锁把自检串行化，
+# 避免彼此争抢同一张表的元数据锁。名称与库同级，不同库互不影响。
+INIT_ADVISORY_LOCK_NAME = "xy_db_init"
+INIT_ADVISORY_LOCK_WAIT_SECONDS = 300
 
 
 @contextmanager
@@ -83,6 +95,108 @@ def suppress_db_warnings():
         for lg in loggers_to_filter:
             lg.removeFilter(db_filter)
         warnings.filterwarnings('default', category=SAWarning)
+
+
+def describe_ddl_error(exc: Exception) -> str:
+    """
+    把建表/改表异常转成带排查提示的信息。
+
+    Args:
+        exc: DDL 执行抛出的异常。
+    Returns:
+        原始错误信息；锁等待超时时追加持锁方的排查指引。
+    """
+    message = str(exc)
+    lowered = message.lower()
+    if "lock wait timeout" in lowered or "metadata lock" in lowered:
+        return (
+            f"{message} ｜ 该表被其他连接的事务或 ALTER 占用元数据锁，"
+            f"已按 {DDL_LOCK_WAIT_TIMEOUT_SECONDS} 秒上限放弃等待。"
+            f"排查：SELECT trx_mysql_thread_id, trx_started, trx_query "
+            f"FROM information_schema.innodb_trx ORDER BY trx_started; "
+            f"确认非必要事务后 KILL 对应线程再重启服务"
+        )
+    return message
+
+
+async def _apply_lock_wait_timeout(conn) -> None:
+    """
+    给当前连接设置锁等待上限，避免建表/改表卡在元数据锁上无限等待。
+
+    Args:
+        conn: 已建立的数据库连接。
+    Returns:
+        无返回值；非 MySQL 或无权限时只记录告警，沿用数据库默认值。
+    """
+    try:
+        await conn.execute(text(f"SET SESSION lock_wait_timeout = {DDL_LOCK_WAIT_TIMEOUT_SECONDS}"))
+        await conn.execute(
+            text(f"SET SESSION innodb_lock_wait_timeout = {DDL_LOCK_WAIT_TIMEOUT_SECONDS}")
+        )
+    except Exception as exc:
+        logger.warning(f"设置锁等待上限失败，本次自检沿用数据库默认超时: {exc}")
+
+
+@asynccontextmanager
+async def ddl_connection():
+    """
+    获取执行建表/改表用的连接，已带锁等待上限。
+
+    Returns:
+        事务内的数据库连接，退出时自动提交。
+    """
+    async with async_engine.begin() as conn:
+        await _apply_lock_wait_timeout(conn)
+        yield conn
+
+
+@asynccontextmanager
+async def init_advisory_lock():
+    """
+    用 MySQL 命名锁把多服务的启动自检串行化。
+
+    拿不到锁（超时或数据库不支持）时不阻断启动，只记录告警后继续执行自检：
+    此时建表/改表已有 30 秒锁等待上限，最坏情况是单张表报错并在日志中写明，
+    不会像以前那样无提示地永久卡住。
+
+    Returns:
+        上下文本身不返回值，退出时释放命名锁。
+    """
+    acquired = False
+    conn = None
+    try:
+        conn = await async_engine.connect()
+        result = await conn.execute(
+            text("SELECT GET_LOCK(:lock_name, :wait_seconds)"),
+            {
+                "lock_name": INIT_ADVISORY_LOCK_NAME,
+                "wait_seconds": INIT_ADVISORY_LOCK_WAIT_SECONDS,
+            },
+        )
+        acquired = result.scalar() == 1
+        if not acquired:
+            logger.warning(
+                f"等待 {INIT_ADVISORY_LOCK_WAIT_SECONDS} 秒仍未取得数据库自检锁 "
+                f"{INIT_ADVISORY_LOCK_NAME}，可能有其他服务正在执行自检；"
+                f"本次继续执行，如遇表被占用会在日志中逐表提示"
+            )
+    except Exception as exc:
+        logger.warning(f"获取数据库自检锁失败（不影响自检执行）: {exc}")
+
+    try:
+        yield
+    finally:
+        if conn is not None:
+            try:
+                if acquired:
+                    await conn.execute(
+                        text("SELECT RELEASE_LOCK(:lock_name)"),
+                        {"lock_name": INIT_ADVISORY_LOCK_NAME},
+                    )
+            except Exception as exc:
+                logger.warning(f"释放数据库自检锁失败（连接关闭后会自动释放）: {exc}")
+            finally:
+                await conn.close()
 
 
 class DatabaseInitializer:
@@ -243,6 +357,13 @@ class DatabaseInitializer:
             "定时清理被禁用账号的浏览器数据",
         ),
         (
+            "cleanup_unconfigured_browser_data",
+            "清理未配置账号密码的浏览器数据任务",
+            10800,
+            False,
+            "定时清理未配置登录账号密码（username 或 login_password 为空）账号的浏览器数据",
+        ),
+        (
             "fetch_orders",
             "获取闲鱼订单任务",
             600,
@@ -354,6 +475,20 @@ class DatabaseInitializer:
             True,
             "定时查询已私信且未下单的采集商品，用监控任务配置的下单账号创建订单（拍下，不自动付款）",
         ),
+        (
+            "image_cleanup",
+            "图片清理",
+            1200,
+            True,
+            "定时扫描卡券与素材库专属图片目录，删除已删除对象遗留的孤儿图片（仅清理各自目录，不影响其它功能图片）",
+        ),
+        (
+            "auto_relist_scan",
+            "商品自动续售",
+            5,
+            True,
+            "检测已成交并完成发货的商品，确认旧商品下架后使用原素材自动续售",
+        ),
     )
     
     # ========== 所有数据表的DDL定义 ==========
@@ -440,6 +575,7 @@ class DatabaseInitializer:
                 scheduled_rate TINYINT(1) NOT NULL DEFAULT 0 COMMENT '定时补评价开关',
                 auto_polish TINYINT(1) NOT NULL DEFAULT 0 COMMENT '商品自动擦亮开关',
                 confirm_before_send TINYINT(1) NOT NULL DEFAULT 0 COMMENT '发货成功再发卡券开关',
+                only_send_card TINYINT(1) NOT NULL DEFAULT 0 COMMENT '只发卡券不确认发货开关',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_owner_id (owner_id),
@@ -457,8 +593,13 @@ class DatabaseInitializer:
                 account_id BIGINT COMMENT '关联账号ID',
                 keyword VARCHAR(120) NOT NULL COMMENT '关键词',
                 reply_content TEXT COMMENT '回复内容',
-                reply_type VARCHAR(16) COMMENT '回复类型(text/image)',
+                reply_type VARCHAR(32) COMMENT '回复类型(text/image/external_contact)',
                 image_url VARCHAR(512) COMMENT '图片URL',
+                location_name VARCHAR(255) COMMENT '站外联系方式定位名称',
+                location_longitude VARCHAR(32) COMMENT '站外联系方式经度',
+                location_latitude VARCHAR(32) COMMENT '站外联系方式纬度',
+                location_title VARCHAR(128) COMMENT '站外联系方式位置标题',
+                location_subtitle VARCHAR(255) COMMENT '站外联系方式位置副标题',
                 item_id VARCHAR(64) COMMENT '商品ID',
                 priority INT DEFAULT 100 COMMENT '优先级',
                 is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用',
@@ -517,6 +658,7 @@ class DatabaseInitializer:
                 receiver_phone VARCHAR(32) COMMENT '收货人手机号',
                 receiver_address VARCHAR(512) COMMENT '收货地址',
                 delivery_fail_reason VARCHAR(2000) COMMENT '发货失败原因',
+                card_only_delivered TINYINT(1) NOT NULL DEFAULT 0 COMMENT '仅发卡券流程是否已处理',
                 item_snapshot JSON COMMENT '商品快照',
                 metadata JSON COMMENT '元数据',
                 source VARCHAR(32) COMMENT '数据来源：fetch_xianyu-获取闲鱼订单按钮',
@@ -549,6 +691,7 @@ class DatabaseInitializer:
                 description TEXT COMMENT '卡券描述',
                 enabled TINYINT(1) DEFAULT 1 COMMENT '是否启用',
                 delay_seconds INT DEFAULT 0 COMMENT '延迟秒数',
+                use_no_logistics_form TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否通过无需邮寄表单发货',
                 delivery_count INT DEFAULT 0 COMMENT '发货次数',
                 price VARCHAR(32) COMMENT '对接价格',
                 is_dockable TINYINT(1) DEFAULT 0 COMMENT '是否可对接',
@@ -576,11 +719,16 @@ class DatabaseInitializer:
                 account_id VARCHAR(80) NOT NULL COMMENT '账号标识',
                 item_id VARCHAR(64) DEFAULT NULL COMMENT '商品ID(空为账号默认回复)',
                 enabled TINYINT(1) DEFAULT 0 COMMENT '是否启用',
-                reply_type VARCHAR(16) DEFAULT 'text' COMMENT '回复类型：text-文本(可附带图片)，api-接口',
+                reply_type VARCHAR(32) DEFAULT 'text' COMMENT '回复类型：text-文本，api-接口，external_contact-站外联系方式',
                 reply_content TEXT COMMENT '回复内容',
                 reply_image VARCHAR(512) COMMENT '回复图片URL',
                 api_url VARCHAR(1024) DEFAULT NULL COMMENT 'API地址(reply_type=api时POST此地址)',
                 api_timeout INT DEFAULT 80 COMMENT 'API请求超时时间(秒)',
+                location_name VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式定位名称',
+                location_longitude VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式经度',
+                location_latitude VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式纬度',
+                location_title VARCHAR(128) DEFAULT NULL COMMENT '站外联系方式位置标题',
+                location_subtitle VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式位置副标题',
                 reply_once TINYINT(1) DEFAULT 0 COMMENT '只回复一次',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -898,6 +1046,8 @@ class DatabaseInitializer:
                 rate_type VARCHAR(20) DEFAULT 'text' COMMENT '评价类型',
                 text_content TEXT COMMENT '固定评价文字内容',
                 api_url VARCHAR(512) COMMENT 'API地址',
+                thanks_enabled TINYINT(1) DEFAULT 0 COMMENT '好评后自动发送消息开关',
+                thanks_content TEXT COMMENT '好评后发送的消息内容',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 UNIQUE KEY uk_account_id (account_id)
@@ -1134,6 +1284,7 @@ class DatabaseInitializer:
                 order_no VARCHAR(64) NOT NULL COMMENT '充值订单号',
                 user_id BIGINT NOT NULL COMMENT '用户ID',
                 amount VARCHAR(32) NOT NULL COMMENT '充值金额',
+                order_type VARCHAR(20) NOT NULL DEFAULT 'recharge' COMMENT '订单类型：recharge-余额充值，ad-广告申请付款',
                 status VARCHAR(32) NOT NULL DEFAULT 'pending' COMMENT '订单状态：pending-待支付，paid-已支付，expired-已过期，failed-失败',
                 trade_no VARCHAR(128) DEFAULT NULL COMMENT '支付宝交易号',
                 qr_code VARCHAR(512) DEFAULT NULL COMMENT '支付二维码内容',
@@ -1256,13 +1407,31 @@ class DatabaseInitializer:
                 price DECIMAL(12,2) NOT NULL COMMENT '价格',
                 original_price DECIMAL(12,2) DEFAULT NULL COMMENT '原价（划线价）',
                 category VARCHAR(100) DEFAULT NULL COMMENT '商品分类',
+                platform_category_id VARCHAR(64) DEFAULT NULL COMMENT '平台末级分类ID（catId）',
+                platform_category_name VARCHAR(100) DEFAULT NULL COMMENT '平台末级分类名称（catName）',
+                platform_channel_category_id VARCHAR(64) DEFAULT NULL COMMENT '平台频道分类ID（channelCatId）',
+                platform_channel_category_name VARCHAR(100) DEFAULT NULL COMMENT '平台频道分类名称（channelCatName）',
+                platform_leaf_id VARCHAR(64) DEFAULT NULL COMMENT '平台叶子分类ID（leafId）',
+                platform_tb_category_id VARCHAR(64) DEFAULT NULL COMMENT '淘宝分类ID（tbCatId）',
+                platform_category_path JSON DEFAULT NULL COMMENT '平台多级分类路径（各级ID和名称）',
+                platform_attributes JSON DEFAULT NULL COMMENT '平台属性标签列表（itemLabelExtList）',
+                category_source VARCHAR(20) NOT NULL DEFAULT 'manual' COMMENT '分类来源：manual-手动，recommendation-推荐',
+                category_confidence DECIMAL(8,6) DEFAULT NULL COMMENT '分类推荐置信度',
                 images JSON DEFAULT NULL COMMENT '图片URL列表（最多9张）',
+                videos JSON DEFAULT NULL COMMENT '视频素材列表（URL、文件ID、尺寸等）',
+                specifications JSON DEFAULT NULL COMMENT '商品规格列表',
+                sku_rows JSON DEFAULT NULL COMMENT '规格组合价格和库存列表',
+                quantity INT NOT NULL DEFAULT 1 COMMENT '发布数量',
                 delivery_method VARCHAR(20) DEFAULT 'express' COMMENT '发货方式：express-快递, pickup-自提',
+                shipping_method VARCHAR(20) DEFAULT 'free' COMMENT '运费方式：free/distance/fixed/template/none',
+                support_pickup TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否支持自提',
                 postage DECIMAL(8,2) DEFAULT 0 COMMENT '邮费，0表示包邮',
                 address VARCHAR(200) DEFAULT NULL COMMENT '宝贝所在地',
+                address_expected_text VARCHAR(200) DEFAULT NULL COMMENT '所在地选择时的期望文本',
                 brand VARCHAR(100) DEFAULT NULL COMMENT '品牌',
                 `condition` VARCHAR(20) DEFAULT '全新' COMMENT '成色',
                 remark VARCHAR(500) DEFAULT NULL COMMENT '备注（仅内部使用）',
+                is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_user_id (user_id),
@@ -1550,7 +1719,9 @@ class DatabaseInitializer:
                 INDEX idx_lmi_dm_send (order_status, is_dm_sent, ordered_at),
                 INDEX idx_lmi_order_pending (is_ordered, order_attempts),
                 INDEX idx_lmi_item_ordered (item_id, is_ordered),
-                INDEX idx_lmi_owner_publish (owner_id, publish_time)
+                INDEX idx_lmi_owner_publish (owner_id, publish_time),
+                INDEX idx_lmi_owner_order_pending (owner_id, is_ordered, created_at, order_attempts),
+                INDEX idx_lmi_owner_task_created (owner_id, monitor_task_id, created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品监控采集商品信息表';
         """,
 
@@ -1711,12 +1882,116 @@ class DatabaseInitializer:
                 INDEX idx_chat_quick_phrase_owner_sort (owner_id, sort_order)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='在线聊天快捷短语';
         """,
+
+        # 52. AI铺货配置表
+        "xy_ai_listing_configs": """
+            CREATE TABLE IF NOT EXISTS xy_ai_listing_configs (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                owner_id BIGINT NOT NULL COMMENT '归属用户（本系统用户ID）',
+                name VARCHAR(80) NOT NULL COMMENT '配置名称',
+                provider_type VARCHAR(30) NOT NULL DEFAULT 'openai_compatible' COMMENT '服务商类型：openai_compatible 等',
+                text_base_url VARCHAR(300) NOT NULL COMMENT '文案接口地址',
+                text_api_key VARCHAR(500) NOT NULL COMMENT '文案接口密钥',
+                text_model VARCHAR(100) NOT NULL COMMENT '文案模型名称',
+                text_temperature DECIMAL(4,2) NOT NULL DEFAULT 0.70 COMMENT '文案生成温度',
+                text_max_tokens INT NOT NULL DEFAULT 2048 COMMENT '文案生成最大token数',
+                prompt_template TEXT DEFAULT NULL COMMENT '自定义提示词模板（为空则用内置模板）',
+                image_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否启用AI图片生成',
+                image_base_url VARCHAR(300) DEFAULT NULL COMMENT '图片接口地址',
+                image_api_key VARCHAR(500) DEFAULT NULL COMMENT '图片接口密钥',
+                image_model VARCHAR(100) DEFAULT NULL COMMENT '图片模型名称',
+                image_size VARCHAR(20) NOT NULL DEFAULT '1024x1024' COMMENT '图片尺寸，如 1024x1024',
+                image_count INT NOT NULL DEFAULT 1 COMMENT '每条素材生成图片数量（1~9）',
+                is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX ix_xy_ai_listing_configs_owner_id (owner_id),
+                INDEX idx_alc_owner_deleted (owner_id, is_deleted)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI铺货配置表';
+        """,
+
+        # 53. AI铺货任务表
+        "xy_ai_listing_tasks": """
+            CREATE TABLE IF NOT EXISTS xy_ai_listing_tasks (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                owner_id BIGINT NOT NULL COMMENT '归属用户（本系统用户ID）',
+                task_id VARCHAR(36) NOT NULL COMMENT '任务ID（UUID）',
+                config_id BIGINT NOT NULL COMMENT '使用的AI铺货配置ID',
+                config_name VARCHAR(80) DEFAULT NULL COMMENT '配置名称快照',
+                keyword VARCHAR(200) NOT NULL COMMENT '生成主题/关键词',
+                total_count INT NOT NULL DEFAULT 0 COMMENT '计划生成条数',
+                success_count INT NOT NULL DEFAULT 0 COMMENT '已成功条数',
+                failed_count INT NOT NULL DEFAULT 0 COMMENT '已失败条数',
+                status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT '状态：pending/running/success/partial/failed/canceled',
+                error_message VARCHAR(1000) DEFAULT NULL COMMENT '整体失败原因',
+                params JSON DEFAULT NULL COMMENT '提交参数快照（价格模式、素材默认值等）',
+                started_at DATETIME DEFAULT NULL COMMENT '开始执行时间',
+                finished_at DATETIME DEFAULT NULL COMMENT '执行结束时间',
+                is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                UNIQUE KEY uq_xy_ai_listing_tasks_task_id (task_id),
+                INDEX ix_xy_ai_listing_tasks_owner_id (owner_id),
+                INDEX idx_alt_owner_created (owner_id, created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI铺货任务表';
+        """,
+
+        # 54. AI铺货任务明细表
+        "xy_ai_listing_task_items": """
+            CREATE TABLE IF NOT EXISTS xy_ai_listing_task_items (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                task_id VARCHAR(36) NOT NULL COMMENT '所属任务ID',
+                owner_id BIGINT NOT NULL COMMENT '归属用户（本系统用户ID）',
+                seq INT NOT NULL DEFAULT 0 COMMENT '序号（从1开始）',
+                status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT '状态：pending/running/success/failed',
+                title VARCHAR(200) DEFAULT NULL COMMENT '生成的商品标题',
+                material_id BIGINT DEFAULT NULL COMMENT '入库后的素材ID',
+                image_count INT NOT NULL DEFAULT 0 COMMENT '本条素材图片数量',
+                error_message VARCHAR(1000) DEFAULT NULL COMMENT '失败原因',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX ix_xy_ai_listing_task_items_task_id (task_id),
+                INDEX idx_alti_task_status (task_id, status)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI铺货任务明细表';
+        """,
     }
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
     COLUMN_MIGRATIONS = {
+        "xy_keyword_rules": [
+            ("location_name", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式定位名称'", "image_url"),
+            ("location_longitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式经度'", "location_name"),
+            ("location_latitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式纬度'", "location_longitude"),
+            ("location_title", "VARCHAR(128) DEFAULT NULL COMMENT '站外联系方式位置标题'", "location_latitude"),
+            ("location_subtitle", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式位置副标题'", "location_title"),
+        ],
+        "xy_recharge_orders": [
+            ("order_type", "VARCHAR(20) NOT NULL DEFAULT 'recharge' COMMENT '订单类型：recharge-余额充值，ad-广告申请付款'", "amount"),
+        ],
         "xy_token_cache": [
             ("renew_expire_at", "DATETIME DEFAULT NULL COMMENT '续期Token过期时间'", "expire_at"),
+        ],
+        "xy_product_materials": [
+            ("platform_category_id", "VARCHAR(64) DEFAULT NULL COMMENT '平台末级分类ID（catId）'", "category"),
+            ("platform_category_name", "VARCHAR(100) DEFAULT NULL COMMENT '平台末级分类名称（catName）'", "platform_category_id"),
+            ("platform_channel_category_id", "VARCHAR(64) DEFAULT NULL COMMENT '平台频道分类ID（channelCatId）'", "platform_category_name"),
+            ("platform_channel_category_name", "VARCHAR(100) DEFAULT NULL COMMENT '平台频道分类名称（channelCatName）'", "platform_channel_category_id"),
+            ("platform_leaf_id", "VARCHAR(64) DEFAULT NULL COMMENT '平台叶子分类ID（leafId）'", "platform_channel_category_name"),
+            ("platform_tb_category_id", "VARCHAR(64) DEFAULT NULL COMMENT '淘宝分类ID（tbCatId）'", "platform_leaf_id"),
+            ("platform_category_path", "JSON DEFAULT NULL COMMENT '平台多级分类路径（各级ID和名称）'", "platform_tb_category_id"),
+            ("platform_attributes", "JSON DEFAULT NULL COMMENT '平台属性标签列表（itemLabelExtList）'", "platform_category_path"),
+            ("category_source", "VARCHAR(20) NOT NULL DEFAULT 'manual' COMMENT '分类来源：manual-手动，recommendation-推荐'", "platform_attributes"),
+            ("category_confidence", "DECIMAL(8,6) DEFAULT NULL COMMENT '分类推荐置信度'", "category_source"),
+            ("videos", "JSON DEFAULT NULL COMMENT '视频素材列表（URL、文件ID、尺寸等）'", "images"),
+            ("specifications", "JSON DEFAULT NULL COMMENT '商品规格列表'", "videos"),
+            ("sku_rows", "JSON DEFAULT NULL COMMENT '规格组合价格和库存列表'", "specifications"),
+            ("quantity", "INT NOT NULL DEFAULT 1 COMMENT '发布数量'", "sku_rows"),
+            ("delivery_method", "VARCHAR(20) DEFAULT 'express' COMMENT '发货方式：express-快递, pickup-自提'", "quantity"),
+            ("shipping_method", "VARCHAR(20) DEFAULT 'free' COMMENT '运费方式：free/distance/fixed/template/none'", "delivery_method"),
+            ("support_pickup", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否支持自提'", "shipping_method"),
+            ("postage", "DECIMAL(8,2) DEFAULT 0 COMMENT '邮费，0表示包邮'", "support_pickup"),
+            ("address_expected_text", "VARCHAR(200) DEFAULT NULL COMMENT '所在地选择时的期望文本'", "address"),
+            ("is_deleted", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）'", "remark"),
         ],
         "xy_listing_monitor_tasks": [
             ("monitor_type", "VARCHAR(20) NOT NULL DEFAULT 'listing' COMMENT '监控类型：listing-上新监控，price_drop-降价监控'", "owner_id"),
@@ -1788,6 +2063,7 @@ class DatabaseInitializer:
             ("auto_polish", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '商品自动擦亮开关'", "scheduled_rate"),
             ("confirm_before_send", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '发货成功再发卡券开关'", "auto_polish"),
             ("send_before_confirm", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '卡券发送成功再确认发货开关'", "confirm_before_send"),
+            ("only_send_card", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '只发卡券不确认发货开关'", "send_before_confirm"),
             ("auto_red_flower", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '自动求小红花开关'", "send_before_confirm"),
             ("delivery_disabled", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '禁止发货开关'", "auto_red_flower"),
             ("delivery_disabled_reason", "VARCHAR(500) DEFAULT NULL COMMENT '禁止发货原因'", "delivery_disabled"),
@@ -1798,8 +2074,12 @@ class DatabaseInitializer:
             ("refund_cancel_enabled", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '退款订单注销开关'", "ai_reply_block_ordered_users"),
             ("refund_cancel_url", "VARCHAR(255) DEFAULT NULL COMMENT '退款订单注销请求URL'", "refund_cancel_enabled"),
             ("refund_cancel_timeout", "INT DEFAULT 60 COMMENT '退款订单注销超时时间(秒)'", "refund_cancel_url"),
+            ("agree_deliver_enabled", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '同意后发货开关'", "refund_cancel_timeout"),
+            ("agree_deliver_notify_message", "VARCHAR(2000) DEFAULT NULL COMMENT '同意后发货-通知用户信息'", "agree_deliver_enabled"),
+            ("agree_deliver_pickup_url", "VARCHAR(255) DEFAULT NULL COMMENT '同意后发货-提货URL'", "agree_deliver_notify_message"),
         ],
         "xy_orders": [
+            ("card_only_delivered", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '仅发卡券流程是否已处理'", "delivery_fail_reason"),
             ("is_bargain", "TINYINT(1) DEFAULT 0 COMMENT '是否小刀'", "account_name"),
             ("chat_id", "VARCHAR(64) COMMENT '聊天会话ID'", "buyer_id"),
             ("buyer_fish_nick", "VARCHAR(120) COMMENT '买家闲鱼昵称（明文）'", "buyer_nick"),
@@ -1812,11 +2092,19 @@ class DatabaseInitializer:
             ("delivery_fail_reason", "VARCHAR(2000) COMMENT '发货失败原因'", "delivery_content"),
             ("source", "VARCHAR(32) COMMENT '数据来源：fetch_xianyu-获取闲鱼订单按钮'", "metadata"),
             ("is_red_flower", "TINYINT(1) DEFAULT 0 COMMENT '是否已求小红花'", "is_rated"),
+            ("is_thanks_sent", "TINYINT(1) DEFAULT 0 COMMENT '是否已发送好评后消息'", "is_red_flower"),
             ("is_unregistered", "TINYINT(1) DEFAULT 0 COMMENT '是否已请求注销接口'", "is_red_flower"),
             ("unregister_error_reason", "VARCHAR(500) DEFAULT NULL COMMENT '注销接口错误原因'", "is_unregistered"),
+            ("agree_deliver_agreed", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '同意后发货-买家是否已点击同意'", "card_only_delivered"),
+            ("agree_deliver_agreed_at", "DATETIME DEFAULT NULL COMMENT '同意后发货-买家点击同意时间'", "agree_deliver_agreed"),
+        ],
+        "xy_auto_rate_configs": [
+            ("thanks_enabled", "TINYINT(1) DEFAULT 0 COMMENT '好评后自动发送消息开关'", "api_url"),
+            ("thanks_content", "TEXT COMMENT '好评后发送的消息内容'", "thanks_enabled"),
         ],
         "xy_cards": [
             ("delivery_count", "INT DEFAULT 0 COMMENT '发货次数'", "delay_seconds"),
+            ("use_no_logistics_form", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否通过无需邮寄表单发货'", "delay_seconds"),
             ("price", "VARCHAR(32) COMMENT '对接价格'", "delivery_count"),
             ("is_dockable", "TINYINT(1) DEFAULT 0 COMMENT '是否可对接'", "price"),
             ("image_urls", "TEXT COMMENT '多图片URL列表(JSON数组，最多3张)'", "image_url"),
@@ -1846,9 +2134,14 @@ class DatabaseInitializer:
         "xy_default_replies": [
             ("item_id", "VARCHAR(64) DEFAULT NULL COMMENT '商品ID'", "account_id"),
             ("reply_image", "VARCHAR(512) COMMENT '回复图片URL'", "reply_content"),
-            ("reply_type", "VARCHAR(16) DEFAULT 'text' COMMENT '回复类型：text-文本(可附带图片)，api-接口'", "enabled"),
+            ("reply_type", "VARCHAR(32) DEFAULT 'text' COMMENT '回复类型：text-文本，api-接口，external_contact-站外联系方式'", "enabled"),
             ("api_url", "VARCHAR(1024) DEFAULT NULL COMMENT 'API地址(reply_type=api时POST此地址)'", "reply_image"),
             ("api_timeout", "INT DEFAULT 80 COMMENT 'API请求超时时间(秒)'", "api_url"),
+            ("location_name", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式定位名称'", "api_timeout"),
+            ("location_longitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式经度'", "location_name"),
+            ("location_latitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式纬度'", "location_longitude"),
+            ("location_title", "VARCHAR(128) DEFAULT NULL COMMENT '站外联系方式位置标题'", "location_latitude"),
+            ("location_subtitle", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式位置副标题'", "location_title"),
         ],
         "xy_default_reply_records": [
             ("item_id", "VARCHAR(64) DEFAULT NULL COMMENT '商品ID'", "account_id"),
@@ -1895,39 +2188,45 @@ class DatabaseInitializer:
         try:
             logger.info("=" * 50)
             logger.info("开始初始化数据库...")
-            
-            # 使用上下文管理器抑制初始化时的重复警告日志
-            with suppress_db_warnings():
-                # 1. 创建所有表
-                await self.create_all_tables()
-                
-                # 2. 创建默认管理员用户
-                await self.create_default_admin()
-                
-                # 3. 初始化系统设置
-                await self.init_system_settings()
-                
-                # 4. 初始化定时任务配置
-                await self.init_scheduled_tasks()
 
-                # 5. 初始化随机地址默认数据
-                await self.init_publish_addresses()
-                
-                # 6. 初始化Redis平台日
-                await self.init_redis_platform_day()
-                
-                # 7. 迁移卡券商品关联数据（从 xy_cards.item_id 到关联表）
-                await self.migrate_card_item_relations()
+            # 命名锁保证多服务同时启动时只有一个进程在建表/改表，避免元数据锁互相阻塞
+            async with init_advisory_lock():
+                # 使用上下文管理器抑制初始化时的重复警告日志
+                with suppress_db_warnings():
+                    # 1. 创建所有表
+                    await self.create_all_tables()
 
-                # 8. 迁移旧禁止发货设置到规则配置表
-                await self.migrate_delivery_block_rules()
+                    # 自动续售表和发布日志关联字段独立幂等迁移，避免依赖旧版本 DDL 顺序。
+                    async with ddl_connection() as conn:
+                        await ensure_auto_relist_schema(conn, get_beijing_now_naive())
 
-                # 9. 为历史用户回填分销秘钥（secret_key 为空的存量用户）
-                await self.backfill_user_secret_keys()
-            
+                    # 2. 创建默认管理员用户
+                    await self.create_default_admin()
+
+                    # 3. 初始化系统设置
+                    await self.init_system_settings()
+
+                    # 4. 初始化定时任务配置
+                    await self.init_scheduled_tasks()
+
+                    # 5. 初始化随机地址默认数据
+                    await self.init_publish_addresses()
+
+                    # 6. 初始化Redis平台日
+                    await self.init_redis_platform_day()
+
+                    # 7. 迁移卡券商品关联数据（从 xy_cards.item_id 到关联表）
+                    await self.migrate_card_item_relations()
+
+                    # 8. 迁移旧禁止发货设置到规则配置表
+                    await self.migrate_delivery_block_rules()
+
+                    # 9. 为历史用户回填分销秘钥（secret_key 为空的存量用户）
+                    await self.backfill_user_secret_keys()
+
             logger.info("数据库初始化完成")
             logger.info("=" * 50)
-            
+
         except Exception as e:
             logger.error(f"数据库初始化失败: {e}")
             raise
@@ -1946,13 +2245,13 @@ class DatabaseInitializer:
         # 先重命名旧表（如果存在）
         await self.rename_legacy_tables()
         
-        async with async_engine.begin() as conn:
+        async with ddl_connection() as conn:
             for table_name, ddl in self.TABLES_DDL.items():
                 try:
                     await conn.execute(text(ddl))
                     logger.info(f"✓ 表 {table_name} 已就绪")
                 except Exception as e:
-                    logger.warning(f"✗ 表 {table_name} 创建失败: {e}")
+                    logger.warning(f"✗ 表 {table_name} 创建失败: {describe_ddl_error(e)}")
         
         logger.info(f"数据表创建完成，共 {len(self.TABLES_DDL)} 张表")
         
@@ -1964,7 +2263,7 @@ class DatabaseInitializer:
     
     async def rename_legacy_tables(self):
         """重命名旧表（统一加 xy_ 前缀）"""
-        async with async_engine.begin() as conn:
+        async with ddl_connection() as conn:
             for old_name, new_name in self.TABLES_TO_RENAME.items():
                 try:
                     # 检查旧表是否存在
@@ -2001,7 +2300,7 @@ class DatabaseInitializer:
         """检查并添加/修改字段"""
         logger.info("检查字段迁移...")
         
-        async with async_engine.begin() as conn:
+        async with ddl_connection() as conn:
             for table_name, columns in self.COLUMN_MIGRATIONS.items():
                 for col_name, col_def, after_col in columns:
                     try:
@@ -2014,6 +2313,22 @@ class DatabaseInitializer:
                         """)
                         result = await conn.execute(check_sql)
                         exists = result.scalar() > 0
+
+                        # Existing installations may have the original VARCHAR(16) reply type.
+                        # Expand it before storing external_contact.
+                        if exists and table_name == "xy_default_replies" and col_name == "reply_type":
+                            length_result = await conn.execute(text("""
+                                SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS
+                                WHERE TABLE_SCHEMA = DATABASE()
+                                AND TABLE_NAME = 'xy_default_replies'
+                                AND COLUMN_NAME = 'reply_type'
+                            """))
+                            current_length = length_result.scalar()
+                            if current_length and current_length < 32:
+                                await conn.execute(text(
+                                    "ALTER TABLE xy_default_replies MODIFY COLUMN reply_type VARCHAR(32) DEFAULT 'text' COMMENT 'reply type'"
+                                ))
+                                logger.info("Expanded xy_default_replies.reply_type to VARCHAR(32)")
                         
                         if not exists:
                             # 添加字段
@@ -2030,7 +2345,9 @@ class DatabaseInitializer:
                         else:
                             logger.debug(f"✓ 表 {table_name} 已有字段 {col_name}")
                     except Exception as e:
-                        logger.warning(f"✗ 表 {table_name} 字段 {col_name} 迁移失败: {e}")
+                        logger.warning(
+                            f"✗ 表 {table_name} 字段 {col_name} 迁移失败: {describe_ddl_error(e)}"
+                        )
 
             # xy_users: account_limit 字段允许为空且默认值为空
             try:
@@ -2129,11 +2446,30 @@ class DatabaseInitializer:
                 except Exception as e:
                     logger.warning(f"✗ xy_cards {card_col} 字段迁移失败: {e}")
 
+            # 归一化历史冲突配置：只发卡券模式优先于自动确认及确认顺序设置。
+            try:
+                result = await conn.execute(text("""
+                    UPDATE xy_accounts
+                    SET auto_confirm = 0,
+                        confirm_before_send = 0,
+                        send_before_confirm = 0
+                    WHERE only_send_card = 1
+                      AND (
+                          auto_confirm <> 0
+                          OR confirm_before_send <> 0
+                          OR send_before_confirm <> 0
+                      )
+                """))
+                if result.rowcount:
+                    logger.info(f"✓ xy_accounts: 已修复 {result.rowcount} 条只发卡券冲突配置")
+            except Exception as e:
+                logger.warning(f"✗ xy_accounts 发货开关冲突配置修复失败: {e}")
+
     async def migrate_indexes(self):
         """检查并迁移索引（如更新 UNIQUE KEY 等）"""
         logger.info("检查索引迁移...")
         
-        async with async_engine.begin() as conn:
+        async with ddl_connection() as conn:
             try:
                 # xy_card_item_relations: 将旧的 uk_card_item(card_id, item_id) 替换为 uk_card_item_dock(card_id, item_id, dock_record_id)
                 # 检查旧索引是否存在
@@ -2864,6 +3200,23 @@ class DatabaseInitializer:
             except Exception as e:
                 logger.warning(f"✗ xy_product_materials idx_pm_user_created 创建失败: {e}")
 
+            # 为 xy_product_materials 补建平台分类索引
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_product_materials'
+                    AND INDEX_NAME = 'idx_pm_platform_category'
+                """)
+                result = await conn.execute(check)
+                if result.scalar() == 0:
+                    await conn.execute(text(
+                        "ALTER TABLE xy_product_materials ADD INDEX idx_pm_platform_category (platform_category_id)"
+                    ))
+                    logger.info("✓ xy_product_materials: 创建 idx_pm_platform_category 索引")
+            except Exception as e:
+                logger.warning(f"✗ xy_product_materials idx_pm_platform_category 创建失败: {e}")
+
             # 为 xy_publish_logs 补建 (user_id, created_at) 复合索引
             try:
                 check = text("""
@@ -3107,6 +3460,13 @@ class DatabaseInitializer:
                 ("idx_lmi_item_ordered", "(item_id, is_ordered)"),
                 # 前端列表分页：owner_id 过滤 + 按 publish_time 排序
                 ("idx_lmi_owner_publish", "(owner_id, publish_time)"),
+                # 「采集商品自动下单」按用户配额取数：owner_id + is_ordered=0 + created_at>=窗口 + order_attempts<上限
+                (
+                    "idx_lmi_owner_order_pending",
+                    "(owner_id, is_ordered, created_at, order_attempts)",
+                ),
+                # 「采集商品卖家ID补全」按用户/任务两级配额取数：owner_id + monitor_task_id 分组统计 + created_at>=窗口
+                ("idx_lmi_owner_task_created", "(owner_id, monitor_task_id, created_at)"),
             ]
             for idx_name, idx_cols in lmi_query_indexes:
                 try:

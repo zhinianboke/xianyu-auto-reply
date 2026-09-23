@@ -277,6 +277,43 @@ class DBManagerCompat:
                 return bool(send_before_confirm) if send_before_confirm is not None else False
         return self._run_async(_query)
 
+    def get_only_send_card(self, cookie_id: str) -> bool:
+        """获取只发卡券、不确认发货开关设置"""
+        async def _query(session_maker):
+            async with session_maker() as session:
+                stmt = select(XYAccount.only_send_card).where(XYAccount.account_id == cookie_id)
+                result = await session.execute(stmt)
+                value = result.scalar_one_or_none()
+                return bool(value) if value is not None else False
+        return self._run_async(_query)
+
+    def get_agree_deliver_config(self, cookie_id: str) -> dict:
+        """获取同意后发货配置（开关/通知信息/提货URL），一次查询返回。
+
+        Args:
+            cookie_id: 闲鱼账号标识（account_id）
+        Returns:
+            {"enabled": bool, "notify_message": str|None, "pickup_url": str|None}；
+            无记录时返回 enabled=False 的空配置
+        """
+        async def _query(session_maker):
+            async with session_maker() as session:
+                stmt = select(
+                    XYAccount.agree_deliver_enabled,
+                    XYAccount.agree_deliver_notify_message,
+                    XYAccount.agree_deliver_pickup_url,
+                ).where(XYAccount.account_id == cookie_id)
+                result = await session.execute(stmt)
+                row = result.first()
+                if not row:
+                    return {"enabled": False, "notify_message": None, "pickup_url": None}
+                return {
+                    "enabled": bool(row[0]),
+                    "notify_message": row[1],
+                    "pickup_url": row[2],
+                }
+        return self._run_async(_query)
+
     def get_cookie_status(self, cookie_id: str) -> bool:
         """获取账号是否启用"""
         async def _query(session_maker):
@@ -645,11 +682,13 @@ class DBManagerCompat:
     
     # ==================== 订单相关 ====================
     
-    def get_order_by_id(self, order_id: str) -> Optional[Dict[str, Any]]:
-        """获取订单信息"""
+    def get_order_by_id(self, order_id: str, account_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """按订单号获取订单信息，可选按闲鱼账号过滤。"""
         async def _query(session_maker):
             async with session_maker() as session:
                 stmt = select(XYOrder).where(XYOrder.order_no == order_id)
+                if account_id:
+                    stmt = stmt.where(XYOrder.account_id == account_id)
                 result = await session.execute(stmt)
                 order = result.scalars().first()
                 if not order:
@@ -667,6 +706,9 @@ class DBManagerCompat:
                     'amount': str(order.amount) if order.amount else '0',
                     'quantity': order.quantity,
                     'is_bargain': order.is_bargain,
+                    'card_only_delivered': order.card_only_delivered,
+                    'delivery_method': order.delivery_method,
+                    'delivery_content': order.delivery_content,
                 }
         return self._run_async(_query)
     

@@ -33,7 +33,7 @@ from common.services.remote_token_api import (
 from common.services.remote_token_risk_log_service import (
     REMOTE_OUTCOME_FAILED,
     REMOTE_OUTCOME_SUCCESS,
-    build_remote_fallback_event_description,
+    build_remote_direct_event_description,
     record_remote_token_risk_log_sync,
 )
 from common.services.token_api_mode import (
@@ -52,7 +52,7 @@ _APP_KEY = "34839810"
 _TOKEN_REFETCH_TOTAL_TIMEOUT_SECONDS = 10.0
 _TOKEN_API_CONNECT_TIMEOUT_SECONDS = 3.0
 # 重取滑块验证链接场景的风控日志事件描述前缀
-_REMOTE_FALLBACK_EVENT_SCENE = "重取滑块验证链接时"
+_REMOTE_TOKEN_EVENT_SCENE = "重取滑块验证链接时"
 
 
 def _post_token_api(
@@ -228,33 +228,37 @@ def _request_token_api_with_expiry_retry(
     )
 
 
-def _try_remote_token_fallback(
+def _request_remote_token(
     cookie_id: str,
     result: Dict[str, object],
     *,
     cookies_str: str,
     timeout_seconds: float,
-    local_failure_reason: str,
-    local_duration_seconds: float = 0,
 ) -> bool:
-    """在远程接口已配置时，以远程 Token 结果回退本地网页接口失败。
+    """调用远程 Token 接口并将结果写入重取结果。
 
     Args:
         cookie_id: 账号标识，用于日志和风控记录。
         result: 当前重取结果，远程成功时会写入 Token 与设备信息。
         cookies_str: 当前账号完整 Cookie 字符串，传给远程接口 data.cookies。
         timeout_seconds: 远程请求可用的剩余超时预算。
-        local_failure_reason: 本地网页接口失败原因。
-        local_duration_seconds: 本地网页接口耗时，与远程耗时分开记入风控日志。
     Returns:
         远程接口是否成功返回有效 Token。
     """
+    def _event_description(remote_outcome: str) -> str:
+        return build_remote_direct_event_description(
+            remote_outcome=remote_outcome,
+            scene=_REMOTE_TOKEN_EVENT_SCENE,
+        )
+
+    request_context = "按系统设置直接调用远程接口"
+
     try:
         remote_settings = load_remote_token_settings_sync()
     except Exception as exc:
         logger.warning(
-            f"【{cookie_id}】本地网页接口获取Token失败（{local_failure_reason}），"
-            f"读取远程接口配置失败，跳过远程回退: {type(exc).__name__}: {exc}"
+            f"【{cookie_id}】{request_context}，"
+            f"读取远程接口配置失败，跳过远程请求: {type(exc).__name__}: {exc}"
         )
         return False
 
@@ -264,14 +268,13 @@ def _try_remote_token_fallback(
     )
     if config_error:
         logger.info(
-            f"【{cookie_id}】本地网页接口获取Token失败（{local_failure_reason}），"
-            f"远程接口未配置，跳过远程回退: {config_error}"
+            f"【{cookie_id}】{request_context}，"
+            f"远程接口未配置，跳过远程请求: {config_error}"
         )
         return False
 
     logger.warning(
-        f"【{cookie_id}】本地网页接口获取Token失败（{local_failure_reason}），"
-        "开始调用远程接口获取Token"
+        f"【{cookie_id}】{request_context}，开始调用远程接口获取Token"
     )
     # 远程整体耗时自行计时：异常时拿不到 RemoteTokenResult.duration_seconds
     remote_started_at = time.monotonic()
@@ -287,16 +290,11 @@ def _try_remote_token_fallback(
             success=False,
             message=error_message,
             duration_seconds=time.monotonic() - remote_started_at,
-            local_duration_seconds=local_duration_seconds,
-            event_description=build_remote_fallback_event_description(
-                local_failure_reason=local_failure_reason,
-                remote_outcome=REMOTE_OUTCOME_FAILED,
-                scene=_REMOTE_FALLBACK_EVENT_SCENE,
-            ),
+            local_duration_seconds=0,
+            event_description=_event_description(REMOTE_OUTCOME_FAILED),
         )
         logger.warning(
-            f"【{cookie_id}】本地网页接口获取Token失败后的远程回退异常: "
-            f"{error_message}"
+            f"【{cookie_id}】远程接口调用异常: {error_message}"
         )
         return False
 
@@ -307,18 +305,14 @@ def _try_remote_token_fallback(
         api_mode=remote_result.api_mode,
         status_code=remote_result.status_code,
         duration_seconds=remote_result.duration_seconds,
-        local_duration_seconds=local_duration_seconds,
-        event_description=build_remote_fallback_event_description(
-            local_failure_reason=local_failure_reason,
-            remote_outcome=(
-                REMOTE_OUTCOME_SUCCESS if remote_result.success else REMOTE_OUTCOME_FAILED
-            ),
-            scene=_REMOTE_FALLBACK_EVENT_SCENE,
+        local_duration_seconds=0,
+        event_description=_event_description(
+            REMOTE_OUTCOME_SUCCESS if remote_result.success else REMOTE_OUTCOME_FAILED
         ),
     )
     if not remote_result.success:
         logger.warning(
-            f"【{cookie_id}】本地网页接口获取Token失败后的远程回退失败: "
+            f"【{cookie_id}】远程接口获取Token失败: "
             f"{remote_result.message or '未返回错误说明'}"
         )
         return False
@@ -328,7 +322,7 @@ def _try_remote_token_fallback(
     result["device_id"] = remote_result.device_id
     result["api_mode"] = remote_result.api_mode
     logger.info(
-        f"【{cookie_id}】本地网页接口获取Token失败后远程回退成功，"
+        f"【{cookie_id}】远程接口获取Token成功，"
         f"实际接口={remote_result.api_mode or '未返回'}"
     )
     return True
@@ -370,9 +364,19 @@ def request_fresh_captcha_url(
     }
     try:
         deadline = time.monotonic() + _TOKEN_REFETCH_TOTAL_TIMEOUT_SECONDS
-        # 网页模式只调用本地网页端接口；远程模式先本地、失败后再远程。
+        # 网页模式只调用本地网页端接口；远程模式按配置直接调用远程接口。
         configured_mode = load_token_api_mode_sync(cookie_id)
-        remote_fallback_enabled = configured_mode == TOKEN_API_MODE_REMOTE
+        remote_mode = configured_mode == TOKEN_API_MODE_REMOTE
+
+        if remote_mode:
+            remaining_seconds = max(0.1, deadline - time.monotonic())
+            _request_remote_token(
+                cookie_id,
+                result,
+                cookies_str=cookies_str,
+                timeout_seconds=remaining_seconds,
+            )
+            return result
 
         current_cookies = dict(cookies)
         current_cookies_str = cookies_str
@@ -387,22 +391,7 @@ def request_fresh_captcha_url(
                     deadline,
                 )
             )
-        except Exception as local_error:
-            if remote_fallback_enabled:
-                remaining_seconds = max(0.1, deadline - time.monotonic())
-                _try_remote_token_fallback(
-                    cookie_id,
-                    result,
-                    cookies_str=cookies_str,
-                    timeout_seconds=remaining_seconds,
-                    local_failure_reason=(
-                        f"请求异常：{type(local_error).__name__}: {local_error}"
-                    ),
-                    # 本地耗时由总预算反推，避免额外调用 monotonic 影响超时预算计算
-                    local_duration_seconds=(
-                        _TOKEN_REFETCH_TOTAL_TIMEOUT_SECONDS - remaining_seconds
-                    ),
-                )
+        except Exception:
             return result
         result["new_cookies"] = dict(response_cookies)
         new_token = extract_im_access_token(primary_response)
@@ -413,21 +402,6 @@ def request_fresh_captcha_url(
             result["token_ok"] = True
             result["new_token"] = new_token
             return result
-
-        if remote_fallback_enabled:
-            remaining_seconds = max(0.1, deadline - time.monotonic())
-            if _try_remote_token_fallback(
-                cookie_id,
-                result,
-                cookies_str=cookies_str,
-                timeout_seconds=remaining_seconds,
-                local_failure_reason="未返回有效Token",
-                # 本地耗时由总预算反推，避免额外调用 monotonic 影响超时预算计算
-                local_duration_seconds=(
-                    _TOKEN_REFETCH_TOTAL_TIMEOUT_SECONDS - remaining_seconds
-                ),
-            ):
-                return result
 
         new_url = extract_token_captcha_url(primary_response)
         if new_url:

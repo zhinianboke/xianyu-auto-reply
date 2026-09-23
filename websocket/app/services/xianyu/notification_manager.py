@@ -194,7 +194,7 @@ class NotificationManager:
             quantity = "未知"
             if order_id:
                 try:
-                    order = db_manager.get_order_by_id(order_id, self.cookie_id)
+                    order = db_manager.get_order_by_id(order_id, account_id=self.cookie_id)
                     if order:
                         buyer_nick = (
                             order.get("buyer_fish_nick")

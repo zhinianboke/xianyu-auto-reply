@@ -331,6 +331,9 @@ class XianyuPublisher:
 
             logger.info(f"共有 {len(images)} 张图片需要上传")
             await self._upload_images(images)
+            videos = item_data.get("videos") or []
+            if videos:
+                await self._upload_videos(videos)
 
             logger.info("\n[步骤3] ⏳ 等待图片上传和分类自动识别...")
             await asyncio.sleep(5)
@@ -350,10 +353,11 @@ class XianyuPublisher:
 
             await self._select_category()
 
-            logger.info("\n[步骤7] ⏭️ 跳过商品规格...")
-            await asyncio.sleep(1)
+            logger.info("\n[步骤7] 🧩 填写商品规格...")
+            await self._fill_specifications(item_data)
 
             await self._fill_price(item_data)
+            await self._fill_stock(item_data)
 
             logger.info("\n[步骤10] ⏭️ 跳过服务选择...")
             await asyncio.sleep(1)
@@ -362,7 +366,7 @@ class XianyuPublisher:
             logger.info("\n[步骤11] ⏭️ 跳过服务选择...")
             await asyncio.sleep(1)
 
-            await self._set_free_shipping()
+            await self._set_shipping(item_data)
 
             await self._set_item_address(item_data)
 
@@ -578,6 +582,66 @@ class XianyuPublisher:
             raise Exception("❌ 没有成功上传任何图片")
 
         logger.info(f"✅ 共上传 {uploaded_count}/{len(images)} 张图片")
+
+    async def _upload_videos(self, videos: list[dict]):
+        """上传商品视频文件，控件或文件异常时终止本次发布。"""
+        video_paths: list[str] = []
+        for video in videos[:3]:
+            raw_path = str(video.get("path") or "").strip()
+            if not raw_path:
+                raise Exception("视频缺少本地文件路径，无法上传")
+                continue
+            if raw_path.startswith("/static/") or raw_path.startswith("static/"):
+                relative_path = raw_path.lstrip("/").replace("static/", "", 1)
+                file_path = self.static_root / relative_path if self.static_root else Path(raw_path.lstrip("/"))
+            else:
+                file_path = Path(raw_path)
+            if not file_path.exists():
+                raise Exception(f"视频文件不存在：{file_path}")
+            video_paths.append(str(file_path))
+
+        if not video_paths:
+            raise Exception("没有可上传的视频文件")
+
+        file_input = None
+        selectors = [
+            'input[type="file"][accept*="video"]',
+            'input[type="file"][accept*="mp4"]',
+            'input[type="file"][name*="video"]',
+        ]
+        for selector in selectors:
+            try:
+                file_input = await self.page.query_selector(selector)
+                if file_input:
+                    break
+            except Exception:
+                continue
+
+        if not file_input:
+            try:
+                for candidate in await self.page.query_selector_all('input[type="file"]'):
+                    accept = (await candidate.get_attribute("accept") or "").lower()
+                    name = (await candidate.get_attribute("name") or "").lower()
+                    if "video" in accept or "video" in name or "mp4" in accept:
+                        file_input = candidate
+                        break
+            except Exception:
+                file_input = None
+
+        if not file_input:
+            raise Exception("未找到视频上传控件，无法上传视频")
+
+        uploaded_count = 0
+        for index, file_path in enumerate(video_paths, 1):
+            try:
+                await file_input.set_input_files(file_path)
+                await asyncio.sleep(3)
+                logger.info(f"✅ 已选择视频 {index}/{len(video_paths)}：{file_path}")
+                uploaded_count += 1
+            except Exception as exc:
+                raise Exception(f"视频 {index} 上传失败：{exc}") from exc
+        if uploaded_count != len(video_paths):
+            raise Exception(f"视频上传不完整：成功 {uploaded_count}/{len(video_paths)}")
 
     async def _set_item_address(self, item_data: dict):
         address = (item_data.get("address") or "").strip()
@@ -1514,8 +1578,173 @@ class XianyuPublisher:
         else:
             logger.warning("⚠️ 未找到分类选择元素，跳过")
 
+    async def _fill_specifications(self, item_data: dict):
+        """按发布表单填写商品规格和 SKU 矩阵，页面不支持时保留明确日志。"""
+        specifications = item_data.get("specifications") or []
+        sku_rows = item_data.get("sku_rows") or []
+        if not specifications:
+            logger.info("ℹ️ 未提供商品规格，跳过规格填写")
+            return
+
+        add_selectors = [
+            'button:has-text("添加规格类型")',
+            'text=添加规格类型',
+            '[class*="add-spec"]',
+        ]
+        for index, specification in enumerate(specifications[:2]):
+            name = str(specification.get("name") or "").strip()
+            values = [str(value.get("name") or "").strip() for value in specification.get("values") or []]
+            if not name or not values:
+                logger.warning("⚠️ 规格类型或规格值为空，已跳过该规格")
+                continue
+
+            if index > 0:
+                for selector in add_selectors:
+                    try:
+                        button = await self.page.query_selector(selector)
+                        if button and await button.is_visible():
+                            await button.click()
+                            await asyncio.sleep(0.3)
+                            break
+                    except Exception:
+                        continue
+
+            try:
+                selects = await self.page.query_selector_all("select")
+            except Exception:
+                selects = []
+            selected = False
+            for select in selects:
+                try:
+                    if await select.is_visible() and await select.is_enabled():
+                        await select.select_option(label=name)
+                        selected = True
+                        break
+                except Exception:
+                    continue
+            if not selected:
+                logger.warning(f"⚠️ 未找到规格类型控件，无法选择：{name}")
+
+            for value in values:
+                value_selectors = [
+                    f'button:has-text("{value}")',
+                    f'label:has-text("{value}")',
+                    f'text={value}',
+                ]
+                clicked = False
+                for selector in value_selectors:
+                    try:
+                        value_element = await self.page.query_selector(selector)
+                        if value_element and await value_element.is_visible():
+                            await value_element.click()
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
+                if not clicked:
+                    logger.info(f"ℹ️ 页面未提供可直接选择的规格值：{value}")
+
+        if sku_rows:
+            await self._fill_sku_rows(sku_rows)
+
+    async def _fill_sku_rows(self, sku_rows: list[dict]):
+        """尝试填写页面中的 SKU 价格和库存输入框。"""
+        try:
+            inputs = await self.page.query_selector_all(
+                '[class*="sku"] input, [class*="Sku"] input, '
+                '[data-testid*="sku"] input'
+            )
+        except Exception:
+            inputs = []
+        if not inputs:
+            logger.warning("⚠️ 未找到 SKU 价格/库存输入框，保留前端提交数据")
+            return
+
+        input_index = 0
+        for row in sku_rows:
+            for raw_value in (row.get("price"), row.get("stock")):
+                if input_index >= len(inputs):
+                    logger.warning("⚠️ SKU 输入框数量少于提交的规格组合数量")
+                    return
+                try:
+                    await inputs[input_index].fill(str(raw_value))
+                except Exception:
+                    pass
+                input_index += 1
+        logger.info(f"✅ 已尝试填写 {min(len(sku_rows), input_index // 2)} 组 SKU")
+
+    async def _fill_stock(self, item_data: dict):
+        """填写无规格商品库存。"""
+        if item_data.get("sku_rows"):
+            return
+        stock = item_data.get("stock", item_data.get("quantity", 1))
+        selectors = [
+            'input[placeholder*="库存"]',
+            'input[aria-label*="库存"]',
+            'input[placeholder*="数量"]',
+            '[class*="stock"] input',
+        ]
+        for selector in selectors:
+            try:
+                field = await self.page.query_selector(selector)
+                if field and await field.is_visible() and await field.is_enabled():
+                    await field.fill(str(max(0, int(stock or 0))))
+                    logger.info(f"✅ 库存已输入：{stock}")
+                    return
+            except Exception:
+                continue
+        logger.info("ℹ️ 页面未提供库存输入框，跳过库存填写")
+
+    async def _set_shipping(self, item_data: dict):
+        """根据发货方式选择包邮、运费或无需邮寄。"""
+        method = str(item_data.get("shipping_method") or "free")
+        labels = {
+            "free": "包邮",
+            "distance": "按距离计费",
+            "fixed": "一口价",
+            "template": "运费模板",
+            "none": "无需邮寄",
+        }
+        label = labels.get(method, "包邮")
+        selectors = [f'button:has-text("{label}")', f'label:has-text("{label}")', f'div:has-text("{label}")']
+        for selector in selectors:
+            try:
+                element = await self.page.query_selector(selector)
+                if element and await element.is_visible():
+                    await element.click()
+                    logger.info(f"✅ 已选择发货方式：{label}")
+                    break
+            except Exception:
+                continue
+        else:
+            logger.warning(f"⚠️ 未找到发货方式控件：{label}")
+
+        if method in {"distance", "fixed"} and item_data.get("postage") is not None:
+            for selector in ['input[placeholder*="运费"]', 'input[placeholder*="邮费"]', '[class*="postage"] input']:
+                try:
+                    field = await self.page.query_selector(selector)
+                    if field and await field.is_visible():
+                        await field.fill(str(item_data.get("postage") or 0))
+                        break
+                except Exception:
+                    continue
+
+        if item_data.get("support_pickup"):
+            for selector in ['label:has-text("支持自提")', 'button:has-text("支持自提")', 'text=支持自提']:
+                try:
+                    element = await self.page.query_selector(selector)
+                    if element and await element.is_visible():
+                        await element.click()
+                        break
+                except Exception:
+                    continue
+
     async def _fill_price(self, item_data: dict):
         """填写售价和原价（按原项目流程）"""
+        if item_data.get("specifications") and item_data.get("sku_rows"):
+            logger.info("规格商品已配置 SKU 价格，跳过通用价格和原价输入")
+            return
+
         logger.info("\n[步骤8] 💰 输入价格...")
 
         price = item_data.get("price", 0)

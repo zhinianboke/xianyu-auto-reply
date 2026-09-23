@@ -25,7 +25,13 @@ from common.services.token_api_mode import (
 )
 from common.utils.text_utils import escape_xss
 
-SENSITIVE_KEYS = {"admin_password_hash"}
+# 敏感配置不通过通用系统设置接口返回或修改。
+# 服务间令牌由启动流程自动维护，避免在管理页面暴露或被误改。
+SENSITIVE_KEYS = {
+    "admin_password_hash",
+    "security.internal_api_token",
+    "security.jwt_secret_key",
+}
 
 DEFAULT_DISCLAIMER_CONTENT = (
     "数据存储说明\n"
@@ -84,6 +90,8 @@ DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
     "captcha.slider_mode": ("browser", "滑块滑动方式：browser/real_mouse"),
     # 账号密码登录模式：protocol-协议登录 / browser-浏览器登录
     "password_login.mode": ("browser", "账号密码登录模式：protocol/browser"),
+    "password_login.remote_url": ("", "协议登录远程接口URL"),
+    "password_login.remote_secret_key": ("", "协议登录远程接口秘钥"),
     # Token获取方式：web-网页接口 / remote-远程接口
     "token.api_mode": ("web", "Token获取方式：web-网页接口/remote-远程接口"),
     "token.remote_url": ("", "Token远程接口URL"),
@@ -146,11 +154,16 @@ NO_ESCAPE_KEYS = {
     "captcha.real_mouse_weight_remote",
     # 账号密码登录模式：枚举字符串，无需转义
     "password_login.mode",
+    # 协议登录远程接口配置：URL 和秘钥不能被 XSS 转义
+    "password_login.remote_url",
+    "password_login.remote_secret_key",
     # Token获取方式：枚举字符串，无需转义
     "token.api_mode",
     # Token远程接口配置：URL 和秘钥不能被 XSS 转义
     TOKEN_REMOTE_URL_SETTING_KEY,
     TOKEN_REMOTE_SECRET_KEY_SETTING_KEY,
+    # 服务间令牌不会经由通用设置接口写入；加入免转义集合，防止内部维护时被破坏。
+    "security.internal_api_token",
 }
 
 
@@ -183,6 +196,9 @@ class SystemSettingService:
         result = await self.session.execute(stmt)
         settings: Dict[str, str] = {}
         for entry in result.scalars().all():
+            # JWT 密钥和服务间令牌即使内部调用 include_sensitive=True 也不返回。
+            if entry.key in {"security.internal_api_token", "security.jwt_secret_key"}:
+                continue
             if not include_sensitive and entry.key in SENSITIVE_KEYS:
                 continue
             settings[entry.key] = entry.value
@@ -203,6 +219,8 @@ class SystemSettingService:
         return settings
 
     async def set_setting(self, key: str, value: str, description: str | None = None) -> None:
+        if key in SENSITIVE_KEYS:
+            raise ValueError("敏感设置不能通过通用接口修改")
         stmt = select(SystemSetting).where(SystemSetting.key == key)
         result = await self.session.execute(stmt)
         record = result.scalars().first()
@@ -232,6 +250,10 @@ class SystemSettingService:
         """
         if not settings:
             return
+
+        sensitive_keys = set(settings).intersection(SENSITIVE_KEYS)
+        if sensitive_keys:
+            raise ValueError("敏感设置不能通过通用接口修改")
 
         stmt = select(SystemSetting).where(SystemSetting.key.in_(tuple(settings.keys())))
         result = await self.session.execute(stmt)

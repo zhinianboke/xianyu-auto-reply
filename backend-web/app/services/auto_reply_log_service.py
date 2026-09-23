@@ -56,6 +56,7 @@ class AutoReplyLogService:
         *,
         owner_id: int | None = None,
         account_id: str | None = None,
+        item_id: str | None = None,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
     ) -> list:
@@ -68,6 +69,8 @@ class AutoReplyLogService:
             conditions.append(XYAutoReplyMessageLog.owner_id == owner_id)
         if account_id and account_id.strip():
             conditions.append(XYAutoReplyMessageLog.account_id == account_id.strip())
+        if item_id and item_id.strip():
+            conditions.append(XYAutoReplyMessageLog.item_id == item_id.strip())
         if start_time is not None:
             conditions.append(XYAutoReplyMessageLog.created_at >= start_time)
         if end_time is not None:
@@ -95,6 +98,7 @@ class AutoReplyLogService:
         *,
         owner_id: int | None = None,
         account_id: str | None = None,
+        item_id: str | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
         matched_rule_type: str | None = None,
@@ -114,6 +118,7 @@ class AutoReplyLogService:
                 self._build_auto_delivery_conditions(
                     owner_id=owner_id,
                     account_id=account_id,
+                    item_id=item_id,
                     start_time=start_time,
                     end_time=end_time,
                 )
@@ -125,6 +130,13 @@ class AutoReplyLogService:
                 start_time=start_time,
                 end_time=end_time,
             )
+
+            # 商品 ID 精确筛选对自动回复的所有统计分支统一生效。
+            if item_id and item_id.strip():
+                branch_conditions = [
+                    [*conds, XYAutoReplyMessageLog.item_id == item_id.strip()]
+                    for conds in branch_conditions
+                ]
 
             # 追加 matched_rule_type 筛选条件（仅自动回复支持规则类型筛选）
             if matched_rule_type:

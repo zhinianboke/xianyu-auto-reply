@@ -94,9 +94,9 @@ export function CustomerOrdersPanel({
               </button>
             )}
             {SHIPPABLE_STATUSES.includes(order.status) && (
-              <button onClick={() => onDeliver(order.order_no)} disabled={anyActionRunning} className="mt-1.5 w-full flex items-center justify-center gap-1 py-1.5 rounded border border-blue-300 text-blue-600 hover:bg-blue-50 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed">
+              <button onClick={() => onDeliver(order.order_no)} disabled={anyActionRunning || order.card_only_delivered} className="mt-1.5 w-full flex items-center justify-center gap-1 py-1.5 rounded border border-blue-300 text-blue-600 hover:bg-blue-50 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed">
                 {deliveringOrderNo === order.order_no ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Truck className="w-3.5 h-3.5" />}
-                发卡发货
+                {order.card_only_delivered ? '卡券已发送' : '发卡发货'}
               </button>
             )}
           </div>

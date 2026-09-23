@@ -14,6 +14,7 @@ from . import (
     admin,
     advertisements,
     ai,
+    ai_listing,
     announcements,
     auto_reply_logs,
     auth,
@@ -51,6 +52,7 @@ from . import (
     orders,
     password_login,
     product_publish,
+    product_publish_capability,
     publish_addresses,
     personal_addresses,
     listing_monitor_category,
@@ -58,8 +60,15 @@ from . import (
     collect_fallback_account,
     order_fallback_account,
     external_cookie,
+    external_accounts,
+    external_category,
+    external_message_logs,
+    external_orders,
+    external_publish,
     proxy,
     refund_cancel,
+    agree_deliver,
+    agree_pickup,
     qr_login,
     qrcode,
     risk_control_logs,
@@ -103,6 +112,8 @@ api_router.include_router(cookies.router, prefix="/cookies", tags=["账号管理
 api_router.include_router(items.items_router, tags=["商品管理"])  # items.py已定义prefix="/items"
 api_router.include_router(orders.router, prefix="/orders", tags=["订单管理"])
 api_router.include_router(product_publish.router, tags=["商品发布"])  # 已定义prefix="/product-publish"
+api_router.include_router(ai_listing.router, tags=["AI铺货"])  # 已定义prefix="/ai-listing"
+api_router.include_router(product_publish_capability.router, tags=["商品发布账号能力"])
 api_router.include_router(publish_addresses.router, tags=["商品发布随机地址池"])  # 已定义prefix="/product-publish/addresses"
 api_router.include_router(personal_addresses.router, tags=["个人发布地址库"])  # 已定义prefix="/product-publish/personal-addresses"
 api_router.include_router(listing_monitor_category.router, tags=["商品监控分类"])  # 已定义prefix="/product-monitor/categories"
@@ -110,6 +121,11 @@ api_router.include_router(listing_monitor.router, tags=["商品上新监控"])  
 api_router.include_router(collect_fallback_account.router, tags=["兜底采集账号"])  # 已定义prefix="/product-monitor/collect-fallback-accounts"
 api_router.include_router(order_fallback_account.router, tags=["兜底下单账号"])  # 已定义prefix="/product-monitor/order-fallback-accounts"
 api_router.include_router(external_cookie.router, tags=["外部Cookie同步"])  # 已定义prefix="/external/account-cookie"
+api_router.include_router(external_accounts.router, tags=["公开账号查询"])  # 已定义prefix="/external/enabled-accounts"
+api_router.include_router(external_category.router, tags=["公开分类推荐"])  # 已定义prefix="/external/category"
+api_router.include_router(external_message_logs.router, tags=["公开消息日志"])  # 已定义prefix="/external/message-logs"
+api_router.include_router(external_orders.router, tags=["公开订单查询"])  # 已定义prefix="/external/orders"
+api_router.include_router(external_publish.router, tags=["公开商品发布"])  # 已定义prefix="/external/publish"
 api_router.include_router(keywords.router, prefix="/keywords-with-item-id", tags=["关键词管理"])
 api_router.include_router(cards.router, prefix="/cards", tags=["卡券管理"])
 api_router.include_router(distribution.router, prefix="/distribution", tags=["分销管理"])
@@ -154,6 +170,9 @@ api_router.include_router(token_renewal_logs.router, prefix="/admin", tags=["Tok
 # 代理和上传
 api_router.include_router(proxy.router, prefix="/proxy", tags=["代理配置"])
 api_router.include_router(refund_cancel.router, prefix="/refund-cancel", tags=["退款订单注销配置"])
+api_router.include_router(agree_deliver.router, prefix="/agree-deliver", tags=["同意后发货配置"])
+# 同意后发货提货页（公开接口，无需登录）
+api_router.include_router(agree_pickup.router, prefix="/agree-pickup", tags=["同意后发货提货页"])
 api_router.include_router(upload.router, prefix="/upload", tags=["文件上传"])
 api_router.include_router(qrcode.router, tags=["群二维码"])  # 已定义prefix="/qrcode"
 

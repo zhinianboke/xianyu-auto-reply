@@ -1,7 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, create_autospec, patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / "websocket"))
 
 from app.services.xianyu.notification_manager import NotificationManager  # noqa: E402
 from app.services.xianyu.auto_reply_service import AutoReplyService  # noqa: E402
+from common.db.compat import db_manager  # noqa: E402
 
 
 class NotificationDispatchTest(unittest.IsolatedAsyncioTestCase):
@@ -46,6 +47,10 @@ class NotificationDispatchTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_delivery_template_uses_order_nickname_amount_and_quantity(self):
         manager = NotificationManager("seller")
+        order_lookup = create_autospec(
+            db_manager.get_order_by_id,
+            return_value={"buyer_fish_nick": "金鱼小姐21", "amount": "2", "quantity": 1},
+        )
         with patch("common.db.compat.db_manager.get_message_filter_keywords", return_value=[]), patch(
             "common.db.compat.db_manager.get_account_notifications",
             return_value=[
@@ -62,8 +67,7 @@ class NotificationDispatchTest(unittest.IsolatedAsyncioTestCase):
             "common.db.compat.db_manager.get_cookie_details",
             return_value={"remark": "主账号"},
         ), patch(
-            "common.db.compat.db_manager.get_order_by_id",
-            return_value={"buyer_fish_nick": "金鱼小姐21", "amount": "2", "quantity": 1},
+            "common.db.compat.db_manager.get_order_by_id", new=order_lookup
         ), patch(
             "app.services.xianyu.notification_manager.send_bark_notification",
             new=AsyncMock(return_value=True),
@@ -78,6 +82,7 @@ class NotificationDispatchTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(bark_send.await_args.args[1], "金鱼小姐21|¥2.00|1|发货成功")
+        order_lookup.assert_called_once_with("order-1", account_id="seller")
 
     async def test_delivery_default_keeps_original_layout_and_adds_amount_and_quantity(self):
         manager = NotificationManager("seller")

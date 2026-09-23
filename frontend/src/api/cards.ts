@@ -12,6 +12,7 @@ export interface CardData {
   description?: string
   enabled?: boolean
   delay_seconds?: number
+  use_no_logistics_form?: boolean
   delivery_count?: number  // 发货次数
   price?: string | null     // 对接价格
   is_dockable?: boolean    // 是否可对接

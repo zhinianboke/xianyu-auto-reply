@@ -25,6 +25,8 @@ from common.models.xy_account import XYAccount
 from common.models.xy_order import XYOrder
 from common.models.scheduled_rate_log import ScheduledRateLog
 from common.utils.time_utils import get_beijing_now_naive
+from app.core.config import get_settings
+from app.core.http_client import get_http_client
 
 
 # 全局冷却缓存：订单号 -> 冷却过期时间
@@ -402,6 +404,8 @@ class RateTask:
                 # 更新订单评价状态
                 await update_order_rated_status(order_no, True)
                 logger.info(f"[定时补评价] 订单 {order_no} 评价成功")
+                # 好评后自动发送致谢消息（#232），失败不影响评价结果
+                await self._send_thanks_message(order)
                 return True, None, cookie_string
             else:
                 error_msg = result.get('message', '评价失败')
@@ -418,6 +422,77 @@ class RateTask:
             error_msg = str(e)
             logger.error(f"[定时补评价] 订单 {order_no} 评价异常: {error_msg}")
             return False, error_msg, cookie_string
+    
+    async def _send_thanks_message(self, order: XYOrder) -> None:
+        """好评成功后自动向买家发送配置的致谢消息（#232）
+        
+        通过 WebSocket 服务内部接口创建会话并发送消息（与定时私信/补发货同一方式）。
+        与 websocket 实时评价路径共用订单 is_thanks_sent 标记去重；
+        任何失败仅记录日志，不影响评价主流程。
+        """
+        order_no = order.order_no
+        try:
+            from common.services.rate_service import (
+                get_thanks_message_content, is_order_thanks_sent, mark_order_thanks_sent,
+            )
+            
+            content = await get_thanks_message_content(order.account_id)
+            if not content:
+                return
+            
+            if await is_order_thanks_sent(order_no):
+                logger.debug(f"[定时补评价] 订单 {order_no} 好评后消息已发送过，跳过")
+                return
+            
+            if not order.buyer_id or not order.item_id:
+                logger.warning(f"[定时补评价] 订单 {order_no} 缺少买家ID/商品ID，无法创建会话，跳过好评后消息")
+                return
+            
+            settings = get_settings()
+            http_client = get_http_client()
+            base_url = settings.websocket_service_url.rstrip("/")
+            
+            # 1) 创建/获取与买家的会话（幂等，已存在直接返回现有chat_id）
+            create_url = f"{base_url}/internal/accounts/{order.account_id}/create-chat"
+            create_res = await http_client.post(
+                create_url,
+                json={"buyer_id": str(order.buyer_id), "item_id": str(order.item_id)},
+                timeout=90, max_retries=1,
+            )
+            if not isinstance(create_res, dict) or not create_res.get("success"):
+                msg = create_res.get("message") if isinstance(create_res, dict) else create_res
+                logger.warning(f"[定时补评价] 订单 {order_no} 好评后消息未发送，创建会话失败: {msg}")
+                return
+            
+            chat_id = (create_res.get("data") or {}).get("chat_id")
+            if not chat_id:
+                logger.warning(f"[定时补评价] 订单 {order_no} 好评后消息未发送，创建会话响应缺少 chat_id")
+                return
+            
+            # 2) 发送消息内容（等待服务端结果，识别安全拦截）
+            send_url = f"{base_url}/internal/accounts/{order.account_id}/send-message"
+            send_res = await http_client.post(
+                send_url, json={"chat_id": chat_id, "message": content, "wait_result": True}
+            )
+            if not isinstance(send_res, dict) or not send_res.get("success"):
+                msg = send_res.get("message") if isinstance(send_res, dict) else send_res
+                logger.warning(f"[定时补评价] 订单 {order_no} 好评后消息发送失败: {msg}")
+                return
+            
+            data = send_res.get("data") or {}
+            send_status = data.get("send_status") or "unknown"
+            if send_status == "failed":
+                # 被服务端拦截等明确失败：不标记已发送，保留失败原因供排查
+                logger.warning(
+                    f"[定时补评价] 订单 {order_no} 好评后消息被拦截: {data.get('send_fail_reason')}"
+                )
+                return
+            
+            # success / unknown(超时未确认) 均视为已发出，标记去重避免重复发送
+            await mark_order_thanks_sent(order_no)
+            logger.info(f"[定时补评价] 订单 {order_no} 好评后消息已发送: {content[:50]}...")
+        except Exception as e:
+            logger.warning(f"[定时补评价] 订单 {order_no} 好评后消息发送异常: {e}")
     
     async def _check_item_belongs_to_account(self, account_pk: int, item_id: str) -> bool:
         """检查商品是否属于指定账号

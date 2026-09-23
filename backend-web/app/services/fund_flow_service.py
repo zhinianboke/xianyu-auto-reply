@@ -29,11 +29,12 @@ class FundFlowService:
         username: str = "",
         page: int = 1,
         page_size: int = 20,
+        description: str = "",
     ) -> Dict[str, Any]:
         """分页获取资金流水列表（关联用户名）
 
         通过 LEFT JOIN 用户表取出每笔流水对应的用户名，避免用户被软删除后
-        流水记录丢失。管理员可按用户名模糊筛选。
+        流水记录丢失。支持按描述模糊筛选，管理员还可按用户名筛选。
 
         Args:
             user_id: 用户ID，None表示查询所有（管理员）
@@ -41,6 +42,7 @@ class FundFlowService:
             username: 用户名模糊筛选，空字符串表示不筛选
             page: 页码
             page_size: 每页数量
+            description: 流水描述模糊筛选，空字符串表示不筛选
 
         Returns:
             分页数据字典
@@ -54,6 +56,11 @@ class FundFlowService:
         if username:
             # 参数化模糊查询，防 SQL 注入
             conditions.append(User.username.like(f"%{username.strip()}%"))
+        if description.strip():
+            # autoescape 会转义用户输入中的 LIKE 通配符，同时保持参数化查询
+            conditions.append(
+                FundFlow.description.contains(description.strip(), autoescape=True)
+            )
 
         # LEFT JOIN 用户表，同时取出流水与用户名
         list_stmt = select(FundFlow, User.username).outerjoin(

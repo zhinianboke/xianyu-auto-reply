@@ -156,8 +156,13 @@ async def execute_single_publish(
         result = await publish_single_item(
             item_data=publish_item_data,
             cookie=cookies_str,
+            account_id=account.account_id,
+            owner_id=user_id,
             static_root=static_root,
         )
+        refreshed_cookies = result.get("cookies_str")
+        if refreshed_cookies:
+            account.cookie = refreshed_cookies
     except Exception as exc:
         pub_error = exc
         logger.error(f"单品发布异常: {exc}")

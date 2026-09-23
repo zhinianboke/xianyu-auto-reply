@@ -14,6 +14,7 @@ router = APIRouter(tags=["消息回复日志"])
 @router.get("/auto-reply-logs")
 async def list_auto_reply_logs(
     account_id: str | None = Query(default=None, description="账号ID"),
+    item_id: str | None = Query(default=None, description="商品ID，精确筛选"),
     start_date: str | None = Query(default=None, description="开始日期，格式：YYYY-MM-DD"),
     end_date: str | None = Query(default=None, description="结束日期，格式：YYYY-MM-DD"),
     matched_rule_type: str | None = Query(default=None, description="规则类型筛选"),
@@ -31,6 +32,7 @@ async def list_auto_reply_logs(
         items, total = await service.list_logs(
             owner_id=owner_id,
             account_id=account_id,
+            item_id=item_id,
             start_date=start_date,
             end_date=end_date,
             matched_rule_type=matched_rule_type,

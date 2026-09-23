@@ -11,6 +11,7 @@
 import functools
 import http.server
 import os
+import secrets
 import signal
 import subprocess
 import sys
@@ -187,6 +188,7 @@ class ServiceManager:
         # 数据库备份目录：backend-web 与 scheduler 必须指向同一绝对路径，
         # 否则 scheduler 写入的备份文件 backend-web 无法读取下载（本地源码模式各服务 cwd 不同）
         backup_dir = (self.project_root / "backups").as_posix()
+        internal_api_token = config.get("internal_api_token") or secrets.token_urlsafe(32)
 
         # backend-web .env
         backend_env = (
@@ -203,8 +205,9 @@ class ServiceManager:
             f"REDIS_DB={config['redis_db']}\n"
             f"BACKEND_WEB_PORT=8089\n"
             f"JWT_ALGORITHM=HS256\n"
-            f"ACCESS_TOKEN_EXPIRE_MINUTES=30\n"
+            f"ACCESS_TOKEN_EXPIRE_MINUTES=1440\n"
             f"REFRESH_TOKEN_EXPIRE_MINUTES=10080\n"
+            f"INTERNAL_API_TOKEN={internal_api_token}\n"
             f"CORS_ORIGINS=*\n"
             f"WEBSOCKET_SERVICE_URL=http://127.0.0.1:8090\n"
             f"SCHEDULER_SERVICE_URL=http://127.0.0.1:8091\n"
@@ -233,6 +236,7 @@ class ServiceManager:
             f"TOKEN_REFRESH_INTERVAL=72000\n"
             f"TOKEN_RETRY_INTERVAL=7200\n"
             f"BACKEND_WEB_SERVICE_URL=http://127.0.0.1:8089\n"
+            f"INTERNAL_API_TOKEN={internal_api_token}\n"
             f"STATIC_DIR=static\n"
         )
         
@@ -256,6 +260,7 @@ class ServiceManager:
             f"BACKEND_WEB_SERVICE_URL=http://127.0.0.1:8089\n"
             f"STATIC_DIR=static\n"
             f"BACKUP_DIR={backup_dir}\n"
+            f"INTERNAL_API_TOKEN={internal_api_token}\n"
         )
         
         env_map = {

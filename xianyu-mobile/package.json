@@ -1,0 +1,46 @@
+{
+  "name": "xianyu-mobile",
+  "version": "1.0.0",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "sync-api": "tsx scripts/sync-api.ts"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "expo": "~57.0.16",
+    "expo-clipboard": "~57.0.1",
+    "expo-constants": "~57.0.14",
+    "expo-document-picker": "~57.0.1",
+    "expo-file-system": "~57.0.5",
+    "expo-image-picker": "~57.0.13",
+    "expo-linking": "~57.0.7",
+    "expo-router": "~57.0.16",
+    "expo-secure-store": "~57.0.1",
+    "expo-sharing": "~57.0.15",
+    "expo-status-bar": "~57.0.1",
+    "lucide-react-native": "^1.34.0",
+    "openapi-fetch": "^0.17.0",
+    "openapi-typescript": "^7.13.0",
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-qrcode-svg": "^6.3.21",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0",
+    "react-native-svg": "^15.15.4",
+    "react-native-webview": "13.16.1",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "@types/react": "~19.2.2",
+    "babel-plugin-module-resolver": "^5.0.3",
+    "babel-preset-expo": "^57.0.8",
+    "tsx": "^4.23.12",
+    "typescript": "~6.0.3"
+  },
+  "private": true
+}

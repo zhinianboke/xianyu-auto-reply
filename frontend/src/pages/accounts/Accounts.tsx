@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, RefreshCw, QrCode, Key, Edit2, Trash2, Power, PowerOff, X, Loader2, Clock, CheckCircle, MessageSquare, Bot, Globe, Timer, ScanFace, ChevronLeft, ChevronRight, ChevronDown, ImagePlus, Filter, Repeat, MoreHorizontal, PackageCheck, Star, ShieldCheck, Flower2, Eye, EyeOff, Ban, Download, Upload, Send, AlertCircle } from 'lucide-react'
-import { getAccountDetailsPaginated, deleteAccount, updateAccountCookie, updateAccountStatus, updateAccountsStatusBatch, closeAccountsNoticeBatch, clearTokenCacheBatch, updateAccountRemark, addAccount, generateQRLogin, checkQRLoginStatus, passwordLogin, checkPasswordLoginStatus, cancelPasswordLogin, updateAccountAutoConfirm, updateAccountPauseDuration, updateAccountMessageExpireTime, updateAccountReplyDelay, updateAccountLoginInfo, updateAccountScheduledRedelivery, updateAccountScheduledRate, updateAccountAutoPolish, updateAccountConfirmBeforeSend, updateAccountSendBeforeConfirm, updateAccountAutoRedFlower, updateAccountAiReplyBlockOrderedUsers, getAIReplySettings, updateAIReplySettings, testAIConnection, fetchAIModels, AI_PROVIDER_OPTIONS, AI_PROVIDER_DEFAULT_BASE_URLS, getProxyConfig, updateProxyConfig, getFaceVerificationScreenshot, deleteFaceVerificationScreenshot, getConfirmReceiptMessage, updateConfirmReceiptMessage, uploadConfirmReceiptImage, exportAccountsExcel, importAccountsExcel, type AIProviderType, type AIModelOption, type ProxyConfig, type FaceVerificationScreenshot, type AccountFilterParams } from '@/api/accounts'
+import { Plus, RefreshCw, QrCode, Key, Edit2, Trash2, Power, PowerOff, X, Loader2, Clock, CheckCircle, MessageSquare, Bot, Globe, Timer, ScanFace, ChevronLeft, ChevronRight, ChevronDown, ImagePlus, Filter, Repeat, MoreHorizontal, PackageCheck, Star, ShieldCheck, Flower2, Eye, EyeOff, Ban, Download, Upload, Send, Ticket, AlertCircle, Truck } from 'lucide-react'
+import { getAccountDetailsPaginated, deleteAccount, updateAccountCookie, updateAccountStatus, updateAccountsStatusBatch, closeAccountsNoticeBatch, clearTokenCacheBatch, updateAccountRemark, addAccount, generateQRLogin, checkQRLoginStatus, passwordLogin, checkPasswordLoginStatus, cancelPasswordLogin, updateAccountAutoConfirm, updateAccountPauseDuration, updateAccountMessageExpireTime, updateAccountReplyDelay, updateAccountLoginInfo, updateAccountScheduledRedelivery, updateAccountScheduledRate, updateAccountAutoPolish, updateAccountConfirmBeforeSend, updateAccountSendBeforeConfirm, updateAccountOnlySendCard, updateAccountAutoRedFlower, updateAccountAiReplyBlockOrderedUsers, getAIReplySettings, updateAIReplySettings, testAIConnection, fetchAIModels, AI_PROVIDER_OPTIONS, AI_PROVIDER_DEFAULT_BASE_URLS, getProxyConfig, updateProxyConfig, getFaceVerificationScreenshot, deleteFaceVerificationScreenshot, getConfirmReceiptMessage, updateConfirmReceiptMessage, uploadConfirmReceiptImage, exportAccountsExcel, importAccountsExcel, type AIProviderType, type AIModelOption, type ProxyConfig, type FaceVerificationScreenshot, type AccountFilterParams } from '@/api/accounts'
 import { getDefaultReply, updateDefaultReply, uploadDefaultReplyImage } from '@/api/keywords'
 import { getAutoRateConfig, updateAutoRateConfig } from '@/api/autoRate'
 import { checkAdminDefaultPassword } from '@/api/auth'
@@ -12,11 +12,30 @@ import { useAuthStore } from '@/store/authStore'
 import { useMenuVisibilityStore } from '@/store/menuVisibilityStore'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
+import LocationContactReplyFields, { DEFAULT_LOCATION_TITLE, type LocationContactReplyValue } from '@/pages/common/LocationContactReplyFields'
+import { getUserSetting } from '@/api/settings'
 import { DeliveryBlockRulesModal } from './DeliveryBlockRulesModal'
 import { RefundCancelModal } from './RefundCancelModal'
+import { AgreeDeliverModal } from './AgreeDeliverModal'
 import type { AccountDetail } from '@/types'
 
-type ModalType = 'qrcode' | 'password' | 'manual' | 'edit' | 'default-reply' | 'ai-settings' | 'proxy-settings' | 'message-expire-time' | 'reply-delay' | 'face-verification' | 'confirm-receipt' | 'auto-rate' | 'delivery-disabled' | 'refund-cancel' | null
+type ModalType = 'qrcode' | 'password' | 'manual' | 'edit' | 'default-reply' | 'ai-settings' | 'proxy-settings' | 'message-expire-time' | 'reply-delay' | 'face-verification' | 'confirm-receipt' | 'auto-rate' | 'delivery-disabled' | 'refund-cancel' | 'agree-deliver' | null
+type DefaultReplyType = 'text' | 'api' | 'external_contact'
+
+const normalizeDefaultReplyType = (replyType: unknown): DefaultReplyType => {
+  if (replyType === 'api' || replyType === 'external_contact') {
+    return replyType
+  }
+  return 'text'
+}
+
+const EMPTY_LOCATION_REPLY: LocationContactReplyValue = {
+  location_name: '',
+  location_longitude: '',
+  location_latitude: '',
+  location_title: DEFAULT_LOCATION_TITLE,
+  location_subtitle: '',
+}
 
 interface AccountWithKeywordCount extends AccountDetail {
   keywordCount?: number
@@ -120,9 +139,10 @@ export function Accounts() {
   const [defaultReplyImage, setDefaultReplyImage] = useState('')
   const [defaultReplyEnabled, setDefaultReplyEnabled] = useState(false)
   const [defaultReplyOnce, setDefaultReplyOnce] = useState(false)
-  const [defaultReplyType, setDefaultReplyType] = useState<'text' | 'api'>('text')
+  const [defaultReplyType, setDefaultReplyType] = useState<DefaultReplyType>('text')
   const [defaultReplyApiUrl, setDefaultReplyApiUrl] = useState('')
   const [defaultReplyApiTimeout, setDefaultReplyApiTimeout] = useState(80)
+  const [defaultReplyLocation, setDefaultReplyLocation] = useState<LocationContactReplyValue>(EMPTY_LOCATION_REPLY)
   const [defaultReplySaving, setDefaultReplySaving] = useState(false)
   const [defaultReplyImageUploading, setDefaultReplyImageUploading] = useState(false)
   const defaultReplyImageInputRef = useRef<HTMLInputElement>(null)
@@ -185,6 +205,8 @@ export function Accounts() {
   const [aiCustomPrompts, setAiCustomPrompts] = useState('')
   const [aiTimeRangeStart, setAiTimeRangeStart] = useState('')
   const [aiTimeRangeEnd, setAiTimeRangeEnd] = useState('')
+  const [aiManualReplyPauseEnabled, setAiManualReplyPauseEnabled] = useState(false)
+  const [aiManualReplyPauseMinutes, setAiManualReplyPauseMinutes] = useState(10)
   const [aiSettingsSaving, setAiSettingsSaving] = useState(false)
   const [aiSettingsLoading, setAiSettingsLoading] = useState(false)
   const [aiTesting, setAiTesting] = useState(false)
@@ -237,10 +259,14 @@ export function Accounts() {
   const [autoRateTextContent, setAutoRateTextContent] = useState('')
   const [autoRateApiUrl, setAutoRateApiUrl] = useState('')
   const [autoRateSaving, setAutoRateSaving] = useState(false)
+  // 好评后自动发送消息（#232）
+  const [autoRateThanksEnabled, setAutoRateThanksEnabled] = useState(false)
+  const [autoRateThanksContent, setAutoRateThanksContent] = useState('')
 
   // 禁止发货设置状态
   const [deliveryDisabledAccount, setDeliveryDisabledAccount] = useState<AccountWithKeywordCount | null>(null)
   const [refundCancelAccount, setRefundCancelAccount] = useState<AccountWithKeywordCount | null>(null)
+  const [agreeDeliverAccount, setAgreeDeliverAccount] = useState<AccountWithKeywordCount | null>(null)
 
   // 确认弹窗状态
   const [deleteAccountConfirm, setDeleteAccountConfirm] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
@@ -494,6 +520,8 @@ export function Accounts() {
     setEditPasswordVisible(false)
     setAiTimeRangeStart('')
     setAiTimeRangeEnd('')
+    setAiManualReplyPauseEnabled(false)
+    setAiManualReplyPauseMinutes(10)
   }, [activeModal, cancelPwdSession, clearPwdCheck, clearPwdSuccessCloseTimer, clearQrCheck, pwdSessionId, pwdStatus])
 
   // ==================== 管理员默认密码检查 ====================
@@ -1115,6 +1143,7 @@ export function Accounts() {
     setDefaultReplyType('text')
     setDefaultReplyApiUrl('')
     setDefaultReplyApiTimeout(80)
+    setDefaultReplyLocation(EMPTY_LOCATION_REPLY)
     setActiveModal('default-reply')
     
     // 加载当前默认回复
@@ -1124,9 +1153,16 @@ export function Accounts() {
       setDefaultReplyImage(result.reply_image || '')
       setDefaultReplyEnabled(result.enabled || false)
       setDefaultReplyOnce(result.reply_once || false)
-      setDefaultReplyType((result.reply_type as 'text' | 'api') || 'text')
+      setDefaultReplyType(normalizeDefaultReplyType(result.reply_type))
       setDefaultReplyApiUrl(result.api_url || '')
       setDefaultReplyApiTimeout(result.api_timeout || 80)
+      setDefaultReplyLocation({
+        location_name: result.location_name || '',
+        location_longitude: result.location_longitude || '',
+        location_latitude: result.location_latitude || '',
+        location_title: result.location_title || DEFAULT_LOCATION_TITLE,
+        location_subtitle: result.location_subtitle || '',
+      })
     } catch {
       // ignore
     }
@@ -1137,6 +1173,23 @@ export function Accounts() {
     if (defaultReplyType === 'api' && !defaultReplyApiUrl.trim()) {
       addToast({ type: 'warning', message: '请输入 API 地址' })
       return
+    }
+    if (defaultReplyType === 'external_contact') {
+      const [remoteUrl, remoteSecret] = await Promise.all([
+        getUserSetting('location_chat.remote_url'),
+        getUserSetting('location_chat.remote_secret_key'),
+      ])
+      if (!remoteUrl.success || !remoteUrl.value?.trim() || !remoteSecret.success || !remoteSecret.value?.trim()) {
+        addToast({ type: 'warning', message: '请先到个人设置的远程URL配置中填写位置聊天远程URL和秘钥' })
+        return
+      }
+      if (!defaultReplyLocation.location_name || !defaultReplyLocation.location_longitude || !defaultReplyLocation.location_latitude) {
+        addToast({ type: 'warning', message: '请选择带经纬度的定位信息' })
+        return
+      }
+      if (!defaultReplyLocation.location_title.trim()) {
+        setDefaultReplyLocation((current) => ({ ...current, location_title: DEFAULT_LOCATION_TITLE }))
+      }
     }
     
     try {
@@ -1149,7 +1202,8 @@ export function Accounts() {
         defaultReplyImage,
         defaultReplyType,
         defaultReplyApiUrl,
-        defaultReplyApiTimeout
+        defaultReplyApiTimeout,
+        { ...defaultReplyLocation, location_title: defaultReplyLocation.location_title.trim() || DEFAULT_LOCATION_TITLE }
       )
       if (result.success) {
         addToast({ type: 'success', message: '默认回复已保存' })
@@ -1284,7 +1338,7 @@ export function Accounts() {
     try {
       await updateAccountConfirmBeforeSend(account.id, newEnabled)
       setAccounts(prev => prev.map(a =>
-        a.id === account.id ? { ...a, confirm_before_send: newEnabled, ...(newEnabled ? { send_before_confirm: false } : {}) } : a,
+        a.id === account.id ? { ...a, confirm_before_send: newEnabled, ...(newEnabled ? { send_before_confirm: false, only_send_card: false } : {}) } : a,
       ))
       addToast({ type: 'success', message: `发货成功再发卡券已${newEnabled ? '开启' : '关闭'}` })
     } catch {
@@ -1298,11 +1352,27 @@ export function Accounts() {
     try {
       await updateAccountSendBeforeConfirm(account.id, newEnabled)
       setAccounts(prev => prev.map(a =>
-        a.id === account.id ? { ...a, send_before_confirm: newEnabled, ...(newEnabled ? { confirm_before_send: false } : {}) } : a,
+        a.id === account.id ? { ...a, send_before_confirm: newEnabled, ...(newEnabled ? { confirm_before_send: false, only_send_card: false } : {}) } : a,
       ))
       addToast({ type: 'success', message: `卡券发送成功再确认发货已${newEnabled ? '开启' : '关闭'}` })
     } catch {
       addToast({ type: 'error', message: '更新卡券发送成功再确认发货开关失败' })
+    }
+  }
+
+  // ==================== 只发卡券不确认发货开关 ====================
+  const handleToggleOnlySendCard = async (account: AccountWithKeywordCount) => {
+    const newEnabled = !account.only_send_card
+    try {
+      await updateAccountOnlySendCard(account.id, newEnabled)
+      setAccounts(prev => prev.map(a =>
+        a.id === account.id
+          ? { ...a, only_send_card: newEnabled, ...(newEnabled ? { auto_confirm: false, confirm_before_send: false, send_before_confirm: false } : {}) }
+          : a,
+      ))
+      addToast({ type: 'success', message: `只发卡券不确认发货已${newEnabled ? '开启' : '关闭'}` })
+    } catch {
+      addToast({ type: 'error', message: '更新只发卡券不确认发货开关失败' })
     }
   }
 
@@ -1348,7 +1418,7 @@ export function Accounts() {
     try {
       await updateAccountAutoConfirm(account.id, newEnabled)
       setAccounts(prev => prev.map(a =>
-        a.id === account.id ? { ...a, auto_confirm: newEnabled } : a,
+        a.id === account.id ? { ...a, auto_confirm: newEnabled, ...(newEnabled ? { only_send_card: false } : {}) } : a,
       ))
       addToast({ type: 'success', message: `自动确认发货已${newEnabled ? '开启' : '关闭'}` })
     } catch {
@@ -1381,6 +1451,8 @@ export function Accounts() {
       }
       setAiTimeRangeStart(formatTime(settings.ai_time_range_start))
       setAiTimeRangeEnd(formatTime(settings.ai_time_range_end))
+      setAiManualReplyPauseEnabled(settings.manual_reply_ai_pause_enabled ?? false)
+      setAiManualReplyPauseMinutes(settings.manual_reply_ai_pause_minutes ?? 10)
     } catch (error) {
       const detail = getApiErrorMessage(error, '加载AI设置失败')
       addToast({ type: 'error', message: detail })
@@ -1487,6 +1559,8 @@ export function Accounts() {
         custom_prompts: aiCustomPrompts,
         ai_time_range_start: aiTimeRangeStart,
         ai_time_range_end: aiTimeRangeEnd,
+        manual_reply_ai_pause_enabled: aiManualReplyPauseEnabled,
+        manual_reply_ai_pause_minutes: aiManualReplyPauseMinutes,
       })
       if (!result.success) {
         addToast({ type: 'warning', message: result.message || 'AI配置未填写完整，无法开启AI回复' })
@@ -1530,6 +1604,8 @@ export function Accounts() {
         custom_prompts: aiCustomPrompts,
         ai_time_range_start: aiTimeRangeStart,
         ai_time_range_end: aiTimeRangeEnd,
+        manual_reply_ai_pause_enabled: aiManualReplyPauseEnabled,
+        manual_reply_ai_pause_minutes: aiManualReplyPauseMinutes,
       })
       if (!saveResult.success) {
         addToast({ type: 'warning', message: saveResult.message || 'AI配置未填写完整，无法测试AI连接' })
@@ -1617,8 +1693,10 @@ export function Accounts() {
 
   // ==================== 消息等待时间设置 ====================
   const openMessageExpireTimeModal = (account: AccountWithKeywordCount) => {
-    setMessageExpireTimeAccount(account)
-    setMessageExpireTime(account.message_expire_time || 3600)
+    // 从最新的 accounts 列表中获取账号数据，确保使用最新值
+    const latestAccount = accounts.find(a => a.id === account.id) || account
+    setMessageExpireTimeAccount(latestAccount)
+    setMessageExpireTime(latestAccount.message_expire_time ?? 3600)
     setActiveModal('message-expire-time')
   }
 
@@ -1634,16 +1712,26 @@ export function Accounts() {
     setActiveModal('refund-cancel')
   }
 
+  // ==================== 同意后发货设置 ====================
+  const openAgreeDeliverModal = (account: AccountWithKeywordCount) => {
+    setAgreeDeliverAccount(account)
+    setActiveModal('agree-deliver')
+  }
+
   const handleSaveMessageExpireTime = async () => {
     if (!messageExpireTimeAccount) return
-    
+
     try {
       setMessageExpireTimeSaving(true)
       const result = await updateAccountMessageExpireTime(messageExpireTimeAccount.id, messageExpireTime)
       if (result.success) {
+        // 更新本地账号列表中的 message_expire_time
+        setAccounts(prev => prev.map(a =>
+          a.id === messageExpireTimeAccount.id ? { ...a, message_expire_time: messageExpireTime } : a
+        ))
         addToast({ type: 'success', message: '相同消息等待时间已保存' })
         closeModal()
-        loadAccounts()
+        await loadAccounts()
       } else {
         addToast({ type: 'error', message: result.message || '保存失败' })
       }
@@ -1803,6 +1891,8 @@ export function Accounts() {
     setAutoRateType('text')
     setAutoRateTextContent('不错的买家')
     setAutoRateApiUrl('')
+    setAutoRateThanksEnabled(false)
+    setAutoRateThanksContent('')
     setActiveModal('auto-rate')
     
     try {
@@ -1812,6 +1902,8 @@ export function Accounts() {
         setAutoRateType(result.data.rate_type || 'text')
         setAutoRateTextContent(result.data.text_content || '不错的买家')
         setAutoRateApiUrl(result.data.api_url || '')
+        setAutoRateThanksEnabled(result.data.thanks_enabled || false)
+        setAutoRateThanksContent(result.data.thanks_content || '')
       }
     } catch {
       // 忽略错误，使用默认值
@@ -1832,6 +1924,10 @@ export function Accounts() {
         return
       }
     }
+    if (autoRateThanksEnabled && !autoRateThanksContent.trim()) {
+      addToast({ type: 'warning', message: '请填写好评后发送的消息内容' })
+      return
+    }
     
     try {
       setAutoRateSaving(true)
@@ -1840,6 +1936,8 @@ export function Accounts() {
         rate_type: autoRateType,
         text_content: autoRateTextContent,
         api_url: autoRateApiUrl,
+        thanks_enabled: autoRateThanksEnabled,
+        thanks_content: autoRateThanksContent,
       })
       if (result.success) {
         addToast({ type: 'success', message: '自动评价配置已保存' })
@@ -2311,7 +2409,7 @@ export function Accounts() {
                   <th className="whitespace-nowrap min-w-[120px]">状态</th>
                   <th className="whitespace-nowrap min-w-[90px]">在线状态</th>
                   <th className="whitespace-nowrap min-w-[90px]">配置密码</th>
-                  <th className="whitespace-nowrap min-w-[340px]">功能开关</th>
+                  <th className="whitespace-nowrap min-w-[620px]">功能开关</th>
                   <th className="whitespace-nowrap min-w-[90px]">暂停时间</th>
                   <th className="whitespace-nowrap min-w-[160px] sticky right-0 bg-slate-50 dark:bg-slate-800 z-20">操作</th>
                 </tr>
@@ -2401,13 +2499,13 @@ export function Accounts() {
                         {(account.username && account.login_password) ? '已配置' : '未配置'}
                       </span>
                     </td>
-                    {/* 功能开关组：7 个开关合并为紧凑图标组，点击切换，hover 查看说明 */}
+                    {/* 功能开关组：图标按钮点击切换，hover 查看说明 */}
                     <td>
                       <div className="flex items-center gap-1 [&>button]:shrink-0">
                         {/* AI回复 */}
                         <button
                           onClick={() => handleToggleAI(account)}
-                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
+                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
                             account.aiEnabled
                               ? 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300 dark:hover:bg-purple-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
@@ -2415,11 +2513,12 @@ export function Accounts() {
                           title={`AI回复：${account.aiEnabled ? '已开启（点击关闭）' : '已关闭（点击开启）'}`}
                         >
                           <Bot className="w-3.5 h-3.5" />
+                          <span>AI回复</span>
                         </button>
                         {/* 定时补发货 */}
                         <button
                           onClick={() => handleToggleScheduledRedelivery(account)}
-                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
+                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
                             account.scheduled_redelivery
                               ? 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-300 dark:hover:bg-teal-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
@@ -2427,11 +2526,12 @@ export function Accounts() {
                           title={`定时补发货：${account.scheduled_redelivery ? '已开启（点击关闭）' : '已关闭（点击开启）'}`}
                         >
                           <Repeat className="w-3.5 h-3.5" />
+                          <span>补发货</span>
                         </button>
                         {/* 定时补评价 */}
                         <button
                           onClick={() => handleToggleScheduledRate(account)}
-                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
+                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
                             account.scheduled_rate
                               ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
@@ -2439,11 +2539,12 @@ export function Accounts() {
                           title={`定时补评价：${account.scheduled_rate ? '已开启（点击关闭）' : '已关闭（点击开启）'}`}
                         >
                           <Star className="w-3.5 h-3.5" />
+                          <span>补评价</span>
                         </button>
                         {/* 商品擦亮 */}
                         <button
                           onClick={() => handleToggleAutoPolish(account)}
-                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
+                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
                             account.auto_polish
                               ? 'bg-fuchsia-100 text-fuchsia-700 hover:bg-fuchsia-200 dark:bg-fuchsia-900/30 dark:text-fuchsia-300 dark:hover:bg-fuchsia-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
@@ -2451,23 +2552,25 @@ export function Accounts() {
                           title={`商品自动擦亮：${account.auto_polish ? '已开启（点击关闭）' : '已关闭（点击开启）'}`}
                         >
                           <RefreshCw className="w-3.5 h-3.5" />
+                          <span>擦亮</span>
                         </button>
                         {/* 自动确认发货 */}
                         <button
                           onClick={() => handleToggleAutoConfirm(account)}
-                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
+                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
                             account.auto_confirm
                               ? 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300 dark:hover:bg-green-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
                           }`}
-                          title={`自动确认发货：${account.auto_confirm ? '已开启（点击关闭）' : '已关闭（点击开启）'}`}
+                          title={`自动确认发货：${account.auto_confirm ? '已开启（点击关闭）' : '已关闭（点击开启，开启后会关闭“只发卡券不确认发货”）'}`}
                         >
                           <PackageCheck className="w-3.5 h-3.5" />
+                          <span>确认发货</span>
                         </button>
                         {/* 发货成功再发卡券 */}
                         <button
                           onClick={() => handleToggleConfirmBeforeSend(account)}
-                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
+                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
                             account.confirm_before_send
                               ? 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-300 dark:hover:bg-cyan-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
@@ -2475,11 +2578,12 @@ export function Accounts() {
                           title={`发货成功再发卡券：${account.confirm_before_send ? '已开启（点击关闭）' : '已关闭（点击开启，开启后确认发货失败将不发送卡券）'}`}
                         >
                           <ShieldCheck className="w-3.5 h-3.5" />
+                          <span>先发货后发卡</span>
                         </button>
                         {/* 卡券发送成功再确认发货 */}
                         <button
                           onClick={() => handleToggleSendBeforeConfirm(account)}
-                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
+                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
                             account.send_before_confirm
                               ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
@@ -2487,11 +2591,25 @@ export function Accounts() {
                           title={`卡券发送成功再确认发货：${account.send_before_confirm ? '已开启（点击关闭）' : '已关闭（点击开启，开启后先发卡券，发送成功后再确认发货）'}`}
                         >
                           <Send className="w-3.5 h-3.5" />
+                          <span>先发卡后发货</span>
+                        </button>
+                        {/* 只发卡券不确认发货 */}
+                        <button
+                          onClick={() => handleToggleOnlySendCard(account)}
+                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
+                            account.only_send_card
+                              ? 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:hover:bg-orange-900/50'
+                              : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
+                          }`}
+                          title={`只发卡券不确认发货：${account.only_send_card ? '已开启（点击关闭，当前所有发货仅发送卡券）' : '已关闭（点击开启，开启后会关闭自动确认发货，并跳过确认发货和免拼接口）'}`}
+                        >
+                          <Ticket className="w-3.5 h-3.5" />
+                          <span>只发卡券</span>
                         </button>
                         {/* 自动求小红花 */}
                         <button
                           onClick={() => handleToggleAutoRedFlower(account)}
-                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
+                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
                             account.auto_red_flower
                               ? 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-300 dark:hover:bg-pink-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
@@ -2499,11 +2617,12 @@ export function Accounts() {
                           title={`自动求小红花：${account.auto_red_flower ? '已开启（点击关闭）' : '已关闭（点击开启）'}`}
                         >
                           <Flower2 className="w-3.5 h-3.5" />
+                          <span>求小红花</span>
                         </button>
                         {/* 已下单用户禁止AI回复 */}
                         <button
                           onClick={() => handleToggleAiReplyBlockOrderedUsers(account)}
-                          className={`inline-flex items-center justify-center w-7 h-7 rounded transition-colors ${
+                          className={`inline-flex items-center gap-1 px-2 h-7 rounded text-xs whitespace-nowrap transition-colors ${
                             account.ai_reply_block_ordered_users
                               ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50'
                               : 'bg-slate-100 text-slate-400 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-500 dark:hover:bg-slate-600'
@@ -2511,6 +2630,7 @@ export function Accounts() {
                           title={`已下单用户禁止AI回复：${account.ai_reply_block_ordered_users ? '已开启（点击关闭）对已下单用户不使用AI回复' : '已关闭（点击开启）'}`}
                         >
                           <Ban className="w-3.5 h-3.5" />
+                          <span>已购禁AI</span>
                         </button>
                       </div>
                     </td>
@@ -2664,6 +2784,13 @@ export function Accounts() {
                     >
                       <Repeat className="w-3.5 h-3.5 text-orange-500" />
                       <span className="text-slate-700 dark:text-slate-300">退款订单注销</span>
+                    </button>
+                    <button
+                      onClick={() => { openAgreeDeliverModal(account); setMoreMenuAccountId(null) }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                    >
+                      <Truck className={`w-3.5 h-3.5 ${account.agree_deliver_enabled ? 'text-blue-500' : 'text-slate-400'}`} />
+                      <span className="text-slate-700 dark:text-slate-300">同意后发货</span>
                     </button>
                   </>
                 )
@@ -3224,6 +3351,7 @@ export function Accounts() {
                   {([
                     { value: 'text', label: '默认回复' },
                     { value: 'api', label: 'API接口' },
+                    { value: 'external_contact', label: '站外联系方式' },
                   ] as const).map((opt) => (
                     <button
                       key={opt.value}
@@ -3291,8 +3419,15 @@ export function Accounts() {
                 </>
               )}
 
+              {defaultReplyType === 'external_contact' && (
+                <LocationContactReplyFields
+                  value={defaultReplyLocation}
+                  onChange={setDefaultReplyLocation}
+                />
+              )}
+
               {/* 文本回复内容（API 类型时隐藏） */}
-              {defaultReplyType !== 'api' && (
+              {defaultReplyType === 'text' && (
               <div className="input-group">
                 <label className="input-label">默认回复内容</label>
                 <textarea
@@ -3308,7 +3443,7 @@ export function Accounts() {
               )}
 
               {/* 图片上传（默认回复类型显示，与文本一起） */}
-              {defaultReplyType !== 'api' && (
+              {defaultReplyType === 'text' && (
               <div className="input-group">
                 <label className="input-label">回复图片（可选）</label>
                 <input
@@ -3363,7 +3498,7 @@ export function Accounts() {
               )}
 
               {/* 变量说明（API 类型时隐藏） */}
-              {defaultReplyType !== 'api' && (
+              {defaultReplyType === 'text' && (
               <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
                 <p className="text-xs text-blue-600 dark:text-blue-400">
                   <strong>支持变量：</strong><br />
@@ -3503,6 +3638,45 @@ export function Accounts() {
                     </div>
                   )}
 
+                  {aiEnabled && (
+                    <div className="bg-slate-50 dark:bg-slate-800/40 rounded-xl p-3.5 border border-slate-100 dark:border-slate-800 space-y-3">
+                      <div className="flex items-center justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-medium text-slate-900 dark:text-slate-100">人工回复后暂停 AI</p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">仅暂停相同商品 ID 和买家 ID 的 AI 回复，关键词和默认回复仍正常执行。</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setAiManualReplyPauseEnabled(value => !value)}
+                          className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                            aiManualReplyPauseEnabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'
+                          }`}
+                          aria-label="切换人工回复后暂停 AI"
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                              aiManualReplyPauseEnabled ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                      {aiManualReplyPauseEnabled && (
+                        <div className="flex items-center gap-3">
+                          <label className="input-label mb-0 shrink-0">暂停时长</label>
+                          <input
+                            type="number"
+                            value={aiManualReplyPauseMinutes}
+                            onChange={(e) => setAiManualReplyPauseMinutes(Number(e.target.value))}
+                            className="input-ios w-28"
+                            min="1"
+                            max="1440"
+                          />
+                          <span className="text-sm text-slate-500 dark:text-slate-400">分钟（1–1440）</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* API配置 */}
                   <div className="border-t border-slate-200 dark:border-slate-700 pt-4">
                     <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3 flex items-center gap-2">
@@ -3539,6 +3713,17 @@ export function Accounts() {
                           {aiProviderType === 'anthropic' && '无需补全 /v1/messages'}
                           {aiProviderType === 'gemini' && '无需补全 /v1beta/models'}
                           {aiProviderType === 'dashscope_app' && '请填入完整的 .../apps/{app_id}/completion 地址'}
+                        </p>
+                        <p className="text-xs text-red-500 dark:text-red-400 mt-1">
+                          推荐AI：{' '}
+                          <a
+                            href="https://api.momentsofus.cn/sign-up?aff=dAM9"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="underline hover:text-red-600 dark:hover:text-red-300"
+                          >
+                            https://api.momentsofus.cn/sign-up?aff=dAM9
+                          </a>
                         </p>
                       </div>
                       <div className="input-group">
@@ -4160,6 +4345,15 @@ export function Accounts() {
         />
       )}
 
+      {/* 同意后发货设置弹窗 */}
+      {activeModal === 'agree-deliver' && agreeDeliverAccount && (
+        <AgreeDeliverModal
+          accountId={agreeDeliverAccount.id}
+          accountDisplayId={agreeDeliverAccount.id}
+          onClose={closeModal}
+        />
+      )}
+
       {/* 人脸验证弹窗 */}
       {activeModal === 'face-verification' && faceVerificationAccount && (
         <div className="modal-overlay">
@@ -4450,6 +4644,41 @@ export function Accounts() {
                 </div>
               )}
 
+              {/* 好评后自动发送消息（#232） */}
+              <div className="flex items-center justify-between py-3 border-b border-slate-100 dark:border-slate-700">
+                <div>
+                  <p className="font-medium text-slate-900 dark:text-slate-100">好评后自动发送消息</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">需同时启用自动评价；评价买家成功后自动发送下方配置的消息</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAutoRateThanksEnabled(!autoRateThanksEnabled)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    autoRateThanksEnabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      autoRateThanksEnabled ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {autoRateThanksEnabled && (
+                <div className="input-group">
+                  <label className="input-label">好评后发送的消息内容</label>
+                  <textarea
+                    value={autoRateThanksContent}
+                    onChange={(e) => setAutoRateThanksContent(e.target.value)}
+                    placeholder="例如：感谢您的支持！有问题随时联系我，欢迎下次光临~"
+                    className="input-ios min-h-[80px] resize-none"
+                    maxLength={500}
+                  />
+                  <p className="input-hint">{autoRateThanksContent.length}/500</p>
+                </div>
+              )}
+
               {/* 使用说明 */}
               <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
                 <p className="text-xs text-blue-600 dark:text-blue-400">
@@ -4457,7 +4686,8 @@ export function Accounts() {
                   • 当收到「快给ta一个评价吧」消息时，系统会自动评价买家<br />
                   • 固定文字：使用您设置的固定评价内容<br />
                   • API获取：请求API地址，将返回内容作为评价内容<br />
-                  • 评价成功后会自动更新订单的评价状态
+                  • 评价成功后会自动更新订单的评价状态<br />
+                  • 开启「好评后自动发送消息」后，评价买家成功会自动发送配置的消息，每个订单仅发送一次
                 </p>
               </div>
             </div>

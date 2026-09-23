@@ -1,5 +1,12 @@
 import { get, post, put, del } from '@/utils/request'
 import type { Item, ApiResponse } from '@/types'
+import type {
+  MaterialVideo,
+  PlatformCategoryPathItem,
+  PlatformMaterialAttribute,
+  PublishSkuRow,
+  PublishSpecification,
+} from '@/api/productPublish'
 
 // API前缀
 const ITEM_PREFIX = '/api/v1/items'
@@ -14,9 +21,12 @@ export interface FetchItemsSummaryResponse extends ApiResponse {
 }
 
 // 获取商品列表
-export const getItems = async (cookieId?: string): Promise<{ success: boolean; data: Item[] }> => {
+export const getItems = async (cookieId?: string): Promise<{ success: boolean; data: Item[]; message?: string }> => {
   const url = cookieId ? `${ITEM_PREFIX}/cookie/${cookieId}` : ITEM_PREFIX
-  const result = await get<{ items?: Item[] } | Item[]>(url)
+  const result = await get<{ items?: Item[]; success?: boolean; message?: string } | Item[]>(url)
+  if (!Array.isArray(result) && result.success === false) {
+    return { success: false, data: [], message: result.message || '商品列表加载失败' }
+  }
   // 后端返回 { items: [...] } 或直接返回数组
   const items = Array.isArray(result) ? result : (result.items || [])
   return { success: true, data: items }
@@ -156,6 +166,102 @@ export const updateItemMultiSpec = (cookieId: string, itemId: string, enabled: b
   return put(`${ITEM_PREFIX}/${cookieId}/${itemId}/multi-spec`, { is_multi_spec: enabled })
 }
 
+// 鱼小铺商品改价（价格与库存一并提交）
+// 单规格：{ price, quantity }；多规格：{ skus: [{ sku_id, price, quantity }] }
+export interface UpdateItemPricePayload {
+  price?: number
+  quantity?: number
+  skus?: Array<{ sku_id: string; price: number; quantity: number }>
+}
+
+export const updateItemPrice = (
+  cookieId: string,
+  itemId: string,
+  payload: UpdateItemPricePayload,
+): Promise<ApiResponse> => {
+  return put(`${ITEM_PREFIX}/${cookieId}/${itemId}/price`, payload)
+}
+
+// ==================== 鱼小铺商品编辑（同步到闲鱼平台）====================
+
+// 平台商品编辑详情，字段与素材库/单品发布保持一致，可直接回填发布表单
+export interface SellerItemEditForm {
+  item_id: string
+  title: string
+  description: string
+  price: number | null
+  original_price: number | null
+  category: string
+  quantity: number
+  images: string[]
+  videos: MaterialVideo[]
+  specifications: PublishSpecification[]
+  sku_rows: PublishSkuRow[]
+  platform_category_id: string
+  platform_category_name: string
+  platform_channel_category_id: string
+  platform_channel_category_name: string
+  platform_leaf_id: string
+  platform_tb_category_id: string
+  platform_category_path: PlatformCategoryPathItem[]
+  platform_attributes: PlatformMaterialAttribute[]
+  category_source: 'manual' | 'recommendation'
+  address: string
+  address_expected_text: string
+  shipping_method: 'free' | 'distance' | 'fixed' | 'template' | 'none'
+  postage: number
+  support_pickup: boolean
+  delivery_method: 'express' | 'pickup'
+  condition: string
+  brand: string
+}
+
+// 鱼小铺商品编辑提交参数（字段与单品发布一致，不含账号ID）
+export interface SellerItemEditPayload {
+  title: string
+  description: string
+  price: number
+  original_price?: number | null
+  images: string[]
+  // 平台已有视频带 file_id（后端凭此原样回传，不重复上传）；空数组表示清空平台视频
+  videos: MaterialVideo[]
+  platform_category_id?: string | null
+  platform_category_name?: string | null
+  platform_channel_category_id?: string | null
+  platform_channel_category_name?: string | null
+  platform_leaf_id?: string | null
+  platform_tb_category_id?: string | null
+  platform_attributes: PlatformMaterialAttribute[]
+  specifications: PublishSpecification[]
+  sku_rows: PublishSkuRow[]
+  quantity: number
+  address?: string | null
+  address_expected_text?: string | null
+  delivery_method: 'express' | 'pickup'
+  shipping_method: 'free' | 'distance' | 'fixed' | 'template' | 'none'
+  support_pickup: boolean
+  postage: number
+  brand?: string | null
+  condition?: string | null
+}
+
+// 获取鱼小铺商品的平台编辑详情（用于编辑弹窗回填）
+export const getSellerItemEditDetail = (
+  cookieId: string,
+  itemId: string,
+): Promise<ApiResponse<{ form: SellerItemEditForm }>> => {
+  return get(`${ITEM_PREFIX}/${cookieId}/${itemId}/seller-detail`)
+}
+
+// 提交鱼小铺商品编辑到闲鱼平台，成功后后端会重新同步该账号商品
+export const updateSellerItem = (
+  cookieId: string,
+  itemId: string,
+  payload: SellerItemEditPayload,
+): Promise<ApiResponse> => {
+  return put(`${ITEM_PREFIX}/${cookieId}/${itemId}/seller-edit`, payload)
+}
+
 
 // ==================== 商品默认回复 ====================
 
@@ -166,9 +272,14 @@ export interface ItemDefaultReplyConfig {
   reply_image: string
   enabled: boolean
   reply_once: boolean
-  reply_type?: string  // text-文本，image-图片，api-接口
+  reply_type?: string  // text-文本，image-图片，api-接口，external_contact-站外联系方式
   api_url?: string
   api_timeout?: number
+  location_name?: string
+  location_longitude?: string
+  location_latitude?: string
+  location_title?: string
+  location_subtitle?: string
 }
 
 // 获取商品默认回复配置
@@ -180,7 +291,7 @@ export const getItemDefaultReply = (cookieId: string, itemId: string): Promise<A
 export const saveItemDefaultReply = (
   cookieId: string,
   itemId: string,
-  data: { reply_content: string; reply_image?: string; enabled: boolean; reply_once: boolean; reply_type?: string; api_url?: string; api_timeout?: number }
+  data: { reply_content: string; reply_image?: string; enabled: boolean; reply_once: boolean; reply_type?: string; api_url?: string; api_timeout?: number; location_name?: string; location_longitude?: string; location_latitude?: string; location_title?: string; location_subtitle?: string }
 ): Promise<ApiResponse> => {
   return put(`${ITEM_PREFIX}/${cookieId}/${itemId}/default-reply`, data)
 }
@@ -206,7 +317,7 @@ export const deleteItemDefaultReply = (cookieId: string, itemId: string): Promis
 // 批量保存商品默认回复配置
 export const batchSaveItemDefaultReply = (
   cookieId: string,
-  data: { item_ids: string[]; reply_content: string; reply_image?: string; enabled: boolean; reply_once: boolean; reply_type?: string; api_url?: string; api_timeout?: number }
+  data: { item_ids: string[]; reply_content: string; reply_image?: string; enabled: boolean; reply_once: boolean; reply_type?: string; api_url?: string; api_timeout?: number; location_name?: string; location_longitude?: string; location_latitude?: string; location_title?: string; location_subtitle?: string }
 ): Promise<ApiResponse> => {
   return post(`${ITEM_PREFIX}/${cookieId}/batch-default-reply`, data)
 }

@@ -16,6 +16,10 @@ import aiohttp
 from app.core.config import get_settings
 from app.core.http_client import get_http_client
 from common.services.captcha.remote_timeout import get_remote_solve_timeout
+from common.utils.internal_auth import (
+    build_internal_auth_headers,
+    is_internal_api_url,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -103,24 +107,36 @@ class WebSocketServiceClient:
             logger.error(f"查询账号任务状态失败: {account_id}, 错误: {e}")
             return {"success": False, "message": f"查询账号任务状态失败: {str(e)}"}
 
-    async def send_message(self, account_id: str, chat_id: str, content: str, message_type: str = "text") -> dict:
+    async def send_message(
+        self,
+        account_id: str,
+        chat_id: str,
+        content: str,
+        message_type: str = "text",
+        to_user_id: str | None = None,
+        wait_result: bool = True,
+    ) -> dict:
         """发送消息
-        
+
         Args:
             account_id: 账号ID
             chat_id: 聊天ID
             content: 消息内容
             message_type: 消息类型（text/image）
-            
+            to_user_id: 接收方（买家）用户ID
+            wait_result: 是否等待闲鱼服务端结果（识别安全拦截）
+
         Returns:
             响应数据
         """
         url = f"{self.base_url}/internal/accounts/{account_id}/send-message"
         try:
+            # 字段名需与 websocket 内部接口 SendMessageRequest 一致（message / to_user_id）
             response = await self.http_client.post(url, json={
                 "chat_id": chat_id,
-                "content": content,
-                "message_type": message_type
+                "message": content,
+                "to_user_id": to_user_id,
+                "wait_result": wait_result,
             })
             return response
         except Exception as e:
@@ -151,10 +167,13 @@ class WebSocketServiceClient:
         """
         url = f"{self.base_url}/internal/accounts/{account_id}/create-chat"
         try:
+            # create-chat 遇明确的 Token/Session 失效会触发「刷新 token + 断线重连 + 重试」，
+            # 最坏约 73s；故单独放宽超时到 90s。该操作有副作用（会关闭并重建连接），不可安全重试，
+            # 显式 max_retries=1 避免超时后重复触发 create-chat 与重连叠加。
             response = await self.http_client.post(url, json={
                 "buyer_id": buyer_id,
                 "item_id": item_id,
-            })
+            }, timeout=90, max_retries=1)
             return response
         except Exception as e:
             logger.error(f"创建会话失败: account_id={account_id}, buyer_id={buyer_id}, 错误: {e}")
@@ -208,6 +227,20 @@ class WebSocketServiceClient:
         except Exception as e:
             logger.error(f"订单发货失败: {order_no}, 错误: {e}")
             return {"success": False, "message": f"订单发货失败: {str(e)}"}
+
+
+    async def agree_pickup_deliver(self, order_no: str) -> dict:
+        """同意后发货：买家在公开提货页点击「同意」后触发真实发货并返回卡券内容。
+
+        websocket 侧据 order_no 定位在线账号实例，完成 免拼(小刀)→确认发货 并取卡落库，
+        返回 {success, message, data:{order_no, content, already_agreed?}}。
+        """
+        url = f"{self.base_url}/internal/orders/agree-pickup-deliver"
+        try:
+            return await self.http_client.post(url, json={"order_no": order_no})
+        except Exception as e:
+            logger.error(f"同意后发货失败: {order_no}, 错误: {e}")
+            return {"success": False, "message": f"同意后发货失败: {str(e)}"}
 
 
     async def confirm_no_logistics(
@@ -278,6 +311,13 @@ class WebSocketServiceClient:
             websocket 返回的响应字典（success / data.engine / data.cookies）
         """
         endpoint = f"{self.base_url}/internal/captcha/solve"
+        if not is_internal_api_url(endpoint, (self.base_url,)):
+            logger.error(f"过滑块服务地址不合法: {endpoint}")
+            return {
+                "success": False,
+                "message": "过滑块服务地址不合法",
+                "_request_not_sent": True,
+            }
         request_not_sent_errors = (aiohttp.ClientConnectorError, aiohttp.InvalidURL)
         connection_timeout_error = getattr(aiohttp, "ConnectionTimeoutError", None)
         if connection_timeout_error is not None:
@@ -307,7 +347,11 @@ class WebSocketServiceClient:
                     payload["persist_token_cache"] = True
                     payload["token_user_id"] = token_user_id or ""
                     payload["token_cache_write_mode"] = token_cache_write_mode or "renewal"
-                async with session.post(endpoint, json=payload) as resp:
+                async with session.post(
+                    endpoint,
+                    json=payload,
+                    headers=build_internal_auth_headers(settings.internal_api_token),
+                ) as resp:
                     return await resp.json(content_type=None)
         except request_not_sent_errors as e:
             logger.error(f"无法连接过滑块服务: account_id={account_id}, 错误: {e}")

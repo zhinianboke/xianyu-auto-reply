@@ -31,10 +31,12 @@ from app.services.remote_captcha_admission_service import (
 from app.services.risk_control_log_service import RiskControlLogService
 from app.services.system_setting_service import SystemSettingService
 from app.services.websocket_client import websocket_client
+from app.core.config import get_settings
 from common.db.session import async_session_maker
 from common.models.system_setting import SystemSetting
 from common.models.user import User
 from common.schemas.common import ApiResponse
+from common.utils.internal_auth import build_internal_auth_headers, is_internal_api_url
 
 router = APIRouter(prefix="/captcha", tags=["验证码"])
 
@@ -57,6 +59,10 @@ class SendCodeRequest(BaseModel):
     email: EmailStr
     session_id: Optional[str] = None
     type: str = "register"  # register, login 或 reset_password
+    # 极验滑动验证参数（仅忘记密码 reset_password 场景使用，参照登录逻辑）
+    geetest_challenge: Optional[str] = None
+    geetest_validate: Optional[str] = None
+    geetest_seccode: Optional[str] = None
 
 
 class SliderSolveRequest(BaseModel):
@@ -100,7 +106,7 @@ REMOTE_CONFIG_WEIGHT_REMOTE_KEY = "captcha.real_mouse_weight_remote"
 
 # Token获取方式专用域名：这些是取Token的远程接口地址，不属于过滑块远程服务，
 # 误填到风控日志的远程服务URL会导致过滑块一直失败，因此保存时直接拦截。
-TOKEN_API_ONLY_DOMAINS = ("api.xianyusite.shop", "api.zhinianblog.cn")
+TOKEN_API_ONLY_DOMAINS = ("api.xianyushop.shop", "api.xianyusite.shop", "api.zhinianblog.cn")
 
 
 def _check_token_api_domain(url: str) -> Optional[ApiResponse]:
@@ -382,10 +388,26 @@ async def send_email_verification_code(
     """发送邮箱验证码"""
     try:
         cleanup_expired_email_codes()
-        
+
         from app.services.user_service import UserService
         user_service = UserService(db)
-        
+
+        # 忘记密码场景：参照登录逻辑，开启滑动验证时必须先通过极验二次验证
+        if request.type == "reset_password":
+            setting_service = SystemSettingService(db)
+            all_settings = await setting_service.list_settings()
+            captcha_enabled_str = all_settings.get("login_captcha_enabled")
+            captcha_enabled = captcha_enabled_str in (None, "true", "1")  # 默认开启
+            if captcha_enabled:
+                from app.api.routes.geetest import check_geetest_verified
+
+                if not request.geetest_challenge:
+                    return ApiResponse(success=False, message="请完成滑动验证")
+
+                geetest_ok, geetest_msg = check_geetest_verified(request.geetest_challenge)
+                if not geetest_ok:
+                    return ApiResponse(success=False, message=geetest_msg)
+
         # 根据类型检查邮箱
         if request.type == "register":
             existing_user = await user_service.get_by_email(request.email)
@@ -670,14 +692,37 @@ async def test_remote_slider_solve(
         "account_id": "connectivity-test",
         "url": "",  # 故意留空：只测连通+秘钥，不真正过滑块
     }
-    logger.info(f"[过滑块测试] 请求远程服务 url={url} payload={payload}")
+    settings = get_settings()
+    allowed_internal_bases = tuple(
+        value
+        for value in (
+            settings.websocket_service_url,
+            getattr(settings, "scheduler_service_url", ""),
+        )
+        if value
+    )
+    request_headers: dict[str, str] = {}
+    if is_internal_api_url(url, allowed_internal_bases):
+        token = (settings.internal_api_token or "").strip()
+        if token:
+            request_headers = build_internal_auth_headers(token)
+    # 只记录是否提供秘钥和长度，禁止把远程秘钥原文写入日志。
+    logger.info(
+        "[过滑块测试] 请求远程服务 url={} secret_key_present={} secret_key_length={}",
+        url.split("?", 1)[0],
+        bool(payload["secret_key"]),
+        len(payload["secret_key"]),
+    )
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-            async with session.post(url, json=payload) as resp:
+            async with session.post(url, json=payload, headers=request_headers) as resp:
                 # 打印远程服务原始返回（状态码 + 文本）
                 raw_text = await resp.text()
+                # 远程服务可能回显请求体中的秘钥或 Cookie，日志只保留状态和长度。
                 logger.info(
-                    f"[过滑块测试] 远程响应 status={resp.status} body={raw_text}"
+                    "[过滑块测试] 远程响应 status={} body_length={}",
+                    resp.status,
+                    len(raw_text),
                 )
                 try:
                     body = await resp.json(content_type=None)

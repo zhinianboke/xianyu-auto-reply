@@ -244,12 +244,14 @@ export const getFundFlows = (
   pageSize: number = 20,
   flowType: string = '',
   username: string = '',
+  description: string = '',
 ): Promise<FundFlowListResponse> => {
   const params = new URLSearchParams()
   params.append('page', String(page))
   params.append('page_size', String(pageSize))
   if (flowType) params.append('type', flowType)
   if (username) params.append('username', username)
+  if (description.trim()) params.append('description', description.trim())
   return get(`/api/v1/distribution/fund-flows?${params.toString()}`)
 }
 

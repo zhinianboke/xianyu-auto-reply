@@ -13,14 +13,26 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.publish_log import PublishLog
-
-
 from common.utils.time_utils import safe_isoformat
+
+
 class PublishLogService:
     """发布日志 CRUD 服务。"""
 
     def __init__(self, session: AsyncSession):
         self.session = session
+
+    async def get_by_request_id(self, publish_request_id: str) -> PublishLog | None:
+        """按自动续售发布请求号查询已有发布结果。"""
+        if not publish_request_id:
+            return None
+        result = await self.session.execute(
+            select(PublishLog)
+            .where(PublishLog.publish_request_id == publish_request_id)
+            .order_by(PublishLog.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     async def create_log(
         self,
@@ -31,6 +43,8 @@ class PublishLogService:
         price: str = None,
         material_id: int = None,
         batch_id: str = None,
+        publish_request_id: str = None,
+        source_event_id: int = None,
         status: str = "pending",
         error_message: str = None,
         resolved_address_id: int = None,
@@ -46,6 +60,8 @@ class PublishLogService:
             price=price,
             material_id=material_id,
             batch_id=batch_id,
+            publish_request_id=publish_request_id,
+            source_event_id=source_event_id,
             status=status,
             error_message=str(error_message)[:1000] if error_message is not None else None,
             resolved_address_id=resolved_address_id,
@@ -130,6 +146,8 @@ def _log_to_dict(log: PublishLog) -> dict:
         "price": log.price,
         "material_id": log.material_id,
         "batch_id": log.batch_id,
+        "publish_request_id": log.publish_request_id,
+        "source_event_id": log.source_event_id,
         "status": log.status,
         "item_url": log.item_url,
         "item_id": log.item_id,

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from typing import Any, Dict, Optional
 
@@ -38,6 +39,7 @@ class ConfirmShippingService(BaseShippingService):
         order_id: str,
         item_id: Optional[str] = None,
         retry_count: int = 0,
+        trade_text: Optional[str] = None,
     ) -> Dict[str, Any]:
         """自动确认发货
         
@@ -45,6 +47,7 @@ class ConfirmShippingService(BaseShippingService):
             order_id: 订单ID
             item_id: 商品ID(可选,用于Token刷新)
             retry_count: 当前重试次数
+            trade_text: 无需邮寄凭证内容
             
         Returns:
             结果字典,包含success或error字段
@@ -82,8 +85,21 @@ class ConfirmShippingService(BaseShippingService):
             'sessionOption': 'AutoLoginOnly',
         }
 
-        # 构建请求数据
-        data_val = '{"orderId":"' + order_id + '", "tradeText":"","picList":[],"newUnconsign":true}'
+        # 未传凭证时保持原请求内容不变，避免影响现有确认发货流程。
+        normalized_trade_text = trade_text.strip() if isinstance(trade_text, str) else ""
+        if normalized_trade_text:
+            data_val = json.dumps(
+                {
+                    "orderId": order_id,
+                    "tradeText": normalized_trade_text,
+                    "picList": [],
+                    "newUnconsign": True,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        else:
+            data_val = '{"orderId":"' + order_id + '", "tradeText":"","picList":[],"newUnconsign":true}'
         data = {'data': data_val}
 
         # 获取Token并生成签名
@@ -126,7 +142,9 @@ class ConfirmShippingService(BaseShippingService):
                     logger.warning(f"【{self.account_id}】❌ 自动确认发货失败: {ret_msg}")
                     
                     # 重试
-                    return await self.auto_confirm(order_id, item_id, retry_count + 1)
+                    return await self.auto_confirm(
+                        order_id, item_id, retry_count + 1, trade_text=normalized_trade_text
+                    )
 
         except Exception as e:
             logger.error(f"【{self.account_id}】自动确认发货API请求异常: {self._safe_str(e)}")
@@ -135,7 +153,9 @@ class ConfirmShippingService(BaseShippingService):
             # 网络异常也进行重试
             if retry_count < 2:
                 logger.info(f"【{self.account_id}】网络异常,准备重试...")
-                return await self.auto_confirm(order_id, item_id, retry_count + 1)
+                return await self.auto_confirm(
+                    order_id, item_id, retry_count + 1, trade_text=normalized_trade_text
+                )
 
             return {"error": f"网络异常: {self._safe_str(e)}", "order_id": order_id}
 

@@ -171,9 +171,19 @@ export const checkAdminDefaultPassword = (): Promise<ApiResponse<{ is_default: b
 
 
 // 发送重置密码验证码
-export const sendResetPasswordCode = async (email: string): Promise<ApiResponse> => {
+export const sendResetPasswordCode = async (
+  email: string,
+  geetest?: { challenge: string; validate: string; seccode: string }
+): Promise<ApiResponse> => {
   const sessionId = `reset_${Math.random().toString(36).substr(2, 9)}_${Date.now()}`
-  return post(`${CAPTCHA_PREFIX}/send-email-code`, { email, type: 'reset_password', session_id: sessionId })
+  return post(`${CAPTCHA_PREFIX}/send-email-code`, {
+    email,
+    type: 'reset_password',
+    session_id: sessionId,
+    geetest_challenge: geetest?.challenge,
+    geetest_validate: geetest?.validate,
+    geetest_seccode: geetest?.seccode,
+  })
 }
 
 // 重置密码

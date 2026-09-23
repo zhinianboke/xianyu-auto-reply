@@ -2,7 +2,7 @@
  * 资金流水页面
  * 
  * 功能：展示当前用户的资金流水记录，管理员可查看所有用户的流水
- * 支持按类型筛选、分页
+ * 支持按类型、用户名、描述筛选和后端分页
  */
 import { useState, useEffect, useCallback } from 'react'
 import { RefreshCw, Wallet } from 'lucide-react'
@@ -19,6 +19,18 @@ const FLOW_TYPE_MAP: Record<string, string> = {
   fee: '手续费',
 }
 
+interface FundFlowFilters {
+  flowType: string
+  username: string
+  description: string
+}
+
+const EMPTY_FILTERS: FundFlowFilters = {
+  flowType: '',
+  username: '',
+  description: '',
+}
+
 export function FundFlows() {
   const { addToast } = useUIStore()
   const { user } = useAuthStore()
@@ -32,17 +44,24 @@ export function FundFlows() {
   const [flowType, setFlowType] = useState('')
   // 用户名查询草稿（仅管理员使用）
   const [username, setUsername] = useState('')
+  const [description, setDescription] = useState('')
+  const [appliedFilters, setAppliedFilters] = useState<FundFlowFilters>(EMPTY_FILTERS)
 
   // 加载数据
   const loadData = useCallback(async (
-    p: number = page,
-    ps: number = pageSize,
-    type: string = flowType,
-    uname: string = username,
+    p: number,
+    ps: number,
+    filters: FundFlowFilters,
   ) => {
     setLoading(true)
     try {
-      const result = await getFundFlows(p, ps, type, uname)
+      const result = await getFundFlows(
+        p,
+        ps,
+        filters.flowType,
+        filters.username,
+        filters.description,
+      )
       setFlows(result.list)
       setTotal(result.total)
       setPage(result.page)
@@ -53,11 +72,11 @@ export function FundFlows() {
     } finally {
       setLoading(false)
     }
-  }, [flowType, username, page, pageSize, addToast])
+  }, [addToast])
 
   useEffect(() => {
-    loadData(1, pageSize, flowType, username)
-  }, [])
+    loadData(1, 20, EMPTY_FILTERS)
+  }, [loadData])
 
   // 类型筛选变化：仅更新草稿，不即时查询
   const handleTypeChange = (type: string) => {
@@ -66,25 +85,33 @@ export function FundFlows() {
 
   // 查询：以当前选中的条件回到第 1 页
   const handleSearch = () => {
-    loadData(1, pageSize, flowType, username)
+    const filters = {
+      flowType,
+      username: username.trim(),
+      description: description.trim(),
+    }
+    setAppliedFilters(filters)
+    loadData(1, pageSize, filters)
   }
 
   // 重置：清空所有筛选并以空值重新查询第 1 页
   const handleReset = () => {
     setFlowType('')
     setUsername('')
-    loadData(1, pageSize, '', '')
+    setDescription('')
+    setAppliedFilters(EMPTY_FILTERS)
+    loadData(1, pageSize, EMPTY_FILTERS)
   }
 
   // 分页切换
   const handlePageChange = (newPage: number) => {
     if (newPage < 1 || newPage > totalPages) return
-    loadData(newPage, pageSize, flowType, username)
+    loadData(newPage, pageSize, appliedFilters)
   }
 
   const handlePageSizeChange = (newSize: number) => {
     setPageSize(newSize)
-    loadData(1, newSize, flowType, username)
+    loadData(1, newSize, appliedFilters)
   }
 
   return (
@@ -95,7 +122,7 @@ export function FundFlows() {
           <h1 className="page-title">资金流水</h1>
           <p className="page-description">查看资金变动明细记录</p>
         </div>
-        <button onClick={() => loadData(page, pageSize, flowType)} className="btn-ios-secondary">
+        <button onClick={() => loadData(page, pageSize, appliedFilters)} className="btn-ios-secondary">
           <RefreshCw className="w-4 h-4" />
           刷新
         </button>
@@ -131,6 +158,18 @@ export function FundFlows() {
                 />
               </div>
             )}
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-600 dark:text-gray-400">描述：</span>
+              <input
+                type="text"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
+                maxLength={500}
+                placeholder="按描述模糊查询"
+                className="input-ios w-auto py-1.5 px-3 text-sm"
+              />
+            </div>
             <span className="text-sm text-gray-500">
               共 {total} 条记录
             </span>
@@ -138,7 +177,7 @@ export function FundFlows() {
               <button onClick={handleSearch} className="btn-ios-primary">
                 查询
               </button>
-              {(flowType || username) && (
+              {(flowType || username || description) && (
                 <button onClick={handleReset} className="btn-ios-secondary text-red-500">
                   重置
                 </button>
@@ -149,12 +188,12 @@ export function FundFlows() {
       </div>
 
       {/* 表格 */}
-      <div className="vben-card">
-        <div className="vben-card-body p-0">
+      <div className="vben-card flex min-h-0 flex-col">
+        <div className="vben-card-body flex min-h-0 flex-1 flex-col p-0">
           {loading ? (
             <PageLoading />
           ) : (
-            <div className="table-ios-container">
+            <div className="table-scroll h-[60vh] min-h-[320px] max-h-[720px]">
               <table className="table-ios">
                 <thead>
                   <tr>

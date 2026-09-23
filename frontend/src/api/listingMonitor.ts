@@ -363,3 +363,23 @@ export const getListingMonitorItemDetail = (
 ): Promise<ApiResponse<{ item: ListingMonitorItemDetail }>> => {
   return get(`${PREFIX}/items/${itemPk}`)
 }
+
+// ==================== 远程过风控配置（保存在个人设置，每个用户单独一份） ====================
+
+export interface MonitorRemoteRiskConfig {
+  url: string
+  secret_key: string
+}
+
+// 查询当前用户的远程过风控配置
+export const getMonitorRemoteRiskConfig = (): Promise<ApiResponse<MonitorRemoteRiskConfig>> => {
+  return get(`${PREFIX}/remote-risk-config`)
+}
+
+// 保存当前用户的远程过风控配置（两项都留空表示不启用）
+export const saveMonitorRemoteRiskConfig = (
+  url: string,
+  secretKey: string
+): Promise<ApiResponse<MonitorRemoteRiskConfig>> => {
+  return put(`${PREFIX}/remote-risk-config`, { url, secret_key: secretKey })
+}

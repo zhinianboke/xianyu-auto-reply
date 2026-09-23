@@ -20,6 +20,12 @@ from app.core.http_client import get_http_client
 from app.services.listing_monitor_service import ListingMonitorService, _task_to_dict
 from common.models.user import User
 from common.schemas.common import ApiResponse
+from common.services.monitor_remote_risk_config import (
+    get_remote_risk_config,
+    save_remote_risk_config,
+    validate_remote_risk_secret,
+    validate_remote_risk_url,
+)
 from common.utils.auth_scope import resolve_owner_scope
 
 router = APIRouter(prefix="/product-monitor/listing-tasks", tags=["商品上新监控"])
@@ -115,6 +121,17 @@ class ListingMonitorResetItemsDmRequest(BaseModel):
     ids: List[int] = Field(default_factory=list, description="采集商品主键ID列表")
 
 
+class MonitorRemoteRiskConfigRequest(BaseModel):
+    """保存商品监控「远程过风控」配置请求（保存到当前用户个人设置）
+
+    长度校验统一由 common 层的校验方法处理，不在此处用 max_length 约束，
+    避免超长输入被 FastAPI 拦成 422，破坏「业务错误也返回 HTTP 200」的统一口径。
+    """
+
+    url: str = Field("", description="远程过风控服务URL，留空表示不启用")
+    secret_key: str = Field("", description="远程调用秘钥，留空表示不启用")
+
+
 @router.get("", response_model=ApiResponse)
 async def list_listing_monitor_tasks(
     page: int = Query(1, ge=1, description="页码"),
@@ -149,6 +166,46 @@ async def listing_monitor_overview(
     svc = ListingMonitorService(session)
     data = await svc.get_overview(owner_id)
     return ApiResponse(success=True, message="查询成功", data=data)
+
+
+@router.get("/remote-risk-config", response_model=ApiResponse)
+async def get_monitor_remote_risk_config(
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """查询当前用户的商品监控「远程过风控」配置（保存在个人设置中，每个用户单独一份）"""
+    config = await get_remote_risk_config(session, current_user.id)
+    return ApiResponse(
+        success=True,
+        message="查询成功",
+        data={"url": config["url"], "secret_key": config["secret"]},
+    )
+
+
+@router.put("/remote-risk-config", response_model=ApiResponse)
+async def save_monitor_remote_risk_config(
+    req: MonitorRemoteRiskConfigRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """保存当前用户的商品监控「远程过风控」配置到个人设置（仅影响本人的监控任务）"""
+    url_error = validate_remote_risk_url(req.url)
+    if url_error:
+        return ApiResponse(success=False, message=url_error)
+    secret_error = validate_remote_risk_secret(req.secret_key)
+    if secret_error:
+        return ApiResponse(success=False, message=secret_error)
+
+    try:
+        saved = await save_remote_risk_config(session, current_user.id, req.url, req.secret_key)
+    except Exception as exc:  # noqa: BLE001
+        await session.rollback()
+        return ApiResponse(success=False, message=f"保存远程过风控配置失败：{exc}")
+    return ApiResponse(
+        success=True,
+        message="远程过风控配置已保存",
+        data={"url": saved["url"], "secret_key": saved["secret"]},
+    )
 
 
 @router.post("", response_model=ApiResponse)

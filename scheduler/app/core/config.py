@@ -30,8 +30,23 @@ class SchedulerConfig(BaseConfig):
     
     # 服务间通信URL
     websocket_service_url: str = Field(
-        default="http://localhost:8090",
+        default="http://127.0.0.1:8090",
         alias="WEBSOCKET_SERVICE_URL"
+    )
+    backend_web_service_url: str = Field(
+        default="http://127.0.0.1:8089",
+        alias="BACKEND_WEB_SERVICE_URL",
+    )
+
+    # 自动续售执行参数：周期由定时任务配置表控制，批量和租约通过环境变量调节。
+    auto_relist_batch_size: int = Field(
+        default=10, alias="AUTO_RELIST_BATCH_SIZE", ge=1, le=100
+    )
+    auto_relist_lease_seconds: int = Field(
+        default=900, alias="AUTO_RELIST_LEASE_SECONDS", ge=120, le=86400
+    )
+    auto_relist_max_retries: int = Field(
+        default=3, alias="AUTO_RELIST_MAX_RETRIES", ge=1, le=20
     )
 
 

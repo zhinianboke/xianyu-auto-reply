@@ -37,6 +37,7 @@ dependencies = [
     "certifi>=2023.11.0",
     "qrcode[pil]>=7.4.0",
     "pillow>=10.0.0",
+    "opencv-python-headless>=4.10.0",
 ]
 
 [build-system]

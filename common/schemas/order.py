@@ -31,6 +31,7 @@ class OrderOut(BaseModel):
     delivery_method: str | None = None  # 发货方式：manual-手动发货, auto-自动发货, scheduled-定时发货
     delivery_content: str | None = None  # 发货内容（卡券内容）
     delivery_fail_reason: str | None = None  # 发货失败原因
+    card_only_delivered: bool = False  # 只发卡券流程已处理，防止平台待发货状态导致重复耗卡
     # 关联自动发货消息日志的发送状态
     delivery_send_status: str | None = None  # 消息日志发送状态：success/failed/unknown/timeout
     delivery_send_fail_reason: str | None = None  # 消息日志发送失败原因

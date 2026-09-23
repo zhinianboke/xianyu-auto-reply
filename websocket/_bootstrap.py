@@ -77,6 +77,14 @@ async def lifespan(app: FastAPI):
         logger.error("数据库连接失败，服务退出")
         sys.exit(1)
 
+    # 只读取 backend 已准备好的服务间 API 令牌，WebSocket 不负责数据库初始化。
+    try:
+        from common.utils.internal_token_service import load_internal_api_token
+        await load_internal_api_token(settings)
+    except Exception as e:
+        logger.error(f"内部 API 令牌加载失败: {e}")
+        raise
+
     cleanup_result = await fail_processing_risk_control_logs_on_restart()
     if not cleanup_result.success:
         logger.error(cleanup_result.message)
@@ -210,4 +218,6 @@ def run_server():
         port=settings.service_port,
         reload=False,
         log_level=settings.log_level.lower(),
+        # 保留公共日志工具配置，确保 Uvicorn 日志也进入普通日志和 error.log。
+        log_config=None,
     )

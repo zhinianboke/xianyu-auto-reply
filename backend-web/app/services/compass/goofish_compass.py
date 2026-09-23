@@ -12,6 +12,7 @@ from loguru import logger
 from app.services.search.browser import BrowserManager, PLAYWRIGHT_AVAILABLE
 from app.services.search.parser import ItemParser
 from app.services.search.slider_handler import SliderHandler
+from common.utils.xianyu_utils import canonical_goofish_item_url
 
 
 @dataclass(frozen=True)
@@ -126,7 +127,7 @@ class GoofishCompassService:
 
     @classmethod
     def _canonical_item_url(cls, item_id: str) -> str:
-        return f"https://www.goofish.com/item?id={item_id}"
+        return canonical_goofish_item_url(item_id)
 
     @classmethod
     def _normalize_item_url(cls, *, item: dict[str, Any]) -> str:

@@ -20,6 +20,12 @@ from loguru import logger
 CLOSE_NOTICE_API = "mtop.taobao.idlemessage.pc.profile.notice.update"
 
 
+def canonical_goofish_item_url(item_id: Any) -> str:
+    """根据商品 ID 生成当前 Goofish 网页端商品详情地址。"""
+    normalized_id = str(item_id or "").strip()
+    return f"https://www.goofish.com/item?id={normalized_id}" if normalized_id else ""
+
+
 def trans_cookies(cookies_str: str) -> Dict[str, str]:
     """将cookies字符串转换为字典
     
@@ -107,7 +113,7 @@ def generate_device_id(user_id: str) -> str:
     return ''.join(result) + "-" + user_id
 
 
-def generate_sign(t: str, token: str, data: str) -> str:
+def generate_sign(t: str, token: str, data: str, app_key: str = "34839810") -> str:
     """生成API签名
     
     Args:
@@ -118,7 +124,6 @@ def generate_sign(t: str, token: str, data: str) -> str:
     Returns:
         签名字符串
     """
-    app_key = "34839810"
     msg = f"{token}&{t}&{app_key}&{data}"
     
     md5_hash = hashlib.md5()

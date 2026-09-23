@@ -32,6 +32,7 @@ export interface CustomerOrder {
   status: string
   delivery_method: string
   delivery_fail_reason: string
+  card_only_delivered: boolean
   placed_at: string
 }
 
@@ -237,9 +238,10 @@ export const getCustomerOrders = async (
 ): Promise<CustomerOrder[]> => {
   const params = new URLSearchParams()
   if (chatId) params.append('chat_id', chatId)
-  const res = await get<{ success: boolean; data: CustomerOrder[] }>(
+  const res = await get<{ success: boolean; message?: string; data: CustomerOrder[] }>(
     `${PREFIX}/customer-orders/${accountId}/${buyerId}?${params.toString()}`,
   )
+  if (!res.success) throw new Error(res.message || '获取客户订单失败')
   return res.data || []
 }
 

@@ -38,12 +38,13 @@ from common.schemas.account import (
     AccountScheduledRedeliveryUpdate,
     AccountScheduledRateUpdate,
     AccountSendBeforeConfirmUpdate,
+    AccountOnlySendCardUpdate,
     AccountStatusUpdate,
     DeliveryBlockRulesUpdate,
 )
 from common.schemas.common import ApiResponse
 from common.services.ai_provider_service import read_ai_enabled
-from common.services.token_renewal_cache_service import mark_token_cache_expired
+from common.services.token_renewal_cache_service import delete_token_cache
 from common.utils.auth_scope import resolve_owner_scope
 from common.utils.xianyu_utils import close_account_notice
 from app.services.account_service import AccountService
@@ -201,6 +202,7 @@ async def list_cookie_details(
                 auto_polish=bool(account.auto_polish),
                 confirm_before_send=bool(account.confirm_before_send),
                 send_before_confirm=bool(account.send_before_confirm),
+                only_send_card=bool(account.only_send_card),
                 auto_red_flower=bool(account.auto_red_flower),
                 ai_reply_block_ordered_users=bool(account.ai_reply_block_ordered_users),
                 delivery_disabled=bool(account.delivery_disabled),
@@ -345,8 +347,10 @@ async def list_cookie_details_paginated(
             "auto_polish": bool(account.auto_polish),
             "confirm_before_send": bool(account.confirm_before_send),
             "send_before_confirm": bool(account.send_before_confirm),
+            "only_send_card": bool(account.only_send_card),
             "auto_red_flower": bool(account.auto_red_flower),
             "ai_reply_block_ordered_users": bool(account.ai_reply_block_ordered_users),
+            "agree_deliver_enabled": bool(account.agree_deliver_enabled),
             "delivery_disabled": bool(account.delivery_disabled),
             "delivery_disabled_reason": account.delivery_disabled_reason or "",
             "auto_close_order": bool(account.auto_close_order),
@@ -631,12 +635,11 @@ async def clear_token_cache_batch(
             continue
 
         try:
-            # 1. 标记Token缓存失效（WebSocket侧 user_id=unb，聊天侧 user_id=chat_unb）
+            # 1. 删除Token缓存（WebSocket侧 user_id=unb，聊天侧 user_id=chat_unb）
             invalidation_messages: list[str] = []
             for token_user_id in (unb, f"chat_{unb}"):
-                invalidation = await mark_token_cache_expired(
+                invalidation = await delete_token_cache(
                     token_user_id=token_user_id,
-                    invalidate_valid_cache=True,
                 )
                 if not invalidation.success:
                     raise RuntimeError(invalidation.message)
@@ -812,6 +815,19 @@ async def update_account_send_before_confirm(
     account = await _get_account_or_404(current_user, account_id, account_service)
     await account_service.update_send_before_confirm(account, payload.send_before_confirm)
     return ApiResponse(success=True, message="卡券发送成功再确认发货设置已更新")
+
+
+@router.put("/{account_id}/only-send-card", response_model=ApiResponse)
+async def update_account_only_send_card(
+    account_id: str,
+    payload: AccountOnlySendCardUpdate,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+) -> ApiResponse:
+    """更新只发卡券、不确认发货开关"""
+    account = await _get_account_or_404(current_user, account_id, account_service)
+    await account_service.update_only_send_card(account, payload.only_send_card)
+    return ApiResponse(success=True, message="只发卡券不确认发货设置已更新")
 
 
 @router.put("/{account_id}/auto-red-flower", response_model=ApiResponse)

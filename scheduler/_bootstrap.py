@@ -19,7 +19,8 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from loguru import logger
 
@@ -72,6 +73,14 @@ async def lifespan(app: FastAPI):
     if not await check_database_connection():
         logger.error("数据库连接失败，服务退出")
         sys.exit(1)
+
+    # 只读取 backend 已准备好的服务间 API 令牌，scheduler 不负责数据库初始化。
+    try:
+        from common.utils.internal_token_service import load_internal_api_token
+        await load_internal_api_token(settings)
+    except Exception as e:
+        logger.error(f"内部 API 令牌加载失败: {e}")
+        raise
     
     # 从数据库加载日志保留天数配置
     from common.utils.logging_utils import apply_db_log_retention, run_db_log_retention_sync
@@ -117,6 +126,55 @@ app = FastAPI(
 
 
 # 全局异常处理器
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc: HTTPException):
+    """将 HTTP 异常转换为项目统一的 HTTP 200 业务错误响应。"""
+    logger.warning(
+        "HTTP异常: {} - {}\n请求路径: {}\n请求方法: {}",
+        exc.status_code,
+        exc.detail,
+        request.url.path,
+        request.method,
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": False,
+            "code": exc.status_code,
+            "message": exc.detail,
+            "data": None,
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    """将请求参数校验错误转换为统一的 HTTP 200 业务响应。"""
+    # 错误对象可能携带完整请求体，禁止把 Cookie/密码等敏感输入写入日志。
+    error_fields = [
+        {
+            "loc": [str(part) for part in error.get("loc", ())],
+            "type": str(error.get("type", "unknown")),
+        }
+        for error in exc.errors()
+    ]
+    logger.warning(
+        "请求参数校验失败: fields={}\n请求路径: {}\n请求方法: {}",
+        error_fields,
+        request.url.path,
+        request.method,
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": False,
+            "code": 400,
+            "message": "请求参数不正确",
+            "data": None,
+        },
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """
@@ -124,14 +182,13 @@ async def global_exception_handler(request, exc):
     
     捕获所有未处理的异常,返回统一格式的错误响应
     """
-    from fastapi import HTTPException
-    
-    # 记录错误日志
-    logger.error(
-        f"全局异常捕获: {type(exc).__name__}: {str(exc)}\n"
-        f"请求路径: {request.url.path}\n"
-        f"请求方法: {request.method}",
-        exc_info=True
+    # 通过参数传递动态异常文本，避免异常 repr 中的 ``{}`` 被 Loguru 当作模板占位符。
+    logger.opt(exception=exc).error(
+        "全局异常捕获: {}: {}\n请求路径: {}\n请求方法: {}",
+        type(exc).__name__,
+        str(exc),
+        request.url.path,
+        request.method,
     )
     
     # 处理HTTPException
@@ -210,4 +267,6 @@ def run_server():
         port=settings.service_port,
         reload=False,
         log_level=settings.log_level.lower(),
+        # 保留公共日志工具配置，确保 Uvicorn 日志也进入普通日志和 error.log。
+        log_config=None,
     )

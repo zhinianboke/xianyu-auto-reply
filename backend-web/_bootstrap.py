@@ -20,12 +20,15 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
+from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
+from common.db.error_messages import get_public_database_error_message
 from common.utils.logging_utils import setup_logging
 from common.utils.network_utils import resolve_listen_host
 
@@ -88,7 +91,22 @@ async def lifespan(app: FastAPI):
         await ensure_jwt_secret_key(settings)
     except Exception as e:
         logger.error(f"JWT 密钥自检失败: {e}")
-    
+
+    # 初始化服务间 API 令牌，多个服务通过数据库共享同一令牌。
+    try:
+        from common.utils.internal_token_service import ensure_internal_api_token
+        await ensure_internal_api_token(settings)
+    except Exception as e:
+        logger.error(f"内部 API 令牌初始化失败: {e}")
+        raise
+
+    # 自检 AI 铺货任务：把重启前遗留的进行中任务标记为失败，避免状态永远停在执行中
+    try:
+        from app.services.ai_listing_task_service import mark_stale_running_failed
+        await mark_stale_running_failed()
+    except Exception as e:
+        logger.error(f"AI铺货任务自检失败: {e}")
+
     # 从数据库加载日志保留天数配置
     from common.utils.logging_utils import apply_db_log_retention, run_db_log_retention_sync
     await apply_db_log_retention()
@@ -262,6 +280,57 @@ async def health_check():
     }
 
 
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """将 HTTP 异常转换为项目统一的 HTTP 200 业务错误响应。"""
+    logger.warning(
+        "HTTP异常: {} - {}\n请求路径: {}\n请求方法: {}",
+        exc.status_code,
+        exc.detail,
+        request.url.path,
+        request.method,
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": False,
+            "code": exc.status_code,
+            "message": exc.detail,
+            "data": None,
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(
+    request: Request, exc: RequestValidationError
+):
+    """将请求参数校验错误转换为项目统一的 HTTP 200 业务响应。"""
+    # 不记录完整的 Pydantic error 对象：其中可能包含请求体原文（Cookie、密码等敏感数据）。
+    error_fields = [
+        {
+            "loc": [str(part) for part in error.get("loc", ())],
+            "type": str(error.get("type", "unknown")),
+        }
+        for error in exc.errors()
+    ]
+    logger.warning(
+        "请求参数校验失败: fields={}\n请求路径: {}\n请求方法: {}",
+        error_fields,
+        request.url.path,
+        request.method,
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": False,
+            "code": 400,
+            "message": "请求参数不正确",
+            "data": None,
+        },
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """
@@ -269,9 +338,6 @@ async def global_exception_handler(request, exc):
     
     捕获所有未处理的异常,返回统一格式的错误响应
     """
-    from fastapi import HTTPException
-    from fastapi.responses import JSONResponse
-    
     # 记录错误日志
     # 注意：loguru 默认对 message 调用 str.format(*args, **kwargs)。
     # 如果用 f-string 把 str(exc) 拼进 message，且 str(exc) 中含有 '{xxx}' 字面量
@@ -300,13 +366,16 @@ async def global_exception_handler(request, exc):
             },
         )
     
+    # 已知基础设施异常转换为清晰提示，避免向用户暴露驱动堆栈和数据库地址。
+    public_error_message = get_public_database_error_message(exc)
+
     # 其他异常
     return JSONResponse(
         status_code=200,  # 统一返回200
         content={
             "success": False,
             "code": 500,
-            "message": f"服务器内部错误: {str(exc)}",
+            "message": public_error_message or f"服务器内部错误: {str(exc)}",
             "data": None,
         },
     )
@@ -325,4 +394,6 @@ def run_server():
         port=settings.service_port,
         reload=False,
         log_level=settings.log_level.lower(),
+        # 保留公共日志工具配置，确保 Uvicorn 日志也进入普通日志和 error.log。
+        log_config=None,
     )

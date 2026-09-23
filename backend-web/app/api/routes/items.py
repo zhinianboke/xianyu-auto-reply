@@ -11,17 +11,22 @@ from common.models.user import User
 from common.schemas.common import ApiResponse
 from common.utils.auth_scope import resolve_owner_scope
 from common.utils.default_reply_api import validate_api_url, normalize_api_timeout
+from common.utils.default_reply_location import EXTERNAL_CONTACT_REPLY_TYPE, validate_external_contact_fields
+from common.models.user_setting import UserSetting
+from sqlalchemy import select
 from common.schemas.item import (
     ItemBatchDeleteRequest,
     ItemBatchOfflineRequest,
     ItemFullFetchRequest,
     ItemPageFetchRequest,
+    SellerItemEditRequest,
 )
 from common.services.item_offline_service import batch_offline_items_from_xianyu
 from common.services.item_delete_service import batch_delete_items_from_xianyu
 from app.services.account_service import AccountService
 from app.services.item_service import ItemService
 from app.services.selectable_item_service import SelectableItemService
+from app.services.xianyu_item_edit_service import edit_seller_item, fetch_seller_item_edit_detail
 
 logger = logging.getLogger(__name__)
 
@@ -212,9 +217,14 @@ class ItemDefaultReplyRequest(PydanticBaseModel):
     reply_image: str = ""
     enabled: bool = True
     reply_once: bool = False
-    reply_type: str = "text"  # text-文本(可附带图片)，api-接口
+    reply_type: str = "text"  # text-文本(可附带图片)，api-接口，external_contact-站外联系方式
     api_url: str = ""
     api_timeout: int = 80
+    location_name: str = ""
+    location_longitude: str = ""
+    location_latitude: str = ""
+    location_title: str = ""
+    location_subtitle: str = ""
 
 
 @items_router.get("/{cookie_id}/{item_id}/default-reply")
@@ -249,6 +259,11 @@ async def get_item_default_reply(
                     "reply_type": reply_config.get("reply_type", "text"),
                     "api_url": reply_config.get("api_url", ""),
                     "api_timeout": reply_config.get("api_timeout", 80),
+                    "location_name": reply_config.get("location_name", ""),
+                    "location_longitude": reply_config.get("location_longitude", ""),
+                    "location_latitude": reply_config.get("location_latitude", ""),
+                    "location_title": reply_config.get("location_title", ""),
+                    "location_subtitle": reply_config.get("location_subtitle", ""),
                 }
             )
         else:
@@ -264,6 +279,11 @@ async def get_item_default_reply(
                     "reply_type": "text",
                     "api_url": "",
                     "api_timeout": 80,
+                    "location_name": "",
+                    "location_longitude": "",
+                    "location_latitude": "",
+                    "location_title": "",
+                    "location_subtitle": "",
                 }
             )
     except Exception as e:
@@ -294,6 +314,27 @@ async def save_item_default_reply(
         valid, err = validate_api_url(payload.api_url)
         if not valid:
             return ApiResponse(success=False, message=err)
+    if payload.reply_type == EXTERNAL_CONTACT_REPLY_TYPE:
+        setting_result = await default_reply_service.session.execute(select(UserSetting.key, UserSetting.value).where(
+            UserSetting.user_id == account.owner_id,
+            UserSetting.key.in_(
+                ("location_chat.remote_url", "location_chat.remote_secret_key")
+            ),
+        ))
+        location_settings = {str(key): str(value or "").strip() for key, value in setting_result.all()}
+        remote_url = location_settings.get("location_chat.remote_url", "")
+        if not location_settings.get("location_chat.remote_secret_key"):
+            return ApiResponse(success=False, message="请先到个人设置的远程URL配置中填写位置聊天远程URL和秘钥")
+        location_error = validate_external_contact_fields(
+            remote_url=remote_url,
+            location_name=payload.location_name,
+            longitude=payload.location_longitude,
+            latitude=payload.location_latitude,
+            title=payload.location_title,
+            subtitle=payload.location_subtitle,
+        )
+        if location_error:
+            return ApiResponse(success=False, message=location_error)
 
     try:
         success = await default_reply_service.save_item_default_reply(
@@ -306,6 +347,11 @@ async def save_item_default_reply(
             reply_type=payload.reply_type,
             api_url=payload.api_url,
             api_timeout=api_timeout,
+            location_name=payload.location_name,
+            location_longitude=payload.location_longitude,
+            location_latitude=payload.location_latitude,
+            location_title=payload.location_title,
+            location_subtitle=payload.location_subtitle,
         )
         
         if success:
@@ -394,9 +440,14 @@ class BatchItemDefaultReplyRequest(PydanticBaseModel):
     reply_image: str = ""
     enabled: bool = True
     reply_once: bool = False
-    reply_type: str = "text"  # text-文本(可附带图片)，api-接口
+    reply_type: str = "text"  # text-文本(可附带图片)，api-接口，external_contact-站外联系方式
     api_url: str = ""
     api_timeout: int = 80
+    location_name: str = ""
+    location_longitude: str = ""
+    location_latitude: str = ""
+    location_title: str = ""
+    location_subtitle: str = ""
 
 
 @items_router.post("/{cookie_id}/batch-default-reply/upload-image")
@@ -455,6 +506,27 @@ async def batch_save_item_default_reply(
         valid, err = validate_api_url(payload.api_url)
         if not valid:
             return ApiResponse(success=False, message=err)
+    if payload.reply_type == EXTERNAL_CONTACT_REPLY_TYPE:
+        setting_result = await default_reply_service.session.execute(select(UserSetting.key, UserSetting.value).where(
+            UserSetting.user_id == account.owner_id,
+            UserSetting.key.in_(
+                ("location_chat.remote_url", "location_chat.remote_secret_key")
+            ),
+        ))
+        location_settings = {str(key): str(value or "").strip() for key, value in setting_result.all()}
+        remote_url = location_settings.get("location_chat.remote_url", "")
+        if not location_settings.get("location_chat.remote_secret_key"):
+            return ApiResponse(success=False, message="请先到个人设置的远程URL配置中填写位置聊天远程URL和秘钥")
+        location_error = validate_external_contact_fields(
+            remote_url=remote_url,
+            location_name=payload.location_name,
+            longitude=payload.location_longitude,
+            latitude=payload.location_latitude,
+            title=payload.location_title,
+            subtitle=payload.location_subtitle,
+        )
+        if location_error:
+            return ApiResponse(success=False, message=location_error)
 
     return await _execute_batch_item_operation(
         item_ids=payload.item_ids,
@@ -468,6 +540,11 @@ async def batch_save_item_default_reply(
             reply_type=payload.reply_type,
             api_url=payload.api_url,
             api_timeout=api_timeout,
+            location_name=payload.location_name,
+            location_longitude=payload.location_longitude,
+            location_latitude=payload.location_latitude,
+            location_title=payload.location_title,
+            location_subtitle=payload.location_subtitle,
         ),
         action_verb="保存",
         subject="默认回复",
@@ -711,6 +788,139 @@ async def update_item_multi_spec(
     return ApiResponse(success=True, message=f"商品多规格状态已{status_text}")
 
 
+@items_router.put("/{cookie_id}/{item_id}/price", response_model=ApiResponse)
+async def update_item_price(
+    cookie_id: str,
+    item_id: str,
+    payload: dict,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+    item_service: ItemService = Depends(deps.get_item_service),
+) -> ApiResponse:
+    """鱼小铺商品改价（价格与库存一并提交）。
+
+    单规格：payload = {"price": 22.22, "quantity": 242}
+    多规格：payload = {"skus": [{"sku_id": "...", "price": 11.11, "quantity": 111}, ...]}
+    仅鱼小铺账号可用；服务层会校验账号类型并返回 success=False。
+    """
+    # 管理员可以操作所有账号，普通用户只能操作自己的账号
+    owner_id, _ = resolve_owner_scope(current_user)
+
+    account = await account_service.get_account_for_user(owner_id, cookie_id)
+    if not account:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账号不存在")
+
+    skus = payload.get("skus")
+    if isinstance(skus, list) and skus:
+        result = await item_service.update_item_price(account, item_id, skus=skus)
+    else:
+        single = {"price": payload.get("price"), "quantity": payload.get("quantity")}
+        result = await item_service.update_item_price(account, item_id, single=single)
+
+    return ApiResponse(
+        success=bool(result.get("success")),
+        message=result.get("message", ""),
+    )
+
+
+@items_router.get("/{cookie_id}/{item_id}/seller-detail", response_model=ApiResponse)
+async def get_seller_item_edit_detail(
+    cookie_id: str,
+    item_id: str,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+) -> ApiResponse:
+    """拉取鱼小铺商品的平台编辑详情，返回与单品发布同构的表单数据。
+
+    仅鱼小铺账号可用；非鱼小铺账号返回 success=False 由前端展示提示。
+    """
+    # 管理员可以操作所有账号，普通用户只能操作自己的账号
+    owner_id, _ = resolve_owner_scope(current_user)
+
+    account = await account_service.get_account_for_user(owner_id, cookie_id)
+    if not account:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账号不存在")
+
+    result = await fetch_seller_item_edit_detail(
+        account_id=account.account_id,
+        cookie=account.cookie,
+        item_id=item_id,
+        owner_id=account.owner_id,
+    )
+    return ApiResponse(
+        success=bool(result.get("success")),
+        message=result.get("message", ""),
+        data=result.get("data"),
+    )
+
+
+@items_router.put("/{cookie_id}/{item_id}/seller-edit", response_model=ApiResponse)
+async def update_seller_item(
+    cookie_id: str,
+    item_id: str,
+    payload: SellerItemEditRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+    item_service: ItemService = Depends(deps.get_item_service),
+) -> ApiResponse:
+    """提交鱼小铺商品编辑到闲鱼平台，成功后重新同步该账号商品。
+
+    编辑为全量覆盖式提交，服务层会先拉取平台详情作为快照，
+    未改动的图片/视频/宝贝所在地/发货设置直接复用平台数据。
+    """
+    # 管理员可以操作所有账号，普通用户只能操作自己的账号
+    owner_id, _ = resolve_owner_scope(current_user)
+
+    account = await account_service.get_account_for_user(owner_id, cookie_id)
+    if not account:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账号不存在")
+
+    result = await edit_seller_item(
+        account_id=account.account_id,
+        cookie=account.cookie,
+        item_id=item_id,
+        item_data=payload.model_dump(),
+        owner_id=account.owner_id,
+    )
+    if not result.get("success"):
+        if result.get("account_invalid"):
+            logger.warning(
+                f"鱼小铺商品编辑时账号登录状态失效: cookie_id={cookie_id}, item_id={item_id}, "
+                f"message={result.get('message')}"
+            )
+        return ApiResponse(success=False, message=result.get("message", "商品编辑失败"))
+
+    # mtop 令牌刷新可能返回合并后的 Cookie，后续同步必须继续使用该账号的新 Cookie
+    refreshed_cookies = result.get("cookies_str")
+    if refreshed_cookies:
+        account.cookie = refreshed_cookies
+
+    # 平台编辑成功后重新同步该账号商品，保证本地列表与平台一致
+    message = result.get("message") or "商品编辑成功"
+    try:
+        sync_result = await item_service.fetch_all_items_from_account(account=account)
+        if sync_result.get("success"):
+            synced_total = sync_result.get("total_count", 0) or 0
+            sync_message = str(sync_result.get("message") or "")
+            if not synced_total and sync_message:
+                # 同步锁被占用等场景也是 success，此时拼「已同步 0 个商品」会误导用户
+                message = f"{message}，{sync_message}，请稍后手动刷新商品列表"
+            else:
+                message = (
+                    f"{message}，已重新同步 {synced_total} 个商品，"
+                    f"入库 {sync_result.get('saved_count', 0)} 个商品"
+                )
+        else:
+            message = (
+                f"{message}，但商品同步失败：{sync_result.get('message') or '未知错误'}，"
+                "请手动刷新商品列表"
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"编辑成功后同步商品失败: cookie_id={cookie_id}, item_id={item_id}, error={exc}")
+        message = f"{message}，但商品同步失败：{exc}，请手动刷新商品列表"
+    return ApiResponse(success=True, message=message)
+
+
 @items_router.put("/{cookie_id}/{item_id}/multi-quantity-delivery", response_model=ApiResponse)
 async def update_item_multi_quantity_delivery(
     cookie_id: str,
@@ -882,9 +1092,10 @@ async def batch_delete_xianyu_items(
     account_service: AccountService = Depends(deps.get_account_service),
     item_service: ItemService = Depends(deps.get_item_service),
 ) -> ApiResponse:
-    """使用指定账号 Cookie 批量删除闲鱼平台商品。
+    """使用指定账号 Cookie 批量删除闲鱼平台商品，并同步删除本地库记录。
 
-    本接口只删除闲鱼平台商品，不物理删除本地商品及关联数据。
+    平台删除成功的商品会同步删除本地商品记录及其卡券关联，保持本地与平台一致；
+    平台删除失败的商品保留本地记录。本地清理失败不影响平台删除结果，仅记录日志。
     """
     owner_id, _ = resolve_owner_scope(current_user)
     try:
@@ -986,14 +1197,28 @@ async def batch_delete_xianyu_items(
     )
     success_count = int(result.get("success_count", 0) or 0)
     fail_count = int(result.get("fail_count", 0) or 0)
+
+    # 平台删除成功的商品，同步删除本地库记录（含卡券关联），保持本地与平台一致
+    platform_deleted_ids = [
+        str(entry.get("item_id") or "").strip()
+        for entry in result.get("results", [])
+        if entry.get("success") and str(entry.get("item_id") or "").strip()
+    ]
+    local_delete = await item_service.delete_local_items(account, platform_deleted_ids)
+    local_deleted_count = len(local_delete.get("deleted", []))
+    local_failed_ids = local_delete.get("failed", [])
+
     data = {
         "results": result.get("results", []),
         "success_count": success_count,
         "fail_count": fail_count,
+        "local_deleted_count": local_deleted_count,
+        "local_failed_ids": local_failed_ids,
     }
     logger.info(
         f"批量删除闲鱼商品: 账号={account.account_id}, 请求={len(cleaned_item_ids)}, "
-        f"成功={success_count}, 失败={fail_count}"
+        f"成功={success_count}, 失败={fail_count}, "
+        f"本地同步删除={local_deleted_count}, 本地删除失败={len(local_failed_ids)}"
     )
     if success_count == 0:
         return ApiResponse(
@@ -1001,9 +1226,14 @@ async def batch_delete_xianyu_items(
             message=result.get("message") or "删除闲鱼商品失败",
             data=data,
         )
+    base_message = result.get("message") or f"已删除 {success_count} 个闲鱼商品"
+    if local_failed_ids:
+        base_message = (
+            f"{base_message}；其中 {len(local_failed_ids)} 个本地记录清理失败，请稍后重试"
+        )
     return ApiResponse(
         success=True,
-        message=result.get("message") or f"已删除 {success_count} 个闲鱼商品",
+        message=base_message,
         data=data,
     )
 

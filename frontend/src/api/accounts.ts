@@ -69,6 +69,7 @@ export const getAccountDetailsPaginated = async (
     auto_polish?: boolean
     confirm_before_send?: boolean
     send_before_confirm?: boolean
+    only_send_card?: boolean
     auto_red_flower?: boolean
     ai_reply_block_ordered_users?: boolean
     delivery_disabled?: boolean
@@ -145,6 +146,7 @@ export const getAccountDetailsPaginated = async (
       auto_polish: item.auto_polish || false,
       confirm_before_send: item.confirm_before_send || false,
       send_before_confirm: item.send_before_confirm || false,
+      only_send_card: item.only_send_card || false,
       auto_red_flower: item.auto_red_flower || false,
       ai_reply_block_ordered_users: item.ai_reply_block_ordered_users || false,
       delivery_disabled: item.delivery_disabled || false,
@@ -272,6 +274,11 @@ export const updateAccountConfirmBeforeSend = (id: string, confirmBeforeSend: bo
 // 更新卡券发送成功再确认发货开关
 export const updateAccountSendBeforeConfirm = (id: string, sendBeforeConfirm: boolean): Promise<ApiResponse> => {
   return put(`${COOKIE_PREFIX}/${id}/send-before-confirm`, { send_before_confirm: sendBeforeConfirm })
+}
+
+// 更新只发卡券、不确认发货开关
+export const updateAccountOnlySendCard = (id: string, onlySendCard: boolean): Promise<ApiResponse> => {
+  return put(`${COOKIE_PREFIX}/${id}/only-send-card`, { only_send_card: onlySendCard })
 }
 
 
@@ -475,6 +482,8 @@ export interface AIReplySettings {
   custom_prompts?: string
   ai_time_range_start?: string
   ai_time_range_end?: string
+  manual_reply_ai_pause_enabled?: boolean
+  manual_reply_ai_pause_minutes?: number
   // 兼容旧字段（前端内部使用）
   enabled?: boolean
 }
@@ -511,6 +520,12 @@ export const updateAIReplySettings = (cookieId: string, settings: Partial<AIRepl
   if (settings.custom_prompts !== undefined) payload.custom_prompts = settings.custom_prompts
   if (settings.ai_time_range_start !== undefined) payload.ai_time_range_start = settings.ai_time_range_start
   if (settings.ai_time_range_end !== undefined) payload.ai_time_range_end = settings.ai_time_range_end
+  if (settings.manual_reply_ai_pause_enabled !== undefined) {
+    payload.manual_reply_ai_pause_enabled = settings.manual_reply_ai_pause_enabled
+  }
+  if (settings.manual_reply_ai_pause_minutes !== undefined) {
+    payload.manual_reply_ai_pause_minutes = settings.manual_reply_ai_pause_minutes
+  }
   return put(`${AI_SETTINGS_PREFIX}/${cookieId}`, payload)
 }
 
@@ -591,6 +606,51 @@ export const getRefundCancelConfig = (accountId: string): Promise<RefundCancelCo
 // 更新退款订单注销配置
 export const updateRefundCancelConfig = (accountId: string, config: RefundCancelConfig): Promise<RefundCancelConfigResponse> => {
   return put(`${REFUND_CANCEL_PREFIX}/${accountId}`, config)
+}
+
+// ==================== 同意后发货配置 ====================
+
+const AGREE_DELIVER_PREFIX = '/api/v1/agree-deliver'
+
+export interface AgreeDeliverConfig {
+  enabled: boolean                 // 是否开启同意后发货
+  notify_message?: string | null   // 通知用户信息（文本域）
+  pickup_url?: string | null       // 提货URL
+}
+
+export interface AgreeDeliverConfigResponse {
+  success: boolean
+  message?: string
+  data?: AgreeDeliverConfig
+}
+
+// 获取同意后发货配置
+export const getAgreeDeliverConfig = (accountId: string): Promise<AgreeDeliverConfigResponse> => {
+  return get(`${AGREE_DELIVER_PREFIX}/${accountId}`)
+}
+
+// 更新同意后发货配置
+export const updateAgreeDeliverConfig = (accountId: string, config: AgreeDeliverConfig): Promise<AgreeDeliverConfigResponse> => {
+  return put(`${AGREE_DELIVER_PREFIX}/${accountId}`, config)
+}
+
+// 本系统提货页地址推荐（供「提货URL」填写提示）
+export interface PickupUrlSuggestion {
+  pickup_url: string    // 推荐填写的提货URL
+  warning: string       // 需要注意的提示（为空表示可直接使用）
+  env_name: string      // 公网部署需配置的环境变量名
+  example_url: string   // 买家最终收到的完整链接示例
+}
+
+export interface PickupUrlSuggestionResponse {
+  success: boolean
+  message?: string
+  data?: PickupUrlSuggestion
+}
+
+// 获取本系统提货页地址推荐
+export const getPickupUrlSuggestion = (): Promise<PickupUrlSuggestionResponse> => {
+  return get(`${AGREE_DELIVER_PREFIX}/pickup-url/suggestion`)
 }
 
 // ==================== 人脸验证相关 ====================

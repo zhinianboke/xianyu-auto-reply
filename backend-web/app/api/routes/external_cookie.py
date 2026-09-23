@@ -25,14 +25,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from app.api.routes.external_api_route import ExternalApiRoute
+from app.api.routes.external_shared import ExternalApiResponse, external_error
 from app.services.account_service import AccountService
-from common.models.user import User
+from common.models.user import User, UserStatus
 from common.models.xy_account import XYAccount
-from common.schemas.common import ApiResponse
 from common.utils.auth_scope import is_admin_user
 from common.utils.xianyu_utils import trans_cookies
 
-router = APIRouter(prefix="/external/account-cookie", tags=["外部Cookie同步"])
+router = APIRouter(
+    prefix="/external/account-cookie",
+    tags=["外部Cookie同步"],
+    route_class=ExternalApiRoute,
+)
 
 # Cookie 字符串长度上限（xy_accounts.cookie 为 TEXT，约 64KB；正常闲鱼 Cookie 仅几 KB，
 # 这里给 16KB 余量，超长一律拒绝，避免异常/恶意超大数据写入）
@@ -84,14 +89,14 @@ class ExternalCookieSyncRequest(BaseModel):
     secret_key: str = Field(..., min_length=1, max_length=128, description="分销秘钥（须为该账号所属用户的分销秘钥）")
 
 
-@router.post("/sync", response_model=ApiResponse)
+@router.post("/sync", response_model=ExternalApiResponse)
 async def sync_account_cookie(
     payload: ExternalCookieSyncRequest,
     request: Request,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(deps.get_db_session),
     account_service: AccountService = Depends(deps.get_account_service),
-) -> ApiResponse:
+) -> ExternalApiResponse:
     """外部系统回传账号 Cookie：校验账号、分销秘钥与 Cookie 归属后，仅更新 Cookie 到数据库。
 
     业务错误统一以 HTTP 200 + success=false 返回，由调用方据标志字段处理。
@@ -103,26 +108,45 @@ async def sync_account_cookie(
 
     if not account_id or not secret_key or not cookies:
         logger.warning(f"[外部Cookie同步] 参数不完整 ip={client_ip} account_id={account_id}")
-        return ApiResponse(success=False, message="参数不完整")
+        return external_error(40008, "参数不完整")
 
     # 1. 校验账号是否存在（全局，不区分所属用户）
-    account = (
-        await session.execute(select(XYAccount).where(XYAccount.account_id == account_id))
-    ).scalar_one_or_none()
+    try:
+        account = (
+            await session.execute(select(XYAccount).where(XYAccount.account_id == account_id))
+        ).scalar_one_or_none()
+    except Exception as exc:
+        await session.rollback()
+        logger.error(
+            f"[外部Cookie同步] 查询账号失败 ip={client_ip} account_id={account_id}: {exc}"
+        )
+        return external_error(50001, "账号信息查询失败，请稍后重试")
     if not account:
         logger.warning(f"[外部Cookie同步] 账号不存在 ip={client_ip} account_id={account_id}")
-        return ApiResponse(success=False, message="账号不存在")
+        return external_error(40002, "账号不存在")
 
     # 2. 校验分销秘钥是否存在
-    user = (
-        await session.execute(select(User).where(User.secret_key == secret_key))
-    ).scalar_one_or_none()
+    try:
+        user = (
+            await session.execute(select(User).where(User.secret_key == secret_key))
+        ).scalar_one_or_none()
+    except Exception as exc:
+        await session.rollback()
+        logger.error(
+            f"[外部Cookie同步] 查询秘钥失败 ip={client_ip} account_id={account_id}: {exc}"
+        )
+        return external_error(50001, "秘钥校验失败，请稍后重试")
     if not user:
         logger.warning(
             f"[外部Cookie同步] 分销秘钥无效 ip={client_ip} account_id={account_id} "
             f"secret={_mask_secret(secret_key)}"
         )
-        return ApiResponse(success=False, message="分销秘钥无效")
+        return external_error(40001, "分销秘钥无效")
+    if user.status == UserStatus.DELETED:
+        logger.warning(
+            f"[外部Cookie同步] 分销秘钥对应用户已删除 ip={client_ip} account_id={account_id}"
+        )
+        return external_error(40001, "分销秘钥对应的用户不可用")
 
     # 3. 校验分销秘钥归属该账号所属用户（防止越权更新他人账号）；
     #    若秘钥对应用户为管理员，则不限制账号归属，可更新任意账号。
@@ -131,7 +155,7 @@ async def sync_account_cookie(
             f"[外部Cookie同步] 秘钥与账号不匹配 ip={client_ip} account_id={account_id} "
             f"user={user.id} owner={account.owner_id}"
         )
-        return ApiResponse(success=False, message="分销秘钥与账号不匹配")
+        return external_error(40002, "分销秘钥与账号不匹配")
 
     # 4. 校验 Cookie 格式与归属：必须能解析出键值对且含登录态 unb；
     #    若账号已有 unb，则提交 Cookie 的 unb 必须一致，防止把别的账号 Cookie 写进来（串号）。
@@ -142,17 +166,24 @@ async def sync_account_cookie(
     cookie_unb = str(cookie_dict.get("unb") or "").strip()
     if not cookie_dict or not cookie_unb:
         logger.warning(f"[外部Cookie同步] Cookie格式不正确 ip={client_ip} account_id={account_id}")
-        return ApiResponse(success=False, message="Cookie 格式不正确或缺少登录态")
+        return external_error(40007, "Cookie 格式不正确或缺少登录态")
     expected_unb = str(account.unb or "").strip()
     if expected_unb and cookie_unb != expected_unb:
         logger.warning(
             f"[外部Cookie同步] Cookie与账号不匹配 ip={client_ip} account_id={account_id} "
             f"cookie_unb={cookie_unb} expected_unb={expected_unb}"
         )
-        return ApiResponse(success=False, message="Cookie 与账号不匹配（unb 不一致）")
+        return external_error(40007, "Cookie 与账号不匹配（unb 不一致）")
 
     # 5. 仅更新 Cookie 到数据库（不重启账号 WebSocket 任务，避免打断实时连接）
-    await account_service.update_cookie(account, cookies)
+    try:
+        await account_service.update_cookie(account, cookies)
+    except Exception as exc:
+        await session.rollback()
+        logger.error(
+            f"[外部Cookie同步] 更新Cookie失败 ip={client_ip} account_id={account_id}: {exc}"
+        )
+        return external_error(50001, "Cookie 更新失败，请稍后重试")
 
     # 6. 回传新 Cookie 意味着账号已恢复，通知 scheduler 解除其风控冷却，
     #    让采集/补全等定时任务无需等满冷却期即可立即重新使用该账号。
@@ -163,4 +194,4 @@ async def sync_account_cookie(
         f"[外部Cookie同步] 更新成功 ip={client_ip} account_id={account_id} owner={account.owner_id} "
         f"secret={_mask_secret(secret_key)} cookie_len={len(cookies)}"
     )
-    return ApiResponse(success=True, message="Cookie 已更新")
+    return ExternalApiResponse(success=True, code=200, message="Cookie 已更新", data=None)

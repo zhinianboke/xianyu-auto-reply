@@ -159,9 +159,36 @@ class RechargeService:
             logger.info(f"交易状态非成功: {trade_status}")
             return True
 
+        # 按订单类型分流处理：
+        # - ad（广告付款）：仅标记订单已支付，绝不给用户加余额、不写充值流水。
+        #   广告的实际结算（审核通过、管理员收入、用户支出流水）由广告付款轮询接口
+        #   ad_payment_notify 依据订单 paid 状态完成。
+        # - recharge（余额充值）：加余额 + 写充值流水（原逻辑）。
+        if order.order_type == 'ad':
+            await self._mark_order_paid(order, trade_no)
+            logger.info(f"广告付款订单已确认支付（不加余额）: {out_trade_no}")
+            return True
+
         # 充值成功，更新余额和插入流水（加锁）
         await self._process_recharge_success(order, trade_no)
         return True
+
+    async def _mark_order_paid(
+        self, order: RechargeOrder, trade_no: str
+    ) -> None:
+        """仅将订单标记为已支付（不触碰余额、不写流水）
+
+        用于广告付款等"复用充值订单表但不属于余额充值"的场景：支付宝到账后
+        只需把订单状态置为 paid，具体业务结算由各自的业务接口完成。
+
+        Args:
+            order: 订单
+            trade_no: 支付宝交易号
+        """
+        order.status = 'paid'
+        order.trade_no = trade_no
+        order.paid_at = get_beijing_now_naive()
+        await self.session.commit()
 
     async def _process_recharge_success(
         self, order: RechargeOrder, trade_no: str

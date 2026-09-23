@@ -23,6 +23,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.xy_account import XYAccount
+from common.utils.internal_auth import (
+    build_internal_auth_headers,
+    is_internal_api_url,
+)
 from common.utils.xianyu_utils import trans_cookies
 
 
@@ -465,11 +469,16 @@ def _do_password_login_via_api(account_id: str) -> None:
         
         # 调用密码登录刷新API
         api_url = f"{websocket_url}/internal/accounts/{account_id}/password-login-refresh"
+
+        if not is_internal_api_url(api_url, (websocket_url,)):
+            logger.error(f"【{account_id}】[后台密码登录] WebSocket服务地址不合法")
+            return
         
         try:
             response = requests.post(
                 api_url,
                 json={"trigger_reason": "Session过期"},
+                headers=build_internal_auth_headers(settings.internal_api_token),
                 timeout=10  # API立即返回，无需长时间等待
             )
             

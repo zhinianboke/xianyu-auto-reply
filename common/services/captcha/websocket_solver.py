@@ -14,7 +14,12 @@ from typing import Any
 import aiohttp
 from loguru import logger
 
+from common.core.config import get_settings
 from common.services.captcha.remote_timeout import get_remote_solve_timeout
+from common.utils.internal_auth import (
+    build_internal_auth_headers,
+    is_internal_api_url,
+)
 
 
 async def solve_captcha_via_websocket(
@@ -46,6 +51,13 @@ async def solve_captcha_via_websocket(
         WebSocket 服务的 JSON 响应；网络异常时返回 ``success=False``。
     """
     endpoint = f"{websocket_service_url.rstrip('/')}/internal/captcha/solve"
+    if not is_internal_api_url(endpoint, (websocket_service_url,)):
+        logger.error(f"【{account_id}】调用WebSocket过滑块失败：服务地址不合法")
+        return {
+            "success": False,
+            "message": "WebSocket服务地址不合法",
+            "data": None,
+        }
     timeout_seconds = get_remote_solve_timeout(browser_timeout)
     payload = {
         "account_id": account_id,
@@ -68,7 +80,13 @@ async def solve_captcha_via_websocket(
     try:
         timeout = aiohttp.ClientTimeout(total=timeout_seconds, connect=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(endpoint, json=payload) as response:
+            # 启动流程会把共享令牌注入公共配置；在独立调用或测试环境尚未完成启动时，
+            # 不在客户端提前抛异常，仍让服务端用统一的 401 业务响应拒绝请求。
+            token = (get_settings().internal_api_token or "").strip()
+            request_kwargs = {"json": payload}
+            if token and is_internal_api_url(endpoint, (websocket_service_url,)):
+                request_kwargs["headers"] = build_internal_auth_headers(token)
+            async with session.post(endpoint, **request_kwargs) as response:
                 result = await response.json(content_type=None)
                 if isinstance(result, dict):
                     return result
