@@ -89,7 +89,10 @@ export async function updateNotificationChannel(
   updates: Partial<Pick<NotificationChannel, 'name' | 'type' | 'config' | 'enabled'>>,
 ): Promise<void> {
   const client = await getApiClient();
-  await (client.PUT as any)(`/api/v1/notification-channels/${id}`, { body: updates });
+  const { error } = (await (client.PUT as any)(`/api/v1/notification-channels/${id}`, {
+    body: updates,
+  })) as { error?: unknown };
+  if (error) throw await extractError(error);
 }
 
 /** 删除通知渠道 */

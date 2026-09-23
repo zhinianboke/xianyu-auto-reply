@@ -62,6 +62,17 @@ class YifanApiHandler:
     async def send_notification(self, send_user_name, send_user_id, content, item_id, chat_id):
         return await self.parent.send_notification(send_user_name, send_user_id, content, item_id, chat_id)
 
+    async def send_delivery_failure_notification(self, send_user_name, send_user_id, item_id,
+                                                 error_message, chat_id, order_id=None):
+        return await self.parent.send_delivery_failure_notification(
+            send_user_name,
+            send_user_id,
+            item_id,
+            error_message,
+            chat_id,
+            order_id=order_id,
+        )
+
 
     # ==================== 亦凡API卡券获取 ====================
 
@@ -204,10 +215,12 @@ class YifanApiHandler:
                             error_msg = result.get('msg', '未知错误')
                             logger.error(f"亦凡API调用失败: code={result.get('code')}, msg={error_msg}")
                             
-                            # 发送通知给用户
+                            # 发送自动发货失败通知
                             if chat_id and buyer_id:
-                                notification_msg = f"❌ 自动发货失败\n错误信息: {error_msg}\n请联系客服处理"
-                                await self.send_notification("系统", buyer_id, notification_msg, item_id or "unknown", chat_id)
+                                await self.send_delivery_failure_notification(
+                                    "系统", buyer_id, item_id or "unknown", error_msg, chat_id,
+                                    order_id=order_id,
+                                )
                             
                             return None
                     except Exception as e:
@@ -310,10 +323,12 @@ class YifanApiHandler:
                             error_msg = result.get('msg', '未知错误')
                             logger.error(f"亦凡API调用失败: code={result.get('code')}, msg={error_msg}")
                             
-                            # 发送通知给用户
+                            # 发送自动发货失败通知
                             if chat_id and buyer_id:
-                                notification_msg = f"❌ 自动发货失败\n错误信息: {error_msg}\n请联系客服处理"
-                                await self.send_notification("系统", buyer_id, notification_msg, item_id or "unknown", chat_id)
+                                await self.send_delivery_failure_notification(
+                                    "系统", buyer_id, item_id or "unknown", error_msg, chat_id,
+                                    order_id=order_id,
+                                )
                             
                             return None
                     except Exception as e:

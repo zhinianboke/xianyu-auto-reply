@@ -682,11 +682,13 @@ class DBManagerCompat:
     
     # ==================== 订单相关 ====================
     
-    def get_order_by_id(self, order_id: str) -> Optional[Dict[str, Any]]:
-        """获取订单信息"""
+    def get_order_by_id(self, order_id: str, account_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """按订单号获取订单信息，可选按闲鱼账号过滤。"""
         async def _query(session_maker):
             async with session_maker() as session:
                 stmt = select(XYOrder).where(XYOrder.order_no == order_id)
+                if account_id:
+                    stmt = stmt.where(XYOrder.account_id == account_id)
                 result = await session.execute(stmt)
                 order = result.scalars().first()
                 if not order:
@@ -696,6 +698,8 @@ class DBManagerCompat:
                     'order_id': order.order_no,
                     'account_id': order.account_id,
                     'item_id': order.item_id,
+                    'buyer_nick': order.buyer_nick,
+                    'buyer_fish_nick': order.buyer_fish_nick,
                     'buyer_id': order.buyer_id,
                     'chat_id': order.chat_id,
                     'status': order.status,
