@@ -28,6 +28,7 @@ import {
   getHiddenMenuKeysFromSettings,
   type ServiceKey,
 } from '@/api/wrappers/settings';
+import { getCurrentVersion } from '@/api/wrappers/version';
 import {
   User,
   ChevronRight,
@@ -191,6 +192,8 @@ export default function SettingsScreen() {
   const [sysSettings, setSysSettings] = useState<Record<string, string>>({});
   const [initialSettings, setInitialSettings] = useState<Record<string, string>>({});
   const [sysLoading, setSysLoading] = useState(false);
+  const [serverVersion, setServerVersion] = useState('');
+  const [versionError, setVersionError] = useState('');
   const [batchSaving, setBatchSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -255,6 +258,25 @@ export default function SettingsScreen() {
     loadSystemSettings();
     if (isAdmin) loadSvcStatus();
   }, [loadSystemSettings, loadSvcStatus, isAdmin]);
+
+  useEffect(() => {
+    let active = true;
+    getCurrentVersion()
+      .then((version) => {
+        if (active) setServerVersion(version);
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setVersionError(
+            error instanceof Error ? error.message : '获取后台版本失败',
+          );
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // 当前未保存的设置项 key（工作副本与初始快照不一致）
   const dirtyKeys = SETTING_DEFS.filter(
@@ -869,8 +891,10 @@ export default function SettingsScreen() {
             <Text style={[styles.sectionTitle, { color: c.textSecondary }]}>关于</Text>
           </View>
           <View style={styles.settingRow}>
-            <Text style={[styles.settingLabel, { color: c.text }]}>版本号</Text>
-            <Text style={[styles.settingValue, { color: c.textMuted }]}>1.0.0</Text>
+            <Text style={[styles.settingLabel, { color: c.text }]}>服务端版本</Text>
+            <Text style={[styles.settingValue, { color: c.textMuted }]}>
+              {serverVersion ? `v${serverVersion}` : versionError || '获取中...'}
+            </Text>
           </View>
           <View style={styles.settingRow}>
             <Text style={[styles.settingLabel, { color: c.text }]}>项目</Text>

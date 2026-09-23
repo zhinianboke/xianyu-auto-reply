@@ -7,6 +7,7 @@ import QRCode from 'react-native-qrcode-svg';
 import { Card, Loading } from '@/components/ui';
 import { colors, spacing, typography, radius } from '@/lib/theme';
 import { getSystemSettings } from '@/api/wrappers/settings';
+import { getCurrentVersion } from '@/api/wrappers/version';
 import { Info, Phone, Mail, Globe, MessageCircle } from 'lucide-react-native';
 
 /** 从系统设置中按候选 key 顺序取第一个非空字符串 */
@@ -24,20 +25,35 @@ export default function AboutScreen() {
 
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
+  const [serverVersion, setServerVersion] = useState('');
+  const [versionError, setVersionError] = useState('');
 
   const appName = Constants.expoConfig?.name ?? '闲鱼管家';
-  const appVersion = Constants.expoConfig?.version ?? '1.0.0';
 
   const load = useCallback(async () => {
-    try {
-      const data = await getSystemSettings();
-      setSettings(data);
-    } catch (e) {
+    const [settingsResult, versionResult] = await Promise.allSettled([
+      getSystemSettings(),
+      getCurrentVersion(),
+    ]);
+
+    if (settingsResult.status === 'fulfilled') {
+      setSettings(settingsResult.value);
+    } else {
       // 关于页对设置加载失败应保持静默，仍展示基础信息
-      console.warn('加载系统设置失败', e);
-    } finally {
-      setLoading(false);
+      console.warn('加载系统设置失败', settingsResult.reason);
     }
+
+    if (versionResult.status === 'fulfilled') {
+      setServerVersion(versionResult.value);
+    } else {
+      setVersionError(
+        versionResult.reason instanceof Error
+          ? versionResult.reason.message
+          : '获取后台版本失败',
+      );
+    }
+
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -83,8 +99,15 @@ export default function AboutScreen() {
           </View>
           <Text style={[styles.appName, { color: c.text }]}>{appName}</Text>
           <View style={[styles.versionBadge, { backgroundColor: c.primaryLight }]}>
-            <Text style={[styles.versionText, { color: c.primary }]}>v{appVersion}</Text>
+            <Text style={[styles.versionText, { color: c.primary }]}>
+              {serverVersion ? `服务端版本 v${serverVersion}` : '服务端版本获取失败'}
+            </Text>
           </View>
+          {versionError ? (
+            <Text style={[styles.versionError, { color: c.textMuted }]}>
+              {versionError}
+            </Text>
+          ) : null}
         </View>
 
         {description ? (
@@ -190,6 +213,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
   },
   versionText: { ...typography.caption, fontWeight: '600' },
+  versionError: { ...typography.small, textAlign: 'center' },
   section: { gap: spacing.md },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   sectionTitle: { ...typography.caption, fontWeight: '600' },
