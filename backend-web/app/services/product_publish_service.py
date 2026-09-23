@@ -29,26 +29,6 @@ class MaterialSpecificationError(MaterialValidationError):
     """商品素材规格不符合保存规则。"""
 
 
-CATEGORY_ID_FIELDS = {
-    "platform_category_id": "末级分类ID",
-    "platform_channel_category_id": "频道分类ID",
-    "platform_tb_category_id": "淘宝分类ID",
-}
-
-
-def _validate_material_category(data: dict) -> None:
-    """校验素材包含发布接口要求的全部平台分类 ID。"""
-    missing_fields = [
-        field_name
-        for field, field_name in CATEGORY_ID_FIELDS.items()
-        if not str(data.get(field) or "").strip()
-    ]
-    if missing_fields:
-        raise MaterialValidationError(
-            f"平台商品分类信息不完整，缺少 {', '.join(missing_fields)}，请重新选择完整分类"
-        )
-
-
 def _normalize_specifications(value: Any) -> list[dict]:
     """规范化规格 JSON，确保规格值名称和图片字段完整保存。"""
     if not isinstance(value, list):
@@ -126,13 +106,9 @@ class ProductMaterialService:
         self,
         user_id: int,
         data: dict,
-        *,
-        require_complete_category: bool = False,
     ) -> ProductMaterial:
-        """创建素材；手工维护入口可要求平台分类完整。"""
+        """创建商品素材，平台分类字段按请求原样保存。"""
         data = _normalize_material_json(data)
-        if require_complete_category:
-            _validate_material_category(data)
         shipping_method = str(data.get("shipping_method") or "free")
         material = ProductMaterial(
             user_id=user_id,
@@ -256,21 +232,12 @@ class ProductMaterialService:
         material_id: int,
         user_id: int = None,
         data: dict = None,
-        *,
-        require_complete_category: bool = False,
     ) -> Optional[ProductMaterial]:
-        """更新素材；管理员可跨用户操作，手工维护入口可要求平台分类完整。"""
+        """更新素材，平台分类字段按请求原样保存。"""
         data = data or {}
         material = await self.get(material_id, user_id)
         if not material:
             return None
-
-        if require_complete_category:
-            effective_category = {
-                field: data[field] if field in data else getattr(material, field)
-                for field in CATEGORY_ID_FIELDS
-            }
-            _validate_material_category(effective_category)
 
         if "specifications" in data:
             data["specifications"] = _normalize_specifications(data.get("specifications"))

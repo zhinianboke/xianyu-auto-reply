@@ -360,7 +360,6 @@ async def create_material(
         material = await svc.create(
             current_user.id,
             req.model_dump(),
-            require_complete_category=True,
         )
     except MaterialValidationError as exc:
         return ApiResponse(success=False, message=str(exc))
@@ -676,7 +675,6 @@ async def update_material(
             # 只忽略请求中未出现的字段；显式传入的空数组、False 或 null 都要保存，
             # 否则编辑素材时清空规格/属性会被旧值覆盖。
             req.model_dump(exclude_unset=True),
-            require_complete_category=True,
         )
     except MaterialValidationError as exc:
         return ApiResponse(success=False, message=str(exc))

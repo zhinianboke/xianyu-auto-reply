@@ -113,13 +113,6 @@ class XianyuPersonalPublisher:
             "channelCatId": text(item_data.get("platform_channel_category_id")),
             "tbCatId": text(item_data.get("platform_tb_category_id")),
         }
-        missing_fields = [field for field in ("catId", "channelCatId", "tbCatId") if not category_info[field]]
-        if missing_fields:
-            names = {"catId": "末级分类ID", "channelCatId": "频道分类ID", "tbCatId": "淘宝分类ID"}
-            raise DirectPublishError(
-                "平台商品分类信息不完整，缺少 "
-                f"{', '.join(names[field] for field in missing_fields)}，请重新选择分类"
-            )
         resolved_address = await _resolve_item_address(item_data)
         video_items: list[dict[str, Any]] = []
         if item_data.get("videos"):

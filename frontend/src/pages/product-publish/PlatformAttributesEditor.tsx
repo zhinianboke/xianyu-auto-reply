@@ -10,6 +10,10 @@ import type {
   PlatformCategoryPropertyOption,
   PlatformMaterialAttribute,
 } from '@/api/productPublish'
+import {
+  optionMatchesCategoryCandidate,
+  platformAttributeFromOption,
+} from './categoryUtils'
 
 interface PlatformAttributesEditorProps {
   properties: PlatformCategoryProperty[]
@@ -33,13 +37,6 @@ interface PlatformOptionFieldProps {
   multiple?: boolean
   disabled?: boolean
   onSelect: (value: string) => void
-}
-
-function optionMatchesCandidate(option: PlatformCategoryPropertyOption, candidate?: PlatformCategoryCandidate) {
-  if (!candidate) return true
-  const channelMatches = !option.channel_cat_id || !candidate.channel_cat_id || option.channel_cat_id === candidate.channel_cat_id
-  const tbMatches = !option.tb_cat_id || !candidate.tb_cat_id || option.tb_cat_id === candidate.tb_cat_id
-  return channelMatches && tbMatches
 }
 
 function optionValue(option: PlatformCategoryPropertyOption) {
@@ -157,20 +154,6 @@ export function PlatformAttributesEditor({ properties, attributes, candidate, on
     selectedByProperty.set(key, current)
   }
 
-  const createAttribute = (property: PlatformCategoryProperty, option?: PlatformCategoryPropertyOption, textValue?: string) => {
-    const valueName = option?.value_name || textValue?.trim() || ''
-    if (!valueName) return null
-    const valueId = option?.value_id || null
-    return {
-      property_id: property.property_id,
-      property_name: property.property_name,
-      value_id: valueId,
-      value_name: valueName,
-      text: valueName,
-      properties: valueId ? `${property.property_id}##${property.property_name}:${valueId}##${valueName}` : null,
-    } satisfies PlatformMaterialAttribute
-  }
-
   const setPropertyValue = (property: PlatformCategoryProperty, option?: PlatformCategoryPropertyOption, textValue?: string) => {
     const propertyId = property.property_id
     const retained = attributes.filter((attribute) => attributeKey(attribute) !== propertyId)
@@ -179,7 +162,7 @@ export function PlatformAttributesEditor({ properties, attributes, candidate, on
     if (property.is_multiple && option) {
       const value = optionValue(option)
       const exists = current.some((attribute) => (attribute.value_id || attribute.value_name) === value)
-      const nextAttribute = createAttribute(property, option)
+      const nextAttribute = platformAttributeFromOption(property, option)
       const updated = exists
         ? current.filter((attribute) => (attribute.value_id || attribute.value_name) !== value)
         : nextAttribute ? [...current, nextAttribute] : current
@@ -187,7 +170,7 @@ export function PlatformAttributesEditor({ properties, attributes, candidate, on
       return
     }
 
-    const nextAttribute = createAttribute(property, option, textValue)
+    const nextAttribute = platformAttributeFromOption(property, option, textValue)
     onChange(nextAttribute ? [...retained, nextAttribute] : retained)
   }
 
@@ -196,7 +179,7 @@ export function PlatformAttributesEditor({ properties, attributes, candidate, on
       {visibleProperties.map((property) => {
         const selectedValues = selectedByProperty.get(property.property_id) || []
         const selected = selectedValues[0]
-        const matchedOptions = property.options.filter((option) => optionMatchesCandidate(option, candidate))
+        const matchedOptions = property.options.filter((option) => optionMatchesCategoryCandidate(option, candidate))
         // 本次分类推荐返回的属性已经与当前请求绑定；平台 ID 口径不一致时不能把整组有效选项过滤为空。
         const options = matchedOptions.length > 0 ? matchedOptions : property.options
         const selectedOptions = options.filter((option) => selectedValues.some((attribute) =>

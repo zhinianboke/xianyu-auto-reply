@@ -109,8 +109,6 @@ def _build_category_label(item_data: dict[str, Any]) -> dict[str, Any]:
     category_name = _text(item_data.get("platform_category_name"))
     channel_name = _text(item_data.get("platform_channel_category_name")) or category_name
     tb_cat_id = _text(item_data.get("platform_tb_category_id"))
-    if not channel_id or not channel_name or not tb_cat_id:
-        raise DirectPublishError("请先根据商品描述重新选择完整的平台商品分类")
     return {
         "channelCateName": channel_name,
         "valueId": None,
@@ -336,19 +334,6 @@ async def build_item_payload(
         "leafId": _text(item_data.get("platform_leaf_id")),
         "tbCatId": _text(item_data.get("platform_tb_category_id")),
     }
-    missing_category_fields = [
-        field for field in ("catId", "channelCatId", "tbCatId") if not category_info[field]
-    ]
-    if missing_category_fields:
-        field_names = {
-            "catId": "末级分类ID",
-            "channelCatId": "频道分类ID",
-            "tbCatId": "淘宝分类ID",
-        }
-        raise DirectPublishError(
-            "平台商品分类信息不完整，缺少 "
-            f"{', '.join(field_names[field] for field in missing_category_fields)}，请重新选择分类"
-        )
     resolved_address = await _resolve_address(item_data, snapshot)
     video_items: list[dict[str, Any]] = []
     raw_videos = item_data.get("videos")

@@ -18,7 +18,6 @@ import {
 } from '@/api/productPublish'
 import ProductPublishForm from './ProductPublishForm'
 import ProductVideoUploader from './ProductVideoUploader'
-import { hasCompletePlatformCategory } from './categoryUtils'
 import { buildSkuKey, findDuplicateSpecificationValue, type ProductSpecification, type PublishForm, type SkuRow } from './publishTypes'
 
 type MaterialFormState = PublishForm & { images: string[]; remark: string }
@@ -212,7 +211,6 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
     if (!form.description.trim()) return addToast({ type: 'warning', message: '请填写商品描述' })
     if (form.description.length > 1500) return addToast({ type: 'warning', message: '商品描述不能超过1500字' })
     if (!form.images.length) return addToast({ type: 'warning', message: '请至少上传一张商品图片' })
-    if (!hasCompletePlatformCategory(form)) return addToast({ type: 'warning', message: '平台商品分类信息不完整，请重新选择完整分类' })
     const invalidSpec = form.specifications.find((spec) => !spec.name.trim() || !spec.values.some((value) => value.name.trim()))
     if (invalidSpec) return addToast({ type: 'warning', message: '请完善商品规格类型和规格值' })
     const duplicateSpecValue = findDuplicateSpecificationValue(form.specifications)
@@ -259,6 +257,7 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
             onUploadSpecImage={handleSpecUpload}
             categoryLocked={categoryLocked}
             onCategoryEdit={() => setCategoryLocked(false)}
+            unlockCategoryOnTextChange={false}
           />
 
           <div className="input-group"><label className="input-label">备注（内部使用，不公开）</label><input className="input-ios" maxLength={500} placeholder="选填" value={form.remark} onChange={(event) => setForm((current) => ({ ...current, remark: event.target.value }))} /></div>

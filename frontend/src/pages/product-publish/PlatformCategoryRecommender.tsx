@@ -16,8 +16,9 @@ import type { PublishForm } from './publishTypes'
 import PlatformAttributesEditor, { PlatformOptionField } from './PlatformAttributesEditor'
 import {
   bestMatchingCategoryCandidate,
-  isCompleteCategoryCandidate,
+  defaultPlatformAttributes,
   mergeCategoryCandidate,
+  platformAttributesPatch,
 } from './categoryUtils'
 
 interface PlatformCategoryRecommenderProps {
@@ -231,10 +232,6 @@ function buildCategorySelection(cards: PlatformCategoryCardData[], candidate: Pl
   }
 }
 
-function selectedProperty(attributes: PlatformMaterialAttribute[], propertyId: string) {
-  return attributes.find((attribute) => attribute.property_id === propertyId)
-}
-
 export function PlatformCategoryRecommender({ form, onChange, categoryLocked = false, onReselectCategory }: PlatformCategoryRecommenderProps) {
   const [candidates, setCandidates] = useState<PlatformCategoryCandidate[]>([])
   const [properties, setProperties] = useState<PlatformCategoryProperty[]>([])
@@ -295,24 +292,27 @@ export function PlatformCategoryRecommender({ form, onChange, categoryLocked = f
         }
 
         const returnedCandidates = response.data.candidates
-        const completeCandidates = returnedCandidates.filter(isCompleteCategoryCandidate)
-        const preferredCandidate = completeCandidates.find((candidate) => candidate.is_selected)
+        // 分类推荐的首轮响应中，平台可能只给频道分类 ID；保留可识别的候选，
+        // 让用户可以继续选择，后续按分类卡重新请求时再补齐发布所需 ID。
+        const preferredCandidate = returnedCandidates.find((candidate) => candidate.is_selected)
           || bestMatchingCategoryCandidate({
             cat_id: form.platform_category_id,
             channel_cat_id: form.platform_channel_category_id,
             tb_cat_id: form.platform_tb_category_id,
             path: form.platform_category_path,
-          }, completeCandidates)
-          || completeCandidates[0]
+          }, returnedCandidates)
+          || returnedCandidates[0]
 
+        const returnedProperties = response.data.properties || []
         setCandidates(returnedCandidates)
-        setProperties(response.data.properties || [])
+        setProperties(returnedProperties)
         setCardList(response.data.card_list || [])
         if (!preferredCandidate) {
-          setError('接口返回的分类信息不完整，请重新选择分类或点击重试')
+          setError('接口未返回可用分类，请点击重试')
           return
         }
-        onChange({ ...candidatePatch(preferredCandidate), platform_attributes: [], brand: '', condition: '全新' })
+        const defaultAttributes = defaultPlatformAttributes(returnedProperties, preferredCandidate)
+        onChange({ ...candidatePatch(preferredCandidate), ...platformAttributesPatch(defaultAttributes) })
       } catch {
         if (version !== requestVersion.current) return
         setError('分类推荐请求失败，请稍后重试')
@@ -361,15 +361,14 @@ export function PlatformCategoryRecommender({ form, onChange, categoryLocked = f
       const refreshedCandidate = matchedCandidate
         ? mergeCategoryCandidate(candidate, matchedCandidate)
         : candidate
+      const refreshedProperties = response.data.properties || []
+      const defaultAttributes = defaultPlatformAttributes(refreshedProperties, refreshedCandidate)
       setCandidates(matchedCandidate
         ? refreshedCandidates.map((item) => item === matchedCandidate ? refreshedCandidate : item)
         : refreshedCandidates)
-      setProperties(response.data.properties || [])
+      setProperties(refreshedProperties)
       setCardList(response.data.card_list || selection.current_card_list)
-      onChange({ ...candidatePatch(refreshedCandidate), platform_attributes: [], brand: '', condition: '全新' })
-      if (!isCompleteCategoryCandidate(refreshedCandidate)) {
-        setError('当前分类缺少发布所需的分类 ID，请重新选择其他分类')
-      }
+      onChange({ ...candidatePatch(refreshedCandidate), ...platformAttributesPatch(defaultAttributes) })
     } catch {
       if (version === requestVersion.current) setError('分类切换请求失败，请点击重试')
     } finally {
@@ -395,14 +394,7 @@ export function PlatformCategoryRecommender({ form, onChange, categoryLocked = f
   const selectedIndex = selectedCandidate ? String(candidates.indexOf(selectedCandidate)) : ''
 
   const updateAttributes = (platformAttributes: PlatformMaterialAttribute[]) => {
-    const patch: Partial<PublishForm> = { platform_attributes: platformAttributes }
-    if (properties.some((property) => property.property_id === '20000')) {
-      patch.brand = selectedProperty(platformAttributes, '20000')?.value_name || ''
-    }
-    if (properties.some((property) => property.property_id === '20879')) {
-      patch.condition = selectedProperty(platformAttributes, '20879')?.value_name || '全新'
-    }
-    onChange(patch)
+    onChange(platformAttributesPatch(platformAttributes))
   }
 
   return (

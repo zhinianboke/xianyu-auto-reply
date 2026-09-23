@@ -2,13 +2,12 @@
  * 商品发布分类数据工具。
  * 统一判断平台分类是否可发布，并在分类刷新时保留已有的有效标识。
  */
-import type { PlatformCategoryCandidate } from '@/api/productPublish'
-
-interface PlatformCategoryIds {
-  platform_category_id?: string | null
-  platform_channel_category_id?: string | null
-  platform_tb_category_id?: string | null
-}
+import type {
+  PlatformCategoryCandidate,
+  PlatformCategoryProperty,
+  PlatformCategoryPropertyOption,
+  PlatformMaterialAttribute,
+} from '@/api/productPublish'
 
 const candidateIdFields = [
   ['channel_cat_id', 8],
@@ -66,23 +65,69 @@ export function bestMatchingCategoryCandidate(
   return bestCandidate
 }
 
-/** 判断推荐候选是否包含发布接口要求的三个分类 ID。 */
-export function isCompleteCategoryCandidate(candidate?: PlatformCategoryCandidate | null) {
-  return Boolean(
-    candidate?.cat_id
-      && candidate.channel_cat_id
-      && candidate.tb_cat_id
-      && (candidate.channel_cat_name || candidate.cat_name || candidate.path?.at(-1)?.name),
-  )
+/** 判断动态属性选项是否属于当前分类。 */
+export function optionMatchesCategoryCandidate(
+  option: PlatformCategoryPropertyOption,
+  candidate?: PlatformCategoryCandidate,
+) {
+  if (!candidate) return true
+  const channelMatches = !option.channel_cat_id
+    || !candidate.channel_cat_id
+    || option.channel_cat_id === candidate.channel_cat_id
+  const tbMatches = !option.tb_cat_id || !candidate.tb_cat_id || option.tb_cat_id === candidate.tb_cat_id
+  return channelMatches && tbMatches
 }
 
-/** 判断发布表单是否包含发布接口要求的三个分类 ID。 */
-export function hasCompletePlatformCategory(category: PlatformCategoryIds) {
-  return Boolean(
-    category.platform_category_id?.trim()
-      && category.platform_channel_category_id?.trim()
-      && category.platform_tb_category_id?.trim(),
-  )
+/** 将接口属性选项转换为素材和发布接口共用的平台属性。 */
+export function platformAttributeFromOption(
+  property: PlatformCategoryProperty,
+  option?: PlatformCategoryPropertyOption,
+  textValue?: string,
+): PlatformMaterialAttribute | null {
+  const valueName = option?.value_name || textValue?.trim() || ''
+  if (!valueName) return null
+  const valueId = option?.value_id || null
+  return {
+    property_id: property.property_id,
+    property_name: property.property_name,
+    value_id: valueId,
+    value_name: valueName,
+    text: valueName,
+    properties: option?.properties
+      || (valueId ? `${property.property_id}##${property.property_name}:${valueId}##${valueName}` : null),
+  }
+}
+
+/** 提取平台明确标记的默认属性；单选属性只采用第一个默认值。 */
+export function defaultPlatformAttributes(
+  properties: PlatformCategoryProperty[],
+  candidate?: PlatformCategoryCandidate,
+) {
+  const attributes: PlatformMaterialAttribute[] = []
+  for (const property of properties) {
+    const selectedOptions = property.options.filter((option) =>
+      option.is_selected && optionMatchesCategoryCandidate(option, candidate),
+    )
+    const acceptedOptions = property.is_multiple || selectedOptions.length > 1
+      ? selectedOptions
+      : selectedOptions.slice(0, 1)
+    for (const option of acceptedOptions) {
+      const attribute = platformAttributeFromOption(property, option)
+      if (attribute) attributes.push(attribute)
+    }
+  }
+  return attributes
+}
+
+/** 同步平台属性及素材库单独保存的品牌、成色字段。 */
+export function platformAttributesPatch(platformAttributes: PlatformMaterialAttribute[]) {
+  const valueOf = (propertyId: string) =>
+    platformAttributes.find((attribute) => attribute.property_id === propertyId)?.value_name || ''
+  return {
+    platform_attributes: platformAttributes,
+    brand: valueOf('20000'),
+    condition: valueOf('20879') || '全新',
+  }
 }
 
 /** 合并同一候选的刷新结果，避免平台返回空字段时清掉上一轮已取得的 ID。 */

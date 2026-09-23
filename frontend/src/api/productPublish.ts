@@ -44,8 +44,10 @@ export interface PlatformCategoryPropertyOption {
   property_name: string
   value_id?: string | null
   value_name: string
+  properties?: string | null
   channel_cat_id?: string | null
   tb_cat_id?: string | null
+  is_selected?: boolean
 }
 
 export interface PlatformCategoryProperty {
