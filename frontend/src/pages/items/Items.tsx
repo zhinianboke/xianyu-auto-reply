@@ -2,6 +2,7 @@
 import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink, Tag, ListChecks } from 'lucide-react'
 import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, updateItemPrice, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
 import { getAccountDetails } from '@/api/accounts'
+import { getUserSetting } from '@/api/settings'
 import { batchClearItemRelations } from '@/api/cards'
 import { ItemCardRelationModal } from './ItemCardRelationModal'
 import { ItemQueryConfigModal } from './ItemQueryConfigModal'
@@ -12,8 +13,18 @@ import { useAuthStore } from '@/store/authStore'
 import { Select } from '@/components/common/Select'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import type { Account, Item } from '@/types'
+import LocationContactReplyFields, { DEFAULT_LOCATION_TITLE, type LocationContactReplyValue } from '@/pages/common/LocationContactReplyFields'
 
 type ItemBooleanFilterKey = 'is_polished' | 'is_multi_spec' | 'multi_quantity_delivery'
+type DefaultReplyType = 'text' | 'api' | 'external_contact'
+
+const EMPTY_LOCATION_REPLY: LocationContactReplyValue = {
+  location_name: '',
+  location_longitude: '',
+  location_latitude: '',
+  location_title: DEFAULT_LOCATION_TITLE,
+  location_subtitle: '',
+}
 
 
 export function Items() {
@@ -79,9 +90,10 @@ export function Items() {
   const [defaultReplyImage, setDefaultReplyImage] = useState('')
   const [defaultReplyEnabled, setDefaultReplyEnabled] = useState(true)
   const [defaultReplyOnce, setDefaultReplyOnce] = useState(false)
-  const [defaultReplyType, setDefaultReplyType] = useState<'text' | 'api'>('text')
+  const [defaultReplyType, setDefaultReplyType] = useState<DefaultReplyType>('text')
   const [defaultReplyApiUrl, setDefaultReplyApiUrl] = useState('')
   const [defaultReplyApiTimeout, setDefaultReplyApiTimeout] = useState(80)
+  const [defaultReplyLocation, setDefaultReplyLocation] = useState<LocationContactReplyValue>(EMPTY_LOCATION_REPLY)
   const [loadingDefaultReply, setLoadingDefaultReply] = useState(false)
   const [savingDefaultReply, setSavingDefaultReply] = useState(false)
   const [defaultReplyImageUploading, setDefaultReplyImageUploading] = useState(false)
@@ -94,9 +106,10 @@ export function Items() {
   const [batchReplyImage, setBatchReplyImage] = useState('')
   const [batchReplyEnabled, setBatchReplyEnabled] = useState(true)
   const [batchReplyOnce, setBatchReplyOnce] = useState(false)
-  const [batchReplyType, setBatchReplyType] = useState<'text' | 'api'>('text')
+  const [batchReplyType, setBatchReplyType] = useState<DefaultReplyType>('text')
   const [batchReplyApiUrl, setBatchReplyApiUrl] = useState('')
   const [batchReplyApiTimeout, setBatchReplyApiTimeout] = useState(80)
+  const [batchReplyLocation, setBatchReplyLocation] = useState<LocationContactReplyValue>(EMPTY_LOCATION_REPLY)
   const [savingBatchReply, setSavingBatchReply] = useState(false)
   const [batchItemSearch, setBatchItemSearch] = useState('')
   const [batchReplyImageUploading, setBatchReplyImageUploading] = useState(false)
@@ -678,9 +691,16 @@ export function Items() {
         setDefaultReplyImage(result.data.reply_image || '')
         setDefaultReplyEnabled(result.data.enabled ?? true)
         setDefaultReplyOnce(result.data.reply_once ?? false)
-        setDefaultReplyType((result.data.reply_type as 'text' | 'api') || 'text')
+        setDefaultReplyType((result.data.reply_type as DefaultReplyType) || 'text')
         setDefaultReplyApiUrl(result.data.api_url || '')
         setDefaultReplyApiTimeout(result.data.api_timeout || 80)
+        setDefaultReplyLocation({
+          location_name: result.data.location_name || '',
+          location_longitude: result.data.location_longitude || '',
+          location_latitude: result.data.location_latitude || '',
+          location_title: result.data.location_title || DEFAULT_LOCATION_TITLE,
+          location_subtitle: result.data.location_subtitle || '',
+        })
       } else {
         setDefaultReplyContent('')
         setDefaultReplyImage('')
@@ -689,6 +709,7 @@ export function Items() {
         setDefaultReplyType('text')
         setDefaultReplyApiUrl('')
         setDefaultReplyApiTimeout(80)
+        setDefaultReplyLocation(EMPTY_LOCATION_REPLY)
       }
     } catch {
       setDefaultReplyContent('')
@@ -698,6 +719,7 @@ export function Items() {
       setDefaultReplyType('text')
       setDefaultReplyApiUrl('')
       setDefaultReplyApiTimeout(80)
+      setDefaultReplyLocation(EMPTY_LOCATION_REPLY)
     } finally {
       setLoadingDefaultReply(false)
     }
@@ -713,6 +735,7 @@ export function Items() {
     setDefaultReplyType('text')
     setDefaultReplyApiUrl('')
     setDefaultReplyApiTimeout(80)
+    setDefaultReplyLocation(EMPTY_LOCATION_REPLY)
   }
 
   // 保存默认回复配置
@@ -721,6 +744,23 @@ export function Items() {
     if (defaultReplyType === 'api' && !defaultReplyApiUrl.trim()) {
       addToast({ type: 'warning', message: '请输入 API 地址' })
       return
+    }
+    if (defaultReplyType === 'external_contact') {
+      const [remoteUrl, remoteSecret] = await Promise.all([
+        getUserSetting('location_chat.remote_url'),
+        getUserSetting('location_chat.remote_secret_key'),
+      ])
+      if (!remoteUrl.success || !remoteUrl.value?.trim() || !remoteSecret.success || !remoteSecret.value?.trim()) {
+        addToast({ type: 'warning', message: '请先到个人设置的远程URL配置中填写位置聊天远程URL和秘钥' })
+        return
+      }
+      if (!defaultReplyLocation.location_name || !defaultReplyLocation.location_longitude || !defaultReplyLocation.location_latitude) {
+        addToast({ type: 'warning', message: '请选择带经纬度的定位信息' })
+        return
+      }
+      if (!defaultReplyLocation.location_title.trim()) {
+        setDefaultReplyLocation((current) => ({ ...current, location_title: DEFAULT_LOCATION_TITLE }))
+      }
     }
     setSavingDefaultReply(true)
     try {
@@ -735,6 +775,8 @@ export function Items() {
           reply_type: defaultReplyType,
           api_url: defaultReplyApiUrl,
           api_timeout: defaultReplyApiTimeout,
+          ...defaultReplyLocation,
+          location_title: defaultReplyLocation.location_title.trim() || DEFAULT_LOCATION_TITLE,
         }
       )
       if (result.success) {
@@ -822,6 +864,7 @@ export function Items() {
     setBatchReplyType('text')
     setBatchReplyApiUrl('')
     setBatchReplyApiTimeout(80)
+    setBatchReplyLocation(EMPTY_LOCATION_REPLY)
     setShowBatchDefaultReplyModal(true)
   }
 
@@ -836,6 +879,7 @@ export function Items() {
     setBatchReplyType('text')
     setBatchReplyApiUrl('')
     setBatchReplyApiTimeout(80)
+    setBatchReplyLocation(EMPTY_LOCATION_REPLY)
     setBatchItemSearch('')
   }
 
@@ -875,9 +919,26 @@ export function Items() {
         addToast({ type: 'warning', message: '请输入 API 地址' })
         return
       }
-    } else if (!batchReplyContent.trim() && !batchReplyImage.trim()) {
+    } else if (batchReplyType === 'text' && !batchReplyContent.trim() && !batchReplyImage.trim()) {
       addToast({ type: 'warning', message: '请输入回复内容或上传图片' })
       return
+    }
+    if (batchReplyType === 'external_contact') {
+      const [remoteUrl, remoteSecret] = await Promise.all([
+        getUserSetting('location_chat.remote_url'),
+        getUserSetting('location_chat.remote_secret_key'),
+      ])
+      if (!remoteUrl.success || !remoteUrl.value?.trim() || !remoteSecret.success || !remoteSecret.value?.trim()) {
+        addToast({ type: 'warning', message: '请先到个人设置的远程URL配置中填写位置聊天远程URL和秘钥' })
+        return
+      }
+      if (!batchReplyLocation.location_name || !batchReplyLocation.location_longitude || !batchReplyLocation.location_latitude) {
+        addToast({ type: 'warning', message: '请选择带经纬度的定位信息' })
+        return
+      }
+      if (!batchReplyLocation.location_title.trim()) {
+        setBatchReplyLocation((current) => ({ ...current, location_title: DEFAULT_LOCATION_TITLE }))
+      }
     }
 
     setSavingBatchReply(true)
@@ -891,6 +952,8 @@ export function Items() {
         reply_type: batchReplyType,
         api_url: batchReplyApiUrl,
         api_timeout: batchReplyApiTimeout,
+        ...batchReplyLocation,
+        location_title: batchReplyLocation.location_title.trim() || DEFAULT_LOCATION_TITLE,
       })
       if (result.success) {
         addToast({ type: 'success', message: result.message || '批量保存成功' })
@@ -2091,6 +2154,7 @@ export function Items() {
                       {([
                         { value: 'text', label: '默认回复' },
                         { value: 'api', label: 'API接口' },
+                        { value: 'external_contact', label: '站外联系方式' },
                       ] as const).map((opt) => (
                         <button
                           key={opt.value}
@@ -2159,8 +2223,16 @@ export function Items() {
                     </>
                   )}
 
+                  {defaultReplyType === 'external_contact' && (
+                    <LocationContactReplyFields
+                      value={defaultReplyLocation}
+                      onChange={setDefaultReplyLocation}
+                      disabled={!defaultReplyEnabled}
+                    />
+                  )}
+
                   {/* 文本回复内容（API 类型时隐藏） */}
-                  {defaultReplyType !== 'api' && (
+                  {defaultReplyType === 'text' && (
                   <div className="input-group">
                     <label className="input-label">回复内容</label>
                     <textarea
@@ -2179,7 +2251,7 @@ export function Items() {
                   )}
                   
                   {/* 图片上传（默认回复类型显示，与文本一起） */}
-                  {defaultReplyType !== 'api' && (
+                  {defaultReplyType === 'text' && (
                   <div className="input-group">
                     <label className="input-label">回复图片（可选）</label>
                     <input
@@ -2506,6 +2578,7 @@ export function Items() {
                   {([
                     { value: 'text', label: '默认回复' },
                     { value: 'api', label: 'API接口' },
+                    { value: 'external_contact', label: '站外联系方式' },
                   ] as const).map((opt) => (
                     <button
                       key={opt.value}
@@ -2574,8 +2647,16 @@ export function Items() {
                 </>
               )}
 
+              {batchReplyType === 'external_contact' && (
+                <LocationContactReplyFields
+                  value={batchReplyLocation}
+                  onChange={setBatchReplyLocation}
+                  disabled={!batchReplyEnabled}
+                />
+              )}
+
               {/* 回复内容（API 类型时隐藏） */}
-              {batchReplyType !== 'api' && (
+              {batchReplyType === 'text' && (
               <div className="input-group">
                 <label className="input-label">回复内容</label>
                 <textarea
@@ -2594,7 +2675,7 @@ export function Items() {
               )}
 
               {/* 图片上传（API 类型时隐藏） */}
-              {batchReplyType !== 'api' && (
+              {batchReplyType === 'text' && (
               <div className="input-group">
                 <label className="input-label">回复图片（可选）</label>
                 <input

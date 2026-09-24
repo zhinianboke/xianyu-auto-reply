@@ -68,3 +68,39 @@ async def ensure_internal_api_token(settings) -> str:
     get_common_settings().internal_api_token = token
     logger.info("内部 API 令牌已从数据库加载或自动初始化")
     return token
+
+
+async def load_internal_api_token(settings) -> str:
+    """
+    只读取已有的服务间 API 令牌，不创建或修改数据库记录。
+
+    Args:
+        settings: 当前服务配置对象。
+    Returns:
+        已加载的服务间 API 令牌。
+    Raises:
+        ValueError: 环境变量中的令牌长度不足。
+        RuntimeError: 数据库和环境变量中都没有有效令牌。
+    """
+    configured = (getattr(settings, "internal_api_token", "") or "").strip()
+    if configured and len(configured) < MIN_INTERNAL_TOKEN_LENGTH:
+        raise ValueError("INTERNAL_API_TOKEN 长度不足32位")
+
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(SystemSetting.value).where(
+                SystemSetting.key == INTERNAL_TOKEN_SETTING_KEY
+            )
+        )
+        persisted = result.scalar_one_or_none()
+
+    token = (persisted or configured or "").strip()
+    if len(token) < MIN_INTERNAL_TOKEN_LENGTH:
+        raise RuntimeError(
+            "服务间 API 令牌未初始化，请先启动 backend 完成数据库初始化"
+        )
+
+    settings.internal_api_token = token
+    get_common_settings().internal_api_token = token
+    logger.info("内部 API 令牌已从现有配置加载，当前服务未写入数据库")
+    return token

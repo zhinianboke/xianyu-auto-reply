@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import type { FormEvent, ChangeEvent } from 'react'
 import { motion } from 'framer-motion'
-import { MessageSquare, RefreshCw, Plus, Edit2, Trash2, Upload, Download, Info, Image, CheckSquare, Square, Search, ChevronLeft, ChevronRight } from 'lucide-react'
+import { MessageSquare, RefreshCw, Plus, Edit2, Trash2, Upload, Download, Info, Image, MapPin, CheckSquare, Square, Search, ChevronLeft, ChevronRight } from 'lucide-react'
 import { getKeywords, deleteKeyword, saveKeywords, updateKeyword, exportKeywords, importKeywords as importKeywordsApi, addImageKeyword } from '@/api/keywords'
 import { getAccountDetails } from '@/api/accounts'
 import { getItems } from '@/api/items'
@@ -11,6 +11,8 @@ import { useAuthStore } from '@/store/authStore'
 import { Select } from '@/components/common/Select'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import type { Keyword, Account, Item } from '@/types'
+import { getUserSetting } from '@/api/settings'
+import LocationContactReplyFields, { DEFAULT_LOCATION_TITLE, type LocationContactReplyValue } from '@/pages/common/LocationContactReplyFields'
 
 /** 解析关键词文本域，按行保存是为了兼容旧表结构的一条关键词一条规则。 */
 const parseKeywordLines = (value: string) => value.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
@@ -52,6 +54,14 @@ export function Keywords() {
   const [editingKeyword, setEditingKeyword] = useState<Keyword | null>(null)
   const [keywordText, setKeywordText] = useState('')
   const [replyText, setReplyText] = useState('')
+  const [replyType, setReplyType] = useState<'text' | 'external_contact'>('text')
+  const [location, setLocation] = useState<LocationContactReplyValue>({
+    location_name: '',
+    location_longitude: '',
+    location_latitude: '',
+    location_title: DEFAULT_LOCATION_TITLE,
+    location_subtitle: '',
+  })
   const [itemIdText, setItemIdText] = useState('')  // 绑定的商品ID（编辑时使用）
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([])  // 多选商品ID（新增时使用）
   const [itemSearchText, setItemSearchText] = useState('')  // 商品搜索
@@ -189,10 +199,21 @@ export function Keywords() {
     setFormAccountId(selectedAccount)
     setKeywordText('')
     setReplyText('')
+    setReplyType('text')
+    setLocation({ location_name: '', location_longitude: '', location_latitude: '', location_title: DEFAULT_LOCATION_TITLE, location_subtitle: '' })
     setItemIdText('')
     setSelectedItemIds([])
     setItemSearchText('')
     setIsModalOpen(true)
+  }
+
+  const openExternalContactModal = () => {
+    if (!selectedAccount) {
+      addToast({ type: 'warning', message: '请先选择具体账号才能添加关键词' })
+      return
+    }
+    openAddModal()
+    setReplyType('external_contact')
   }
 
   const openEditModal = (keyword: Keyword) => {
@@ -212,6 +233,14 @@ export function Keywords() {
     setFormAccountId(accountId)
     setKeywordText(keyword.keyword)
     setReplyText(keyword.reply)
+    setReplyType(keyword.type === 'external_contact' ? 'external_contact' : 'text')
+    setLocation({
+      location_name: keyword.location_name || '',
+      location_longitude: keyword.location_longitude || '',
+      location_latitude: keyword.location_latitude || '',
+      location_title: keyword.location_title || DEFAULT_LOCATION_TITLE,
+      location_subtitle: keyword.location_subtitle || '',
+    })
     setItemIdText(keyword.item_id || '')
     setIsModalOpen(true)
   }
@@ -238,6 +267,26 @@ export function Keywords() {
       return
     }
 
+    if (replyType === 'external_contact') {
+      try {
+        const [urlResult, secretResult] = await Promise.all([
+          getUserSetting('location_chat.remote_url'),
+          getUserSetting('location_chat.remote_secret_key'),
+        ])
+        if (!urlResult.value?.trim() || !secretResult.value?.trim()) {
+          addToast({ type: 'warning', message: '请先到个人设置的远程URL配置中填写位置聊天配置的远程URL和秘钥' })
+          return
+        }
+      } catch {
+        addToast({ type: 'error', message: '无法读取个人设置，请先配置位置聊天远程URL和秘钥' })
+        return
+      }
+
+      if (!location.location_title.trim()) {
+        setLocation((current) => ({ ...current, location_title: DEFAULT_LOCATION_TITLE }))
+      }
+    }
+
     // 回复内容允许留空：留空表示命中关键词但不回复，用于屏蔽特定消息
 
     try {
@@ -260,6 +309,9 @@ export function Keywords() {
             keyword: normalizedKeywordText,
             reply: replyText.trim(),
             item_id: itemIdText.trim(),
+            type: replyType,
+            ...location,
+            location_title: location.location_title.trim() || DEFAULT_LOCATION_TITLE,
           }
         )
         if (result.success === false) {
@@ -286,7 +338,9 @@ export function Keywords() {
           keyword: normalizedKeywordText,
           reply: replyText.trim(),
           item_id: itemId,
-          type: 'text' as const,
+          type: replyType,
+          ...location,
+          location_title: location.location_title.trim() || DEFAULT_LOCATION_TITLE,
         } as Keyword))
         const result = await saveKeywords(submitAccountId, [...existingKeywords, ...newKeywords])
         if (result.success === false) {
@@ -598,6 +652,14 @@ export function Keywords() {
           </button>
           <button
             type="button"
+            onClick={openExternalContactModal}
+            className="btn-ios-primary"
+          >
+            <MapPin className="w-4 h-4" />
+            添加站外联系方式关键词
+          </button>
+          <button
+            type="button"
             onClick={openImageModal}
             className="btn-ios-primary"
           >
@@ -772,6 +834,8 @@ export function Keywords() {
                         >
                           查看大图
                         </button>
+                      ) : keyword.type === 'external_contact' ? (
+                        <span className="text-sm text-emerald-600 dark:text-emerald-400">站外联系方式</span>
                       ) : (
                         <p className="truncate text-slate-600 dark:text-slate-300" title={keyword.reply}>
                           {keyword.reply || <span className="text-gray-400">不回复</span>}
@@ -781,6 +845,8 @@ export function Keywords() {
                     <td>
                       {keyword.type === 'image' ? (
                         <span className="badge-primary">图片</span>
+                      ) : keyword.type === 'external_contact' ? (
+                        <span className="badge-primary">站外联系方式</span>
                       ) : (
                         <span className="badge-gray">文本</span>
                       )}
@@ -1019,23 +1085,38 @@ export function Keywords() {
                   )}
                 </div>
                 <div>
-                  <label className="input-label">回复内容</label>
-                  <textarea
-                    value={replyText}
-                    onChange={(e) => setReplyText(e.target.value)}
-                    className="input-ios h-28 resize-none"
-                    placeholder="请输入自动回复内容，留空表示不回复"
-                  />
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                    回复内容留空时，匹配到关键词但不会自动回复，可用于屏蔽特定消息
-                  </p>
-                  <p className="text-xs text-blue-500 dark:text-blue-400 mt-1">
-                    💡 支持变量：{'{send_user_name}'} 用户昵称、{'{send_user_id}'} 用户ID、{'{send_message}'} 用户消息内容
-                  </p>
-                  <p className="text-xs text-blue-500 dark:text-blue-400 mt-1">
-                    💡 使用 ###### 分隔可拆分为多条消息依次发送，例如：第一条消息######第二条消息
-                  </p>
+                  <label className="input-label">回复类型</label>
+                  <select
+                    value={replyType}
+                    onChange={(e) => setReplyType(e.target.value as 'text' | 'external_contact')}
+                    className="input-ios"
+                  >
+                    <option value="text">文本回复</option>
+                    <option value="external_contact">站外联系方式</option>
+                  </select>
                 </div>
+                {replyType === 'external_contact' ? (
+                  <LocationContactReplyFields value={location} onChange={setLocation} />
+                ) : (
+                  <div>
+                    <label className="input-label">回复内容</label>
+                    <textarea
+                      value={replyText}
+                      onChange={(e) => setReplyText(e.target.value)}
+                      className="input-ios h-28 resize-none"
+                      placeholder="请输入自动回复内容，留空表示不回复"
+                    />
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                      回复内容留空时，匹配到关键词但不会自动回复，可用于屏蔽特定消息
+                    </p>
+                    <p className="text-xs text-blue-500 dark:text-blue-400 mt-1">
+                      💡 支持变量：{'{send_user_name}'} 用户昵称、{'{send_user_id}'} 用户ID、{'{send_message}'} 用户消息内容
+                    </p>
+                    <p className="text-xs text-blue-500 dark:text-blue-400 mt-1">
+                      💡 使用 ###### 分隔可拆分为多条消息依次发送，例如：第一条消息######第二条消息
+                    </p>
+                  </div>
+                )}
 
               </div>
               <div className="modal-footer">
@@ -1219,7 +1300,7 @@ export function Keywords() {
                     <div className="text-sm text-blue-700 dark:text-blue-300">
                       <p className="font-medium mb-1">说明：</p>
                       <ul className="list-disc list-inside space-y-0.5 text-xs">
-                        <li>图片关键词优先级高于文本关键词</li>
+                        <li>同一范围内优先级：图片 &gt; 站外联系方式 &gt; 文本；商品级关键词整体优先于通用关键词</li>
                         <li>用户发送匹配的关键词时，系统将回复上传的图片</li>
                         <li>图片将被转换为适合聊天的格式</li>
                       </ul>

@@ -29,6 +29,7 @@ import {
   getHiddenMenuKeysFromSettings,
   type ServiceKey,
 } from '@/api/wrappers/settings';
+import { getCurrentVersion } from '@/api/wrappers/version';
 import {
   User,
   ChevronRight,
@@ -80,10 +81,10 @@ type SettingCategory =
  */
 const SETTING_DEFS: SettingDef[] = [
   // 基础设置
-  { key: 'allow_registration', label: '允许注册', type: 'switch', category: '基础设置' },
-  { key: 'enable_login_captcha', label: '登录验证码', type: 'switch', category: '基础设置' },
+  { key: 'registration_enabled', label: '允许注册', type: 'switch', category: '基础设置' },
+  { key: 'login_captcha_enabled', label: '登录验证码', type: 'switch', category: '基础设置' },
   { key: 'show_default_login_info', label: '显示默认登录信息', type: 'switch', category: '基础设置' },
-  { key: 'log_retention_days', label: '日志保留天数', type: 'input', category: '基础设置', numeric: true, placeholder: '如 30' },
+  { key: 'log.retention_days', label: '日志保留天数', type: 'input', category: '基础设置', numeric: true, placeholder: '如 30' },
   { key: 'account.face_verify_timeout_disable', label: '人脸验证超时自动禁用', type: 'switch', category: '基础设置' },
   {
     key: 'password_login.mode',
@@ -104,7 +105,7 @@ const SETTING_DEFS: SettingDef[] = [
   { key: 'smtp_sender', label: '发件人', type: 'input', category: 'SMTP配置', placeholder: '发件人名称' },
   // Token 获取方式
   {
-    key: 'token_method',
+    key: 'token.api_mode',
     label: '获取方式',
     type: 'toggle',
     category: 'Token获取方式',
@@ -114,8 +115,8 @@ const SETTING_DEFS: SettingDef[] = [
       { value: 'remote', label: '远程' },
     ],
   },
-  { key: 'remote_token_url', label: '远程URL', type: 'input', category: 'Token获取方式', placeholder: '远程 Token 服务地址' },
-  { key: 'remote_token_key', label: '密钥', type: 'secret', category: 'Token获取方式', placeholder: '远程服务密钥' },
+  { key: 'token.remote_url', label: '远程URL', type: 'input', category: 'Token获取方式', placeholder: '远程 Token 服务地址' },
+  { key: 'token.remote_secret_key', label: '密钥', type: 'secret', category: 'Token获取方式', placeholder: '远程服务密钥' },
   // 密码登录远程配置（仅当 password_login.mode === 'protocol' 时展示）
   { key: 'password_login.remote_url', label: '远程URL', type: 'input', category: '密码登录远程配置', placeholder: 'https://api.xianyushop.shop/api/external/invoke' },
   { key: 'password_login.remote_secret_key', label: '秘钥', type: 'secret', category: '密码登录远程配置', placeholder: '远程服务密钥' },
@@ -193,6 +194,8 @@ export default function SettingsScreen() {
   const [sysSettings, setSysSettings] = useState<Record<string, string>>({});
   const [initialSettings, setInitialSettings] = useState<Record<string, string>>({});
   const [sysLoading, setSysLoading] = useState(false);
+  const [serverVersion, setServerVersion] = useState('');
+  const [versionError, setVersionError] = useState('');
   const [batchSaving, setBatchSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -257,6 +260,25 @@ export default function SettingsScreen() {
     loadSystemSettings();
     if (isAdmin) loadSvcStatus();
   }, [loadSystemSettings, loadSvcStatus, isAdmin]);
+
+  useEffect(() => {
+    let active = true;
+    getCurrentVersion()
+      .then((version) => {
+        if (active) setServerVersion(version);
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setVersionError(
+            error instanceof Error ? error.message : '获取后台版本失败',
+          );
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // 当前未保存的设置项 key（工作副本与初始快照不一致）
   const dirtyKeys = SETTING_DEFS.filter(
@@ -889,8 +911,10 @@ export default function SettingsScreen() {
             <Text style={[styles.sectionTitle, { color: c.textSecondary }]}>关于</Text>
           </View>
           <View style={styles.settingRow}>
-            <Text style={[styles.settingLabel, { color: c.text }]}>版本号</Text>
-            <Text style={[styles.settingValue, { color: c.textMuted }]}>1.0.0</Text>
+            <Text style={[styles.settingLabel, { color: c.text }]}>服务端版本</Text>
+            <Text style={[styles.settingValue, { color: c.textMuted }]}>
+              {serverVersion ? `v${serverVersion}` : versionError || '获取中...'}
+            </Text>
           </View>
           <View style={styles.settingRow}>
             <Text style={[styles.settingLabel, { color: c.text }]}>项目</Text>

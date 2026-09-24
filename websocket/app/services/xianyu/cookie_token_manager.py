@@ -36,6 +36,10 @@ from common.services.token_api_mode import (
     get_token_api_mode_label,
     load_token_api_mode,
 )
+from common.services.token_request_lock import (
+    TokenRequestLockError,
+    token_request_lock,
+)
 from common.services.captcha.concurrency import run_browser_task
 from common.services.captcha.slider_mode import (
     SLIDER_MODE_REAL_MOUSE,
@@ -476,6 +480,12 @@ class CookieTokenManager:
 
     # ==================== Cookie更新 ====================
 
+    def _clear_refetch_state(self) -> None:
+        """Clear transient state produced by one captcha refetch flow."""
+        self._refetch_token_ok = False
+        self._refetch_new_token = None
+        self._refetch_new_cookies = {}
+
     async def update_config_cookies(self) -> bool:
         """更新数据库中的 Cookie（不覆盖账号密码等其他字段）。
 
@@ -645,11 +655,11 @@ class CookieTokenManager:
             logger.warning(f"【{self.cookie_id}】读取远程过滑块配置失败（走本机逻辑）: {self._safe_str(e)}")
         return None
 
-    async def handle_captcha_verification(self, res_json: dict) -> str:
+    async def handle_captcha_verification(self, res_json: dict) -> str | None:
         """处理滑块验证，返回新的cookies字符串"""
         try:
             import os
-            
+
             # 检查消息接收冷却时间 - 收到消息后5分钟内不执行滑块验证
             current_time = time.time()
             time_since_last_message = current_time - self.last_message_received_time
@@ -736,10 +746,9 @@ class CookieTokenManager:
             try:
                 from app.services.captcha.slider_stealth import run_slider_verification_with_fallback
 
-                # 重置"重取链接时 token 已可用"标志，避免读到上一次的残留值
-                self._refetch_token_ok = False
-                self._refetch_new_token = None
-                self._refetch_new_cookies = {}
+                # Clear the hand-off state only after this call owns the captcha
+                # processing slot, so a concurrent call cannot erase its result.
+                self._clear_refetch_state()
 
                 # 读取全局"远程过滑块"配置（system_settings，仅管理员可配）。
                 # 配置了则优先走远程接口；远程超时/不可用时回退本机逻辑。
@@ -778,7 +787,8 @@ class CookieTokenManager:
                 await _persist_refetched_cookie_updates()
 
                 # 重取链接时发现 token 已可用（风控解除，无需滑块）：直接采用，跳过滑块结果处理。
-                # Cookie 已在上方统一写回；返回 cookies_str，让上层清缓存后重试 Token 刷新。
+                # The outer refresh_token() consumes _refetch_new_token first. A
+                # cookie-only result is the only case that needs a token retry.
                 if getattr(self, '_refetch_token_ok', False):
                     logger.info(f"【{self.cookie_id}】滑块流程中检测到 token 已可用，直接采用，跳过滑块验证")
                     captcha_duration = time.time() - captcha_start_time
@@ -796,7 +806,6 @@ class CookieTokenManager:
                         except Exception as update_e:
                             logger.error(f"【{self.cookie_id}】更新风控日志失败: {update_e}")
 
-                    self._refetch_token_ok = False
                     return self.cookies_str
 
                 if success and cookies:
@@ -1065,7 +1074,41 @@ class CookieTokenManager:
 
     # ==================== Token刷新核心逻辑 ====================
 
-    async def refresh_token(self, captcha_retry_count: int = 0, token_expiry_retry_count: int = 0):
+    async def refresh_token(
+        self,
+        captcha_retry_count: int = 0,
+        token_expiry_retry_count: int = 0,
+    ):
+        """在账号级 Redis 锁内执行完整 Token 刷新流程。
+
+        Args:
+            captcha_retry_count: 滑块验证重试次数。
+            token_expiry_retry_count: 令牌过期重试次数。
+        Returns:
+            可用 Token；刷新失败或锁不可用时返回 None。
+        """
+        account_identifier = self.myid or self.cookie_id
+        try:
+            async with token_request_lock(account_identifier):
+                return await self._refresh_token_with_lock(
+                    captcha_retry_count,
+                    token_expiry_retry_count,
+                )
+        except TokenRequestLockError as exc:
+            logger.error(f"【{self.cookie_id}】{exc}")
+            self.current_token = None
+            self.last_token_refresh_status = "failed_token_request_lock"
+            await self.send_token_refresh_notification(
+                str(exc),
+                "token_request_lock_failed",
+            )
+            return None
+
+    async def _refresh_token_with_lock(
+        self,
+        captcha_retry_count: int = 0,
+        token_expiry_retry_count: int = 0,
+    ):
         """刷新token
         
         Args:
@@ -1148,6 +1191,13 @@ class CookieTokenManager:
                     self._startup_expired_cache_available = False
                 if cached:
                     return await self._use_cached_token(cached)
+                if not getattr(self, "_last_cache_lookup_succeeded", True):
+                    self.last_token_refresh_status = "skipped_cache_lookup_failed"
+                    logger.warning(
+                        f"【{self.cookie_id}】Token缓存复查失败，"
+                        "本次未调用Token接口，等待下次轮询"
+                    )
+                    return self.current_token
 
             should_skip_refresh, existing_token = (
                 await self._get_processing_risk_control_skip_result("Token刷新")
@@ -1271,7 +1321,7 @@ class CookieTokenManager:
                 if refresh_result is True:
                     # 刷新成功，清除旧缓存并重新获取token
                     await self._delete_cached_token()
-                    return await self.refresh_token(captcha_retry_count + 1)
+                    return await self._refresh_token_with_lock(captcha_retry_count + 1)
                 if refresh_result == "skipped_cooldown":
                     # 密码登录冷却期内跳过：包括「上次登录冷却 300 秒内」与「账密错误
                     # 冷却 5 小时内」两种确定性可恢复状态。账号本身一切正常，只是
@@ -1317,12 +1367,51 @@ class CookieTokenManager:
                         notification_sent = True
                         return None
 
+                    refetch_token_ok = bool(
+                        getattr(self, "_refetch_token_ok", False)
+                    )
+                    refetched_token = getattr(self, "_refetch_new_token", None)
+                    if isinstance(refetched_token, str):
+                        refetched_token = refetched_token.strip()
+                    else:
+                        refetched_token = None
+
+                    # Consume a token returned by the remote captcha endpoint here.
+                    # A non-empty cookie string alone must not trigger another token
+                    # API request when a usable token is already available.
+                    if (
+                        new_cookies_str is not None
+                        and refetch_token_ok
+                        and refetched_token
+                    ):
+                        token_changed = refetched_token != self._cached_token_in_use
+                        self.current_token = refetched_token
+                        self.parent._using_expired_startup_token = False
+                        self.last_token_refresh_time = time.time()
+                        self.parent.last_message_received_time = 0
+                        self.last_token_refresh_status = "success"
+                        await self._set_cached_token(refetched_token, self.device_id)
+                        self._clear_refetch_state()
+                        logger.info(
+                            f"[{self.cookie_id}] remote captcha endpoint returned a token; "
+                            "skip the duplicate token refresh request"
+                        )
+                        if token_changed:
+                            await self._reconnect_websocket_for_renewed_token(
+                                reason="remote captcha endpoint returned a new token"
+                            )
+                        return refetched_token
+
                     if new_cookies_str:
                         logger.info(f"【{self.cookie_id}】滑块验证成功，准备重新刷新token...")
                         # 滑块验证成功后，清除旧缓存并重新获取token
+                        self._clear_refetch_state()
                         await self._delete_cached_token()
-                        return await self.refresh_token(captcha_retry_count=captcha_retry_count + 1)
+                        return await self._refresh_token_with_lock(
+                            captcha_retry_count=captcha_retry_count + 1
+                        )
                     logger.error(f"【{self.cookie_id}】滑块验证失败")
+                    self._clear_refetch_state()
                     notification_sent = True
                     self.last_token_refresh_status = "failed_captcha"
                     self.current_token = None
@@ -1330,6 +1419,7 @@ class CookieTokenManager:
                     return None
                 except Exception as captcha_e:
                     logger.error(f"【{self.cookie_id}】滑块验证处理异常: {self._safe_str(captcha_e)}")
+                    self._clear_refetch_state()
                     notification_sent = True
                     self.last_token_refresh_status = "failed_captcha_exception"
                     self.current_token = None
@@ -1342,7 +1432,7 @@ class CookieTokenManager:
                     ret_value = res_json.get('ret', []) or []
                     logger.warning(f"【{self.cookie_id}】检测到令牌过期，准备重试一次: {ret_value}")
                     await asyncio.sleep(0.5)
-                    return await self.refresh_token(
+                    return await self._refresh_token_with_lock(
                         captcha_retry_count=captcha_retry_count,
                         token_expiry_retry_count=token_expiry_retry_count + 1,
                     )

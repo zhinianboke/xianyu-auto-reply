@@ -14,7 +14,12 @@ from common.schemas.notification import (
     NotificationChannelCreate,
     NotificationChannelUpdate,
 )
+from common.utils.notification_template import validate_notification_templates
 from app.services.account_service import AccountService
+
+
+class NotificationTemplateValidationError(ValueError):
+    """Raised when a notification channel contains an invalid template."""
 
 
 class NotificationChannelService:
@@ -38,6 +43,7 @@ class NotificationChannelService:
         payload: NotificationChannelCreate,
     ) -> dict[str, Any]:
         config = self._parse_config(payload.config)
+        self._validate_template_config(config)
         channel = NotificationChannel(
             owner_id=owner_id,
             name=payload.name.strip(),
@@ -68,12 +74,17 @@ class NotificationChannelService:
         if not channel:
             return None
 
+        config = None
+        if payload.config is not None:
+            config = self._parse_config(payload.config)
+            self._validate_template_config(config)
+
         if payload.name is not None:
             channel.name = payload.name.strip()
         if payload.type is not None:
             channel.channel_type = payload.type.strip()
         if payload.config is not None:
-            channel.config_payload = self._parse_config(payload.config)
+            channel.config_payload = config
         if payload.enabled is not None:
             channel.enabled = bool(payload.enabled)
 
@@ -114,6 +125,18 @@ class NotificationChannelService:
             return parsed if isinstance(parsed, dict) else {"value": parsed}
         except json.JSONDecodeError:
             return {"raw": value}
+
+    def _validate_template_config(self, config: dict | None) -> None:
+        """校验渠道配置中的模板字段，避免无效模板入库。
+
+        Args:
+            config: 解析后的通知渠道配置。
+        Returns:
+            校验成功时不返回内容；失败时抛出模板校验异常。
+        """
+        validation_error = validate_notification_templates(config)
+        if validation_error:
+            raise NotificationTemplateValidationError(validation_error)
 
 
 class MessageNotificationService:

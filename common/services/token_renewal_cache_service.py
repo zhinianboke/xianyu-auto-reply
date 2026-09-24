@@ -5,6 +5,7 @@ Token 缓存写入服务。
 1. 按 Token 缓存行、用户 ID、Device ID 条件写入续期 Token
 2. 保持与定时续期任务一致的并发保护条件，避免覆盖其他流程已更新的缓存
 3. 支持聊天 Token 基础缓存 upsert 和安全失效标记
+4. 支持持锁后的 Token 缓存有效性复查
 """
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import or_, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.dialects.mysql import insert
 
 from common.db.session import async_session_maker
@@ -63,6 +64,89 @@ class TokenCacheInvalidationResult:
     success: bool
     changed: bool = False
     message: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class TokenCacheLookupResult:
+    """Token 缓存有效性复查结果。"""
+
+    success: bool
+    reusable: bool = False
+    effective_expire_at: datetime | None = None
+    message: str = ""
+
+
+async def get_reusable_token_cache(
+    *,
+    token_user_id: str,
+    cache_id: int,
+    valid_after: datetime,
+    max_attempts: int = DEFAULT_DB_MAX_ATTEMPTS,
+    retry_delay_seconds: float = DEFAULT_DB_RETRY_DELAY_SECONDS,
+) -> TokenCacheLookupResult:
+    """复查指定 Token 缓存是否已被其他流程续期。
+
+    Args:
+        token_user_id: Token 缓存用户 ID。
+        cache_id: ``xy_token_cache.id``。
+        valid_after: 缓存有效期必须晚于该时间才可直接复用。
+        max_attempts: 数据库查询最大尝试次数。
+        retry_delay_seconds: 相邻重试之间的等待秒数。
+    Returns:
+        查询状态、是否可复用及实际有效期。
+    """
+    attempts = max(1, int(max_attempts))
+    last_error = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            async with async_session_maker() as session:
+                row = (
+                    await session.execute(
+                        select(
+                            TokenCache.token,
+                            TokenCache.device_id,
+                            TokenCache.expire_at,
+                            TokenCache.renew_expire_at,
+                        ).where(
+                            TokenCache.id == cache_id,
+                            TokenCache.user_id == token_user_id,
+                        )
+                    )
+                ).one_or_none()
+            break
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            if attempt < attempts:
+                await asyncio.sleep(max(0.0, retry_delay_seconds))
+    else:
+        return TokenCacheLookupResult(
+            success=False,
+            message=f"复查Token缓存失败，已重试{attempts}次：{last_error}",
+        )
+
+    if row is None:
+        return TokenCacheLookupResult(False, message="Token缓存已不存在")
+    if not str(row.token or "").strip() or not str(row.device_id or "").strip():
+        return TokenCacheLookupResult(False, message="Token缓存内容不完整")
+
+    valid_expiries = [
+        expiry
+        for expiry in (row.expire_at, row.renew_expire_at)
+        if expiry is not None and expiry > valid_after
+    ]
+    if not valid_expiries:
+        return TokenCacheLookupResult(True, message="Token缓存仍需续期")
+
+    effective_expire_at = max(valid_expiries)
+    return TokenCacheLookupResult(
+        success=True,
+        reusable=True,
+        effective_expire_at=effective_expire_at,
+        message=(
+            "Token缓存已由其他流程续期，"
+            f"有效期至{effective_expire_at:%Y-%m-%d %H:%M:%S}"
+        ),
+    )
 
 
 async def mark_token_cache_expired(

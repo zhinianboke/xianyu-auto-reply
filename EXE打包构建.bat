@@ -8,6 +8,18 @@ echo   XianyuAutoReply - One-Click Build
 echo ============================================
 echo.
 
+REM --- Ask whether to use local proxy ---
+choice /C YN /M "Use local proxy for downloads? (Y=yes, N=no)"
+if %errorlevel% equ 1 (
+    echo [INFO] Setting Clash local proxy: http://127.0.0.1:7890
+    set HTTP_PROXY=http://127.0.0.1:7890
+    set HTTPS_PROXY=http://127.0.0.1:7890
+    echo [INFO] Proxy configured successfully.
+) else (
+    echo [INFO] No proxy configured.
+)
+echo.
+
 REM --- Ask whether to skip frontend build ---
 set SKIP_FRONTEND=0
 choice /C YN /M "Skip frontend build (Y=skip, N=rebuild)"

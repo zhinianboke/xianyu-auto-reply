@@ -21,9 +21,12 @@ export interface FetchItemsSummaryResponse extends ApiResponse {
 }
 
 // 获取商品列表
-export const getItems = async (cookieId?: string): Promise<{ success: boolean; data: Item[] }> => {
+export const getItems = async (cookieId?: string): Promise<{ success: boolean; data: Item[]; message?: string }> => {
   const url = cookieId ? `${ITEM_PREFIX}/cookie/${cookieId}` : ITEM_PREFIX
-  const result = await get<{ items?: Item[] } | Item[]>(url)
+  const result = await get<{ items?: Item[]; success?: boolean; message?: string } | Item[]>(url)
+  if (!Array.isArray(result) && result.success === false) {
+    return { success: false, data: [], message: result.message || '商品列表加载失败' }
+  }
   // 后端返回 { items: [...] } 或直接返回数组
   const items = Array.isArray(result) ? result : (result.items || [])
   return { success: true, data: items }
@@ -269,9 +272,14 @@ export interface ItemDefaultReplyConfig {
   reply_image: string
   enabled: boolean
   reply_once: boolean
-  reply_type?: string  // text-文本，image-图片，api-接口
+  reply_type?: string  // text-文本，image-图片，api-接口，external_contact-站外联系方式
   api_url?: string
   api_timeout?: number
+  location_name?: string
+  location_longitude?: string
+  location_latitude?: string
+  location_title?: string
+  location_subtitle?: string
 }
 
 // 获取商品默认回复配置
@@ -283,7 +291,7 @@ export const getItemDefaultReply = (cookieId: string, itemId: string): Promise<A
 export const saveItemDefaultReply = (
   cookieId: string,
   itemId: string,
-  data: { reply_content: string; reply_image?: string; enabled: boolean; reply_once: boolean; reply_type?: string; api_url?: string; api_timeout?: number }
+  data: { reply_content: string; reply_image?: string; enabled: boolean; reply_once: boolean; reply_type?: string; api_url?: string; api_timeout?: number; location_name?: string; location_longitude?: string; location_latitude?: string; location_title?: string; location_subtitle?: string }
 ): Promise<ApiResponse> => {
   return put(`${ITEM_PREFIX}/${cookieId}/${itemId}/default-reply`, data)
 }
@@ -309,7 +317,7 @@ export const deleteItemDefaultReply = (cookieId: string, itemId: string): Promis
 // 批量保存商品默认回复配置
 export const batchSaveItemDefaultReply = (
   cookieId: string,
-  data: { item_ids: string[]; reply_content: string; reply_image?: string; enabled: boolean; reply_once: boolean; reply_type?: string; api_url?: string; api_timeout?: number }
+  data: { item_ids: string[]; reply_content: string; reply_image?: string; enabled: boolean; reply_once: boolean; reply_type?: string; api_url?: string; api_timeout?: number; location_name?: string; location_longitude?: string; location_latitude?: string; location_title?: string; location_subtitle?: string }
 ): Promise<ApiResponse> => {
   return post(`${ITEM_PREFIX}/${cookieId}/batch-default-reply`, data)
 }

@@ -458,6 +458,26 @@ export const updateUserSetting = async (key: string, value: string, description?
   return put(`/api/v1/user-settings/${key}`, { value, description })
 }
 
+export interface LocationChatRemoteTestResult {
+  success: boolean
+  message?: string
+  data?: {
+    status_code?: number
+    duration_ms?: number
+    protocol_version?: string
+  }
+}
+
+export const testLocationChatRemoteApi = async (
+  url: string,
+  secretKey: string,
+): Promise<LocationChatRemoteTestResult> => {
+  return post('/api/v1/user-settings/external-api/location-chat/test', {
+    url,
+    secret_key: secretKey,
+  })
+}
+
 // 一键创建对接卡密秘钥（后端调用外部密钥服务创建并自动保存到当前用户）
 export const createCardSecretKey = async (): Promise<ApiResponse<{ key_value: string }>> => {
   return post('/api/v1/user-settings/card-secret-key/create')

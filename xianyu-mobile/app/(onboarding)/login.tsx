@@ -24,6 +24,7 @@ import {
   loginWithEmail,
   loginWithVerificationCode,
   sendEmailCode,
+  validateGeetest,
   getPublicSettings,
   extractUser,
   type LoginResponse,
@@ -35,6 +36,13 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function isValidEmail(email: string) {
   return EMAIL_RE.test(email);
+}
+
+/** 宽松解析布尔型系统设置：兼容 true / 'true' / '1' / 1 与大小写、空白差异 */
+function isTruthySetting(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  const text = String(value ?? '').trim().toLowerCase();
+  return text === 'true' || text === '1';
 }
 
 /** 60 秒倒计时 hook */
@@ -83,6 +91,7 @@ export default function LoginScreen() {
 
   // 极验滑块验证
   const [captchaVisible, setCaptchaVisible] = useState(false);
+  const [captchaInline, setCaptchaInline] = useState(false);
   const [geetestResult, setGeetestResult] = useState<{
     challenge: string;
     validate: string;
@@ -95,8 +104,8 @@ export default function LoginScreen() {
       try {
         const settings = await getPublicSettings();
         if (cancelled) return;
-        setCaptchaEnabled(settings.login_captcha_enabled === true || settings.login_captcha_enabled === 'true');
-        setRegistrationEnabled(settings.registration_enabled === true || settings.registration_enabled === 'true');
+        setCaptchaEnabled(isTruthySetting(settings.login_captcha_enabled));
+        setRegistrationEnabled(isTruthySetting(settings.registration_enabled));
       } catch {
         // 读取失败时保持默认（无滑块、不显示注册入口），不阻塞登录
       }
@@ -131,21 +140,30 @@ export default function LoginScreen() {
     );
   }
 
-  /** 滑块验证成功：存储结果并关闭弹窗 */
-  function handleCaptchaSuccess(
+  /** 滑块验证成功：先完成服务端二次校验，再存储结果并关闭弹窗 */
+  async function handleCaptchaSuccess(
     challenge: string,
     validate: string,
     seccode: string,
   ) {
+    try {
+      await validateGeetest(challenge, validate, seccode);
+    } catch (e) {
+      setGeetestResult(null);
+      Alert.alert('验证失败', `${(e as Error).message || '未知错误'}，请重新完成滑块验证`);
+      return;
+    }
     setGeetestResult({ challenge, validate, seccode });
     setCaptchaVisible(false);
+    setCaptchaInline(false);
   }
 
-  /** 登录返回滑块相关错误时，提示并重置验证结果以便重新完成 */
+  /** 登录返回滑块相关错误时：重置结果，直接打开验证弹窗并提示重新完成 */
   function handleCaptchaFailure(message: string) {
     setGeetestResult(null);
-    Alert.alert('验证失效', `${message}，请重新完成滑块验证`, [
-      { text: '知道了' },
+    setCaptchaVisible(true);
+    Alert.alert('需要完成滑块验证', `${message}。已为你打开验证弹窗，完成滑动后重新点击登录即可。`, [
+      { text: '去完成' },
     ]);
   }
 
@@ -156,7 +174,8 @@ export default function LoginScreen() {
       return;
     }
     if (captchaEnabled && !geetestResult) {
-      Alert.alert('提示', '请先完成滑块验证');
+      // 修复：未完成滑块时直接弹出验证弹窗（原实现只 Alert 提示不弹窗，导致永远无法完成验证）
+      setCaptchaVisible(true);
       return;
     }
     setLoading(true);
@@ -195,7 +214,8 @@ export default function LoginScreen() {
       return;
     }
     if (captchaEnabled && !geetestResult) {
-      Alert.alert('提示', '请先完成滑块验证');
+      // 修复：未完成滑块时直接弹出验证弹窗（原实现只 Alert 提示不弹窗，导致永远无法完成验证）
+      setCaptchaVisible(true);
       return;
     }
     setLoading(true);
@@ -457,6 +477,13 @@ export default function LoginScreen() {
               disabled={!!geetestResult}
             />
           )}
+          {(tab === 'account' || tab === 'email') && captchaEnabled && !geetestResult && (
+            <Pressable onPress={() => setCaptchaInline(true)} style={{ alignSelf: 'center' }}>
+              <Text style={[styles.link, { color: c.primary }]}>
+                拖不动滑块？点这里换一种方式重试
+              </Text>
+            </Pressable>
+          )}
           {tab === 'account' && (
             <Button label="登录" onPress={handleAccountLogin} loading={loading} />
           )}
@@ -490,6 +517,12 @@ export default function LoginScreen() {
       <GeetestCaptcha
         visible={captchaVisible}
         onClose={() => setCaptchaVisible(false)}
+        onSuccess={handleCaptchaSuccess}
+      />
+      <GeetestCaptcha
+        visible={captchaInline}
+        inline
+        onClose={() => setCaptchaInline(false)}
         onSuccess={handleCaptchaSuccess}
       />
     </SafeAreaView>

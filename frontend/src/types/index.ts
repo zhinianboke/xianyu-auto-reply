@@ -94,8 +94,13 @@ export interface Keyword {
   keyword: string
   reply: string
   item_id?: string      // 绑定的商品ID，空表示通用关键词
-  type?: 'text' | 'image' | 'item' | 'normal'  // 关键词类型
+  type?: 'text' | 'image' | 'external_contact' | 'item' | 'normal'  // 关键词类型
   image_url?: string    // 图片类型关键词的图片URL
+  location_name?: string
+  location_longitude?: string
+  location_latitude?: string
+  location_title?: string
+  location_subtitle?: string
   created_at?: string
   updated_at?: string
 }
@@ -325,6 +330,7 @@ export interface SystemSettings {
 // API 响应类型
 export interface ApiResponse<T = unknown> {
   success: boolean
+  code?: number
   message?: string
   data?: T
   // 后端兼容字段

@@ -39,6 +39,10 @@ from common.services.token_api_mode import (
     get_token_api_mode_label,
     load_token_api_mode,
 )
+from common.services.token_request_lock import (
+    TokenRequestLockError,
+    token_request_lock,
+)
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.xianyu_utils import (
     generate_device_id,
@@ -108,6 +112,7 @@ class GoofishImClient:
         self.cookies_str = cookies_str
         self.cookies: Dict[str, str] = trans_cookies(cookies_str)
         self.myid: str = self.cookies.get("unb", "")
+        self._last_token_cache_lookup_succeeded = True
         self.device_id: str = generate_device_id(self.myid)
         self.token: str = ""
         self._captcha_token_cache_saved = False
@@ -544,6 +549,7 @@ class GoofishImClient:
         Returns:
             包含token和device_id的字典，不存在或已过期则返回None
         """
+        self._last_token_cache_lookup_succeeded = False
         try:
             async with async_session_maker() as session:
                 result = await session.execute(
@@ -556,6 +562,7 @@ class GoofishImClient:
                     {"user_id": self._cache_user_id},
                 )
                 row = result.fetchone()
+                self._last_token_cache_lookup_succeeded = True
 
                 if row:
                     token_val, device_id_val, expire_at = row
@@ -626,7 +633,21 @@ class GoofishImClient:
     # ==================== 内部方法 ====================
 
     async def _get_im_token(self) -> str:
-        """获取IM Token，优先从数据库缓存获取，缓存未命中再调mtop API"""
+        """在账号级 Redis 锁内获取 IM Token。
+
+        Returns:
+            数据库缓存或 Token 接口返回的 Token；失败时返回空值。
+        """
+        account_identifier = self.myid or self.account_id
+        try:
+            async with token_request_lock(account_identifier):
+                return await self._get_im_token_with_lock()
+        except TokenRequestLockError as exc:
+            logger.error(f"【{self.account_id}】{exc}")
+            return ""
+
+    async def _get_im_token_with_lock(self) -> str:
+        """持锁后复查数据库缓存，未命中时调用 Token 接口并写回。"""
         # 1. 先从数据库缓存获取
         cached = await self._get_cached_token()
         if cached:
@@ -636,6 +657,11 @@ class GoofishImClient:
                 f"【{self.account_id}】使用数据库缓存的Token和Device ID"
             )
             return cached["token"]
+        if not self._last_token_cache_lookup_succeeded:
+            logger.error(
+                f"【{self.account_id}】Token缓存复查失败，本次未调用Token接口"
+            )
+            return ""
 
         # 2. 缓存未命中，调API获取
         token = await self._fetch_im_token_from_api()

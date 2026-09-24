@@ -107,9 +107,16 @@ async def send_message(request: SendMessageRequest):
             account_id=cleaned_cookie_id,
             chat_id=cleaned_chat_id,
             content=cleaned_message,
-            message_type="text"
+            message_type="text",
+            to_user_id=cleaned_to_user_id,
         )
-        
+
+        send_data = result.get('data') or {}
+        if result.get('success') and send_data.get('send_status') == 'failed':
+            reason = send_data.get('send_fail_reason') or '闲鱼服务端拒绝'
+            logger.error(f"消息被闲鱼服务端拦截: {cleaned_cookie_id} -> {cleaned_to_user_id}: {reason}")
+            return SendMessageResponse(success=False, message=f"消息被闲鱼拦截: {reason}")
+
         if result.get('success'):
             logger.info(f"消息发送成功: {cleaned_cookie_id} -> {cleaned_to_user_id}")
             return SendMessageResponse(

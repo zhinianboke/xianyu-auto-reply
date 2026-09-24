@@ -10,6 +10,9 @@ from common.models.user import User
 from common.utils.auth_scope import resolve_owner_scope
 from common.utils.local_image_upload import ImageUploadError, save_uploaded_image
 from common.utils.default_reply_api import validate_api_url, normalize_api_timeout
+from common.utils.default_reply_location import EXTERNAL_CONTACT_REPLY_TYPE, validate_external_contact_fields
+from common.models.user_setting import UserSetting
+from sqlalchemy import select
 from app.services.account_service import AccountService
 from app.services.default_reply_service import DefaultReplyService
 
@@ -23,11 +26,16 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 class DefaultReplyUpdate(BaseModel):
     enabled: bool = False
-    reply_type: str = "text"  # text-文本(可附带图片)，api-接口
+    reply_type: str = "text"  # text-文本(可附带图片)，api-接口，external_contact-站外联系方式
     reply_content: str = ""
     reply_image: str = ""
     api_url: str = ""
     api_timeout: int = 80
+    location_name: str = ""
+    location_longitude: str = ""
+    location_latitude: str = ""
+    location_title: str = ""
+    location_subtitle: str = ""
     reply_once: bool = False
 
 
@@ -60,6 +68,11 @@ async def get_default_reply(
             "reply_image": "",
             "api_url": "",
             "api_timeout": 80,
+            "location_name": "",
+            "location_longitude": "",
+            "location_latitude": "",
+            "location_title": "",
+            "location_subtitle": "",
             "reply_once": False,
         }
     return result
@@ -89,6 +102,30 @@ async def update_default_reply(
                 "success": False,
                 "message": err,
             }
+    if reply_data.reply_type == EXTERNAL_CONTACT_REPLY_TYPE:
+        setting_result = await reply_service.session.execute(select(UserSetting.key, UserSetting.value).where(
+            UserSetting.user_id == account.owner_id,
+            UserSetting.key.in_(
+                ("location_chat.remote_url", "location_chat.remote_secret_key")
+            ),
+        ))
+        location_settings = {str(key): str(value or "").strip() for key, value in setting_result.all()}
+        remote_url = location_settings.get("location_chat.remote_url", "")
+        if not location_settings.get("location_chat.remote_secret_key"):
+            return {
+                "success": False,
+                "message": "请先到个人设置的远程URL配置中填写位置聊天远程URL和秘钥",
+            }
+        location_error = validate_external_contact_fields(
+            remote_url=remote_url,
+            location_name=reply_data.location_name,
+            longitude=reply_data.location_longitude,
+            latitude=reply_data.location_latitude,
+            title=reply_data.location_title,
+            subtitle=reply_data.location_subtitle,
+        )
+        if location_error:
+            return {"success": False, "message": location_error}
 
     await reply_service.save_default_reply(
         account_id,
@@ -99,6 +136,11 @@ async def update_default_reply(
         reply_type=reply_data.reply_type,
         api_url=reply_data.api_url,
         api_timeout=api_timeout,
+        location_name=reply_data.location_name,
+        location_longitude=reply_data.location_longitude,
+        location_latitude=reply_data.location_latitude,
+        location_title=reply_data.location_title,
+        location_subtitle=reply_data.location_subtitle,
     )
     return {
         "success": True,

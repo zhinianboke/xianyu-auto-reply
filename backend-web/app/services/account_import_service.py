@@ -503,6 +503,11 @@ class AccountImportService:
                 existing.reply_content = _parse_str(row.get("回复内容")) or existing.reply_content
                 existing.reply_type = _parse_str(row.get("回复类型")) or existing.reply_type
                 existing.image_url = _parse_str(row.get("图片URL")) or existing.image_url
+                existing.location_name = _parse_str(row.get("定位名称")) or existing.location_name
+                existing.location_longitude = _parse_str(row.get("经度")) or existing.location_longitude
+                existing.location_latitude = _parse_str(row.get("纬度")) or existing.location_latitude
+                existing.location_title = _parse_str(row.get("位置标题")) or existing.location_title
+                existing.location_subtitle = _parse_str(row.get("位置副标题")) or existing.location_subtitle
                 existing.priority = _parse_int(row.get("优先级"), existing.priority)
                 existing.is_active = _parse_bool(row.get("启用"))
             else:
@@ -513,6 +518,11 @@ class AccountImportService:
                     reply_content=_parse_str(row.get("回复内容")) or None,
                     reply_type=_parse_str(row.get("回复类型")) or "text",
                     image_url=_parse_str(row.get("图片URL")) or None,
+                    location_name=_parse_str(row.get("定位名称")) or None,
+                    location_longitude=_parse_str(row.get("经度")) or None,
+                    location_latitude=_parse_str(row.get("纬度")) or None,
+                    location_title=_parse_str(row.get("位置标题")) or None,
+                    location_subtitle=_parse_str(row.get("位置副标题")) or None,
                     item_id=item_id,
                     priority=_parse_int(row.get("优先级"), 100),
                     is_active=_parse_bool(row.get("启用")),
@@ -549,6 +559,11 @@ class AccountImportService:
                 api_timeout = _parse_int(row.get("API超时"))
                 if api_timeout:
                     existing.api_timeout = api_timeout
+                existing.location_name = _parse_str(row.get("\u5b9a\u4f4d\u540d\u79f0")) or existing.location_name
+                existing.location_longitude = _parse_str(row.get("\u7ecf\u5ea6")) or existing.location_longitude
+                existing.location_latitude = _parse_str(row.get("\u7eac\u5ea6")) or existing.location_latitude
+                existing.location_title = _parse_str(row.get("\u4f4d\u7f6e\u6807\u9898")) or existing.location_title
+                existing.location_subtitle = _parse_str(row.get("\u4f4d\u7f6e\u526f\u6807\u9898")) or existing.location_subtitle
             else:
                 reply = DefaultReply(
                     account_id=account_id,
@@ -561,6 +576,11 @@ class AccountImportService:
                     api_url=_parse_str(row.get("API地址")) or None,
                     api_timeout=_parse_int(row.get("API超时")) or 80,
                 )
+                reply.location_name = _parse_str(row.get("\u5b9a\u4f4d\u540d\u79f0")) or None
+                reply.location_longitude = _parse_str(row.get("\u7ecf\u5ea6")) or None
+                reply.location_latitude = _parse_str(row.get("\u7eac\u5ea6")) or None
+                reply.location_title = _parse_str(row.get("\u4f4d\u7f6e\u6807\u9898")) or None
+                reply.location_subtitle = _parse_str(row.get("\u4f4d\u7f6e\u526f\u6807\u9898")) or None
                 self.session.add(reply)
 
         await self.session.commit()

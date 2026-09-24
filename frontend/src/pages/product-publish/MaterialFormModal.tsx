@@ -339,6 +339,7 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
             onUploadSpecImage={handleSpecUpload}
             categoryLocked={categoryLocked}
             onCategoryEdit={() => setCategoryLocked(false)}
+            unlockCategoryOnTextChange={false}
           />
 
           <div className="input-group"><label className="input-label">备注（内部使用，不公开）</label><input className="input-ios" maxLength={500} placeholder="选填" value={form.remark} onChange={(event) => setForm((current) => ({ ...current, remark: event.target.value }))} /></div>

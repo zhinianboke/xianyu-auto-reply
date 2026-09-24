@@ -18,6 +18,7 @@ from typing import Any
 import aiohttp
 from loguru import logger
 
+from app.services.platform_category_fields import category_result, first_text
 from common.utils.cookie_refresh import (
     handle_token_expired_response,
     is_token_expired_error,
@@ -31,11 +32,8 @@ CATEGORY_RECOMMEND_URL = (
     "mtop.taobao.idle.kgraph.pc.property.recommend/2.0/"
 )
 REQUEST_TIMEOUT_SECONDS = 20
-
-
 class CategoryRecommendationError(RuntimeError):
     """分类推荐接口不可用或未返回有效分类时抛出的业务异常。"""
-
 
 def _get_h5_token(cookie: str) -> str:
     """从 Cookie 中提取 mtop 签名所需的 _m_h5_tk token。"""
@@ -44,25 +42,29 @@ def _get_h5_token(cookie: str) -> str:
         if separator and name == "_m_h5_tk":
             return value.split("_", 1)[0]
     return ""
-
-
 def _make_sign(timestamp: str, token: str, data: str) -> str:
     """按 mtop 规则生成请求签名。"""
     return hashlib.md5(f"{token}&{timestamp}&{APP_KEY}&{data}".encode("utf-8")).hexdigest()
-
-
 def _as_text(value: Any) -> str:
     """将接口字段安全转换为去除首尾空格的字符串。"""
     return str(value).strip() if value is not None else ""
-
-
 def _as_bool(value: Any) -> bool:
     """兼容接口返回的布尔值和字符串布尔值。"""
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes"}
     return bool(value)
-
-
+def _value_name(value: dict[str, Any], transport: dict[str, Any]) -> str:
+    """兼容分类卡和属性卡中不同版本的选项显示字段。"""
+    direct_name = (
+        _as_text(value.get("valueName"))
+        or _as_text(value.get("text"))
+        or _as_text(transport.get("valueName"))
+        or _as_text(transport.get("text"))
+    )
+    if direct_name:
+        return direct_name
+    properties = _as_text(value.get("properties")) or _as_text(transport.get("properties"))
+    return properties.rsplit("##", 1)[-1].strip() if "##" in properties else ""
 def _build_path(value: dict[str, Any]) -> list[dict[str, str]]:
     """根据响应中实际存在的 channelCatN 字段动态构建分类路径。"""
     path: list[dict[str, str]] = []
@@ -93,8 +95,6 @@ def _build_path(value: dict[str, Any]) -> list[dict[str, str]]:
     if not path:
         append_level(_as_text(value.get("catId")), _as_text(value.get("catName")))
     return path
-
-
 def _card_list(response: dict[str, Any]) -> list[dict[str, Any]]:
     """读取推荐接口返回的 cardList，兼容字符串形式的 cardList。"""
     data = response.get("data") or {}
@@ -105,8 +105,6 @@ def _card_list(response: dict[str, Any]) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             cards = []
     return cards if isinstance(cards, list) else []
-
-
 def _parse_current_card_list(response: dict[str, Any]) -> list[dict[str, Any]]:
     """保留接口返回的完整 cardData，供下一次分类切换请求作为 currentCardList。
 
@@ -137,16 +135,23 @@ def _parse_candidates(response: dict[str, Any]) -> list[dict[str, Any]]:
             if not isinstance(value, dict):
                 continue
             transport = value.get("transportData") if isinstance(value.get("transportData"), dict) else {}
-            channel_cat_id = _as_text(value.get("channelCatId")) or _as_text(transport.get("channelCateId"))
-            channel_cat_name = _as_text(value.get("channelCatName")) or _as_text(transport.get("channelCateName"))
-            cat_name = _as_text(value.get("catName")) or _as_text(transport.get("valueName"))
-            tb_cat_id = _as_text(value.get("tbCatId")) or _as_text(transport.get("tbCatId"))
+            channel_cat_id = first_text(value.get("channelCatId"), transport.get("channelCateId"),
+                                        value.get("channelCategoryId"), transport.get("channelCategoryId"))
+            cat_id = first_text(value.get("catId"), transport.get("catId"),
+                                value.get("categoryId"), transport.get("categoryId"))
+            cat_name = _as_text(value.get("catName")) or _value_name(value, transport)
+            channel_cat_name = _as_text(value.get("channelCatName")) or _as_text(transport.get("channelCateName")) or cat_name
+            leaf_id = first_text(value.get("leafId"), transport.get("leafId"))
+            tb_cat_id = first_text(value.get("tbCatId"), transport.get("tbCatId"),
+                                   value.get("taobaoCategoryId"), transport.get("taobaoCategoryId"))
             normalized_value = {
                 **transport,
                 **value,
+                "catId": cat_id,
                 "channelCatId": channel_cat_id,
                 "channelCatName": channel_cat_name,
                 "catName": cat_name,
+                "leafId": leaf_id,
                 "tbCatId": tb_cat_id,
             }
             path = _build_path(normalized_value)
@@ -156,11 +161,11 @@ def _parse_candidates(response: dict[str, Any]) -> list[dict[str, Any]]:
                 continue
             candidates.append(
                 {
-                    "cat_id": _as_text(value.get("catId")) or None,
+                    "cat_id": cat_id or None,
                     "cat_name": cat_name or None,
                     "channel_cat_id": channel_cat_id or None,
                     "channel_cat_name": channel_cat_name or None,
-                    "leaf_id": _as_text(value.get("leafId")) or None,
+                    "leaf_id": leaf_id or None,
                     "tb_cat_id": tb_cat_id or None,
                     "path": path,
                     "score": value.get("score"),
@@ -180,32 +185,63 @@ def _apply_category_predict_result(
     都存在，因此仅对当前命中的候选合并该信息。
     """
     data = response.get("data") or {}
-    result = data.get("categoryPredictResult") if isinstance(data, dict) else None
-    if not isinstance(result, dict):
+    result = category_result(data.get("categoryPredictResult") if isinstance(data, dict) else None)
+    if not result:
         return candidates
 
-    cat_id = _as_text(result.get("catId"))
+    cat_id = first_text(result.get("catId"), result.get("categoryId"))
     cat_name = _as_text(result.get("catName"))
-    channel_cat_id = _as_text(result.get("channelCatId"))
-    tb_cat_id = _as_text(result.get("tbCatId"))
+    channel_cat_id = first_text(result.get("channelCatId"), result.get("channelCategoryId"))
+    tb_cat_id = first_text(result.get("tbCatId"), result.get("taobaoCategoryId"))
     if not any((cat_id, cat_name, channel_cat_id, tb_cat_id)):
         return candidates
 
-    for candidate in candidates:
-        matches = (
-            bool(channel_cat_id and candidate.get("channel_cat_id") == channel_cat_id)
-            or bool(tb_cat_id and candidate.get("tb_cat_id") == tb_cat_id)
-            or bool(cat_id and candidate.get("cat_id") == cat_id)
-            or bool(cat_name and candidate.get("cat_name") == cat_name)
+    identifier_fields = (
+        (channel_cat_id, "channel_cat_id", 8),
+        (tb_cat_id, "tb_cat_id", 4),
+        (cat_id, "cat_id", 2),
+    )
+
+    def match_score(candidate: dict[str, Any]) -> int:
+        """已有标识必须全部一致，并优先选择匹配信息最完整的候选。"""
+        score = 0
+        for result_value, candidate_field, weight in identifier_fields:
+            candidate_value = _as_text(candidate.get(candidate_field))
+            if not result_value or not candidate_value:
+                continue
+            if candidate_value != result_value:
+                return -1
+            score += weight
+        candidate_name = _as_text(candidate.get("cat_name"))
+        if cat_name and candidate_name:
+            if candidate_name == cat_name:
+                score += 1
+            elif score == 0:
+                return -1
+        return score
+
+    best_score, matched_candidate = max(
+        ((match_score(candidate), candidate) for candidate in candidates),
+        key=lambda item: item[0],
+        default=(-1, None),
+    )
+    if best_score <= 0:
+        # 某些响应的分类卡只返回名称或频道分类 ID，但 categoryPredictResult
+        # 已明确给出当前选中的完整分类。此时优先使用卡片中的显式选中项，
+        # 否则使用平台返回的首个候选（推荐结果按平台相关度排序）。
+        matched_candidate = next(
+            (candidate for candidate in candidates if candidate.get("is_selected")),
+            candidates[0] if candidates else None,
         )
-        if not matches:
-            continue
-        candidate["cat_id"] = candidate.get("cat_id") or cat_id or None
-        candidate["cat_name"] = candidate.get("cat_name") or cat_name or None
-        candidate["channel_cat_id"] = candidate.get("channel_cat_id") or channel_cat_id or None
-        candidate["tb_cat_id"] = candidate.get("tb_cat_id") or tb_cat_id or None
-        candidate["is_selected"] = True
-        break
+    if matched_candidate:
+        for candidate in candidates:
+            candidate["is_selected"] = candidate is matched_candidate
+        matched_candidate["cat_id"] = matched_candidate.get("cat_id") or cat_id or None
+        matched_candidate["cat_name"] = matched_candidate.get("cat_name") or cat_name or None
+        matched_candidate["channel_cat_id"] = (
+            matched_candidate.get("channel_cat_id") or channel_cat_id or None
+        )
+        matched_candidate["tb_cat_id"] = matched_candidate.get("tb_cat_id") or tb_cat_id or None
     return candidates
 
 
@@ -232,19 +268,31 @@ def _parse_properties(response: dict[str, Any]) -> list[dict[str, Any]]:
                 continue
             transport = value.get("transportData") if isinstance(value.get("transportData"), dict) else {}
             value_id = _as_text(value.get("valueId")) or _as_text(transport.get("valueId"))
-            value_name = _as_text(value.get("valueName")) or _as_text(transport.get("valueName"))
+            value_name = _value_name(value, transport)
             if not value_name:
                 continue
             channel_cat_id = _as_text(value.get("channelCatId")) or _as_text(transport.get("channelCateId"))
             tb_cat_id = _as_text(value.get("tbCatId")) or _as_text(transport.get("tbCatId"))
+            properties_value = _as_text(value.get("properties")) or _as_text(transport.get("properties"))
+            is_selected = any(
+                _as_bool(item)
+                for item in (
+                    value.get("isClicked"),
+                    value.get("isUserClick"),
+                    transport.get("isClicked"),
+                    transport.get("isUserClick"),
+                )
+            )
             options.append(
                 {
                     "property_id": property_id,
                     "property_name": property_name,
                     "value_id": value_id or None,
                     "value_name": value_name,
+                    "properties": properties_value or None,
                     "channel_cat_id": channel_cat_id or None,
                     "tb_cat_id": tb_cat_id or None,
+                    "is_selected": is_selected,
                 }
             )
 

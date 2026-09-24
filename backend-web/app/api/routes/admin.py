@@ -412,7 +412,15 @@ async def get_system_logs(
     if not log_dir.exists():
         return {"success": False, "message": "日志目录不存在", "logs": [], "total": 0}
  
-    log_files = sorted(log_dir.glob("*.log"), key=lambda item: item.stat().st_mtime)
+    # 普通日志已经包含 ERROR 及以上级别；error.log 是其副本，聚合展示时排除，避免同一条错误重复出现。
+    log_files = sorted(
+        (
+            log_file
+            for log_file in log_dir.glob("*.log")
+            if log_file.name != "error.log" and not log_file.name.startswith("error.")
+        ),
+        key=lambda item: item.stat().st_mtime,
+    )
     if not log_files:
         return {"success": True, "logs": [], "total": 0}
  

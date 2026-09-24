@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Index, String, Text
+from sqlalchemy import BigInteger, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base, TimestampMixin
@@ -20,6 +20,7 @@ class PublishLog(TimestampMixin, Base):
     __tablename__ = "xy_publish_logs"
     __table_args__ = (
         Index("idx_publish_user_created", "user_id", "created_at"),
+        UniqueConstraint("publish_request_id", name="uk_publish_request_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
@@ -30,6 +31,8 @@ class PublishLog(TimestampMixin, Base):
     price: Mapped[str | None] = mapped_column(String(20), comment="发布价格")
     material_id: Mapped[int | None] = mapped_column(BigInteger, comment="关联的素材ID（批量发布时使用）")
     batch_id: Mapped[str | None] = mapped_column(String(36), index=True, comment="批次ID（批量发布任务标识）")
+    publish_request_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True, comment="发布幂等请求号")
+    source_event_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True, comment="来源自动续售事件ID")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", comment="状态：pending/publishing/success/failed")
     item_url: Mapped[str | None] = mapped_column(String(500), comment="发布成功后的商品链接")
     item_id: Mapped[str | None] = mapped_column(String(64), comment="发布成功后的商品ID")

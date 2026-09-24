@@ -19,13 +19,18 @@ class DefaultReply(Base):
     account_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True, comment="账号标识")  # 对应 xy_accounts.account_id
     item_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True, comment="商品ID(空为账号默认回复)")  # 商品ID，空为账号默认回复
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否启用")
-    # 回复类型：text-文本回复（可附带图片），api-调用外部API获取回复内容
-    reply_type: Mapped[str] = mapped_column(String(16), default="text", server_default="text", comment="回复类型：text-文本(可附带图片)，api-接口")
+    # 回复类型：text-文本回复（可附带图片），api-调用外部API获取回复内容，external_contact-站外联系方式
+    reply_type: Mapped[str] = mapped_column(String(32), default="text", server_default="text", comment="回复类型：text-文本(可附带图片)，api-接口，external_contact-站外联系方式")
     reply_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="回复内容")
     reply_image: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, comment="回复图片URL")  # 回复图片URL
     # API 类型默认回复配置
     api_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True, comment="API地址(reply_type=api时POST此地址)")  # API 地址（POST）
     api_timeout: Mapped[int] = mapped_column(Integer, default=80, server_default="80", comment="API请求超时时间(秒)")  # API 请求超时时间（秒）
+    location_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment="站外联系方式定位名称")
+    location_longitude: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, comment="站外联系方式经度")
+    location_latitude: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, comment="站外联系方式纬度")
+    location_title: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, comment="站外联系方式位置标题")
+    location_subtitle: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment="站外联系方式位置副标题")
     reply_once: Mapped[bool] = mapped_column(Boolean, default=False, comment="只回复一次")  # 是否只回复一次
     
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")

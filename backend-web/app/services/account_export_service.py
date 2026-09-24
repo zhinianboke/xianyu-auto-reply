@@ -295,18 +295,22 @@ class AccountExportService:
         _write_sheet(wb, "卡券商品关联", headers, rows)
 
     def _write_keyword_rules(self, wb: Workbook, rules: list[XYKeywordRule], pk_map: dict) -> None:
-        headers = ["账号ID", "关键词", "回复内容", "回复类型", "图片URL", "商品ID", "优先级", "启用"]
+        headers = ["账号ID", "关键词", "回复内容", "回复类型", "图片URL", "定位名称", "经度", "纬度", "位置标题", "位置副标题", "商品ID", "优先级", "启用"]
         rows = []
         for rule in rules:
             rows.append([
                 pk_map.get(rule.account_pk, ""),
                 rule.keyword, rule.reply_content, rule.reply_type,
-                rule.image_url, rule.item_id, rule.priority, rule.is_active,
+                rule.image_url, rule.location_name, rule.location_longitude,
+                rule.location_latitude, rule.location_title, rule.location_subtitle,
+                rule.item_id, rule.priority, rule.is_active,
             ])
         _write_sheet(wb, "关键词规则", headers, rows)
 
     def _write_default_replies(self, wb: Workbook, replies: list[DefaultReply]) -> None:
+        headers_extra = ["\u5b9a\u4f4d\u540d\u79f0", "\u7ecf\u5ea6", "\u7eac\u5ea6", "\u4f4d\u7f6e\u6807\u9898", "\u4f4d\u7f6e\u526f\u6807\u9898"]
         headers = ["账号ID", "商品ID", "启用", "回复内容", "回复图片", "仅回复一次", "回复类型", "API地址", "API超时"]
+        headers.extend(headers_extra)
         rows = []
         for reply in replies:
             rows.append([
@@ -315,6 +319,11 @@ class AccountExportService:
                 getattr(reply, "reply_type", "text") or "text",
                 getattr(reply, "api_url", "") or "",
                 getattr(reply, "api_timeout", 80) or 80,
+                getattr(reply, "location_name", "") or "",
+                getattr(reply, "location_longitude", "") or "",
+                getattr(reply, "location_latitude", "") or "",
+                getattr(reply, "location_title", "") or "",
+                getattr(reply, "location_subtitle", "") or "",
             ])
         _write_sheet(wb, "默认回复", headers, rows)
 

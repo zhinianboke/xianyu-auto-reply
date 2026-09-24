@@ -107,24 +107,37 @@ class WebSocketServiceClient:
             logger.error(f"查询账号任务状态失败: {account_id}, 错误: {e}")
             return {"success": False, "message": f"查询账号任务状态失败: {str(e)}"}
 
-    async def send_message(self, account_id: str, chat_id: str, content: str, message_type: str = "text") -> dict:
+    async def send_message(
+        self,
+        account_id: str,
+        chat_id: str,
+        content: str,
+        message_type: str = "text",
+        to_user_id: str | None = None,
+        wait_result: bool = True,
+    ) -> dict:
         """发送消息
-        
+
         Args:
             account_id: 账号ID
             chat_id: 聊天ID
             content: 消息内容
             message_type: 消息类型（text/image）
-            
+            to_user_id: 接收方（买家）用户ID
+            wait_result: 是否等待闲鱼服务端结果（识别安全拦截）
+
         Returns:
             响应数据
         """
         url = f"{self.base_url}/internal/accounts/{account_id}/send-message"
         try:
+            # 字段名需与 websocket 内部接口 SendMessageRequest 一致（message / to_user_id）
             response = await self.http_client.post(url, json={
                 "chat_id": chat_id,
                 "message": content,
-                "message_type": message_type
+                "message_type": message_type,
+                "to_user_id": to_user_id,
+                "wait_result": wait_result,
             })
             return response
         except Exception as e:
@@ -155,8 +168,8 @@ class WebSocketServiceClient:
         """
         url = f"{self.base_url}/internal/accounts/{account_id}/create-chat"
         try:
-            # create-chat 遇 code:400 会触发「刷新 token + 断线重连 + 重试」，最坏约 73s，
-            # 故单独放宽超时到 90s；且该操作有副作用（会关闭并重建连接），不可安全重试，
+            # create-chat 遇明确的 Token/Session 失效会触发「刷新 token + 断线重连 + 重试」，
+            # 最坏约 73s；故单独放宽超时到 90s。该操作有副作用（会关闭并重建连接），不可安全重试，
             # 显式 max_retries=1 避免超时后重复触发 create-chat 与重连叠加。
             response = await self.http_client.post(url, json={
                 "buyer_id": buyer_id,

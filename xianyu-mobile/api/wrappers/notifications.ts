@@ -33,6 +33,15 @@ function unwrap<T>(data: unknown): T | null {
   return (data as T) ?? null;
 }
 
+function throwOnBusinessFailure(data: unknown): void {
+  if (!data || typeof data !== 'object') return;
+  const response = data as Record<string, unknown>;
+  if (response.success === false) {
+    const message = typeof response.message === 'string' ? response.message : '操作失败';
+    throw new Error(message);
+  }
+}
+
 function extractArray<T>(data: unknown, normalize?: (raw: Record<string, unknown>) => T): T[] {
   const body = unwrap<unknown>(data);
   let arr: unknown[] | null = null;
@@ -76,6 +85,7 @@ export async function createNotificationChannel(
     body: { name, type, config, enabled: true },
   })) as { data?: unknown; error?: unknown };
   if (error) throw await extractError(error);
+  throwOnBusinessFailure(data);
   const inner = unwrap<unknown>(data);
   if (inner && typeof inner === 'object' && (inner as Record<string, unknown>).id != null) {
     return normalizeChannel(inner as Record<string, unknown>);
@@ -89,7 +99,11 @@ export async function updateNotificationChannel(
   updates: Partial<Pick<NotificationChannel, 'name' | 'type' | 'config' | 'enabled'>>,
 ): Promise<void> {
   const client = await getApiClient();
-  await (client.PUT as any)(`/api/v1/notification-channels/${id}`, { body: updates });
+  const { data, error } = (await (client.PUT as any)(`/api/v1/notification-channels/${id}`, {
+    body: updates,
+  })) as { data?: unknown; error?: unknown };
+  if (error) throw await extractError(error);
+  throwOnBusinessFailure(data);
 }
 
 /** 删除通知渠道 */

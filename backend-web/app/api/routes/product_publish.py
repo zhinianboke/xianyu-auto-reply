@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import uuid
 
@@ -17,19 +17,32 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile
 from loguru import logger
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import get_current_active_user, get_db_session
-from app.services.product_publish_service import MaterialSpecificationError, ProductMaterialService
+from app.services.product_publish_service import MaterialValidationError, ProductMaterialService
 from app.services.account_service import AccountService
 from app.services.platform_category_service import CategoryRecommendationError, PlatformCategoryService
 from app.services.publish_batch_status_service import PublishBatchStatusService
 from app.services.publish_execution_service import PublishExecutorService, PublishLogService
+from app.services.auto_relist_rule_service import AutoRelistRuleService
+from app.services.auto_relist_serializers import serialize_auto_relist_event, serialize_auto_relist_rule
 from common.models.user import User, UserRole
 from common.schemas.common import ApiResponse
 from common.utils.local_image_upload import ImageUploadError, save_uploaded_image
 from common.utils.local_video_upload import VideoUploadError, save_uploaded_video
 from app.core.paths import get_upload_path
 from common.utils.time_utils import get_beijing_now_naive
+
+
+# 自动续售接口业务错误码。HTTP 层仍统一返回 200，由前端依据 success/code 处理。
+AUTO_RELIST_ERROR_CODE = 40001
+
+
+def _auto_relist_error(message: str) -> ApiResponse:
+    """构造自动续售接口统一业务错误响应。"""
+    return ApiResponse(success=False, code=AUTO_RELIST_ERROR_CODE, message=message, data=None)
+
 
 def _is_admin(user: User) -> bool:
     """判断用户是否为管理员"""
@@ -217,6 +230,23 @@ class BatchPublishRequest(BaseModel):
     material_ids: List[int] = Field(..., min_length=1, description="素材ID列表")
 
 
+class AutoRelistRuleRequest(BaseModel):
+    """自动续售配置请求。关闭时资源字段允许为空。"""
+    account_id: Optional[str] = Field(None, max_length=80)
+    current_item_id: Optional[str] = Field(None, max_length=64)
+    card_id: Optional[int] = Field(None, ge=1)
+    enabled: bool = False
+    delay_seconds: int = Field(60, ge=1)
+    expected_version: Optional[int] = Field(None, ge=0)
+
+
+class AutoRelistReconcileRequest(BaseModel):
+    """人工对账请求，可确认已发布或确认平台未发布。"""
+
+    outcome: Literal["published", "not_published"] = "published"
+    new_item_id: Optional[str] = Field(None, min_length=1, max_length=64)
+
+
 class CategoryRecommendRequest(BaseModel):
     """根据商品标题和描述请求平台分类推荐。"""
 
@@ -329,8 +359,11 @@ async def create_material(
     """创建商品素材"""
     svc = ProductMaterialService(session)
     try:
-        material = await svc.create(current_user.id, req.model_dump())
-    except MaterialSpecificationError as exc:
+        material = await svc.create(
+            current_user.id,
+            req.model_dump(),
+        )
+    except MaterialValidationError as exc:
         return ApiResponse(success=False, message=str(exc))
     return ApiResponse(success=True, message="素材创建成功", data={"id": material.id})
 
@@ -364,6 +397,18 @@ async def list_materials(
         name_map = {r.id: r.username for r in rows}
         for m in data["list"]:
             m["username"] = name_map.get(m["user_id"], "未知用户")
+    material_ids = [int(item["id"]) for item in data.get("list", [])]
+    relist_service = AutoRelistRuleService(session)
+    rule_map = await relist_service.get_map(material_ids, None if _is_admin(current_user) else current_user.id)
+    for item in data.get("list", []):
+        rule = rule_map.get(int(item["id"]))
+        can_configure = bool(item.get("user_id") == current_user.id)
+        if rule:
+            # 管理员跨用户素材只读，不能沿用序列化函数的默认可配置值。
+            rule["can_configure"] = can_configure
+        item["auto_relist"] = rule
+        item["auto_relist_owner_id"] = rule.get("owner_id") if rule else item.get("user_id")
+        item["auto_relist_can_configure"] = can_configure
     return ApiResponse(success=True, message="查询成功", data=data)
 
 
@@ -383,6 +428,220 @@ async def batch_delete_materials(
     query_user_id = None if _is_admin(current_user) else current_user.id
     count = await svc.batch_delete(req.ids, query_user_id)
     return ApiResponse(success=True, message=f"成功移出 {count} 条素材", data={"deleted_count": count})
+
+
+@router.get("/materials/{material_id}/auto-relist", response_model=ApiResponse)
+async def get_auto_relist_rule(
+    material_id: int,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """查询素材自动续售配置；管理员跨用户素材只读。"""
+    try:
+        service = AutoRelistRuleService(session)
+        material = await service.get_material_for_owner(
+            material_id, None if _is_admin(current_user) else current_user.id
+        )
+        if not material:
+            return _auto_relist_error("素材不存在或无权访问")
+        # 管理员可以读取跨用户素材，但规则和事件仍必须按素材实际所有者隔离。
+        rule = await service.get(material_id, material.user_id)
+        latest_event = (
+            await service.get_latest_event(rule.id, material.user_id) if rule else None
+        )
+        return ApiResponse(
+            success=True,
+            message="查询成功",
+            data=serialize_auto_relist_rule(
+                rule,
+                can_configure=material.user_id == current_user.id,
+                latest_event=latest_event,
+            ),
+        )
+    except Exception as exc:
+        await session.rollback()
+        logger.opt(exception=exc).error(
+            "查询自动续售配置失败 material_id={} user_id={}", material_id, current_user.id
+        )
+        return _auto_relist_error(f"查询自动续售配置失败：{exc}")
+
+
+@router.put("/materials/{material_id}/auto-relist", response_model=ApiResponse)
+async def save_auto_relist_rule(
+    material_id: int,
+    req: AutoRelistRuleRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """创建或更新自动续售配置，仅允许素材所有者操作。"""
+    if _is_admin(current_user):
+        material = await AutoRelistRuleService(session).get_material_for_owner(material_id, None)
+        if material and material.user_id != current_user.id:
+            return _auto_relist_error("管理员跨用户素材暂不支持配置自动续售")
+    service = AutoRelistRuleService(session)
+    try:
+        rule = await service.save(material_id=material_id, user_id=current_user.id, **req.model_dump())
+    except ValueError as exc:
+        return _auto_relist_error(str(exc))
+    except IntegrityError:
+        await session.rollback()
+        return _auto_relist_error("自动续售配置已被其他操作更新，请刷新后重试")
+    try:
+        latest_event = await service.get_latest_event(rule.id, rule.user_id)
+    except Exception as exc:
+        await session.rollback()
+        logger.opt(exception=exc).error(
+            "查询自动续售最新事件失败 material_id={} rule_id={}", material_id, rule.id
+        )
+        return _auto_relist_error(f"查询自动续售状态失败：{exc}")
+    return ApiResponse(
+        success=True,
+        message="自动续售已启用" if rule.enabled else "自动续售已关闭",
+        data=serialize_auto_relist_rule(rule, latest_event=latest_event),
+    )
+
+
+@router.get("/materials/{material_id}/auto-relist/events", response_model=ApiResponse)
+async def list_auto_relist_events(
+    material_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """分页查询自动续售执行记录。"""
+    try:
+        service = AutoRelistRuleService(session)
+        material = await service.get_material_for_owner(
+            material_id, None if _is_admin(current_user) else current_user.id
+        )
+        if not material:
+            return _auto_relist_error("素材不存在或无权访问")
+        # 管理员跨用户素材只读，但事件仍按素材 owner 隔离。
+        data = await service.list_events(material_id, material.user_id, page, page_size)
+        return ApiResponse(success=True, message="查询成功", data=data)
+    except Exception as exc:
+        await session.rollback()
+        logger.opt(exception=exc).error(
+            "查询自动续售记录失败 material_id={} user_id={}", material_id, current_user.id
+        )
+        return _auto_relist_error(f"查询自动续售记录失败：{exc}")
+
+
+@router.get("/auto-relist/events", response_model=ApiResponse)
+async def list_all_auto_relist_events(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: Optional[str] = Query(None, max_length=24),
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """集中查询自动续售事件，管理员可跨用户筛选未知/人工对账事件。"""
+    try:
+        service = AutoRelistRuleService(session)
+        data = await service.list_all_events(
+            user_id=None if _is_admin(current_user) else current_user.id,
+            status=status.strip() if status and status.strip() else None,
+            page=page,
+            page_size=page_size,
+        )
+        return ApiResponse(success=True, message="查询成功", data=data)
+    except Exception as exc:
+        await session.rollback()
+        logger.opt(exception=exc).error(
+            "集中查询自动续售事件失败 user_id={} status={}", current_user.id, status
+        )
+        return _auto_relist_error(f"查询自动续售事件失败：{exc}")
+
+
+@router.post("/materials/{material_id}/auto-relist/events/{event_id}/reconcile", response_model=ApiResponse)
+async def reconcile_auto_relist_event(
+    material_id: int,
+    event_id: int,
+    req: AutoRelistReconcileRequest,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """人工确认未知发布结果，后续只执行本地关联迁移。"""
+    service = AutoRelistRuleService(session)
+    material = await service.get_material_for_owner(
+        material_id, None if _is_admin(current_user) else current_user.id
+    )
+    if not material:
+        return _auto_relist_error("素材不存在或无权访问")
+    if material.user_id != current_user.id:
+        return _auto_relist_error("管理员跨用户素材暂不支持人工对账")
+    try:
+        event = await service.reconcile_event(
+            material_id=material_id,
+            user_id=current_user.id,
+            event_id=event_id,
+            new_item_id=req.new_item_id,
+            outcome=req.outcome,
+        )
+    except ValueError as exc:
+        return _auto_relist_error(str(exc))
+    except IntegrityError:
+        await session.rollback()
+        return _auto_relist_error("人工对账状态已被其他操作更新，请刷新后重试")
+    except Exception as exc:
+        await session.rollback()
+        logger.opt(exception=exc).error(
+            "人工对账失败 material_id={} event_id={} user_id={}",
+            material_id,
+            event_id,
+            current_user.id,
+        )
+        return _auto_relist_error(f"人工对账失败：{exc}")
+    return ApiResponse(
+        success=True,
+        message=(
+            "已确认发布结果，已安排关联迁移"
+            if req.outcome == "published"
+            else "已确认本次续售失败，系统将继续重试发布"
+        ),
+        data=serialize_auto_relist_event(event),
+    )
+
+
+@router.post("/materials/{material_id}/auto-relist/events/{event_id}/mark-failed", response_model=ApiResponse)
+async def mark_auto_relist_event_failed(
+    material_id: int,
+    event_id: int,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """将发布结果未知的续售记录标记失败，并继续监听后续订单。"""
+    service = AutoRelistRuleService(session)
+    material = await service.get_material_for_owner(
+        material_id, None if _is_admin(current_user) else current_user.id
+    )
+    if not material:
+        return _auto_relist_error("素材不存在或无权访问")
+    if material.user_id != current_user.id:
+        return _auto_relist_error("管理员跨用户素材暂不支持标记失败")
+    try:
+        event = await service.mark_event_failed(
+            material_id=material_id,
+            user_id=current_user.id,
+            event_id=event_id,
+        )
+    except ValueError as exc:
+        return _auto_relist_error(str(exc))
+    except Exception as exc:
+        await session.rollback()
+        logger.opt(exception=exc).error(
+            "标记自动续售失败记录异常 material_id={} event_id={} user_id={}",
+            material_id,
+            event_id,
+            current_user.id,
+        )
+        return _auto_relist_error(f"标记失败操作失败：{exc}")
+    return ApiResponse(
+        success=True,
+        message="已标记本次续售失败，系统将继续重试发布；后续订单将继续自动续售",
+        data=serialize_auto_relist_event(event),
+    )
 
 
 @router.get("/materials/{material_id}", response_model=ApiResponse)
@@ -419,7 +678,7 @@ async def update_material(
             # 否则编辑素材时清空规格/属性会被旧值覆盖。
             req.model_dump(exclude_unset=True),
         )
-    except MaterialSpecificationError as exc:
+    except MaterialValidationError as exc:
         return ApiResponse(success=False, message=str(exc))
     if not updated:
         return ApiResponse(success=False, message="素材不存在或无权修改")

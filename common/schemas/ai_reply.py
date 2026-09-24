@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AIReplySettings(BaseModel):
@@ -17,6 +17,8 @@ class AIReplySettings(BaseModel):
     custom_prompts: str = ""
     ai_time_range_start: str = ""
     ai_time_range_end: str = ""
+    manual_reply_ai_pause_enabled: bool = False
+    manual_reply_ai_pause_minutes: int = Field(default=10, ge=1, le=1440)
 
 
 class AIReplySettingsUpdate(BaseModel):
@@ -34,6 +36,10 @@ class AIReplySettingsUpdate(BaseModel):
     enabled: bool | None = None
     ai_time_range_start: str | None = None
     ai_time_range_end: str | None = None
+    manual_reply_ai_pause_enabled: bool | None = None
+    # 不在更新入参上限制取值范围：前端清空输入会传 0，若在此用 ge/le 校验会触发
+    # FastAPI 422（非统一 200 格式）。取值范围统一由 service 层 clamp 到 1-1440。
+    manual_reply_ai_pause_minutes: int | None = None
 
 
 class AIModelListRequest(BaseModel):

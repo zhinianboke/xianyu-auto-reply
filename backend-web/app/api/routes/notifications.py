@@ -14,6 +14,7 @@ from common.schemas.notification import (
 from app.services.notification_service import (
     MessageNotificationService,
     NotificationChannelService,
+    NotificationTemplateValidationError,
 )
 
 channels_router = APIRouter(prefix="/notification-channels", tags=["notifications"])
@@ -34,7 +35,10 @@ async def create_notification_channel(
     current_user: User = Depends(deps.get_current_active_user),
     service: NotificationChannelService = Depends(deps.get_notification_channel_service),
 ) -> ApiResponse:
-    await service.create_channel(current_user.id, payload)
+    try:
+        await service.create_channel(current_user.id, payload)
+    except NotificationTemplateValidationError as error:
+        return ApiResponse(success=False, code=40001, message=str(error), data=None)
     return ApiResponse(success=True, message="通知渠道已创建")
 
 
@@ -45,7 +49,10 @@ async def update_notification_channel(
     current_user: User = Depends(deps.get_current_active_user),
     service: NotificationChannelService = Depends(deps.get_notification_channel_service),
 ) -> ApiResponse:
-    updated = await service.update_channel(current_user.id, channel_id, payload)
+    try:
+        updated = await service.update_channel(current_user.id, channel_id, payload)
+    except NotificationTemplateValidationError as error:
+        return ApiResponse(success=False, code=40001, message=str(error), data=None)
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="通知渠道不存在")
     return ApiResponse(success=True, message="通知渠道已更新")

@@ -16,42 +16,37 @@ from common.core.config import get_settings
 settings = get_settings()
 
 
-def _patch_asyncmy_ping():
-    """
-    兼容 asyncmy 新版本 ping() 方法签名变更
+def _patch_asyncmy_ping() -> None:
+    """兼容 SQLAlchemy 2.0.41 与 asyncmy 的 pool_pre_ping 调用签名。
 
-    新版 asyncmy (>=0.2.10) 移除了 ping(reconnect) 参数，
-    而 SQLAlchemy 的 pool_pre_ping 机制调用 ping(reconnect=True)，
-    导致 TypeError。直接 patch asyncmy 底层方法使其接受 reconnect 参数。
+    SQLAlchemy 的 MySQL 通用方言会无参调用适配层 ``ping()``，但该版本的
+    ``AsyncAdapt_asyncmy_connection.ping`` 要求必须传入 ``reconnect``。
+    仅为适配层补充默认值，不修改 asyncmy 驱动本身。
     """
     try:
-        import asyncmy.connection as _asyncmy_conn
+        import inspect
+        from sqlalchemy.dialects.mysql.asyncmy import AsyncAdapt_asyncmy_connection
 
-        _original = _asyncmy_conn.Connection.ping
+        original_ping = AsyncAdapt_asyncmy_connection.ping
 
         # 如果已经 patch 过，跳过
-        if getattr(_original, '_compat_patched', False):
+        if getattr(original_ping, "_compat_patched", False):
             return
 
-        # 检查是否需要 patch（新版本不接受 reconnect）
-        import inspect
         try:
-            sig = inspect.signature(_original)
-            if 'reconnect' in sig.parameters:
-                # 旧版本，无需 patch
+            reconnect = inspect.signature(original_ping).parameters.get("reconnect")
+            if reconnect is None or reconnect.default is not inspect.Parameter.empty:
                 return
         except (ValueError, TypeError):
-            # 无法检测签名，保险起见做 patch
-            pass
+            return
 
-        # 替换为兼容版本
-        async def _patched_ping(self, reconnect=True):
-            return await _original(self)
+        def patched_ping(self, reconnect=False):
+            return original_ping(self, reconnect)
 
-        _patched_ping._compat_patched = True
-        _asyncmy_conn.Connection.ping = _patched_ping
+        patched_ping._compat_patched = True
+        AsyncAdapt_asyncmy_connection.ping = patched_ping
 
-    except (ImportError, AttributeError, Exception):
+    except (ImportError, AttributeError):
         pass
 
 

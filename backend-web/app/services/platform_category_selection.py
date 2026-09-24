@@ -27,16 +27,32 @@ def _transport_data(value: dict[str, Any]) -> dict[str, Any]:
     return transport if isinstance(transport, dict) else {}
 
 
-def _match_candidate_value(
+def _value_name(value: dict[str, Any], transport: dict[str, Any]) -> str:
+    """兼容分类卡不同版本的选项名称字段。"""
+    direct_name = (
+        _as_text(value.get("catName"))
+        or _as_text(value.get("text"))
+        or _as_text(transport.get("valueName"))
+        or _as_text(transport.get("text"))
+        or _as_text(value.get("channelCatName"))
+        or _as_text(transport.get("channelCateName"))
+    )
+    if direct_name:
+        return direct_name
+    properties = _as_text(value.get("properties")) or _as_text(transport.get("properties"))
+    return properties.rsplit("##", 1)[-1].strip() if "##" in properties else ""
+
+
+def _candidate_value_score(
     category: dict[str, Any],
     value: dict[str, Any],
-) -> tuple[bool, bool]:
+) -> tuple[bool, int]:
     """
     按单品发布界面的优先级判断分类候选是否匹配属性卡选项。
 
-    调用方可能只传回其中一个标识（如只有分类名称），因此按
-    channel_cat_id、tb_cat_id、cat_id、分类名称的顺序逐个比对，
-    取第一个双方都有值的标识作为判断依据。
+    调用方可能只传回其中一个标识（如只有分类名称）。频道和淘宝分类 ID
+    同时可比时必须全部一致，并按频道、淘宝、末级分类 ID 的完整度评分；
+    没有 ID 可比时才使用分类名称兜底。
 
     注意 cat_id 只存在于分类卡自带 catId 的候选上：推荐接口会用
     categoryPredictResult 给选中候选补 cat_id，这类补出来的 ID 在分类卡里
@@ -46,33 +62,49 @@ def _match_candidate_value(
         category: 调用方选中的分类对象。
         value: 分类卡中的一个候选选项。
     Returns:
-        (是否存在双方都有值的可比对标识, 该选项是否即调用方所选分类)。
+        (是否存在双方都有值的可比对标识, 匹配分数；ID 冲突时为 -1)。
     """
     transport = _transport_data(value)
-    comparisons = (
+    id_comparisons = (
         (
             _as_text(category.get("channel_cat_id")),
-            _as_text(value.get("channelCatId")) or _as_text(transport.get("channelCateId")),
+            _as_text(value.get("channelCatId"))
+            or _as_text(transport.get("channelCateId")),
+            8,
         ),
         (
             _as_text(category.get("tb_cat_id")),
             _as_text(value.get("tbCatId")) or _as_text(transport.get("tbCatId")),
+            4,
         ),
         (
             _as_text(category.get("cat_id")),
-            _as_text(value.get("catId")),
-        ),
-        (
-            _as_text(category.get("cat_name")) or _as_text(category.get("channel_cat_name")),
-            _as_text(value.get("catName"))
-            or _as_text(value.get("channelCatName"))
-            or _as_text(transport.get("valueName")),
-        ),
+            _as_text(value.get("catId")) or _as_text(transport.get("catId")),
+            2,
+        )
     )
-    for selected_value, candidate_value in comparisons:
-        if selected_value and candidate_value:
-            return True, selected_value == candidate_value
-    return False, False
+    comparable = False
+    score = 0
+    for selected_value, candidate_value, weight in id_comparisons:
+        if not selected_value or not candidate_value:
+            continue
+        comparable = True
+        if selected_value != candidate_value:
+            return True, -1
+        score += weight
+    selected_name = _as_text(category.get("cat_name")) or _as_text(
+        category.get("channel_cat_name")
+    )
+    candidate_name = _value_name(value, transport)
+    if selected_name and candidate_name:
+        comparable = True
+        if selected_name == candidate_name:
+            score += 1
+        elif score == 0:
+            return True, -1
+    if score > 0:
+        return True, score
+    return comparable, 0
 
 
 def build_category_selection(
@@ -120,6 +152,8 @@ def build_category_selection(
     resolved_cat_name = category_name
     resolved_channel_cat_id = channel_cat_id
 
+    best_match: dict[str, Any] | None = None
+    best_score = 0
     for card in current_card_list:
         if not isinstance(card, dict) or _as_text(card.get("propertyId")) != "-10000":
             continue
@@ -131,11 +165,35 @@ def build_category_selection(
         for value in values:
             if not isinstance(value, dict):
                 continue
-            comparable, matched = _match_candidate_value(category, value)
+            comparable, score = _candidate_value_score(category, value)
             if comparable:
                 comparable_found = True
-            # 平台只接受一个选中分类；标识不全时可能有多个候选同名，只认第一个命中项
-            selected = matched and selected_label is None
+            if score > best_score:
+                best_match = value
+                best_score = score
+
+    if not category_card_found:
+        raise CategorySelectionError("card_list中缺少分类卡，请重新调用分类推荐接口")
+    if best_match is None:
+        if not comparable_found:
+            # 例如只传了 categoryPredictResult 补出来的 cat_id，分类卡候选里没有该字段可比对
+            raise CategorySelectionError(
+                "所选分类的标识无法与card_list中的候选比对，"
+                "请改用 channel_cat_id、tb_cat_id 或 cat_name"
+                "（cat_id 仅在分类卡候选自带 catId 时可用）"
+            )
+        raise CategorySelectionError("所选分类不在card_list中，请使用同一次分类推荐返回的数据")
+
+    for card in current_card_list:
+        if not isinstance(card, dict) or _as_text(card.get("propertyId")) != "-10000":
+            continue
+        values = card.get("valuesList")
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            selected = value is best_match
             transport = _transport_data(value)
             value_channel_id = (
                 _as_text(value.get("channelCatId"))
@@ -143,8 +201,7 @@ def build_category_selection(
                 or channel_cat_id
             )
             value_category_name = (
-                _as_text(value.get("catName"))
-                or _as_text(value.get("channelCatName"))
+                _value_name(value, transport)
                 or category_name
             )
             properties = (
@@ -182,7 +239,11 @@ def build_category_selection(
                 next_transport["text"] = value_category_name
                 selected_label = next_transport
                 # 调用方未传的分类标识，从分类卡命中的选项里取回
-                resolved_cat_id = _as_text(value.get("catId")) or selected_cat_id
+                resolved_cat_id = (
+                    _as_text(value.get("catId"))
+                    or _as_text(transport.get("catId"))
+                    or selected_cat_id
+                )
                 resolved_cat_name = value_category_name
                 resolved_channel_cat_id = value_channel_id
 
@@ -190,18 +251,6 @@ def build_category_selection(
             value["isUserClick"] = "1" if selected else "0"
             value["isUserCancel"] = None
             value["transportData"] = next_transport
-
-    if not category_card_found:
-        raise CategorySelectionError("card_list中缺少分类卡，请重新调用分类推荐接口")
-    if selected_label is None:
-        if not comparable_found:
-            # 例如只传了 categoryPredictResult 补出来的 cat_id，分类卡候选里没有该字段可比对
-            raise CategorySelectionError(
-                "所选分类的标识无法与card_list中的候选比对，"
-                "请改用 channel_cat_id、tb_cat_id 或 cat_name"
-                "（cat_id 仅在分类卡候选自带 catId 时可用）"
-            )
-        raise CategorySelectionError("所选分类不在card_list中，请使用同一次分类推荐返回的数据")
 
     return {
         "current_card_list": current_card_list,

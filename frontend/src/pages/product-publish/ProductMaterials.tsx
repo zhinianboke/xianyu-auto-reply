@@ -11,7 +11,7 @@
  */
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Plus, Pencil, Trash2, RefreshCw, Image, ChevronLeft, ChevronRight, Search, Sparkles, X } from 'lucide-react'
+import { Plus, Pencil, Trash2, RefreshCw, Image, ChevronLeft, ChevronRight, Search, Sparkles, X, Repeat2 } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { getMaterials, deleteMaterial, batchDeleteMaterials, type ProductMaterial } from '@/api/productPublish'
@@ -19,6 +19,7 @@ import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { MaterialFormModal } from './MaterialFormModal'
 import { AiListingModal } from './ai-listing/AiListingModal'
+import { AutoRelistModal } from './AutoRelistModal'
 import { useAiListingTask } from './ai-listing/useAiListingTask'
 
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
@@ -62,6 +63,7 @@ export function ProductMaterials() {
 
   // AI 铺货
   const [showAiModal, setShowAiModal] = useState(false)
+  const [relistTarget, setRelistTarget] = useState<ProductMaterial | null>(null)
 
   /** 加载素材列表 */
   const load = async (p = page, size = pageSize) => {
@@ -304,16 +306,17 @@ export function ProductMaterials() {
                 <th>成色</th>
                 <th>媒体</th>
                 <th>创建时间</th>
+                <th>自动续售</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody>
               {tableLoading ? (
-                <tr><td colSpan={isAdmin ? 10 : 9} className="text-center py-12">
+                <tr><td colSpan={isAdmin ? 11 : 10} className="text-center py-12">
                   <RefreshCw className="w-6 h-6 animate-spin text-blue-500 mx-auto" />
                 </td></tr>
               ) : materials.length === 0 ? (
-                <tr><td colSpan={isAdmin ? 10 : 9} className="text-center py-12 text-slate-400">
+                <tr><td colSpan={isAdmin ? 11 : 10} className="text-center py-12 text-slate-400">
                   <div className="flex flex-col items-center gap-2">
                     <Image className="w-12 h-12 text-slate-300" />
                     <p>暂无素材，点击「新建素材」添加</p>
@@ -354,7 +357,18 @@ export function ProductMaterials() {
                     {m.created_at ? new Date(m.created_at).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-'}
                   </td>
                   <td>
+                    <div className="flex items-center gap-1">
+                      <span className={`badge-${m.auto_relist?.status === 'active' ? 'success' : m.auto_relist ? 'warning' : 'gray'}`}>
+                        {m.auto_relist ? (m.auto_relist.status_text || m.auto_relist.status) : '未配置'}
+                      </span>
+                    </div>
+                  </td>
+                  <td>
                     <div className="table-actions">
+                      <button className="table-action-btn" title={m.auto_relist_can_configure === false ? '管理员只读，查看自动续售' : '自动续售'}
+                        onClick={() => setRelistTarget(m)}>
+                        <Repeat2 className={`w-4 h-4 ${m.auto_relist_can_configure === false ? 'text-slate-300' : 'text-emerald-500'}`} />
+                      </button>
                       <button className="table-action-btn" title="编辑"
                         onClick={() => { setEditTarget(m); setShowModal(true) }}>
                         <Pencil className="w-4 h-4 text-blue-500" />
@@ -416,6 +430,14 @@ export function ProductMaterials() {
           onStartTracking={aiTask.startTracking}
           onResetTask={aiTask.resetTask}
           onClose={() => setShowAiModal(false)}
+        />
+      )}
+
+      {relistTarget && (
+        <AutoRelistModal
+          material={relistTarget}
+          onClose={() => setRelistTarget(null)}
+          onSaved={() => { setRelistTarget(null); load(page, pageSize) }}
         />
       )}
 

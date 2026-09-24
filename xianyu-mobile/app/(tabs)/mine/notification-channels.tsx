@@ -7,12 +7,15 @@ import {
   Pressable,
   Switch,
   Alert,
+  Modal,
   RefreshControl,
   ScrollView,
+  KeyboardAvoidingView,
+  Platform,
   useColorScheme,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Bell, Plus } from 'lucide-react-native';
+import { Bell, FileText, Plus, X } from 'lucide-react-native';
 import { Card, Button, Input, Loading, EmptyState, FormModal } from '@/components/ui';
 import { colors, spacing, typography, radius } from '@/lib/theme';
 import {
@@ -140,6 +143,53 @@ function initialConfig(type: string, existing?: Record<string, unknown>): Record
   return cfg;
 }
 
+// ---------------------------------------------------------------------------
+// 通知正文模板（后端 common/utils/notification_template.py 渲染）
+// 占位符 {{variable}}，留空时使用系统默认模板
+// ---------------------------------------------------------------------------
+type NotificationTemplates = {
+  chat_template: string;
+  delivery_template: string;
+  account_template: string;
+};
+
+/** 模板字段定义，variables 需与后端 TEMPLATE_VARIABLES 保持一致 */
+const TEMPLATE_FIELDS: { key: keyof NotificationTemplates; label: string; variables: string[] }[] = [
+  {
+    key: 'chat_template',
+    label: '消息通知',
+    variables: ['account', 'account_id', 'account_remark', 'buyer_nick', 'buyer_id', 'message', 'item_id', 'chat_id', 'time'],
+  },
+  {
+    key: 'delivery_template',
+    label: '自动发货通知',
+    variables: ['account', 'account_id', 'account_remark', 'buyer_nick', 'buyer_id', 'message', 'item_id', 'chat_id', 'time', 'order_id', 'amount', 'quantity', 'result'],
+  },
+  {
+    key: 'account_template',
+    label: '账号异常通知',
+    variables: ['account', 'account_id', 'account_remark', 'title', 'notification_type', 'detail', 'chat_id', 'verification_url', 'verification_info', 'time'],
+  },
+];
+
+/** 校验模板占位符：格式错误或含不支持的变量时返回错误文案 */
+function validateTemplateDraft(templates: NotificationTemplates): string | null {
+  const placeholderPattern = /{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}/g;
+  for (const field of TEMPLATE_FIELDS) {
+    const template = templates[field.key];
+    const placeholders = [...template.matchAll(placeholderPattern)];
+    const remaining = template.replace(placeholderPattern, '');
+    if (remaining.includes('{{') || remaining.includes('}}')) {
+      return `${field.label}模板占位符格式错误，应使用 {{variable}} 格式`;
+    }
+    const unknown = [...new Set(placeholders.map((match) => match[1]).filter((name) => !field.variables.includes(name)))];
+    if (unknown.length > 0) {
+      return `${field.label}模板包含不支持的占位符: ${unknown.map((name) => `{{${name}}}`).join(', ')}`;
+    }
+  }
+  return null;
+}
+
 export default function NotificationChannelsScreen() {
   const scheme = useColorScheme();
   const c = colors[scheme === 'dark' ? 'dark' : 'light'];
@@ -158,6 +208,15 @@ export default function NotificationChannelsScreen() {
     () => initialConfig(CHANNEL_TYPE_DEFS[0].value),
   );
   const [saving, setSaving] = useState(false);
+
+  // 通知模板编辑
+  const [editingChannel, setEditingChannel] = useState<NotificationChannel | null>(null);
+  const [templateDraft, setTemplateDraft] = useState<NotificationTemplates>({
+    chat_template: '',
+    delivery_template: '',
+    account_template: '',
+  });
+  const [savingTemplates, setSavingTemplates] = useState(false);
 
   const activeDef = typeDefOf(formType);
 
@@ -205,6 +264,13 @@ export default function NotificationChannelsScreen() {
       }
       config[f.key] = f.numeric ? Number(raw) || 0 : raw;
     }
+    // 编辑时保留模板等非表单字段，避免保存配置时把已设模板清空
+    if (editing) {
+      for (const key of ['chat_template', 'delivery_template', 'account_template'] as const) {
+        const prev = editing.config?.[key];
+        if (typeof prev === 'string' && prev) config[key] = prev;
+      }
+    }
     setSaving(true);
     try {
       if (editing) {
@@ -249,6 +315,31 @@ export default function NotificationChannelsScreen() {
     ]);
   }
 
+  /** 打开模板编辑弹窗，回填该渠道已保存的模板 */
+  function handleEditTemplates(item: NotificationChannel) {
+    setEditingChannel(item);
+    setTemplateDraft({
+      chat_template: typeof item.config.chat_template === 'string' ? item.config.chat_template : '',
+      delivery_template: typeof item.config.delivery_template === 'string' ? item.config.delivery_template : '',
+      account_template: typeof item.config.account_template === 'string' ? item.config.account_template : '',
+    });
+  }
+
+  async function handleSaveTemplates() {
+    if (!editingChannel) return;
+    const validationError = validateTemplateDraft(templateDraft);
+    if (validationError) { Alert.alert('模板格式错误', validationError); return; }
+    setSavingTemplates(true);
+    const config = { ...editingChannel.config, ...templateDraft };
+    try {
+      await updateNotificationChannel(editingChannel.id, { config });
+      setChannels((prev) => prev.map((ch) => (ch.id === editingChannel.id ? { ...ch, config } : ch)));
+      setEditingChannel(null);
+      Alert.alert('保存成功', '通知模板已更新');
+    } catch (e) { Alert.alert('保存失败', (e as Error).message); }
+    finally { setSavingTemplates(false); }
+  }
+
   if (loading) {
     return (<SafeAreaView style={[styles.container, { backgroundColor: c.background }]}><Loading label="加载通知渠道..." /></SafeAreaView>);
   }
@@ -282,6 +373,15 @@ export default function NotificationChannelsScreen() {
                     {summarizeConfig(item)}
                   </Text>
                 </View>
+                <Pressable
+                  onPress={() => handleEditTemplates(item)}
+                  style={styles.templateButton}
+                  accessibilityRole="button"
+                  accessibilityLabel={`编辑${item.name}的通知模板`}
+                  hitSlop={8}
+                >
+                  <FileText size={18} color={c.primary} />
+                </Pressable>
                 <Switch
                   value={item.enabled}
                   onValueChange={() => handleToggle(item)}
@@ -357,6 +457,70 @@ export default function NotificationChannelsScreen() {
           <Button label={editing ? '保存' : '创建'} onPress={handleSave} loading={saving} style={styles.sheetBtn} />
         </View>
       </FormModal>
+
+      {/* 通知模板编辑弹窗（留空使用系统默认模板） */}
+      <Modal
+        visible={editingChannel != null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {}}
+      >
+        <KeyboardAvoidingView
+          style={styles.templateOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <View style={[styles.templateSheet, { backgroundColor: c.surface }]}>
+            <View style={styles.templateHeader}>
+              <Text style={[styles.sheetTitle, { color: c.text }]}>通知模板</Text>
+              <Pressable
+                onPress={() => setEditingChannel(null)}
+                disabled={savingTemplates}
+                style={styles.closeButton}
+                accessibilityRole="button"
+                accessibilityLabel="关闭通知模板编辑"
+                hitSlop={8}
+              >
+                <X size={20} color={c.textSecondary} />
+              </Pressable>
+            </View>
+            <Text style={[styles.templateChannelName, { color: c.textSecondary }]} numberOfLines={1}>
+              {editingChannel?.name}
+            </Text>
+            <ScrollView style={styles.templateScroll} keyboardShouldPersistTaps="handled">
+              {TEMPLATE_FIELDS.map((field) => (
+                <View key={field.key} style={styles.templateField}>
+                  <Text style={[styles.label, { color: c.text }]}>{field.label}</Text>
+                  <Text style={[styles.templateVariables, { color: c.textMuted }]}>{field.variables.map((name) => `{{${name}}}`).join(' ')}</Text>
+                  <Input
+                    value={templateDraft[field.key]}
+                    onChangeText={(value) => setTemplateDraft((prev) => ({ ...prev, [field.key]: value }))}
+                    placeholder="留空时使用系统默认模板"
+                    multiline
+                    textAlignVertical="top"
+                    style={styles.templateInput}
+                    editable={!savingTemplates}
+                  />
+                </View>
+              ))}
+            </ScrollView>
+            <View style={styles.sheetActions}>
+              <Button
+                label="关闭"
+                variant="secondary"
+                onPress={() => setEditingChannel(null)}
+                disabled={savingTemplates}
+                style={styles.sheetBtn}
+              />
+              <Button
+                label="保存"
+                onPress={handleSaveTemplates}
+                loading={savingTemplates}
+                style={styles.sheetBtn}
+              />
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -386,6 +550,7 @@ const styles = StyleSheet.create({
   card: { gap: spacing.sm },
   cardRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   cardContent: { flex: 1, marginRight: spacing.md, gap: spacing.xs },
+  templateButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', marginRight: spacing.sm },
   typeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   typeBadge: { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: 4 },
   typeText: { color: '#FFF', fontSize: 11, fontWeight: '600' },
@@ -403,4 +568,15 @@ const styles = StyleSheet.create({
   input: { marginTop: spacing.xs },
   sheetActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
   sheetBtn: { flex: 1 },
+  // 通知模板弹窗
+  sheetTitle: { ...typography.heading, textAlign: 'center' },
+  templateOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
+  templateSheet: { maxHeight: '90%', borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg },
+  templateHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  closeButton: { position: 'absolute', right: 0, width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  templateChannelName: { ...typography.caption, textAlign: 'center', marginBottom: spacing.md },
+  templateScroll: { flexShrink: 1 },
+  templateField: { gap: spacing.xs, marginBottom: spacing.md },
+  templateVariables: { ...typography.small },
+  templateInput: { minHeight: 88, paddingTop: spacing.md },
 });
