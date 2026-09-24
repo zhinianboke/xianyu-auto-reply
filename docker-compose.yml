@@ -92,6 +92,8 @@ services:
       - BACKEND_WEB_PUBLIC_URL=${BACKEND_WEB_PUBLIC_URL:-}
       - CARD_DOCK_BASE_URL=${CARD_DOCK_BASE_URL:-http://backend.zhinianboke.com}
       - EXTERNAL_API_KEY=${EXTERNAL_API_KEY:-zhinian_bk}
+      # /api/v1/messages/send 的秘钥；不配置则该接口禁用
+      - MESSAGE_SEND_API_KEY=${MESSAGE_SEND_API_KEY:-}
       - FRONTEND_PUBLIC_URL=${FRONTEND_PUBLIC_URL:-}
       - AUTO_START_CRAWL_JOBS=${AUTO_START_CRAWL_JOBS:-true}
       - REMOTE_OFFICIAL_BASE_URL=${REMOTE_OFFICIAL_BASE_URL:-https://xy.zhinianboke.com}
