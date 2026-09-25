@@ -510,6 +510,11 @@ async def manual_delivery(
         
         # 如果订单缺少 chat_id，先调用闲鱼创建会话接口获取，然后回写到订单
         # 通过 LWP /r/SingleChatConversation/create 幂等创建，已存在会直接返回现有 cid
+        # 占位chat_id（定时补发货创建会话失败时写入的FAILED_前缀）同样视为缺失，重新创建，
+        # 避免占位ID被当作真实会话ID传给发货接口（#282）
+        if order.chat_id and order.chat_id.startswith("FAILED_"):
+            logger.info(f"订单 {request.order_no} chat_id为占位值({order.chat_id})，重新创建会话")
+            order.chat_id = None
         if not order.chat_id:
             logger.info(
                 f"订单 {request.order_no} 缺少 chat_id，开始自动创建会话: "
