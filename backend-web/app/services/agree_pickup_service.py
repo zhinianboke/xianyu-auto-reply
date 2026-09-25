@@ -231,9 +231,18 @@ class AgreePickupService:
                     account = acct_result.scalars().first()
                     if account and account.agree_pickup_notice_enabled:
                         content = (account.agree_pickup_notice_content or "").strip()
-                        if content:
+                        # websocket 内部接口自 #326 起强制要求 to_user_id：缺省会让接收人变成
+                        # None@goofish，买家收不到（且调用方不看返回值，会静默失败）
+                        if content and order.buyer_id:
                             await websocket_client.send_message(
-                                order.account_id, order.chat_id, content
+                                order.account_id,
+                                order.chat_id,
+                                content,
+                                to_user_id=str(order.buyer_id),
+                            )
+                        elif content:
+                            logger.warning(
+                                f"[同意提货] 订单 {real_order_no} 缺少 buyer_id，跳过确认收货提醒"
                             )
                 except Exception as e:
                     logger.error(f"[同意提货] 确认收货提醒发送失败 order={real_order_no}: {e}")
