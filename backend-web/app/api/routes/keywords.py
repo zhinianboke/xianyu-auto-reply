@@ -253,7 +253,10 @@ async def import_keywords(
         raise HTTPException(status_code=400, detail="Excel文件中没有有效的关键词数据")
     
     # 保存到数据库
-    await keyword_service.replace_text_keywords(account, import_data)
+    try:
+        await keyword_service.replace_text_keywords(account, import_data)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     
     return ApiResponse(
         success=True,

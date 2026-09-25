@@ -32,6 +32,7 @@ import {
   getItemAiPrompt,
   saveItemAiPrompt,
   type XianyuItemSku,
+  type ItemDefaultReplyLocationFields,
 } from '@/api/wrappers/items';
 import {
   getItemQueryButtons,
@@ -63,6 +64,17 @@ const SHIPPING_OPTIONS: Array<{ value: 'free' | 'distance' | 'fixed' | 'none'; l
 const BACKEND_VERSION_HINT = '该功能需要后端 v最新版支持';
 
 type SectionKey = 'basic' | 'cards' | 'delivery' | 'reply' | 'ai' | 'query' | 'links';
+
+/** 默认回复类型：image / external_contact 移动端不编辑，回填原值后原样回传 */
+type DefaultReplyType = 'text' | 'api' | 'image' | 'external_contact';
+
+const EMPTY_REPLY_LOCATION: ItemDefaultReplyLocationFields = {
+  location_name: '',
+  location_longitude: '',
+  location_latitude: '',
+  location_title: '',
+  location_subtitle: '',
+};
 
 /** 折叠卡片：标题行 + 展开指示箭头，内容条件渲染（不用动画库） */
 function CollapsibleSection({
@@ -164,13 +176,16 @@ export default function ItemEditScreen() {
   const [replyLoadError, setReplyLoadError] = useState<string | null>(null);
   const [replySaving, setReplySaving] = useState(false);
   const [replyEnabled, setReplyEnabled] = useState(false);
-  // web 端另有 image 类型，移动端不支持编辑图片，回填时保留原值
-  const [replyType, setReplyType] = useState<'text' | 'api' | 'image'>('text');
+  // web 端另有 image / external_contact 类型，移动端不支持编辑，回填时保留原值
+  const [replyType, setReplyType] = useState<DefaultReplyType>('text');
   const [replyContent, setReplyContent] = useState('');
   const [replyImage, setReplyImage] = useState('');
   const [replyOnce, setReplyOnce] = useState(false);
   const [replyApiUrl, setReplyApiUrl] = useState('');
   const [replyApiTimeout, setReplyApiTimeout] = useState('80');
+  // 站外联系方式定位：移动端无编辑入口，仅读入后原样回传
+  const [replyLocation, setReplyLocation] =
+    useState<ItemDefaultReplyLocationFields>(EMPTY_REPLY_LOCATION);
 
   // AI提示词（展开时才加载）
   const [aiLoaded, setAiLoaded] = useState(false);
@@ -275,12 +290,23 @@ export default function ItemEditScreen() {
     try {
       const cfg = await getItemDefaultReply(cookieId, itemId);
       setReplyEnabled(Boolean(cfg.enabled));
-      setReplyType(cfg.reply_type === 'api' ? 'api' : cfg.reply_type === 'image' ? 'image' : 'text');
+      setReplyType(
+        cfg.reply_type === 'api' || cfg.reply_type === 'image' || cfg.reply_type === 'external_contact'
+          ? cfg.reply_type
+          : 'text',
+      );
       setReplyContent(cfg.reply_content ?? '');
       setReplyImage(cfg.reply_image ?? '');
       setReplyOnce(Boolean(cfg.reply_once));
       setReplyApiUrl(cfg.api_url ?? '');
       setReplyApiTimeout(cfg.api_timeout != null ? String(cfg.api_timeout) : '80');
+      setReplyLocation({
+        location_name: cfg.location_name,
+        location_longitude: cfg.location_longitude,
+        location_latitude: cfg.location_latitude,
+        location_title: cfg.location_title,
+        location_subtitle: cfg.location_subtitle,
+      });
       setReplyLoaded(true);
     } catch (e) {
       // 内联展示加载失败 + 重试入口，避免空态表单被误保存覆盖服务端配置
@@ -492,7 +518,7 @@ export default function ItemEditScreen() {
     }
   }
 
-  /** 保存默认回复：reply_image/reply_type(image) 移动端不编辑，原样回传避免丢配置 */
+  /** 保存默认回复：reply_image/reply_type(image|external_contact)/location_* 移动端不编辑，原样回传避免丢配置 */
   async function handleSaveDefaultReply() {
     if (!cookieId || !itemId || replySaving) return;
     if (replyType === 'api' && !replyApiUrl.trim()) {
@@ -511,6 +537,7 @@ export default function ItemEditScreen() {
         reply_type: replyType,
         api_url: replyApiUrl.trim(),
         api_timeout: timeout,
+        ...replyLocation,
       });
       Alert.alert('保存成功', msg || '默认回复已保存');
     } catch (e) {
@@ -968,6 +995,12 @@ export default function ItemEditScreen() {
               {replyType === 'image' ? (
                 <Text style={[styles.hintText, { color: c.textMuted }]}>
                   当前为图片回复，图片上传与编辑请前往 web 端；在此保存将保留原图片配置
+                </Text>
+              ) : null}
+
+              {replyType === 'external_contact' ? (
+                <Text style={[styles.hintText, { color: c.textMuted }]}>
+                  当前为站外联系方式回复，定位与远程URL配置请前往 web 端；在此保存将保留原配置
                 </Text>
               ) : null}
 

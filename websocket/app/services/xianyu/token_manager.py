@@ -140,6 +140,7 @@ class TokenManager:
                     "skipped_risk_control_processing",
                     "skipped_risk_control_check_failed",
                     "skipped_startup_cache_lookup_failed",
+                    "skipped_cache_lookup_failed",
                 ):
                     self.last_cookie_refresh_time = time.time()
                     refresh_status = self.xianyu.last_token_refresh_status
@@ -151,6 +152,8 @@ class TokenManager:
                         reason = "同账号已有处理中的风控任务"
                     elif refresh_status == "skipped_startup_cache_lookup_failed":
                         reason = "启动阶段读取Token缓存失败"
+                    elif refresh_status == "skipped_cache_lookup_failed":
+                        reason = "Token缓存复查失败"
                     else:
                         reason = "处理中风控日志检查失败"
                     logger.warning(

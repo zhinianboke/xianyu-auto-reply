@@ -374,12 +374,20 @@ export async function fetchAiModels(params: {
 // 后端路由前缀: /api/v1/default-replies
 // ---------------------------------------------------------------------------
 
-export interface DefaultReplyConfig {
+export interface DefaultReplyLocationFields {
+  location_name: string;
+  location_longitude: string;
+  location_latitude: string;
+  location_title: string;
+  location_subtitle: string;
+}
+
+export interface DefaultReplyConfig extends DefaultReplyLocationFields {
   enabled: boolean;
   reply_content: string;
   reply_image: string;
   reply_once: boolean;
-  reply_type: string; // 'text' | 'api'
+  reply_type: string; // 'text' | 'api' | 'external_contact'
   api_url: string;
   api_timeout: number;
 }
@@ -412,10 +420,15 @@ export async function getDefaultReply(
     reply_type: 'text',
     api_url: '',
     api_timeout: 80,
+    location_name: '',
+    location_longitude: '',
+    location_latitude: '',
+    location_title: '',
+    location_subtitle: '',
   });
 }
 
-/** 更新账号的默认回复设置 */
+/** 更新账号的默认回复设置；后端整体覆盖，location_* 与 reply_type 需原样回传 */
 export async function updateDefaultReply(
   accountId: string,
   config: DefaultReplyConfig,

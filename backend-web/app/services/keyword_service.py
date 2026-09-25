@@ -254,6 +254,10 @@ class KeywordService:
         normalized_target_reply = (target_reply or "").strip()
         normalized_target_item_id = (target_item_id or "").strip() or None
         normalized_target_type = self._rule_type(target_type)
+        # 本方法只维护文本/外联关键词（查询条件已排除 image），且入参没有 image_url，
+        # 放行会写出 reply_type=IMAGE、image_url=None 的空图规则（命中后发空图）。
+        if normalized_target_type == 'image':
+            raise ValueError('图片关键词不支持通过文本关键词接口保存')
         if normalized_target_type == 'external_contact':
             normalized_target_reply = ''
         normalized_location = {

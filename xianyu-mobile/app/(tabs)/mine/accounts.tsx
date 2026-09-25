@@ -52,6 +52,7 @@ import {
   type QrLoginSession,
   type ToggleKey,
   type DefaultReplyConfig,
+  type DefaultReplyLocationFields,
 } from '@/api/wrappers/accounts';
 import {
   getAccountAiSettings,
@@ -144,6 +145,17 @@ const ADVANCED_CONFIG_DEFS: { key: AdvancedConfigKey; label: string }[] = [
   { key: 'deliveryDisabled', label: '禁止发货规则' },
   { key: 'refundCancel', label: '退款订单注销' },
 ];
+
+/** 默认回复类型：external_contact 移动端不编辑，仅回填原值后原样回传 */
+type DefaultReplyType = 'text' | 'api' | 'external_contact';
+
+const EMPTY_REPLY_LOCATION: DefaultReplyLocationFields = {
+  location_name: '',
+  location_longitude: '',
+  location_latitude: '',
+  location_title: '',
+  location_subtitle: '',
+};
 
 /** 扫码状态文案 */
 function statusLabel(status: string): string {
@@ -468,12 +480,15 @@ export default function AccountsScreen() {
   const [replySaving, setReplySaving] = useState(false);
   const [replyImgUploading, setReplyImgUploading] = useState(false);
   const [replyEnabled, setReplyEnabled] = useState(false);
-  const [replyType, setReplyType] = useState<'text' | 'api'>('text');
+  const [replyType, setReplyType] = useState<DefaultReplyType>('text');
   const [replyContent, setReplyContent] = useState('');
   const [replyImage, setReplyImage] = useState('');
   const [replyApiUrl, setReplyApiUrl] = useState('');
   const [replyApiTimeout, setReplyApiTimeout] = useState('80');
   const [replyOnce, setReplyOnce] = useState(false);
+  // 站外联系方式定位：移动端无编辑入口，仅读入后原样回传
+  const [replyLocation, setReplyLocation] =
+    useState<DefaultReplyLocationFields>(EMPTY_REPLY_LOCATION);
 
   // ==================== 8 项高级配置状态 ====================
   // 1. 代理设置
@@ -525,6 +540,9 @@ export default function AccountsScreen() {
   const [arType, setArType] = useState<'text' | 'api'>('text');
   const [arTextContent, setArTextContent] = useState('');
   const [arApiUrl, setArApiUrl] = useState('');
+  // 好评后消息：移动端无编辑入口，仅读入后原样回传（后端整体覆盖会清空未传字段）
+  const [arThanksEnabled, setArThanksEnabled] = useState(false);
+  const [arThanksContent, setArThanksContent] = useState('');
 
   // 7. 禁止发货规则
   const [ddVisible, setDdVisible] = useState(false);
@@ -1217,16 +1235,24 @@ export default function AccountsScreen() {
     setReplyApiUrl('');
     setReplyApiTimeout('80');
     setReplyOnce(false);
+    setReplyLocation(EMPTY_REPLY_LOCATION);
     getDefaultReply(account.id)
       .then((cfg) => {
         if (req !== replyReqRef.current) return;
         setReplyEnabled(cfg.enabled);
-        setReplyType(cfg.reply_type === 'api' ? 'api' : 'text');
+        setReplyType(cfg.reply_type === 'api' || cfg.reply_type === 'external_contact' ? cfg.reply_type : 'text');
         setReplyContent(cfg.reply_content);
         setReplyImage(cfg.reply_image);
         setReplyApiUrl(cfg.api_url);
         setReplyApiTimeout(String(cfg.api_timeout || 80));
         setReplyOnce(cfg.reply_once);
+        setReplyLocation({
+          location_name: cfg.location_name,
+          location_longitude: cfg.location_longitude,
+          location_latitude: cfg.location_latitude,
+          location_title: cfg.location_title,
+          location_subtitle: cfg.location_subtitle,
+        });
       })
       .catch((e) => {
         if (req !== replyReqRef.current) return;
@@ -1281,6 +1307,7 @@ export default function AccountsScreen() {
       api_url: replyApiUrl.trim(),
       api_timeout: Number(replyApiTimeout) || 80,
       reply_once: replyOnce,
+      ...replyLocation,
     };
     setReplySaving(true);
     try {
@@ -1548,6 +1575,8 @@ export default function AccountsScreen() {
     setArType('text');
     setArTextContent('不错的买家');
     setArApiUrl('');
+    setArThanksEnabled(false);
+    setArThanksContent('');
     getAutoRateConfig(account.id)
       .then((cfg) => {
         if (req !== advancedReqRef.current) return;
@@ -1555,6 +1584,8 @@ export default function AccountsScreen() {
         setArType(cfg.rate_type === 'api' ? 'api' : 'text');
         setArTextContent(cfg.text_content || '不错的买家');
         setArApiUrl(cfg.api_url || '');
+        setArThanksEnabled(cfg.thanks_enabled);
+        setArThanksContent(cfg.thanks_content);
       })
       .catch((e) => {
         if (req !== advancedReqRef.current) return;
@@ -1589,6 +1620,8 @@ export default function AccountsScreen() {
       rate_type: arType,
       text_content: arTextContent,
       api_url: arApiUrl.trim(),
+      thanks_enabled: arThanksEnabled,
+      thanks_content: arThanksContent,
     };
     setArSaving(true);
     try {
@@ -2588,7 +2621,7 @@ export default function AccountsScreen() {
                     style={styles.textarea}
                   />
                 </View>
-              ) : (
+              ) : replyType === 'api' ? (
                 <>
                   <View style={styles.fieldGroup}>
                     <Text style={[styles.fieldLabel, { color: c.textSecondary }]}>API 地址</Text>
@@ -2611,6 +2644,10 @@ export default function AccountsScreen() {
                     />
                   </View>
                 </>
+              ) : (
+                <Text style={[styles.hintText, { color: c.textMuted }]}>
+                  当前为站外联系方式回复，定位与远程URL配置请前往 web 端；在此保存将保留原配置
+                </Text>
               )}
 
               <View style={styles.fieldGroup}>

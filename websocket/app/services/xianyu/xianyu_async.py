@@ -2960,10 +2960,10 @@ class XianyuAsync:
                         await self.refresh_token()
                         if not self.current_token:
                             # 根据 Token 刷新状态区分失败原因：
-                            # - 滑块/风控类失败：不计入禁用计数（属于可恢复的风控场景，账号本身不一定有问题）
-                            # - 真实故障（网络/超时/API 业务失败/Cookie 失效）：累加计数，达到 10 次禁用
+                            # - 滑块/风控/锁竞争类失败：不计入禁用计数（属于可恢复的风控场景或暂时性并发场景，账号本身不一定有问题）
+                            # - 真实故障（网络/超时/API 业务失败/Cookie 失效）：累加计数，达到 100 次禁用
                             refresh_status = getattr(self, 'last_token_refresh_status', '') or ''
-                            # 不计入禁用计数的状态（滑块/风控/冷却）
+                            # 不计入禁用计数的状态（滑块/风控/冷却/锁竞争）
                             non_counted_statuses = (
                                 'failed_captcha',
                                 'failed_captcha_exception',
@@ -2974,16 +2974,18 @@ class XianyuAsync:
                                 'skipped_risk_control_processing',
                                 'skipped_risk_control_check_failed',
                                 'skipped_startup_cache_lookup_failed',
+                                'skipped_cache_lookup_failed',
+                                'failed_token_request_lock',
                             )
 
                             if not hasattr(self, '_token_fetch_failures'):
                                 self._token_fetch_failures = 0
 
                             if refresh_status in non_counted_statuses:
-                                # 滑块/风控类失败：不累加计数，避免账号在风控期间被误禁用
+                                # 滑块/风控/锁竞争类失败：不累加计数，避免账号在风控或并发等待期间被误禁用
                                 logger.warning(
                                     f"【{self.cookie_id}】Token 获取失败（原因: {refresh_status}），"
-                                    f"属于滑块/风控类场景，不计入禁用计数，等待重试..."
+                                    f"属于滑块/风控/锁竞争类场景，不计入禁用计数，等待重试..."
                                 )
                             else:
                                 # 真实故障：累加禁用计数
@@ -3009,7 +3011,8 @@ class XianyuAsync:
                             #   该状态属于确定性可恢复但短期内无法自愈（账密错误冷却 5 小时 /
                             #   上次登录间隔 300 秒未到），每 5 秒重试无意义且会刷屏日志、
                             #   占用 token API 配额。
-                            # - 本机滑块不处理且接口最终仍需滑块：等待 Cookie 刷新的 3 分钟轮询周期。
+                            # - 本机滑块不处理且接口最终仍需滑块、缓存读取失败等未真正请求接口的场景：
+                            #   等待 Cookie 刷新的轮询周期。
                             # - 其他场景（滑块、网络故障、API 业务失败）：保持 5 秒快速重试，
                             #   避免延误账号恢复。
                             if refresh_status == 'skipped_cooldown':
@@ -3020,6 +3023,7 @@ class XianyuAsync:
                                 'skipped_risk_control_processing',
                                 'skipped_risk_control_check_failed',
                                 'skipped_startup_cache_lookup_failed',
+                                'skipped_cache_lookup_failed',
                             ):
                                 sleep_duration = self.token_manager.cookie_refresh_interval
                             else:

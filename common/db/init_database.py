@@ -1961,6 +1961,7 @@ class DatabaseInitializer:
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
     COLUMN_MIGRATIONS = {
         "xy_keyword_rules": [
+            ("reply_type", "VARCHAR(32) DEFAULT NULL COMMENT '回复类型(text/image/external_contact)'", "reply_content"),
             ("location_name", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式定位名称'", "image_url"),
             ("location_longitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式经度'", "location_name"),
             ("location_latitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式纬度'", "location_longitude"),
@@ -2335,6 +2336,23 @@ class DatabaseInitializer:
                                     "ALTER TABLE xy_default_replies MODIFY COLUMN reply_type VARCHAR(32) DEFAULT 'text' COMMENT 'reply type'"
                                 ))
                                 logger.info("Expanded xy_default_replies.reply_type to VARCHAR(32)")
+                        
+                        # Existing installations may still have the original VARCHAR(16) keyword
+                        # rule reply type; expand it to match the model before storing longer values.
+                        if exists and table_name == "xy_keyword_rules" and col_name == "reply_type":
+                            length_result = await conn.execute(text("""
+                                SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS
+                                WHERE TABLE_SCHEMA = DATABASE()
+                                AND TABLE_NAME = 'xy_keyword_rules'
+                                AND COLUMN_NAME = 'reply_type'
+                            """))
+                            current_length = length_result.scalar()
+                            if current_length and current_length < 32:
+                                await conn.execute(text(
+                                    "ALTER TABLE xy_keyword_rules MODIFY COLUMN reply_type VARCHAR(32) "
+                                    "COMMENT '回复类型(text/image/external_contact)'"
+                                ))
+                                logger.info("Expanded xy_keyword_rules.reply_type to VARCHAR(32)")
                         
                         if not exists:
                             # 添加字段

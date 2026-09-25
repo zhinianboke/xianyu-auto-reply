@@ -365,8 +365,20 @@ export async function setItemMultiQuantityDelivery(
 // 商品默认回复（对齐 web src/api/items.ts 的 getItemDefaultReply/saveItemDefaultReply）
 // ---------------------------------------------------------------------------
 
-/** 商品默认回复配置（reply_type: text-文本 / image-图片 / api-接口） */
-export interface ItemDefaultReplyConfig {
+/** 站外联系方式定位字段（移动端无编辑入口，读入后原样回传） */
+export interface ItemDefaultReplyLocationFields {
+  location_name: string;
+  location_longitude: string;
+  location_latitude: string;
+  location_title: string;
+  location_subtitle: string;
+}
+
+/**
+ * 商品默认回复配置
+ * （reply_type: text-文本 / image-图片 / api-接口 / external_contact-站外联系方式）
+ */
+export interface ItemDefaultReplyConfig extends ItemDefaultReplyLocationFields {
   item_id: string;
   reply_content: string;
   reply_image: string;
@@ -386,6 +398,11 @@ const DEFAULT_REPLY_FALLBACK: ItemDefaultReplyConfig = {
   reply_type: 'text',
   api_url: '',
   api_timeout: 80,
+  location_name: '',
+  location_longitude: '',
+  location_latitude: '',
+  location_title: '',
+  location_subtitle: '',
 };
 
 /**
@@ -418,7 +435,7 @@ export async function getItemDefaultReply(
 }
 
 /**
- * 保存商品默认回复配置（整体覆盖，reply_image 需原样回传已有值以免丢失）。
+ * 保存商品默认回复配置（整体覆盖：reply_image 与 location_* 需原样回传已有值以免丢失）。
  * 后端: PUT /api/v1/items/{cookie_id}/{item_id}/default-reply
  */
 export async function saveItemDefaultReply(
@@ -438,6 +455,11 @@ export async function saveItemDefaultReply(
         reply_type: config.reply_type,
         api_url: config.api_url,
         api_timeout: config.api_timeout,
+        location_name: config.location_name,
+        location_longitude: config.location_longitude,
+        location_latitude: config.location_latitude,
+        location_title: config.location_title,
+        location_subtitle: config.location_subtitle,
       },
     },
   )) as { data?: unknown; error?: unknown };

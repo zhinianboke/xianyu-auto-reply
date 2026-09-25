@@ -34,7 +34,7 @@ from common.services.token_renewal_cache_service import (
     write_renewed_token_cache,
 )
 from common.services.token_api_mode import load_token_api_mode
-from common.utils.xianyu_utils import trans_cookies
+from common.utils.xianyu_utils import normalize_xianyu_user_id, trans_cookies
 from app.api.deps import require_internal_auth
 from app.utils.captcha_engine import normalize_captcha_engine
 
@@ -988,7 +988,11 @@ async def send_message(account_id: str, request: SendMessageRequest):
                 "data": None,
             }
         
-        if not request.to_user_id:
+        # 归一化接收方ID：剥离 @goofish 后缀与首尾空白后再判空。
+        # send_msg 内部会无条件拼 "@goofish"，带后缀的入参（如 "xxx@goofish"）
+        # 会变成 "xxx@goofish@goofish" 导致买家收不到而接口仍返回成功。
+        to_user_id = normalize_xianyu_user_id(request.to_user_id)
+        if not to_user_id:
             return {
                 "success": False,
                 "code": 400,
@@ -1000,7 +1004,7 @@ async def send_message(account_id: str, request: SendMessageRequest):
         send_result = await instance.send_msg(
             websocket=instance.ws,
             chat_id=request.chat_id,
-            send_user_id=request.to_user_id,
+            send_user_id=to_user_id,
             content=request.message,
         )
 

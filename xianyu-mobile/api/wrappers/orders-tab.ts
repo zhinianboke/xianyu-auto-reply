@@ -52,6 +52,11 @@ export interface AutoRateConfig {
   enabled: boolean;
   text?: string;
   api_mode?: boolean;
+  /** 后端 api_url：本页无编辑入口，读入后原样回传，避免清空 Web 端配置 */
+  api_url?: string;
+  /** 好评后自动发送消息（#232）：本页无编辑入口，读入后原样回传 */
+  thanks_enabled?: boolean;
+  thanks_content?: string;
 }
 
 /**
@@ -417,8 +422,8 @@ export async function batchDeleteOrders(
 /**
  * 获取账号的自动评价配置。
  *
- * 后端字段 enabled / rate_type / text_content / api_url → 翻译为
- * { enabled, text, api_mode }。
+ * 后端字段 enabled / rate_type / text_content / api_url / thanks_* → 翻译为
+ * { enabled, text, api_mode, api_url, thanks_enabled, thanks_content }。
  */
 export async function getAutoRateConfig(
   accountId: string,
@@ -429,13 +434,23 @@ export async function getAutoRateConfig(
   )) as { data?: unknown; error?: unknown };
   const body = unwrap(data) as Record<string, unknown> | null;
   if (!body || typeof body !== 'object') {
-    return { enabled: false, text: '', api_mode: false };
+    return {
+      enabled: false,
+      text: '',
+      api_mode: false,
+      api_url: '',
+      thanks_enabled: false,
+      thanks_content: '',
+    };
   }
   const rateType = str(body, 'rate_type');
   return {
     enabled: bool(body, 'enabled'),
     text: str(body, 'text_content', 'text') ?? '',
     api_mode: rateType != null ? rateType === 'api' : bool(body, 'api_mode'),
+    api_url: str(body, 'api_url') ?? '',
+    thanks_enabled: bool(body, 'thanks_enabled'),
+    thanks_content: str(body, 'thanks_content') ?? '',
   };
 }
 
@@ -443,7 +458,8 @@ export async function getAutoRateConfig(
  * 更新账号的自动评价配置。
  *
  * 将 { enabled, text, api_mode } 翻译为后端 AutoRateConfigUpdate：
- * { enabled, rate_type, text_content, api_url }。
+ * { enabled, rate_type, text_content, api_url, thanks_enabled, thanks_content }。
+ * 后端整体覆盖：api_url 与 thanks_* 本页不编辑，必须回传读到的原值。
  */
 export async function updateAutoRateConfig(
   accountId: string,
@@ -455,7 +471,9 @@ export async function updateAutoRateConfig(
       enabled: config.enabled,
       rate_type: config.api_mode ? 'api' : 'text',
       text_content: config.text ?? '',
-      api_url: null,
+      api_url: config.api_url ?? '',
+      thanks_enabled: config.thanks_enabled ?? false,
+      thanks_content: config.thanks_content ?? '',
     },
   });
 }

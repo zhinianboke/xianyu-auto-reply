@@ -20,6 +20,7 @@ from common.utils.internal_auth import (
     build_internal_auth_headers,
     is_internal_api_url,
 )
+from common.utils.xianyu_utils import normalize_xianyu_user_id
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -132,6 +133,8 @@ class WebSocketServiceClient:
         # websocket 内部接口自 #326 起强制要求 to_user_id：缺省时发送协议里的接收人会变成
         # None@goofish，买家收不到，而接口只返回 success=false（调用方若不看返回值即静默失败）。
         # 这里做前置显式校验，漏传时留下明确日志，不再无声无息。
+        # 与 websocket 侧一致地剥离 @goofish 后缀与空白：内部发送协议会无条件再拼一次后缀。
+        to_user_id = normalize_xianyu_user_id(to_user_id)
         if not to_user_id:
             logger.error(
                 f"发送消息缺少接收方ID(to_user_id)，已拦截避免静默失败: "
