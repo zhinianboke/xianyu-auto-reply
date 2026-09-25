@@ -392,6 +392,7 @@ async def build_item_payload(
                     image_url,
                     cookie,
                     static_root=static_root,
+                    account_id=account_id,
                 )
             except PublishMediaError as exc:
                 raise DirectPublishError(f"第 {index} 张图片上传失败：{exc}") from exc
@@ -416,6 +417,7 @@ async def build_item_payload(
                         image_source["source"],
                         cookie,
                         static_root=static_root,
+                        account_id=account_id,
                     )
                 except PublishMediaError as exc:
                     raise DirectPublishError(
