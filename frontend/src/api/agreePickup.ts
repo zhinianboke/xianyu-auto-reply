@@ -24,7 +24,7 @@ export interface PickupOrderView {
   content: string | null
   /** 商品配置的查询按钮（含启用标记），无配置为空数组；停用的按钮不下发跳转，但保留工具/API配套入口 */
   query_buttons?: Array<{ name: string; enabled?: boolean }>
-  /** 商品配置的展示入口（底部工具区，link 外链 / text 弹窗），无配置为空数组 */
+  /** 展示入口（底部工具区，link 外链 / image 看图弹窗 / text 弹窗）；已合并用户的默认通用入口，无配置为空数组 */
   display_links?: DisplayLink[]
 }
 

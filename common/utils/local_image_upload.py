@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Optional, Tuple, Union
@@ -39,6 +40,10 @@ DEFAULT_EXT = ".jpg"
 
 # 默认最大字节数：5 MB，覆盖项目内多数上传接口的现状。
 DEFAULT_MAX_SIZE = 5 * 1024 * 1024
+
+# 文件名前缀非法字符（含 ``/``、``\``、``:``）。前缀可能来自 URL 路径参数或数据库自由字符串
+# （如 item_id），必须收敛字符集，否则 ``../../x`` 之类的值会让文件写到上传目录之外。
+UNSAFE_PREFIX_CHARS = re.compile(r"[^0-9A-Za-z_.-]")
 
 
 # ====== 异常 ======
@@ -133,6 +138,7 @@ def build_unique_filename(
         original_filename: 原始上传文件名，仅用于提取扩展名。
         prefix: 文件名前缀，可空。例如 ``"user_1"`` / ``"account_xxx_item_yyy"``，
             最终拼成 ``"{prefix}_{uuid}{ext}"``；为空时省略前缀及连接符。
+            非 ``[0-9A-Za-z_.-]`` 的字符（含路径分隔符）会被替换为 ``_``。
         short_uuid: True 时使用 ``uuid.uuid4().hex[:8]``，否则使用完整 hex
             （对应不同接口的历史命名习惯）。
 
@@ -141,6 +147,7 @@ def build_unique_filename(
     """
     ext = safe_image_ext(original_filename)
     uid = uuid.uuid4().hex[:8] if short_uuid else uuid.uuid4().hex
+    prefix = UNSAFE_PREFIX_CHARS.sub("_", prefix) if prefix else ""
     if prefix:
         return f"{prefix}_{uid}{ext}"
     return f"{uid}{ext}"
@@ -166,7 +173,8 @@ async def save_uploaded_image(
         image: FastAPI 上传文件对象。
         upload_dir: 保存目录（可传 :class:`pathlib.Path` 或字符串绝对/相对路径），
             目录不存在时会自动创建。
-        filename_prefix: 文件名前缀，留空则只用 UUID。
+        filename_prefix: 文件名前缀，留空则只用 UUID。非 ``[0-9A-Za-z_.-]``
+            的字符会被替换为 ``_``（前缀可能来自 URL 路径参数，防路径穿越）。
         max_size: 最大字节数，默认 5 MB。
         short_uuid: True 时使用 8 位短 UUID，否则使用完整 32 位 hex。
         validate_size: 是否启用大小校验。设为 False 可保留某些接口"不校验大小"的旧行为。

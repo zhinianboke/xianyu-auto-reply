@@ -137,3 +137,148 @@ export async function saveItemQueryButtons(
   }
   return typeof res.message === 'string' && res.message ? res.message : '查询配置已保存';
 }
+
+// ---------------------------------------------------------------------------
+// 商品展示入口（存 xy_catalog_items.metadata_json.display_links）
+// 后端路由前缀同 query-buttons: /api/v1/items
+//   GET/PUT /api/v1/items/{cookie_id}/{item_id}/display-links
+//   POST    /api/v1/items/{cookie_id}/{item_id}/display-links/upload-image
+// 结构见 docs 全局接口契约：买家提货页底部入口区渲染，text/image 点击弹窗。
+// 默认模板的合并由提卡页负责，本模块只读写商品自身条目。
+// ---------------------------------------------------------------------------
+
+/** 展示入口条目（三型联合，字段与后端 metadata_json.display_links 元素结构一致） */
+export type DisplayLinkEntry =
+  | { name: string; type: 'link'; url: string; note?: string }
+  | { name: string; type: 'text'; title: string; content: string }
+  | { name: string; type: 'image'; url: string; note?: string };
+
+/** 宽松归一后端下发的单条展示入口（必填字段缺失/类型未知时丢弃该条） */
+function normalizeDisplayLink(raw: unknown): DisplayLinkEntry | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  const name = typeof obj.name === 'string' ? obj.name : '';
+  if (!name) return null;
+  const note = typeof obj.note === 'string' && obj.note ? obj.note : undefined;
+  if (obj.type === 'link') {
+    const url = typeof obj.url === 'string' ? obj.url : '';
+    return url ? { name, type: 'link', url, note } : null;
+  }
+  if (obj.type === 'image') {
+    // url 为 /static/... 相对路径或 http(s) 外链，展示端负责拼服务器地址
+    const url = typeof obj.url === 'string' ? obj.url : '';
+    return url ? { name, type: 'image', url, note } : null;
+  }
+  if (obj.type === 'text') {
+    const title = typeof obj.title === 'string' ? obj.title : '';
+    const content = typeof obj.content === 'string' ? obj.content : '';
+    return title && content ? { name, type: 'text', title, content } : null;
+  }
+  return null;
+}
+
+/**
+ * 获取商品的展示入口配置。
+ * 后端: GET /api/v1/items/{cookie_id}/{item_id}/display-links → data: { links }
+ * 未配置时返回空数组。
+ */
+export async function getItemDisplayLinks(
+  cookieId: string,
+  itemId: string,
+): Promise<DisplayLinkEntry[]> {
+  const client = await getApiClient();
+  const { data, error } = (await (client.GET as any)(
+    `${PREFIX}/${encodeURIComponent(cookieId)}/${encodeURIComponent(itemId)}/display-links`,
+  )) as { data?: unknown; error?: unknown };
+  if (error) throw await extractError(error);
+  const res = (data ?? {}) as Record<string, unknown>;
+  if (res.success === false) {
+    throw new Error(
+      typeof res.message === 'string' && res.message ? res.message : '获取展示入口配置失败',
+    );
+  }
+  const inner =
+    res.data && typeof res.data === 'object' ? (res.data as Record<string, unknown>) : res;
+  const rawLinks = Array.isArray(inner.links) ? inner.links : [];
+  return rawLinks
+    .map(normalizeDisplayLink)
+    .filter((e): e is DisplayLinkEntry => e != null);
+}
+
+/**
+ * 整体覆盖保存商品的展示入口配置。
+ * 后端: PUT /api/v1/items/{cookie_id}/{item_id}/display-links，body: { links }
+ * 后端按类型白名单收敛字段（link/image 存 name/type/url/note，text 存 name/type/title/content），
+ * 业务失败返回 HTTP 200 + success=false，此处统一抛中文 message。
+ */
+export async function saveItemDisplayLinks(
+  cookieId: string,
+  itemId: string,
+  links: DisplayLinkEntry[],
+): Promise<void> {
+  const client = await getApiClient();
+  const { data, error } = (await (client.PUT as any)(
+    `${PREFIX}/${encodeURIComponent(cookieId)}/${encodeURIComponent(itemId)}/display-links`,
+    { body: { links } },
+  )) as { data?: unknown; error?: unknown };
+  if (error) throw await extractError(error);
+  const res = (data ?? {}) as Record<string, unknown>;
+  if (res.success === false) {
+    throw new Error(
+      typeof res.message === 'string' && res.message ? res.message : '保存展示入口配置失败',
+    );
+  }
+}
+
+/**
+ * 上传展示入口图片（multipart/form-data，字段名 image），返回图片 URL。
+ *
+ * 复用项目 RN FormData 上传模式（见 products.ts uploadCardImage）：openapi-fetch 识别
+ * FormData 后交由 fetch 自动设置 boundary，勿手动指定 Content-Type（会缺少 boundary
+ * 导致后端解析失败）。后端返回 { success, message, data: { image_url } }，
+ * 兼容无 data 包裹的 { image_url }。
+ * @param fileUri 本地图片 uri（来自 expo-image-picker）
+ */
+export async function uploadItemDisplayLinkImage(
+  cookieId: string,
+  itemId: string,
+  fileUri: string,
+): Promise<string> {
+  const client = await getApiClient();
+  const ext = (fileUri.split('.').pop() || 'jpg').toLowerCase().split('?')[0];
+  const typeMap: Record<string, string> = {
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    heic: 'image/heic',
+    bmp: 'image/bmp',
+  };
+  const formData = new FormData();
+  // RN FormData 文件字段需要 { uri, name, type } 结构
+  formData.append('image', {
+    uri: fileUri,
+    name: `image.${ext}`,
+    type: typeMap[ext] || 'image/jpeg',
+  } as any);
+
+  const { data, error } = (await (client.POST as any)(
+    `${PREFIX}/${encodeURIComponent(cookieId)}/${encodeURIComponent(itemId)}/display-links/upload-image`,
+    { body: formData },
+  )) as { data?: unknown; error?: unknown };
+  if (error) throw await extractError(error);
+
+  const outer = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
+  const inner =
+    outer.data && typeof outer.data === 'object' ? (outer.data as Record<string, unknown>) : {};
+  const url =
+    (typeof outer.image_url === 'string' ? outer.image_url : '') ||
+    (typeof inner.image_url === 'string' ? inner.image_url : '');
+  if (!url) {
+    throw new Error(
+      typeof outer.message === 'string' && outer.message ? outer.message : '图片上传失败',
+    );
+  }
+  return url;
+}

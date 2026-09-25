@@ -6,7 +6,8 @@
    （不存在 / 不匹配 均返回明确中文提示）
 2. 买家点击「同意」：Redis 锁串行 + 幂等 → 调 websocket 内部接口触发真实发货并返回卡券内容
 3. 回显商品信息：商品标题（商品表 xy_items，缺失时用自动回复日志记录的标题兜底）
-   + 闲鱼商品详情页地址 + 商品展示入口链接（xy_catalog_items.metadata_json.display_links）
+   + 闲鱼商品详情页地址 + 商品展示入口（商品自身 metadata_json.display_links 与用户默认
+   通用模板按名称去重合并，商品条目优先）
 
 说明：
 - 本层为无认证公开接口的业务实现，仅读取展示所需的最小订单信息，不下发敏感字段。
@@ -21,9 +22,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
+from app.services.display_link_service import (
+    merge_display_links,
+    normalize_display_links,
+    template_row_to_entry,
+)
 from app.services.websocket_client import websocket_client
 from app.services.item_query_service import ItemQueryService
 from common.db.redis_client import release_delivery_lock, try_acquire_delivery_lock
+from common.models.display_link_template import DisplayLinkTemplate
 from common.models.xy_account import XYAccount
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.xy_order import XYOrder
@@ -98,7 +105,7 @@ class AgreePickupService:
         }
 
     async def _load_query_buttons(self, order: XYOrder) -> Tuple[list, list]:
-        """读取商品配置的通用查询按钮与展示入口链接（display_links）。
+        """读取商品配置的通用查询按钮与展示入口（商品自身条目 + 用户默认模板合并）。
 
         查询按钮含启用标记（只取 name/enabled 下发给买家）：
         停用的按钮也会下发（enabled=False），提货页据此隐藏跳转按钮本身，
@@ -124,9 +131,12 @@ class AgreePickupService:
         return query_buttons, display_links
 
     async def _load_display_links(self, order: XYOrder) -> list:
-        """读取商品配置的展示入口链接（metadata_json.display_links），完整内容下发给买家。
+        """读取商品展示入口 = 商品自身条目 + 用户默认模板条目（规范化后按名称去重，商品优先）。
 
-        name/type/url/title/content/note 均为展示文案，不含敏感信息；
+        读取时重新过一遍 validate_display_link_entry（经 normalize_display_links）：
+        既收敛字段白名单（metadata 里可能残留 passthrough/导入写入的 headers/Cookie 等键），
+        也让非法商品条目不再遮蔽同名默认模板。
+        完整内容下发给买家；name/type/url/title/content/note 均为展示文案，不含敏感信息；
         不做 enabled 过滤（该体系没有启用开关，数组里有就展示）。
         任何异常都按空数组处理，不阻断提货主流程。
         """
@@ -140,22 +150,23 @@ class AgreePickupService:
                 )
             )
             item = result.scalars().first()
-            if not item:
-                return []
-            links = (item.metadata_json or {}).get("display_links")
-            if not isinstance(links, list):
-                return []
-            # 按契约过滤脏数据（绕过管理接口写入的缺字段项），避免前端渲染出空弹窗
-            valid = []
-            for link in links:
-                if not isinstance(link, dict):
-                    continue
-                link_type = link.get("type")
-                if link_type == "link" and link.get("url"):
-                    valid.append(link)
-                elif link_type == "text" and link.get("title") and link.get("content"):
-                    valid.append(link)
-            return valid
+            links = (item.metadata_json or {}).get("display_links") if item else None
+
+            # 默认模板：读取时合并，改动即时全店生效
+            template_rows = (
+                await self.session.execute(
+                    select(DisplayLinkTemplate).where(
+                        DisplayLinkTemplate.user_id == order.owner_id,
+                        DisplayLinkTemplate.is_default.is_(True),
+                    ).order_by(DisplayLinkTemplate.id)
+                )
+            ).scalars().all()
+
+            # 先各自规范化（丢弃脏数据/多余键）再合并，避免非法商品条目按名称占位遮蔽模板
+            return merge_display_links(
+                normalize_display_links(links),
+                normalize_display_links([template_row_to_entry(r) for r in template_rows]),
+            )
         except Exception as e:
             logger.warning(f"[同意提货] 展示入口配置读取失败 order={order.order_no}: {e}")
             return []

@@ -1,8 +1,8 @@
 """
 display_links 校验纯函数测试脚本
 
-覆盖 backend-web/app/api/routes/item_query.py 的 _validate_display_links：
-商品展示入口配置（买家提货页外链按钮 / 文本弹窗）的字段校验与规范化。
+覆盖 backend-web/app/services/display_link_service.py 的 validate_display_links（item_query.py 以 _validate_display_links 别名引用）：
+商品展示入口配置（买家提货页外链按钮 / 文本弹窗 / 图片入口）的字段校验与规范化。
 
 直接用 ``python scripts/test_display_links.py`` 运行，全部 assert 通过即成功。
 依赖 fastapi / sqlalchemy（路由模块顶层导入），需先安装 backend-web 依赖。
@@ -61,14 +61,13 @@ def test_missing_name_rejected() -> None:
 
 
 def test_invalid_type_rejected() -> None:
-    """type 缺失或不在 link/text 枚举内一律拒绝"""
+    """type 缺失或不在 link/text/image 枚举内一律拒绝"""
     for link in (
         {"name": "x"},
-        {"name": "x", "type": "image"},
         {"name": "x", "type": "LINK"},
     ):
         ok, message, _ = _validate_display_links([link])
-        assert not ok and "第 1 个入口的类型仅支持 link/text" == message, link
+        assert not ok and "第 1 个入口的类型仅支持 link/text/image" == message, link
 
 
 def test_link_url_rules() -> None:

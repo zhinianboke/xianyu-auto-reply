@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react-native';
 import { Card, Button, Input, Loading } from '@/components/ui';
+import { DisplayLinkEditor, toDraft, validateEntry } from '@/components/display-links/DisplayLinkEditor';
 import { colors, spacing, typography, radius } from '@/lib/theme';
 import {
   getSellerItemDetail,
@@ -35,7 +36,11 @@ import {
 import {
   getItemQueryButtons,
   saveItemQueryButtons,
+  getItemDisplayLinks,
+  saveItemDisplayLinks,
+  uploadItemDisplayLinkImage,
   type QueryButton,
+  type DisplayLinkEntry,
 } from '@/api/wrappers/item-query-config';
 import {
   type QueryButtonDraft,
@@ -57,7 +62,7 @@ const SHIPPING_OPTIONS: Array<{ value: 'free' | 'distance' | 'fixed' | 'none'; l
 /** seller-detail / seller-edit 依赖后端新接口，旧版后端会 404 */
 const BACKEND_VERSION_HINT = '该功能需要后端 v最新版支持';
 
-type SectionKey = 'basic' | 'cards' | 'delivery' | 'reply' | 'ai' | 'query';
+type SectionKey = 'basic' | 'cards' | 'delivery' | 'reply' | 'ai' | 'query' | 'links';
 
 /** 折叠卡片：标题行 + 展开指示箭头，内容条件渲染（不用动画库） */
 function CollapsibleSection({
@@ -150,6 +155,7 @@ export default function ItemEditScreen() {
     reply: false,
     ai: false,
     query: false,
+    links: false,
   });
 
   // 默认回复（展开时才加载）
@@ -181,6 +187,13 @@ export default function ItemEditScreen() {
   const [queryDrafts, setQueryDrafts] = useState<QueryButtonDraft[]>([]);
   // 查询页顶部提示文案（metadata_json.page_hint），空串不显示
   const [queryPageHint, setQueryPageHint] = useState('');
+
+  // 展示入口（展开时才加载）
+  const [linksLoaded, setLinksLoaded] = useState(false);
+  const [linksLoading, setLinksLoading] = useState(false);
+  const [linksLoadError, setLinksLoadError] = useState<string | null>(null);
+  const [linksSaving, setLinksSaving] = useState(false);
+  const [linkEntries, setLinkEntries] = useState<DisplayLinkEntry[]>([]);
 
   const paramsReady = Boolean(cookieId && itemId);
 
@@ -308,6 +321,21 @@ export default function ItemEditScreen() {
     }
   }, [cookieId, itemId]);
 
+  const loadDisplayLinks = useCallback(async () => {
+    if (!cookieId || !itemId) return;
+    setLinksLoading(true);
+    setLinksLoadError(null);
+    try {
+      const list = await getItemDisplayLinks(cookieId, itemId);
+      setLinkEntries(list);
+      setLinksLoaded(true);
+    } catch (e) {
+      setLinksLoadError((e as Error).message || '获取展示入口失败');
+    } finally {
+      setLinksLoading(false);
+    }
+  }, [cookieId, itemId]);
+
   /** 展开时才拉取该卡片数据（各卡片独立加载、独立保存） */
   function toggleSection(key: SectionKey) {
     const willExpand = !expanded[key];
@@ -316,6 +344,7 @@ export default function ItemEditScreen() {
     if (key === 'reply' && !replyLoaded && !replyLoading) loadDefaultReply();
     else if (key === 'ai' && !aiLoaded && !aiLoading) loadAiPrompt();
     else if (key === 'query' && !queryLoaded && !queryLoading) loadQueryButtons();
+    else if (key === 'links' && !linksLoaded && !linksLoading) loadDisplayLinks();
   }
 
   async function handleSave() {
@@ -531,6 +560,27 @@ export default function ItemEditScreen() {
   const removeQueryDraft = (key: string) => {
     setQueryDrafts((prev) => prev.filter((d) => d.key !== key));
   };
+
+  /** 保存展示入口：先逐条校验（与后端契约一致），避免整批被后端拒绝 */
+  async function handleSaveDisplayLinks() {
+    if (!cookieId || !itemId || linksSaving || !linksLoaded) return;
+    for (const [i, entry] of linkEntries.entries()) {
+      const err = validateEntry(toDraft(entry));
+      if (err) {
+        Alert.alert('请检查展示入口', `第 ${i + 1} 个：${err}`);
+        return;
+      }
+    }
+    setLinksSaving(true);
+    try {
+      await saveItemDisplayLinks(cookieId, itemId, linkEntries);
+      Alert.alert('保存成功', '展示入口已更新');
+    } catch (e) {
+      Alert.alert('保存失败', (e as Error).message || '未知错误');
+    } finally {
+      setLinksSaving(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -1157,6 +1207,35 @@ export default function ItemEditScreen() {
                 loading={querySaving}
                 disabled={!queryLoaded}
                 style={styles.cardSaveBtn}
+              />
+            </>
+          )}
+        </CollapsibleSection>
+
+        {/* 展示入口（发布后买家提卡页底部可见；默认通用入口自动展示，无需在此重复添加） */}
+        <CollapsibleSection
+          title="展示入口"
+          expanded={expanded.links}
+          onToggle={() => toggleSection('links')}
+        >
+          {linksLoading ? (
+            <ActivityIndicator color={c.primary} style={styles.inlineLoading} />
+          ) : linksLoadError ? (
+            <LoadErrorRow message={linksLoadError} onRetry={loadDisplayLinks} />
+          ) : (
+            <>
+              <DisplayLinkEditor
+                entries={linkEntries}
+                onChange={setLinkEntries}
+                uploadImage={(uri) => uploadItemDisplayLinkImage(cookieId, itemId, uri)}
+                hint="商品自身的入口优先于通用默认入口；同名时以商品配置为准"
+              />
+              <Button
+                label="保存展示入口"
+                onPress={handleSaveDisplayLinks}
+                loading={linksSaving}
+                disabled={!linksLoaded}
+                style={styles.cardActionBtn}
               />
             </>
           )}

@@ -72,6 +72,8 @@ const normalizeItemConfig = (cfg: ProductMaterial['item_config']): MaterialItemC
     default_reply: source?.default_reply ?? '',
     ai_prompt: source?.ai_prompt ?? '',
     query_buttons: Array.isArray(source?.query_buttons) ? source!.query_buttons : [],
+    display_links: Array.isArray(source?.display_links) ? source!.display_links : [],
+    page_hint: typeof source?.page_hint === 'string' ? source.page_hint : '',
   }
 }
 

@@ -5,7 +5,8 @@
  * - 查询按钮：按商品配置通用查询按钮（存 metadata_json.query_buttons），买家在
  *   公开查询页 /query 点击按钮后由服务端代理执行并返回结构化结果。
  * - 展示入口：配置提货页底部工具区的入口（存 metadata_json.display_links），
- *   链接入口新窗口打开，文本入口弹窗展示（{cookie} 由提货页替换为发货 Cookie）。
+ *   链接入口新窗口打开，文本/图片入口弹窗展示（文本中的 {cookie} 由提货页替换为发货 Cookie），
+ *   可一键从用户级「通用展示入口」模板添加。
  *
  * 编辑格式（与 QueryButton 结构的序列化/反序列化在本组件内完成）：
  * - 请求头：textarea 每行 `Key: Value`，值支持变量
@@ -14,17 +15,19 @@
  *
  * 可用变量（服务端执行时替换）：{cookie} {account} {api_key} {line}
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Plus, Search, Trash2, X } from 'lucide-react'
 import {
   getItemDisplayLinks,
   getItemQueryButtons,
   saveItemDisplayLinks,
   saveItemQueryButtons,
+  uploadItemDisplayLinkImage,
   type DisplayLink,
   type QueryButton,
   type QueryResultField,
 } from '@/api/itemQuery'
+import { getDisplayLinkTemplates, type DisplayLinkTemplate } from '@/api/displayLinkTemplates'
 import { useUIStore } from '@/store/uiStore'
 
 // ==================== 编辑态 ⇄ QueryButton 序列化 ====================
@@ -151,18 +154,25 @@ const toQueryButton = (draft: ButtonDraft, index: number): { button?: QueryButto
 
 // ==================== 展示入口编辑态 ⇄ DisplayLink 序列化 ====================
 
-/** 展示入口编辑草稿：两种类型字段平铺编辑，保存时按 type 收敛为 DisplayLink */
+/** 展示入口编辑草稿：三种类型字段平铺编辑，保存时按 type 收敛为 DisplayLink */
 interface LinkDraft {
   name: string
-  type: 'link' | 'text'
-  /** 仅 type=link 使用 */
+  type: 'link' | 'text' | 'image'
+  /** 仅 type=link / image 使用 */
   url: string
-  /** 仅 type=link 使用，可选（如「提取码：xxxx」，显示在按钮右侧） */
+  /** 仅 type=link / image 使用，可选（如「提取码：xxxx」「扫码进群」） */
   note: string
   /** 仅 type=text 使用（弹窗标题） */
   title: string
   /** 仅 type=text 使用（多行文本，支持 {cookie} 占位符） */
   content: string
+}
+
+/** 入口类型的中文文案（类型下拉、列表标签、模板选择器共用） */
+const LINK_TYPE_LABELS: Record<LinkDraft['type'], string> = {
+  link: '链接',
+  text: '文本',
+  image: '图片',
 }
 
 const emptyLinkDraft = (): LinkDraft => ({
@@ -177,11 +187,21 @@ const emptyLinkDraft = (): LinkDraft => ({
 /** DisplayLink → 编辑草稿 */
 const linkToDraft = (link: DisplayLink): LinkDraft => ({
   name: link.name || '',
-  type: link.type === 'text' ? 'text' : 'link',
-  url: link.type === 'link' ? link.url || '' : '',
-  note: link.type === 'link' ? link.note || '' : '',
+  type: link.type,
+  url: link.type === 'text' ? '' : link.url || '',
+  note: link.type === 'text' ? '' : link.note || '',
   title: link.type === 'text' ? link.title || '' : '',
   content: link.type === 'text' ? link.content || '' : '',
+})
+
+/** 通用展示入口模板 → 编辑草稿（字段直接映射） */
+const templateToDraft = (tpl: DisplayLinkTemplate): LinkDraft => ({
+  name: tpl.name || '',
+  type: tpl.type,
+  url: tpl.type === 'text' ? '' : tpl.url || '',
+  note: tpl.type === 'text' ? '' : tpl.note || '',
+  title: tpl.type === 'text' ? tpl.title || '' : '',
+  content: tpl.type === 'text' ? tpl.content || '' : '',
 })
 
 /** 编辑草稿 → DisplayLink；返回错误消息或解析结果 */
@@ -194,6 +214,15 @@ const toDisplayLink = (draft: LinkDraft, index: number): { link?: DisplayLink; e
     if (!/^https?:\/\//i.test(url)) return { error: `入口「${name}」：链接地址必须以 http:// 或 https:// 开头` }
     const note = draft.note.trim()
     return { link: { name, type: 'link', url, ...(note ? { note } : {}) } }
+  }
+  if (draft.type === 'image') {
+    const url = draft.url.trim()
+    if (!url) return { error: `入口「${name}」：请填写图片地址或上传图片` }
+    if (!(url.startsWith('/static/') || url.startsWith('http://') || url.startsWith('https://'))) {
+      return { error: `入口「${name}」：图片地址必须是 /static/ 开头的站内路径或 http(s) 链接` }
+    }
+    const note = draft.note.trim()
+    return { link: { name, type: 'image', url, ...(note ? { note } : {}) } }
   }
   const title = draft.title.trim()
   if (!title) return { error: `入口「${name}」：弹窗标题不能为空` }
@@ -260,6 +289,15 @@ export function ItemQueryConfigModal({
   const [linksLoadedOnce, setLinksLoadedOnce] = useState(false)
   const [linksReloadKey, setLinksReloadKey] = useState(0)
 
+  // 通用展示入口模板（用户级）：与展示入口同处懒加载，供「从通用入口添加」选择器使用
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false)
+  const [templates, setTemplates] = useState<DisplayLinkTemplate[]>([])
+  const [templatesLoadedOnce, setTemplatesLoadedOnce] = useState(false)
+
+  // 图片上传中的草稿下标（按下标记录，允许同时上传多个入口的图片）
+  const [uploadingLinkImage, setUploadingLinkImage] = useState<Record<number, boolean>>({})
+  const linkFileInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
+
   useEffect(() => {
     // 草稿模式不读后端，初始按钮在 useState 初始化时已注入
     if (draftMode) return
@@ -316,6 +354,33 @@ export function ItemQueryConfigModal({
     }
   }, [activeTab, draftMode, linksLoadedOnce, linksReloadKey, cookieId, itemId, addToast])
 
+  // 通用入口模板懒加载：与展示入口同处首次展开时拉取；失败仅提示不阻断保存（模板是可选来源）
+  useEffect(() => {
+    if (draftMode || activeTab !== 'links' || templatesLoadedOnce) return
+    let cancelled = false
+    const load = async () => {
+      try {
+        const list = await getDisplayLinkTemplates()
+        if (cancelled) return
+        setTemplates(list)
+        setTemplatesLoadedOnce(true)
+      } catch (err) {
+        if (cancelled) return
+        addToast({ type: 'error', message: (err as Error).message || '加载通用展示入口失败' })
+      }
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [activeTab, draftMode, templatesLoadedOnce, linksReloadKey, addToast])
+
+  // 可选模板：名称未出现在当前草稿中的（已添加的不再重复展示）
+  const availableTemplates = useMemo(() => {
+    const used = new Set(linkDrafts.map((d) => d.name.trim().toLowerCase()).filter(Boolean))
+    return templates.filter((t) => !used.has(t.name.trim().toLowerCase()))
+  }, [templates, linkDrafts])
+
   const updateDraft = (index: number, patch: Partial<ButtonDraft>) => {
     setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, ...patch } : d)))
   }
@@ -328,9 +393,37 @@ export function ItemQueryConfigModal({
     setLinkDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, ...patch } : d)))
   }
 
-  const addLinkDraft = () => setLinkDrafts((prev) => [...prev, emptyLinkDraft()])
+  /** 追加一条入口草稿；不传则以空白草稿新建 */
+  const addLinkDraft = (draft?: LinkDraft) =>
+    setLinkDrafts((prev) => [...prev, draft ?? emptyLinkDraft()])
 
   const removeLinkDraft = (index: number) => setLinkDrafts((prev) => prev.filter((_, i) => i !== index))
+
+  /** 上传图片到站内静态目录，成功后回填草稿的图片地址 */
+  const handleUploadLinkImage = async (index: number, file: File) => {
+    if (!file.type.startsWith('image/')) {
+      addToast({ type: 'error', message: '请选择图片文件' })
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      addToast({ type: 'error', message: '图片不能超过 5MB' })
+      return
+    }
+    setUploadingLinkImage((prev) => ({ ...prev, [index]: true }))
+    try {
+      const url = await uploadItemDisplayLinkImage(cookieId!, itemId!, file)
+      updateLinkDraft(index, { url })
+      addToast({ type: 'success', message: '图片已上传' })
+    } catch (err) {
+      addToast({ type: 'error', message: (err as Error).message || '图片上传失败' })
+    } finally {
+      setUploadingLinkImage((prev) => {
+        const next = { ...prev }
+        delete next[index]
+        return next
+      })
+    }
+  }
 
   // 保存「查询按钮」Tab
   const handleSaveButtons = async () => {
@@ -657,8 +750,46 @@ export function ItemQueryConfigModal({
                   <li>展示入口显示在买家提货页底部工具区，随商品独立配置</li>
                   <li>「链接」类型：点击新窗口打开链接地址，备注（如提取码）显示在按钮右侧</li>
                   <li>「文本」类型：点击弹窗展示内容，内容中的 {'{cookie}'} 会替换为发货内容里的 Cookie</li>
+                  <li>「图片」类型：点击弹窗展示图片，可上传到站内或填写图片链接</li>
                 </ul>
               </div>
+
+              <div className="mb-2 flex items-center justify-between">
+                <button
+                  type="button"
+                  className="text-sm text-blue-600 hover:underline dark:text-blue-400"
+                  onClick={() => setTemplatePickerOpen((v) => !v)}
+                >
+                  从通用入口添加
+                </button>
+              </div>
+              {templatePickerOpen && (
+                <div className="mb-3 rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+                  {availableTemplates.length === 0 ? (
+                    <p className="py-2 text-center text-xs text-slate-400">通用入口为空或已全部添加</p>
+                  ) : (
+                    availableTemplates.map((tpl) => (
+                      <button
+                        key={tpl.id}
+                        type="button"
+                        className="flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-800"
+                        onClick={() => {
+                          addLinkDraft(templateToDraft(tpl))
+                          setTemplatePickerOpen(false)
+                        }}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-slate-700 dark:text-slate-300">
+                            {LINK_TYPE_LABELS[tpl.type]}
+                          </span>
+                          {tpl.name}
+                        </span>
+                        {tpl.is_default && <span className="text-[10px] text-emerald-600">默认</span>}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
 
               {linkDrafts.length === 0 && (
                 <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
@@ -674,9 +805,7 @@ export function ItemQueryConfigModal({
                   <div className="flex items-center justify-between">
                     <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
                       入口 {index + 1}{draft.name ? `：${draft.name}` : ''}
-                      <span className="ml-2 text-xs text-gray-400">
-                        {draft.type === 'link' ? '链接' : '文本'}
-                      </span>
+                      <span className="ml-2 text-xs text-gray-400">{LINK_TYPE_LABELS[draft.type]}</span>
                     </p>
                     <button
                       type="button"
@@ -703,11 +832,14 @@ export function ItemQueryConfigModal({
                       <label className="input-label">类型</label>
                       <select
                         value={draft.type}
-                        onChange={(e) => updateLinkDraft(index, { type: e.target.value as 'link' | 'text' })}
+                        onChange={(e) =>
+                          updateLinkDraft(index, { type: e.target.value as LinkDraft['type'] })
+                        }
                         className="input-ios"
                       >
                         <option value="link">链接</option>
                         <option value="text">文本</option>
+                        <option value="image">图片</option>
                       </select>
                     </div>
                   </div>
@@ -732,6 +864,65 @@ export function ItemQueryConfigModal({
                           onChange={(e) => updateLinkDraft(index, { note: e.target.value })}
                           className="input-ios"
                           placeholder="如：提取码：abcd"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {draft.type === 'image' && (
+                    <>
+                      <div className="input-group">
+                        <label className="input-label">图片地址</label>
+                        <input
+                          ref={(el) => {
+                            linkFileInputRefs.current[index] = el
+                          }}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0]
+                            // 清空 value，使同一文件再次选择时仍触发 change
+                            e.target.value = ''
+                            if (file) handleUploadLinkImage(index, file)
+                          }}
+                        />
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            className="btn-ios-secondary"
+                            onClick={() => linkFileInputRefs.current[index]?.click()}
+                            disabled={uploadingLinkImage[index]}
+                          >
+                            {uploadingLinkImage[index] ? '上传中...' : '上传图片'}
+                          </button>
+                          <span className="text-xs text-slate-400">
+                            支持 jpg/png 等图片，不超过 5MB；或直接粘贴图片链接
+                          </span>
+                        </div>
+                        <input
+                          type="text"
+                          value={draft.url}
+                          onChange={(e) => updateLinkDraft(index, { url: e.target.value })}
+                          className="input-ios"
+                          placeholder="/static/uploads/display_links/xxx.png 或 https://..."
+                        />
+                        {draft.url && (
+                          <img
+                            src={draft.url}
+                            alt="预览"
+                            className="mt-2 max-h-32 rounded border border-slate-200 object-contain dark:border-slate-700"
+                          />
+                        )}
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label">备注（可选）</label>
+                        <input
+                          type="text"
+                          value={draft.note}
+                          onChange={(e) => updateLinkDraft(index, { note: e.target.value })}
+                          className="input-ios"
+                          placeholder="如：扫码进群"
                         />
                       </div>
                     </>
@@ -768,7 +959,7 @@ export function ItemQueryConfigModal({
 
               <button
                 type="button"
-                onClick={addLinkDraft}
+                onClick={() => addLinkDraft()}
                 className="flex items-center justify-center gap-1.5 w-full px-4 py-2 rounded-lg border border-dashed border-gray-300 dark:border-gray-600 text-sm text-gray-600 dark:text-gray-400 hover:border-blue-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
               >
                 <Plus className="w-4 h-4" />

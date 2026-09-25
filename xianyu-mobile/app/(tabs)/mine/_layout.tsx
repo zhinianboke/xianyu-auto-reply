@@ -46,6 +46,7 @@ export default function MineStackLayout() {
       <Stack.Screen name="item-edit" options={{ title: '编辑商品' }} />
       <Stack.Screen name="materials" options={{ title: '素材管理' }} />
       <Stack.Screen name="material-edit" options={{ title: '编辑素材' }} />
+      <Stack.Screen name="display-link-templates" options={{ title: '通用展示入口' }} />
       <Stack.Screen name="shared-scan" options={{ title: '共享扫码' }} />
       <Stack.Screen name="settings" options={{ title: '系统设置' }} />
       <Stack.Screen name="personal" options={{ title: '个人设置' }} />

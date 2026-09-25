@@ -1,11 +1,12 @@
 ﻿import { useEffect, useState, useRef } from 'react'
-import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink, Tag, ListChecks } from 'lucide-react'
+import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink, Tag, ListChecks, Image as ImageIcon } from 'lucide-react'
 import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, updateItemPrice, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
 import { getAccountDetails } from '@/api/accounts'
 import { getUserSetting } from '@/api/settings'
 import { batchClearItemRelations } from '@/api/cards'
 import { ItemCardRelationModal } from './ItemCardRelationModal'
 import { ItemQueryConfigModal } from './ItemQueryConfigModal'
+import { DisplayLinkTemplatesModal } from './DisplayLinkTemplatesModal'
 import SellerItemEditModal from './SellerItemEditModal'
 import { useUIStore } from '@/store/uiStore'
 import { PageLoading } from '@/components/common/Loading'
@@ -122,6 +123,8 @@ export function Items() {
   const [savingAiPrompt, setSavingAiPrompt] = useState(false)
   // 查询配置弹窗状态
   const [queryConfigItem, setQueryConfigItem] = useState<Item | null>(null)
+  // 通用展示入口管理弹窗状态
+  const [templatesModalOpen, setTemplatesModalOpen] = useState(false)
 
   // 批量新增AI提示词弹窗状态
   const [showBatchAiPromptModal, setShowBatchAiPromptModal] = useState(false)
@@ -1377,6 +1380,11 @@ export function Items() {
             <RefreshCw className="w-3.5 h-3.5" />
             刷新
           </button>
+          <button onClick={() => setTemplatesModalOpen(true)} className="btn-ios-secondary btn-sm whitespace-nowrap">
+            <ImageIcon className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">通用展示入口</span>
+            <span className="sm:hidden">通用入口</span>
+          </button>
         </div>
       </div>
 
@@ -1811,6 +1819,12 @@ export function Items() {
           onSaved={() => setQueryConfigItem(null)}
         />
       )}
+
+      {/* 通用展示入口管理弹窗 */}
+      <DisplayLinkTemplatesModal
+        visible={templatesModalOpen}
+        onClose={() => setTemplatesModalOpen(false)}
+      />
 
       {/* 规格明细弹窗（鱼小铺多规格商品） */}
       {skuDetailItem && (

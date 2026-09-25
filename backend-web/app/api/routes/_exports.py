@@ -38,6 +38,7 @@ from . import (
     cookies,
     cookies_refresh_logs,
     default_replies,
+    display_link_templates,
     face_verification,
     feedback,
     geetest,
@@ -178,6 +179,8 @@ api_router.include_router(agree_pickup.router, prefix="/agree-pickup", tags=["�
 api_router.include_router(item_query.admin_router, prefix="/items", tags=["商品查询配置"])
 # 商品通用查询（公开接口，无需登录）
 api_router.include_router(item_query.public_router, prefix="/item-query", tags=["商品通用查询"])
+# 通用展示入口模板（用户级，需登录；已定义prefix="/display-link-templates"）
+api_router.include_router(display_link_templates.router)
 api_router.include_router(upload.router, prefix="/upload", tags=["文件上传"])
 api_router.include_router(qrcode.router, tags=["群二维码"])  # 已定义prefix="/qrcode"
 

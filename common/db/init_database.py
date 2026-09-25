@@ -28,6 +28,7 @@ from common.db.default_publish_addresses import (
     build_default_publish_addresses,
 )
 from common.db.auto_relist_schema import ensure_auto_relist_schema
+from common.db.display_link_schema import ensure_display_link_schema
 from common.db.session import async_engine, async_session_maker
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.security import generate_secret_key, get_password_hash
@@ -2202,6 +2203,8 @@ class DatabaseInitializer:
                     # 自动续售表和发布日志关联字段独立幂等迁移，避免依赖旧版本 DDL 顺序。
                     async with ddl_connection() as conn:
                         await ensure_auto_relist_schema(conn, get_beijing_now_naive())
+                        # 通用展示入口模板表（用户级）
+                        await ensure_display_link_schema(conn)
 
                     # 2. 创建默认管理员用户
                     await self.create_default_admin()

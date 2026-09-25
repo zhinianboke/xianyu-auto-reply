@@ -18,6 +18,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { ChevronDown, ChevronRight, Trash2, Package, Plus } from 'lucide-react-native';
 import { Card, Button, Input, Loading, FormModal } from '@/components/ui';
+import { DisplayLinkEditor, toDraft, validateEntry } from '@/components/display-links/DisplayLinkEditor';
 import { colors, spacing, typography, radius } from '@/lib/theme';
 import {
   getMaterial,
@@ -31,6 +32,8 @@ import {
 } from '@/api/wrappers/product-publish';
 import { getCards, searchXianyuItems, type Card as CardModel } from '@/api/wrappers/products';
 import { getAccountOptions, type AccountOption } from '@/api/wrappers/accounts';
+import { uploadDisplayLinkTemplateImage } from '@/api/wrappers/display-link-templates';
+import type { DisplayLinkEntry } from '@/api/wrappers/item-query-config';
 import type { XianyuItem } from '@/api/wrappers/items';
 import {
   type QueryButtonDraft,
@@ -88,6 +91,21 @@ function accountLabel(acc: AccountOption): string {
   return acc.remark || acc.id;
 }
 
+/** 素材详情加载失败的内联提示 + 重试（失败时禁止保存，防止空配置覆盖服务端 item_config） */
+function LoadErrorRow({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const scheme = useColorScheme();
+  const c = colors[scheme === 'dark' ? 'dark' : 'light'];
+  return (
+    <View style={styles.loadErrorWrap}>
+      <Text style={[styles.loadErrorText, { color: c.error }]}>加载失败：{message}</Text>
+      <Text style={[styles.loadErrorText, { color: c.textMuted }]}>
+        配置未取到，请重试后再保存，避免覆盖已有配置
+      </Text>
+      <Button label="重试" variant="secondary" onPress={onRetry} style={styles.loadErrorBtn} />
+    </View>
+  );
+}
+
 export default function MaterialEditScreen() {
   const scheme = useColorScheme();
   const c = colors[scheme === 'dark' ? 'dark' : 'light'];
@@ -97,6 +115,10 @@ export default function MaterialEditScreen() {
   const isEdit = Number.isFinite(materialId);
 
   const [loading, setLoading] = useState(isEdit);
+  // 编辑模式详情加载失败：item_config 未取到，保存会把整字典覆盖为空，故置位后禁止保存
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadErrorMsg, setLoadErrorMsg] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -116,6 +138,9 @@ export default function MaterialEditScreen() {
   const [cfgDefaultReply, setCfgDefaultReply] = useState('');
   const [cfgAiPrompt, setCfgAiPrompt] = useState('');
   const [queryDrafts, setQueryDrafts] = useState<QueryButtonDraft[]>([]);
+  const [cfgDisplayLinks, setCfgDisplayLinks] = useState<DisplayLinkEntry[]>([]);
+  // page_hint 移动端无编辑入口，仅透传，避免保存时清空 Web/采集写入的提示文案
+  const [cfgPageHint, setCfgPageHint] = useState('');
 
   // 折叠态：新建默认展开基础信息
   const [expanded, setExpanded] = useState<Record<SectionKey, boolean>>({
@@ -148,10 +173,11 @@ export default function MaterialEditScreen() {
     }
   }, []);
 
-  // 编辑模式：加载素材详情（含 item_config 全量配置）
+  // 编辑模式：加载素材详情（含 item_config 全量配置）；reloadKey 变化即重试
   useEffect(() => {
     if (!isEdit) return;
     let alive = true;
+    setLoading(true);
     (async () => {
       try {
         const m = await getMaterial(materialId);
@@ -173,8 +199,15 @@ export default function MaterialEditScreen() {
           setCfgDefaultReply(cfg.default_reply ?? '');
           setCfgAiPrompt(cfg.ai_prompt ?? '');
           setQueryDrafts((cfg.query_buttons ?? []).map(draftFromButton));
+          setCfgDisplayLinks((cfg.display_links as DisplayLinkEntry[]) ?? []);
+          setCfgPageHint(cfg.page_hint ?? '');
         }
+        setLoadFailed(false);
+        setLoadErrorMsg('');
       } catch (e) {
+        if (!alive) return;
+        setLoadFailed(true);
+        setLoadErrorMsg((e as Error).message);
         Alert.alert('加载素材失败', (e as Error).message);
       } finally {
         if (alive) setLoading(false);
@@ -183,7 +216,7 @@ export default function MaterialEditScreen() {
     return () => {
       alive = false;
     };
-  }, [isEdit, materialId]);
+  }, [isEdit, materialId, reloadKey]);
 
   // 采集弹窗打开时加载账号
   useEffect(() => {
@@ -252,6 +285,8 @@ export default function MaterialEditScreen() {
           setCfgDefaultReply(cfg.default_reply ?? '');
           setCfgAiPrompt(cfg.ai_prompt ?? '');
           setQueryDrafts((cfg.query_buttons ?? []).map(draftFromButton));
+          setCfgDisplayLinks((cfg.display_links as DisplayLinkEntry[]) ?? []);
+          setCfgPageHint(cfg.page_hint ?? '');
         }
         setExpanded({ basic: true, config: true });
         Alert.alert('采集成功', '已从商品列表项填充素材与配置，请核对后保存');
@@ -271,10 +306,24 @@ export default function MaterialEditScreen() {
       default_reply: cfgDefaultReply,
       ai_prompt: cfgAiPrompt,
       query_buttons: serializeQueryButtons(queryDrafts),
+      display_links: cfgDisplayLinks,
+      page_hint: cfgPageHint,
     };
   }
 
   async function handleSave() {
+    if (isEdit && loadFailed) {
+      Alert.alert('提示', '素材配置加载失败，请重试后再保存，避免覆盖已有配置');
+      return;
+    }
+    // 展示入口逐条校验（与后端契约一致）：图片上传未落地时 url 还是空串，也在这里被拦下
+    for (const [i, entry] of cfgDisplayLinks.entries()) {
+      const err = validateEntry(toDraft(entry));
+      if (err) {
+        Alert.alert('请检查展示入口', `第 ${i + 1} 个：${err}`);
+        return;
+      }
+    }
     if (!title.trim()) {
       Alert.alert('提示', '请输入素材标题');
       return;
@@ -369,6 +418,13 @@ export default function MaterialEditScreen() {
         contentContainerStyle={styles.list}
         keyboardShouldPersistTaps="handled"
       >
+        {isEdit && loadFailed ? (
+          <LoadErrorRow
+            message={loadErrorMsg || '获取素材详情失败'}
+            onRetry={() => setReloadKey((k) => k + 1)}
+          />
+        ) : null}
+
         {/* 基础信息 */}
         <CollapsibleSection
           title="基础信息"
@@ -507,7 +563,7 @@ export default function MaterialEditScreen() {
           onToggle={() => toggleSection('config')}
         >
           <Text style={[styles.hintText, { color: c.textMuted }]}>
-            此配置随素材保存，发布成功后一步回写到新商品列表项（多数量发货 / 卡券 / 默认回复 / AI提示 / 查询按钮）。
+            此配置随素材保存，发布成功后一步回写到新商品列表项（多数量发货 / 卡券 / 默认回复 / AI提示 / 查询按钮 / 展示入口）。
           </Text>
 
           {/* 从商品列表采集 */}
@@ -739,13 +795,26 @@ export default function MaterialEditScreen() {
               style={styles.cardActionBtn}
             />
           </View>
+
+          {/* 展示入口：图片类型走模板级上传（素材无 cookie/item，存储目录与商品级相同，URL 可互换） */}
+          <View style={styles.group}>
+            <Text style={[styles.label, { color: c.textSecondary }]}>
+              展示入口（{cfgDisplayLinks.length}）
+            </Text>
+            <DisplayLinkEditor
+              entries={cfgDisplayLinks}
+              onChange={setCfgDisplayLinks}
+              uploadImage={uploadDisplayLinkTemplateImage}
+              hint="随素材保存，发布成功后回写到新商品列表项"
+            />
+          </View>
         </CollapsibleSection>
 
         <Button
           label={saving ? '保存中...' : '保存素材'}
           onPress={handleSave}
           loading={saving}
-          disabled={saving || uploading}
+          disabled={saving || uploading || (isEdit && loadFailed)}
           style={styles.saveBtn}
         />
       </ScrollView>
@@ -937,6 +1006,9 @@ const styles = StyleSheet.create({
   collectBtn: { marginTop: spacing.md },
   cardActionBtn: { marginTop: spacing.sm },
   saveBtn: { marginTop: spacing.md },
+  loadErrorWrap: { alignItems: 'center', paddingVertical: spacing.md, gap: spacing.sm },
+  loadErrorText: { ...typography.caption, textAlign: 'center' },
+  loadErrorBtn: { minHeight: 40, paddingHorizontal: spacing.xl },
   inlineLoading: { marginVertical: spacing.lg },
   // 图片九宫格
   imageGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingVertical: spacing.xs },

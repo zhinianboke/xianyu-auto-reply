@@ -11,7 +11,7 @@
  */
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { AlertCircle, Check, CheckCircle, Copy, Download, ExternalLink, FileText, Loader2, PackageCheck, Search, ShieldCheck, X } from 'lucide-react'
+import { AlertCircle, Check, CheckCircle, Copy, Download, ExternalLink, FileText, Image as ImageIcon, Loader2, PackageCheck, Search, ShieldCheck, X } from 'lucide-react'
 import { agreePickup, queryPickupOrder, type PickupOrderView } from '@/api/agreePickup'
 import type { DisplayLink } from '@/api/itemQuery'
 import { copyToClipboard } from '@/utils/clipboard'
@@ -34,6 +34,10 @@ export function AgreePickupPage() {
   // 文本类展示入口的弹窗状态：activeTextLink 为当前打开的入口配置
   const [activeTextLink, setActiveTextLink] = useState<DisplayLink | null>(null)
   const [textCopied, setTextCopied] = useState(false)
+  // 图片类展示入口的弹窗状态：imageModal 为当前打开的图片入口
+  const [imageModal, setImageModal] = useState<{ name: string; url: string } | null>(null)
+  // 当前图片弹窗的加载失败标记（换图/重开弹窗时重置）
+  const [imageFailed, setImageFailed] = useState(false)
 
   // 从提货内容中提取 Cookie（"Cookie："后的完整字符串），用于展示入口 {cookie} 占位符替换
   const deliveredCookie = (() => {
@@ -282,7 +286,7 @@ export function AgreePickupPage() {
         {/* 底部：展示入口（商品配置驱动）+ 查询按钮列表 + 提示；两者都没有时整个工具区不渲染 */}
         {showFooterTools && (
           <div className="px-6 py-3 bg-slate-50 dark:bg-slate-700/50 border-t border-slate-100 dark:border-slate-700 flex flex-col gap-2.5">
-            {/* 展示入口：type=link 新窗口打开外链（note 显示在按钮右侧）；type=text 打开内容弹窗 */}
+            {/* 展示入口：type=link 新窗口打开外链（note 显示在按钮右侧）；type=image 打开看图弹窗（note 显示在按钮右侧）；type=text 打开内容弹窗 */}
             {displayLinks.map((entry, idx) =>
               entry.type === 'link' ? (
                 <a
@@ -300,6 +304,24 @@ export function AgreePickupPage() {
                     <span className="text-xs text-blue-500 dark:text-blue-400">{entry.note}</span>
                   )}
                 </a>
+              ) : entry.type === 'image' ? (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => {
+                    setImageFailed(false)
+                    setImageModal({ name: entry.name, url: entry.url })
+                  }}
+                  className="flex items-center justify-between gap-2 w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700/30 text-slate-600 dark:text-slate-300 text-sm font-medium hover:bg-slate-100 dark:hover:bg-slate-700/60 active:bg-slate-200 transition-colors"
+                >
+                  <span className="flex items-center gap-2">
+                    <ImageIcon className="w-4 h-4 flex-shrink-0" />
+                    {entry.name}
+                  </span>
+                  {entry.note && (
+                    <span className="text-xs text-slate-400 dark:text-slate-500">{entry.note}</span>
+                  )}
+                </button>
               ) : (
                 <button
                   key={idx}
@@ -365,6 +387,43 @@ export function AgreePickupPage() {
                 {textCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                 {textCopied ? '已复制' : '复制内容'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 图片类展示入口弹窗：图片地址来自商品配置（/static/ 站内路径或 http(s) 外链） */}
+      {imageModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setImageModal(null)}
+        >
+          <div
+            className="w-full max-w-md max-h-[85vh] overflow-y-auto bg-white dark:bg-slate-800 rounded-2xl shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-slate-700">
+              <h2 className="text-base font-bold text-slate-800 dark:text-slate-100">{imageModal.name}</h2>
+              <button
+                type="button"
+                onClick={() => setImageModal(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
+                aria-label="关闭"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="px-5 py-4">
+              {imageFailed ? (
+                <p className="py-8 text-center text-sm text-slate-400">图片加载失败</p>
+              ) : (
+                <img
+                  src={imageModal.url}
+                  alt={imageModal.name}
+                  className="mx-auto max-h-[70vh] w-auto object-contain"
+                  onError={() => setImageFailed(true)}
+                />
+              )}
             </div>
           </div>
         </div>

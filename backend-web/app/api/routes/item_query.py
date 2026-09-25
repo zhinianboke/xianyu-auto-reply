@@ -7,6 +7,7 @@
    - PUT /items/{cookie_id}/{item_id}/query-buttons ：整体覆盖保存（含字段校验）
    - GET /items/{cookie_id}/{item_id}/display-links ：读取商品展示入口配置（提货页链接/弹窗按钮）
    - PUT /items/{cookie_id}/{item_id}/display-links ：整体覆盖保存（含字段校验）
+   - POST /items/{cookie_id}/{item_id}/display-links/upload-image ：上传展示入口图片，返回静态资源 URL
 2. 公开端（无需登录）：
    - GET  /item-query/buttons?order_no= ：按订单号返回买家可见按钮名列表
    - POST /item-query/execute           ：执行查询按钮（订单卡密逐行并发 / 手动 Cookie 单次）
@@ -19,7 +20,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -27,13 +28,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.api import deps
+from app.core.paths import STATIC_ROOT
 from app.services.account_service import AccountService
+from app.services.display_link_service import validate_display_links as _validate_display_links
 from app.services.item_query_service import ItemQueryService
 from common.models.user import User
 from common.models.xy_catalog_item import XYCatalogItem
 from common.schemas.common import ApiResponse
 from common.services.query_template import template_url_has_variable_host
 from common.utils.auth_scope import resolve_owner_scope
+from common.utils.local_image_upload import ImageUploadError, save_uploaded_image
 
 # 管理端：注册时挂 prefix="/items"，路径与 ai-prompt 端点保持同风格
 admin_router = APIRouter(tags=["商品查询配置"])
@@ -110,59 +114,6 @@ def _validate_buttons(buttons: List[dict]) -> tuple[bool, str, List[dict]]:
                 return False, f"第 {index} 个按钮的第 {field_index} 个结果字段缺少取值路径", []
 
         normalized.append({**button, "name": name, "url": url, "method": method})
-    return True, "", normalized
-
-
-def _validate_display_links(links: List[dict]) -> tuple[bool, str, List[dict]]:
-    """校验并规范化商品展示入口配置（买家提货页的外链按钮 / 文本弹窗）。
-
-    校验规则（契约）：name/type 必填、type 仅 link/text；
-    type=link 时 url 必填且必须以 http:// 或 https:// 开头（note 可选，透传不校验）；
-    type=text 时 title/content 必填且非空（content 支持 {cookie} 占位符，由前端替换）。
-
-    安全：规范化按白名单收敛字段——link 只保留 name/type/url/note，
-    text 只保留 name/type/title/content。这些配置会在公开提货页原样下发，
-    放任额外键入库可能把误拷进来的 headers/Cookie 等敏感键泄漏给买家。
-    content 上限 2000 字符，避免超大文本拖慢提货页加载。
-
-    Returns:
-        (ok, message, normalized_links)；失败时 normalized_links 为空列表。
-    """
-    normalized: List[dict] = []
-    for index, link in enumerate(links, start=1):
-        if not isinstance(link, dict):
-            return False, f"第 {index} 个入口配置格式不正确", []
-
-        name = str(link.get("name") or "").strip()
-        if not name:
-            return False, f"第 {index} 个入口缺少按钮名称", []
-
-        link_type = str(link.get("type") or "").strip()
-        if link_type not in ("link", "text"):
-            return False, f"第 {index} 个入口的类型仅支持 link/text", []
-
-        if link_type == "link":
-            url = str(link.get("url") or "").strip()
-            if not url:
-                return False, f"第 {index} 个入口缺少链接地址", []
-            if not (url.startswith("http://") or url.startswith("https://")):
-                return False, f"第 {index} 个入口的链接地址必须以 http:// 或 https:// 开头", []
-            entry = {"name": name, "type": link_type, "url": url}
-            note = str(link.get("note") or "").strip()
-            if note:
-                entry["note"] = note
-            normalized.append(entry)
-        else:
-            title = str(link.get("title") or "").strip()
-            if not title:
-                return False, f"第 {index} 个入口缺少弹窗标题", []
-            # content 为多行文本，仅校验去空白后非空，存储时保留原文以不破坏换行排版
-            content = str(link.get("content") or "")
-            if not content.strip():
-                return False, f"第 {index} 个入口缺少弹窗内容", []
-            if len(content) > 2000:
-                return False, f"第 {index} 个入口的弹窗内容不能超过 2000 字符", []
-            normalized.append({"name": name, "type": link_type, "title": title, "content": content})
     return True, "", normalized
 
 
@@ -331,6 +282,44 @@ async def save_item_display_links(
     except Exception as e:
         logger.error(f"保存商品展示入口配置失败: {e}")
         return ApiResponse(success=False, message=f"保存失败: {str(e)}")
+
+
+# 展示入口图片存储目录（与通用模板共用，URL 可互换使用）
+DISPLAY_LINK_UPLOAD_DIR = STATIC_ROOT / "uploads" / "display_links"
+
+
+@admin_router.post("/{cookie_id}/{item_id}/display-links/upload-image")
+async def upload_item_display_link_image(
+    cookie_id: str,
+    item_id: str,
+    image: UploadFile = File(...),
+    current_user: User = Depends(deps.get_current_active_user),
+    account_service: AccountService = Depends(deps.get_account_service),
+    session: AsyncSession = Depends(deps.get_db_session),
+):
+    """上传商品展示入口图片，返回可访问的静态资源 URL"""
+    # 管理员可以操作所有账号，普通用户只能操作自己的账号
+    owner_id, _ = resolve_owner_scope(current_user)
+
+    account = await account_service.get_account_for_user(owner_id, cookie_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="账号不存在")
+
+    # 同 display-links 配置端点：管理员 resolve_owner_scope 返回 None，商品归属以 account.owner_id 为准
+    item = await _load_catalog_item(session, account.owner_id, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="商品不存在")
+
+    try:
+        _, filename, _ = await save_uploaded_image(
+            image,
+            DISPLAY_LINK_UPLOAD_DIR,
+            filename_prefix=item_id,
+            short_uuid=True,
+        )
+    except ImageUploadError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    return {"success": True, "image_url": f"/static/uploads/display_links/{filename}"}
 
 
 # ==================== 公开端：按钮列表与执行 ====================

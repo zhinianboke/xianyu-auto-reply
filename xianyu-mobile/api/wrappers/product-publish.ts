@@ -1,4 +1,4 @@
-import { getApiClient } from './client';
+import { getApiClient, extractError } from './client';
 import type { QueryButton } from './item-query-config';
 
 const PREFIX = '/api/v1/product-publish';
@@ -51,9 +51,10 @@ export async function uploadProductImages(uris: string[]): Promise<UploadedImage
     formData.append('files', { uri, name, type } as any);
   });
 
-  const { data } = (await (client.POST as any)(`${PREFIX}/upload/images`, {
+  const { data, error } = (await (client.POST as any)(`${PREFIX}/upload/images`, {
     body: formData,
-  })) as { data?: unknown };
+  })) as { data?: unknown; error?: unknown };
+  if (error) throw await extractError(error);
 
   return unwrapData<UploadedImages>(data);
 }
@@ -336,6 +337,7 @@ export async function getPublishLogs(
 /**
  * 宽松解析 item_config：兼容后端返回的 JSON 对象或 JSON 字符串两种形态，
  * 缺字段补默认值。query_buttons 直接透传后端结构（草稿编辑由调用方归一化）。
+ * display_links 同理透传（条目归一化由展示入口编辑器负责）。
  */
 function normalizeItemConfig(raw: unknown): MaterialItemConfig | null {
   if (raw == null) return null;
@@ -362,6 +364,8 @@ function normalizeItemConfig(raw: unknown): MaterialItemConfig | null {
     query_buttons: Array.isArray(r.query_buttons)
       ? (r.query_buttons as QueryButton[])
       : [],
+    display_links: Array.isArray(r.display_links) ? r.display_links : [],
+    page_hint: typeof r.page_hint === 'string' ? r.page_hint : '',
   };
 }
 
@@ -375,9 +379,10 @@ export async function listMaterials(
   const query: Record<string, string | number> = { page, page_size: pageSize };
   if (title) query.title = title;
 
-  const { data } = (await (client.GET as any)(`${PREFIX}/materials`, {
+  const { data, error } = (await (client.GET as any)(`${PREFIX}/materials`, {
     params: { query },
-  })) as { data?: unknown };
+  })) as { data?: unknown; error?: unknown };
+  if (error) throw await extractError(error);
 
   const body = unwrapData<Record<string, unknown>>(data);
   const rawList = Array.isArray(body.list) ? (body.list as Record<string, unknown>[]) : [];
@@ -398,9 +403,12 @@ export async function listMaterials(
 /** 获取单个素材详情（含 item_config 全量配置） */
 export async function getMaterial(id: number): Promise<ProductMaterial> {
   const client = await getApiClient();
-  const { data } = (await (client.GET as any)(`${PREFIX}/materials/${id}`)) as {
+  const { data, error } = (await (client.GET as any)(`${PREFIX}/materials/${id}`)) as {
     data?: unknown;
+    error?: unknown;
   };
+  if (error) throw await extractError(error);
+
   const body = unwrapData<unknown>(data);
   const raw =
     body && typeof body === 'object' && !Array.isArray(body)
@@ -416,9 +424,11 @@ export async function getMaterial(id: number): Promise<ProductMaterial> {
 /** 创建素材，返回新素材 ID */
 export async function createMaterial(params: MaterialCreateParams): Promise<{ id: number }> {
   const client = await getApiClient();
-  const { data } = (await (client.POST as any)(`${PREFIX}/materials`, {
+  const { data, error } = (await (client.POST as any)(`${PREFIX}/materials`, {
     body: params,
-  })) as { data?: unknown };
+  })) as { data?: unknown; error?: unknown };
+  if (error) throw await extractError(error);
+
   return unwrapData<{ id: number }>(data);
 }
 
@@ -428,13 +438,19 @@ export async function updateMaterial(
   params: MaterialUpdateParams,
 ): Promise<void> {
   const client = await getApiClient();
-  await (client.PUT as any)(`${PREFIX}/materials/${id}`, { body: params });
+  const { error } = (await (client.PUT as any)(`${PREFIX}/materials/${id}`, {
+    body: params,
+  })) as { error?: unknown };
+  if (error) throw await extractError(error);
 }
 
 /** 删除素材 */
 export async function deleteMaterial(id: number): Promise<void> {
   const client = await getApiClient();
-  await (client.DELETE as any)(`${PREFIX}/materials/${id}`);
+  const { error } = (await (client.DELETE as any)(`${PREFIX}/materials/${id}`)) as {
+    error?: unknown;
+  };
+  if (error) throw await extractError(error);
 }
 
 /**
@@ -444,9 +460,11 @@ export async function deleteMaterial(id: number): Promise<void> {
  */
 export async function collectFromItem(itemId: string): Promise<CollectedMaterialDraft> {
   const client = await getApiClient();
-  const { data } = (await (client.GET as any)(
+  const { data, error } = (await (client.GET as any)(
     `/api/v1/product-publish/materials/collect-from-item/${encodeURIComponent(itemId)}`,
-  )) as { data?: unknown };
+  )) as { data?: unknown; error?: unknown };
+  if (error) throw await extractError(error);
+
   const body = unwrapData<unknown>(data);
   const raw =
     body && typeof body === 'object' && !Array.isArray(body)

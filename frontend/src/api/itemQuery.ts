@@ -74,7 +74,17 @@ export interface DisplayLinkText extends DisplayLinkBase {
   content: string
 }
 
-export type DisplayLink = DisplayLinkLink | DisplayLinkText
+/** 图片入口：点击弹窗展示图片（url 为 /static/ 站内路径或 http(s) 外链） */
+export interface DisplayLinkImage {
+  name: string
+  type: 'image'
+  /** 图片地址，/static/ 开头的站内路径或 http(s) 外链 */
+  url: string
+  /** 备注（如「扫码进群」），可选 */
+  note?: string
+}
+
+export type DisplayLink = DisplayLinkLink | DisplayLinkText | DisplayLinkImage
 
 /** 执行结果（每个卡密行一条） */
 export interface ExecResult {
@@ -132,6 +142,28 @@ export const saveItemDisplayLinks = (
   links: DisplayLink[],
 ): Promise<ApiResponse> => {
   return put(`${ITEM_PREFIX}/${cookieId}/${itemId}/display-links`, { links })
+}
+
+/** 上传展示入口图片，返回可访问的 image_url（/static/uploads/display_links/xxx） */
+export const uploadItemDisplayLinkImage = async (
+  cookieId: string,
+  itemId: string,
+  file: File,
+): Promise<string> => {
+  const token = localStorage.getItem('auth_token')
+  const formData = new FormData()
+  formData.append('image', file)
+  const resp = await fetch(
+    `/api/v1/items/${encodeURIComponent(cookieId)}/${encodeURIComponent(itemId)}/display-links/upload-image`,
+    { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData },
+  )
+  const body = await resp.json()
+  if (!resp.ok || body?.success === false) {
+    throw new Error(body?.message || body?.detail || '图片上传失败')
+  }
+  const url = body?.image_url ?? body?.data?.image_url
+  if (!url) throw new Error('图片上传失败：响应缺少 image_url')
+  return url
 }
 
 // ==================== 公开接口（无需登录，原生 fetch） ====================
