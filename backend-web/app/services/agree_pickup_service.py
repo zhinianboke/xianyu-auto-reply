@@ -234,12 +234,23 @@ class AgreePickupService:
                         # websocket 内部接口自 #326 起强制要求 to_user_id：缺省会让接收人变成
                         # None@goofish，买家收不到（且调用方不看返回值，会静默失败）
                         if content and order.buyer_id:
-                            await websocket_client.send_message(
+                            send_result = await websocket_client.send_message(
                                 order.account_id,
                                 order.chat_id,
                                 content,
                                 to_user_id=str(order.buyer_id),
                             )
+                            # 显式检查返回值：提醒失败不影响发货主流程，但必须留痕（曾因漏传
+                            # to_user_id 静默失败数小时无任何日志）
+                            if not (isinstance(send_result, dict) and send_result.get("success")):
+                                reason = (
+                                    send_result.get("message")
+                                    if isinstance(send_result, dict)
+                                    else send_result
+                                )
+                                logger.warning(
+                                    f"[同意提货] 订单 {real_order_no} 确认收货提醒未送达: {reason}"
+                                )
                         elif content:
                             logger.warning(
                                 f"[同意提货] 订单 {real_order_no} 缺少 buyer_id，跳过确认收货提醒"

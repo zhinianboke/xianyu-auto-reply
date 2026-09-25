@@ -129,6 +129,15 @@ class WebSocketServiceClient:
         Returns:
             响应数据
         """
+        # websocket 内部接口自 #326 起强制要求 to_user_id：缺省时发送协议里的接收人会变成
+        # None@goofish，买家收不到，而接口只返回 success=false（调用方若不看返回值即静默失败）。
+        # 这里做前置显式校验，漏传时留下明确日志，不再无声无息。
+        if not to_user_id:
+            logger.error(
+                f"发送消息缺少接收方ID(to_user_id)，已拦截避免静默失败: "
+                f"account={account_id}, chat_id={chat_id}"
+            )
+            return {"success": False, "message": "缺少接收方用户ID(to_user_id)"}
         url = f"{self.base_url}/internal/accounts/{account_id}/send-message"
         try:
             # 字段名需与 websocket 内部接口 SendMessageRequest 一致（message / to_user_id）
@@ -139,6 +148,12 @@ class WebSocketServiceClient:
                 "to_user_id": to_user_id,
                 "wait_result": wait_result,
             })
+            # 业务失败（如被安全拦截、账号未运行）也让日志可见：调用方未必检查返回值
+            if isinstance(response, dict) and not response.get("success"):
+                logger.warning(
+                    f"发送消息未成功: account={account_id}, chat_id={chat_id}, "
+                    f"原因={response.get('message') or response.get('code')}"
+                )
             return response
         except Exception as e:
             logger.error(f"发送消息失败: {account_id}, 错误: {e}")
