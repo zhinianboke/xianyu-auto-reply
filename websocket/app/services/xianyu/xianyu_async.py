@@ -2963,7 +2963,11 @@ class XianyuAsync:
                             # - 滑块/风控/锁竞争类失败：不计入禁用计数（属于可恢复的风控场景或暂时性并发场景，账号本身不一定有问题）
                             # - 真实故障（网络/超时/API 业务失败/Cookie 失效）：累加计数，达到 100 次禁用
                             refresh_status = getattr(self, 'last_token_refresh_status', '') or ''
-                            # 不计入禁用计数的状态（滑块/风控/冷却/锁竞争）
+                            # 不计入禁用计数的状态：
+                            # - 滑块/风控/冷却/锁竞争：可恢复的风控场景或暂时性并发场景（原有项）
+                            # - 基础设施/非账号原因（D0-23）：
+                            #   failed_risk_log_create 写风控日志失败（DB 抖动触发，与账号无关）
+                            #   not_started / started   非失败中间态（命中 else 会被当成"未知"失败计数）
                             non_counted_statuses = (
                                 'failed_captcha',
                                 'failed_captcha_exception',
@@ -2976,6 +2980,9 @@ class XianyuAsync:
                                 'skipped_startup_cache_lookup_failed',
                                 'skipped_cache_lookup_failed',
                                 'failed_token_request_lock',
+                                'failed_risk_log_create',
+                                'not_started',
+                                'started',
                             )
 
                             if not hasattr(self, '_token_fetch_failures'):
@@ -3004,6 +3011,19 @@ class XianyuAsync:
                                         logger.warning(f"【{self.cookie_id}】账号已自动禁用")
                                     except Exception as disable_e:
                                         logger.error(f"【{self.cookie_id}】自动禁用账号失败: {disable_e}")
+                                    # 禁用必须通知用户（D0-23）：否则表现为"账号静默停业"，
+                                    # 只能靠用户自己发现消息不回。复用 websocket 进程内已有的
+                                    # 通知管理器（与滑块路径 _disable_account_on_timeout 口径一致，
+                                    # notification_type=account_disabled 自带 3 小时冷却防刷屏）。
+                                    try:
+                                        await self.send_token_refresh_notification(
+                                            f"账号因 Token 获取连续失败 {self._token_fetch_failures} 次"
+                                            f"已被自动禁用。最后一次失败原因: {refresh_status or '未知'}。"
+                                            f"请检查账号状态后在账号管理中手动重新启用。",
+                                            notification_type="account_disabled",
+                                        )
+                                    except Exception as notify_e:
+                                        logger.error(f"【{self.cookie_id}】账号禁用通知发送失败: {notify_e}")
                                     break
 
                             # 根据失败原因决定重试间隔：

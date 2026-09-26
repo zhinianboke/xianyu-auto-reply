@@ -577,6 +577,8 @@ class DatabaseInitializer:
                 auto_polish TINYINT(1) NOT NULL DEFAULT 0 COMMENT '商品自动擦亮开关',
                 confirm_before_send TINYINT(1) NOT NULL DEFAULT 0 COMMENT '发货成功再发卡券开关',
                 only_send_card TINYINT(1) NOT NULL DEFAULT 0 COMMENT '只发卡券不确认发货开关',
+                agree_pickup_notice_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '提货后提醒确认收货开关',
+                agree_pickup_notice_content VARCHAR(2000) DEFAULT NULL COMMENT '提货后提醒内容',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_owner_id (owner_id),
@@ -2081,6 +2083,10 @@ class DatabaseInitializer:
             ("agree_deliver_enabled", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '同意后发货开关'", "refund_cancel_timeout"),
             ("agree_deliver_notify_message", "VARCHAR(2000) DEFAULT NULL COMMENT '同意后发货-通知用户信息'", "agree_deliver_enabled"),
             ("agree_deliver_pickup_url", "VARCHAR(255) DEFAULT NULL COMMENT '同意后发货-提货URL'", "agree_deliver_notify_message"),
+            # 提货后通知：买家同意提货发卡后主动提醒确认收货（账号级，默认关闭）。
+            # 生产库由手工 ALTER 补列，仓库 DDL/迁移此前缺失（D0-1），全新部署会 1054。
+            ("agree_pickup_notice_enabled", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '提货后提醒确认收货开关'", "agree_deliver_pickup_url"),
+            ("agree_pickup_notice_content", "VARCHAR(2000) DEFAULT NULL COMMENT '提货后提醒内容'", "agree_pickup_notice_enabled"),
         ],
         "xy_orders": [
             ("card_only_delivered", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '仅发卡券流程是否已处理'", "delivery_fail_reason"),

@@ -60,6 +60,27 @@ async def close_goofish_connector() -> None:
         _goofish_connector = None
 
 
+# MariaDB 1020（Record has changed since last read in table 'xy_orders'）等
+# 「行版本已变化」冲突的重试预算。每次重试都新建独立 session（新事务），
+# 因此重试是有效的：在同一事务里重发 UPDATE 仍会被 1020 拒绝。
+_CHAT_ID_UPDATE_MAX_RETRIES = 2
+_CHAT_ID_UPDATE_RETRY_BACKOFF_SECONDS = 0.3
+
+
+def _is_record_changed_error(exc: BaseException) -> bool:
+    """判断异常是否为 MariaDB 1020（Record has changed since last read）。
+
+    PyMySQL 原始异常形如 OperationalError(1020, "Record has changed since last read ...")；
+    SQLAlchemy 会把它包进 DBAPIError，原始异常挂在 ``.orig`` 上。
+    """
+    orig = getattr(exc, "orig", exc)
+    args = getattr(orig, "args", ()) or ()
+    if args and args[0] == 1020:
+        return True
+    text = str(orig)
+    return "1020" in text and "Record has changed" in text
+
+
 class OrderService:
     """订单服务 - 读写xy_orders表"""
 
@@ -388,6 +409,20 @@ class OrderService:
         
         场景：订单手动发货时发现 chat_id 为空，
         调用闲鱼 LWP 接口创建会话后，补写回订单表。
+
+        实现说明（P1-2 修复）：
+        - 改用**独立 session** 写入，不再复用调用方 session：
+          调用方（手动发货路由 / 定时补发货）此前已在自己的事务里读过该订单行，
+          同一事务内再 UPDATE 同一行时，MariaDB 会报
+          (1020) Record has changed since last read；旧实现失败后还会
+          `rollback()` 调用方 session，把其已加载的 ORM 实例全部 expire，
+          异步引擎下调用方再读属性即 MissingGreenlet → HTTP 500。
+          独立 session 的提交/回滚都不影响调用方，也天然避开 1020。
+        - 对 1020 做有限重试（最多 _CHAT_ID_UPDATE_MAX_RETRIES 次、短退避），
+          每次重试新建 session（新事务），保证重试能读到最新行版本。
+        - 调用方语义不变：仍只返回成功与否；各调用方拿到返回值后本就自行维护
+          内存中的 chat_id（手动发货用局部变量、定时补发写 order.chat_id），
+          不依赖本方法所在的 session / identity map。
         
         Args:
             order_no: 订单号
@@ -399,19 +434,36 @@ class OrderService:
         if not chat_id:
             logger.warning(f"更新订单 chat_id 失败: chat_id 为空 (order_no={order_no})")
             return False
-        try:
-            stmt = (
-                update(XYOrder)
-                .where(XYOrder.order_no == order_no)
-                .values(chat_id=chat_id)
-            )
-            result = await self.session.execute(stmt)
-            await self.session.commit()
-            return result.rowcount > 0
-        except Exception as e:
-            logger.error(f"更新订单 chat_id 失败: order_no={order_no}, chat_id={chat_id}, 错误={e}")
-            await self.session.rollback()
-            return False
+
+        from common.db.session import async_session_maker
+
+        attempts = _CHAT_ID_UPDATE_MAX_RETRIES + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                async with async_session_maker() as session:
+                    stmt = (
+                        update(XYOrder)
+                        .where(XYOrder.order_no == order_no)
+                        .values(chat_id=chat_id)
+                    )
+                    result = await session.execute(stmt)
+                    await session.commit()
+                    return result.rowcount > 0
+            except Exception as e:
+                if attempt < attempts and _is_record_changed_error(e):
+                    logger.warning(
+                        f"更新订单 chat_id 遇到行版本冲突(1020)，"
+                        f"第 {attempt}/{_CHAT_ID_UPDATE_MAX_RETRIES} 次重试: "
+                        f"order_no={order_no}, chat_id={chat_id}, 错误={e}"
+                    )
+                    await asyncio.sleep(_CHAT_ID_UPDATE_RETRY_BACKOFF_SECONDS * attempt)
+                    continue
+                logger.error(
+                    f"更新订单 chat_id 失败(第 {attempt}/{attempts} 次): "
+                    f"order_no={order_no}, chat_id={chat_id}, 错误={e}"
+                )
+                return False
+        return False
 
     async def get_pending_order_by_buyer(
         self,

@@ -18,15 +18,22 @@ import threading
 import time
 from typing import Any, Callable, Dict, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import update
 
 from common.models.token_cache import TokenCache
 from common.utils.time_utils import get_beijing_now_naive
+from app.api.deps import require_internal_auth
 
-router = APIRouter(prefix="/password-login", tags=["密码登录"])
+# 请求体含明文账号密码，且会启动真实浏览器登录并覆盖 xy_accounts.login_password，
+# 必须与 /internal/* 一样校验服务间令牌（D0-24）。
+router = APIRouter(
+    prefix="/password-login",
+    tags=["密码登录"],
+    dependencies=[Depends(require_internal_auth)],
+)
 
 
 # ==================== 请求/响应模型 ====================

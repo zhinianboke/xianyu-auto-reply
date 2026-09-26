@@ -48,6 +48,53 @@ class TokenManager:
         # 浏览器Cookie刷新成功标志
         self.browser_cookie_refreshed = False
         self.restarted_in_browser_refresh = False
+
+        # 手动触发刷新（/internal/accounts/{id}/refresh-token）的后台任务引用。
+        # 必须保存强引用，否则 asyncio 只持弱引用，任务可能在执行中被垃圾回收。
+        self._manual_refresh_task = None
+
+    async def trigger_refresh(self, reason: str = "manual") -> bool:
+        """手动触发一次即时 Token 刷新（供内部 API /internal/accounts/{id}/refresh-token 使用）。
+
+        设计要点：
+        1. **复用既有刷新实现**：后台任务直接调用 `_execute_cookie_refresh`，其内部
+           `await self.xianyu.refresh_token()` 已包含账号级 Redis 锁、滑块验证、
+           失败重试与"跳过"状态白名单处理，不重复实现刷新逻辑；
+        2. **并发安全**：与 `cookie_refresh_loop` 共用 `cookie_refresh_lock`，
+           同一时刻只会执行一次刷新；已有刷新在执行/已排队时直接合并本次请求，
+           不会并发触发第二次（避免 Redis 锁冲突与重复告警）；
+        3. **不阻塞调用方**：一次刷新（含滑块验证）可能远超 backend-web 调用方的
+           10 秒 httpx 超时，因此以「已提交后台刷新」的语义立即返回，
+           避免调用方超时误判为失败。
+
+        Args:
+            reason: 触发来源，仅用于日志。
+
+        Returns:
+            True 表示刷新请求已被接受（已提交或已在执行中）。
+        """
+        pending = getattr(self, "_manual_refresh_task", None)
+        if pending is not None and not pending.done():
+            logger.info(f"【{self.cookie_id}】Token刷新任务已在进行中，合并本次手动触发({reason})")
+            return True
+        if self.cookie_refresh_lock.locked():
+            logger.info(f"【{self.cookie_id}】Cookie刷新任务执行中，合并本次手动触发({reason})")
+            return True
+
+        logger.info(f"【{self.cookie_id}】收到手动Token刷新请求({reason})，已提交后台执行")
+        self._manual_refresh_task = asyncio.create_task(self._run_manual_refresh(reason))
+        return True
+
+    async def _run_manual_refresh(self, reason: str) -> None:
+        """后台执行一次手动 Token 刷新（异常只记录日志，不影响调用方）。"""
+        try:
+            await self._execute_cookie_refresh(time.time())
+            logger.info(f"【{self.cookie_id}】手动Token刷新任务结束({reason})")
+        except asyncio.CancelledError:
+            logger.info(f"【{self.cookie_id}】手动Token刷新任务已取消({reason})")
+            raise
+        except Exception as e:
+            logger.error(f"【{self.cookie_id}】手动Token刷新任务异常({reason}): {str(e)}")
     
     async def token_refresh_loop(self):
         """Token刷新循环"""
