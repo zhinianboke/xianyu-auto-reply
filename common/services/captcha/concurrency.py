@@ -517,29 +517,45 @@ concurrency_manager = SliderConcurrencyManager()
 
 _browser_task_executor: Optional[ThreadPoolExecutor] = None
 _browser_task_executor_lock = threading.Lock()
+_browser_task_limiter: Optional[asyncio.Semaphore] = None
+_browser_task_limiter_loop: Optional[asyncio.AbstractEventLoop] = None
+_browser_task_limiter_lock = threading.Lock()
+
+
+def _get_browser_task_max_workers() -> int:
+    try:
+        slots = int(_slot_manager.max_concurrent or 1)
+    except Exception:
+        slots = 1
+    return max(1, slots)
 
 
 def get_browser_task_executor() -> ThreadPoolExecutor:
     """返回浏览器任务专用线程池（与 asyncio 默认线程池隔离的单例）。
 
-    线程池大小 = 浏览器并发槽位上限 + 少量余量。余量用于容纳"已进入任务但正在等待
-    槽位/账号锁"的线程，避免它们排队时阻塞新任务进入；整体仍有上限，绝不会无限增长。
+    线程池大小与浏览器并发槽位相同。等待槽位的任务留在协程层排队，不额外占用线程。
     """
     global _browser_task_executor
     if _browser_task_executor is None:
         with _browser_task_executor_lock:
             if _browser_task_executor is None:
-                try:
-                    slots = int(_slot_manager.max_concurrent or 1)
-                except Exception:
-                    slots = 1
-                max_workers = max(2, slots + 2)
+                max_workers = _get_browser_task_max_workers()
                 _browser_task_executor = ThreadPoolExecutor(
                     max_workers=max_workers,
                     thread_name_prefix="browser-task",
                 )
                 logger.info(f"浏览器任务专用线程池初始化完成，max_workers={max_workers}")
     return _browser_task_executor
+
+
+def _get_browser_task_limiter(loop: asyncio.AbstractEventLoop) -> asyncio.Semaphore:
+    """返回当前事件循环的浏览器任务限流器。"""
+    global _browser_task_limiter, _browser_task_limiter_loop
+    with _browser_task_limiter_lock:
+        if _browser_task_limiter is None or _browser_task_limiter_loop is not loop:
+            _browser_task_limiter = asyncio.Semaphore(_get_browser_task_max_workers())
+            _browser_task_limiter_loop = loop
+    return _browser_task_limiter
 
 
 async def run_browser_task(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -550,5 +566,21 @@ async def run_browser_task(func: Callable[..., Any], *args: Any, **kwargs: Any) 
     """
     loop = asyncio.get_running_loop()
     call = functools.partial(func, *args, **kwargs)
-    return await loop.run_in_executor(get_browser_task_executor(), call)
-
+    limiter = _get_browser_task_limiter(loop)
+    await limiter.acquire()
+    try:
+        task = loop.run_in_executor(get_browser_task_executor(), call)
+    except Exception:
+        limiter.release()
+        raise
+    release_on_finish = True
+    try:
+        # shield 防止上层取消时把仍在清理浏览器的工作线程提前放行。
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        release_on_finish = False
+        task.add_done_callback(lambda _: limiter.release())
+        raise
+    finally:
+        if release_on_finish:
+            limiter.release()
