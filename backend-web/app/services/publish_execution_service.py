@@ -22,6 +22,7 @@ from app.services.publish_batch_status_service import PublishBatchStatusService
 from app.services.item_service import ItemService
 from common.models.publish_log import PublishLog
 from common.models.xy_account import XYAccount
+from common.services import material_config_writer
 from common.services.publish_execution_service import (
     SYNC_AFTER_PUBLISH_DELAY_SECONDS,
     execute_single_publish,
@@ -230,13 +231,25 @@ class PublishExecutorService:
         item_data: dict,
     ) -> Dict[str, Any]:
         """单品发布"""
-        return await execute_single_publish(
+        result = await execute_single_publish(
             session=self.session,
             user_id=user_id,
             account_id=account_id,
             item_data=item_data,
             static_root=STATIC_ROOT,
         )
+        # 发布成功后回写素材配置到新商品列表项（失败不影响发布结果）
+        if result.get("success") and result.get("item_id"):
+            try:
+                await material_config_writer.apply_to_item(
+                    self.session, item_data, account_id, result.get("item_id")
+                )
+            except Exception as writer_exc:
+                logger.warning(
+                    f"单品发布配置回写失败: account={account_id}, "
+                    f"item_id={result.get('item_id')}, error={writer_exc}"
+                )
+        return result
 
     async def batch_publish(
         self,
@@ -404,6 +417,16 @@ class PublishExecutorService:
                             item_url=result.get("item_url"),
                             item_id=result.get("item_id"),
                         )
+                        # 把素材的 item_config 回写到新商品列表项（失败不影响发布结果）
+                        try:
+                            await material_config_writer.apply_to_item(
+                                self.session, material, account_id, result.get("item_id")
+                            )
+                        except Exception as writer_exc:
+                            logger.warning(
+                                f"批量发布配置回写失败: account={account_id}, "
+                                f"item_id={result.get('item_id')}, error={writer_exc}"
+                            )
                     else:
                         failed_count += 1
                         await log_svc.update_log(

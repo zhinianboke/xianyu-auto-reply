@@ -383,6 +383,107 @@ class DashboardStatsService:
             "today_agent_orders": int(today_stats["today_agent_orders"]),
         }
 
+    # 待发货状态：买家已付款但卖家尚未发货（含旧数据遗留的 pending/paid）
+    PENDING_SHIP_STATUSES = ("pending_ship", "pending", "paid", "待发货")
+    # 待确认收货状态：卖家已发货，等待买家确认
+    PENDING_CONFIRM_STATUSES = ("shipped", "已发货")
+    # 待评价状态：交易成功但卖家尚未评价
+    PENDING_RATE_STATUSES = ("completed", "已完成")
+
+    async def get_order_status_summary(self, *, owner_id: int | None) -> dict[str, dict[str, int | float]]:
+        """获取按订单状态分类的汇总（笔数 + 金额）。
+
+        三类：
+        - 待发货：买家已付款，卖家未发货
+        - 待确认：卖家已发货，买家未确认收货
+        - 待评价：交易成功，卖家未评价（is_rated=False）
+        """
+        base = select(XYOrder)
+        if owner_id is not None:
+            base = base.where(XYOrder.owner_id == owner_id)
+
+        # 单次查询按状态分类汇总，避免三次扫描
+        stmt = (
+            select(
+                func.sum(
+                    case(
+                        (XYOrder.status.in_(self.PENDING_SHIP_STATUSES), 1),
+                        else_=0,
+                    )
+                ).label("pending_ship_count"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (XYOrder.status.in_(self.PENDING_SHIP_STATUSES), XYOrder.amount),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("pending_ship_amount"),
+                func.sum(
+                    case(
+                        (XYOrder.status.in_(self.PENDING_CONFIRM_STATUSES), 1),
+                        else_=0,
+                    )
+                ).label("pending_confirm_count"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (XYOrder.status.in_(self.PENDING_CONFIRM_STATUSES), XYOrder.amount),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("pending_confirm_amount"),
+                func.sum(
+                    case(
+                        (and_(XYOrder.status.in_(self.PENDING_RATE_STATUSES), XYOrder.is_rated.is_(False)), 1),
+                        else_=0,
+                    )
+                ).label("pending_rate_count"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (and_(XYOrder.status.in_(self.PENDING_RATE_STATUSES), XYOrder.is_rated.is_(False)), XYOrder.amount),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("pending_rate_amount"),
+                # 金额汇总 = 待发货 + 待确认（待评价不计入）
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (XYOrder.status.in_(self.PENDING_SHIP_STATUSES + self.PENDING_CONFIRM_STATUSES), XYOrder.amount),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("total_amount"),
+            )
+            .select_from(XYOrder)
+        )
+        if owner_id is not None:
+            stmt = stmt.where(XYOrder.owner_id == owner_id)
+
+        row = (await self.session.execute(stmt)).one()
+
+        return {
+            "pending_ship": {
+                "count": int(row.pending_ship_count or 0),
+                "amount": round(float(row.pending_ship_amount or 0), 2),
+            },
+            "pending_confirm": {
+                "count": int(row.pending_confirm_count or 0),
+                "amount": round(float(row.pending_confirm_amount or 0), 2),
+            },
+            "pending_rate": {
+                "count": int(row.pending_rate_count or 0),
+                "amount": round(float(row.pending_rate_amount or 0), 2),
+            },
+            "total_amount": round(float(row.total_amount or 0), 2),
+        }
+
     async def get_order_amount_trend(self, *, owner_id: int | None, days: int = 30) -> list[dict[str, int | float | str]]:
         """获取近N天订单金额趋势。"""
         start_date = self._build_today_start() - timedelta(days=days - 1)

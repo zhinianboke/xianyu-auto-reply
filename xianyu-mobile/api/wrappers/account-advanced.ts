@@ -221,6 +221,9 @@ export interface AutoRateConfig {
   rate_type: 'text' | 'api';
   text_content: string;
   api_url: string;
+  /** 好评后自动发送消息（#232），移动端无编辑入口，读入后原样回传 */
+  thanks_enabled: boolean;
+  thanks_content: string;
 }
 
 export async function getAutoRateConfig(
@@ -231,10 +234,18 @@ export async function getAutoRateConfig(
     `/api/v1/auto-rate/${encodeURIComponent(accountId)}`,
   )) as { data?: unknown; error?: unknown };
   if (error) throw await extractError(error);
-  const cfg = unwrapEnvelope<AutoRateConfig>(data);
-  return cfg ?? { enabled: false, rate_type: 'text', text_content: '', api_url: '' };
+  const cfg = unwrapEnvelope<Partial<AutoRateConfig>>(data);
+  return {
+    enabled: cfg?.enabled ?? false,
+    rate_type: cfg?.rate_type === 'api' ? 'api' : 'text',
+    text_content: cfg?.text_content ?? '',
+    api_url: cfg?.api_url ?? '',
+    thanks_enabled: cfg?.thanks_enabled ?? false,
+    thanks_content: cfg?.thanks_content ?? '',
+  };
 }
 
+/** 更新自动评价配置；后端整体覆盖，未传的 thanks_* 会被默认值清空，必须原样回传 */
 export async function updateAutoRateConfig(
   accountId: string,
   config: AutoRateConfig,

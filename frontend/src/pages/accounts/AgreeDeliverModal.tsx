@@ -4,6 +4,7 @@
  * 功能：
  * 1. 配置账号的「同意后发货」开关、通知用户信息、提货URL
  * 2. 提示本系统内置提货页地址，支持一键填入 / 复制（公网地址由后端按环境变量推荐）
+ * 3. 提货后通知：买家同意提货发卡成功后，自动向买家发送确认收货提醒（账号级，默认关闭）
  */
 import { useEffect, useState } from 'react'
 import { X, Loader2, Truck, AlertTriangle, Copy, CornerDownLeft } from 'lucide-react'
@@ -29,6 +30,8 @@ export function AgreeDeliverModal({ accountId, accountDisplayId, onClose }: Prop
   const [enabled, setEnabled] = useState(false)
   const [notifyMessage, setNotifyMessage] = useState('')
   const [pickupUrl, setPickupUrl] = useState('')
+  const [pickupNoticeEnabled, setPickupNoticeEnabled] = useState(false)
+  const [pickupNoticeContent, setPickupNoticeContent] = useState('')
   const [suggestion, setSuggestion] = useState<PickupUrlSuggestion | null>(null)
 
   useEffect(() => {
@@ -47,6 +50,8 @@ export function AgreeDeliverModal({ accountId, accountDisplayId, onClose }: Prop
         setEnabled(res.data.enabled)
         setNotifyMessage(res.data.notify_message || '')
         setPickupUrl(res.data.pickup_url || '')
+        setPickupNoticeEnabled(Boolean(res.data.pickup_notice_enabled))
+        setPickupNoticeContent(res.data.pickup_notice_content || '')
       } else {
         addToast({ type: 'error', message: res.message || '加载配置失败' })
       }
@@ -107,6 +112,8 @@ export function AgreeDeliverModal({ accountId, accountDisplayId, onClose }: Prop
         enabled,
         notify_message: notifyMessage.trim() || null,
         pickup_url: pickupUrl.trim() || null,
+        pickup_notice_enabled: pickupNoticeEnabled,
+        pickup_notice_content: pickupNoticeContent.trim() || null,
       })
       if (res.success) {
         addToast({ type: 'success', message: '同意后发货配置已保存' })
@@ -248,6 +255,38 @@ export function AgreeDeliverModal({ accountId, accountDisplayId, onClose }: Prop
                     </div>
                   )}
                 </div>
+              </div>
+
+              {/* 提货后通知 */}
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-600">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-slate-700 dark:text-slate-200">提货后通知</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">买家同意提货发卡成功后，自动发送提醒确认收货</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPickupNoticeEnabled(!pickupNoticeEnabled)}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${pickupNoticeEnabled ? 'bg-blue-500' : 'bg-slate-300 dark:bg-slate-600'}`}
+                    aria-pressed={pickupNoticeEnabled}
+                  >
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${pickupNoticeEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                  </button>
+                </div>
+                {pickupNoticeEnabled && (
+                  <div className="mt-3">
+                    <label className="text-xs font-medium text-slate-600 dark:text-slate-300">通知内容</label>
+                    <textarea
+                      value={pickupNoticeContent}
+                      onChange={(e) => setPickupNoticeContent(e.target.value)}
+                      rows={3}
+                      maxLength={2000}
+                      placeholder="例如：您的卡密已发送成功，请及时查收并确认收货哦～"
+                      className="input-ios mt-1 text-sm w-full resize-y"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-0.5">最多 2000 字；留空则不发送</p>
+                  </div>
+                )}
               </div>
             </>
           )}

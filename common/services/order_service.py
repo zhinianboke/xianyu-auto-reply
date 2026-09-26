@@ -60,6 +60,27 @@ async def close_goofish_connector() -> None:
         _goofish_connector = None
 
 
+# MariaDB 1020（Record has changed since last read in table 'xy_orders'）等
+# 「行版本已变化」冲突的重试预算。每次重试都新建独立 session（新事务），
+# 因此重试是有效的：在同一事务里重发 UPDATE 仍会被 1020 拒绝。
+_CHAT_ID_UPDATE_MAX_RETRIES = 2
+_CHAT_ID_UPDATE_RETRY_BACKOFF_SECONDS = 0.3
+
+
+def _is_record_changed_error(exc: BaseException) -> bool:
+    """判断异常是否为 MariaDB 1020（Record has changed since last read）。
+
+    PyMySQL 原始异常形如 OperationalError(1020, "Record has changed since last read ...")；
+    SQLAlchemy 会把它包进 DBAPIError，原始异常挂在 ``.orig`` 上。
+    """
+    orig = getattr(exc, "orig", exc)
+    args = getattr(orig, "args", ()) or ()
+    if args and args[0] == 1020:
+        return True
+    text = str(orig)
+    return "1020" in text and "Record has changed" in text
+
+
 class OrderService:
     """订单服务 - 读写xy_orders表"""
 
@@ -388,6 +409,20 @@ class OrderService:
         
         场景：订单手动发货时发现 chat_id 为空，
         调用闲鱼 LWP 接口创建会话后，补写回订单表。
+
+        实现说明（P1-2 修复）：
+        - 改用**独立 session** 写入，不再复用调用方 session：
+          调用方（手动发货路由 / 定时补发货）此前已在自己的事务里读过该订单行，
+          同一事务内再 UPDATE 同一行时，MariaDB 会报
+          (1020) Record has changed since last read；旧实现失败后还会
+          `rollback()` 调用方 session，把其已加载的 ORM 实例全部 expire，
+          异步引擎下调用方再读属性即 MissingGreenlet → HTTP 500。
+          独立 session 的提交/回滚都不影响调用方，也天然避开 1020。
+        - 对 1020 做有限重试（最多 _CHAT_ID_UPDATE_MAX_RETRIES 次、短退避），
+          每次重试新建 session（新事务），保证重试能读到最新行版本。
+        - 调用方语义不变：仍只返回成功与否；各调用方拿到返回值后本就自行维护
+          内存中的 chat_id（手动发货用局部变量、定时补发写 order.chat_id），
+          不依赖本方法所在的 session / identity map。
         
         Args:
             order_no: 订单号
@@ -399,19 +434,36 @@ class OrderService:
         if not chat_id:
             logger.warning(f"更新订单 chat_id 失败: chat_id 为空 (order_no={order_no})")
             return False
-        try:
-            stmt = (
-                update(XYOrder)
-                .where(XYOrder.order_no == order_no)
-                .values(chat_id=chat_id)
-            )
-            result = await self.session.execute(stmt)
-            await self.session.commit()
-            return result.rowcount > 0
-        except Exception as e:
-            logger.error(f"更新订单 chat_id 失败: order_no={order_no}, chat_id={chat_id}, 错误={e}")
-            await self.session.rollback()
-            return False
+
+        from common.db.session import async_session_maker
+
+        attempts = _CHAT_ID_UPDATE_MAX_RETRIES + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                async with async_session_maker() as session:
+                    stmt = (
+                        update(XYOrder)
+                        .where(XYOrder.order_no == order_no)
+                        .values(chat_id=chat_id)
+                    )
+                    result = await session.execute(stmt)
+                    await session.commit()
+                    return result.rowcount > 0
+            except Exception as e:
+                if attempt < attempts and _is_record_changed_error(e):
+                    logger.warning(
+                        f"更新订单 chat_id 遇到行版本冲突(1020)，"
+                        f"第 {attempt}/{_CHAT_ID_UPDATE_MAX_RETRIES} 次重试: "
+                        f"order_no={order_no}, chat_id={chat_id}, 错误={e}"
+                    )
+                    await asyncio.sleep(_CHAT_ID_UPDATE_RETRY_BACKOFF_SECONDS * attempt)
+                    continue
+                logger.error(
+                    f"更新订单 chat_id 失败(第 {attempt}/{attempts} 次): "
+                    f"order_no={order_no}, chat_id={chat_id}, 错误={e}"
+                )
+                return False
+        return False
 
     async def get_pending_order_by_buyer(
         self,
@@ -747,6 +799,9 @@ class OrderService:
             self.session.add(new_order)
             await self.session.commit()
             logger.info(f"订单 {order_no} 创建成功")
+            # 售罄守卫：新订单计入待发货后检查该商品绑定卡券（内部自捕获异常，不影响下单）
+            from common.services.stock_guard_service import check_item_cards_after_order
+            await check_item_cards_after_order(self.session, item_id or "", trigger="order_create_msg")
             return True
             
         except Exception as e:
@@ -1383,6 +1438,16 @@ class OrderService:
                 )
                 await self.session.execute(update_stmt)
                 await self.session.commit()
+                # 售罄守卫：状态/数量被同步修正后（如待付款→待发货、件数1→N）重查绑定卡券
+                # （内部自捕获异常，不影响订单同步主流程）
+                eff_status = update_values.get('status', existing.status)
+                from common.services.stock_guard_service import PENDING_STATUSES, check_item_cards_after_order
+                if eff_status in PENDING_STATUSES:
+                    await check_item_cards_after_order(
+                        self.session,
+                        update_values.get('item_id') or existing.item_id or "",
+                        trigger="order_update_sync",
+                    )
                 return 'updated'
             return 'skipped'
         else:
@@ -1407,6 +1472,9 @@ class OrderService:
             self.session.add(new_order)
             try:
                 await self.session.commit()
+                # 售罄守卫：新订单计入待发货后检查该商品绑定卡券（内部自捕获异常，不影响下单）
+                from common.services.stock_guard_service import check_item_cards_after_order
+                await check_item_cards_after_order(self.session, parsed.get('item_id', ''), trigger="order_create_sync")
                 return 'inserted'
             except IntegrityError:
                 # 并发兜底：(account_id, order_no) 唯一约束命中，说明另一个任务
@@ -2224,7 +2292,12 @@ class OrderStatusChecker:
             
             # 分析订单状态
             can_rate, reason, order_status = self._analyze_can_rate(status_nodes)
-            
+
+            # 交易成功后回写本地状态：收货往往发生在订单同步(已发货)之后，
+            # 仅靠同步任务无法把 status 更新为 completed，这里顺带校正
+            if can_rate or '交易成功' in order_status:
+                await self._sync_order_status_to_completed(order_id)
+
             return {
                 'success': True,
                 'can_rate': can_rate,
@@ -2433,7 +2506,33 @@ class OrderStatusChecker:
                 logger.info(f"订单 {order_id} 状态已更新为 cancelled（交易关闭）")
         except Exception as e:
             logger.error(f"更新订单 {order_id} 状态失败: {e}")
-    
+
+    async def _sync_order_status_to_completed(self, order_id: str) -> None:
+        """交易成功后回写本地订单状态为 completed
+
+        收货通常发生在订单同步(已发货)之后，同步任务不会持续轮询已发货订单，
+        导致本地 status 停留在 shipped。在评价判定发现已交易成功时顺带校正，
+        保证统计/列表口径正确。
+
+        Args:
+            order_id: 订单号
+        """
+        try:
+            from common.db.session import async_session_maker
+
+            async with async_session_maker() as session:
+                stmt = (
+                    update(XYOrder)
+                    .where(XYOrder.order_no == order_id, XYOrder.status != "completed")
+                    .values(status="completed")
+                )
+                result = await session.execute(stmt)
+                await session.commit()
+                if result.rowcount:
+                    logger.info(f"订单 {order_id} 状态已校正为 completed（交易成功）")
+        except Exception as e:
+            logger.error(f"校正订单 {order_id} 状态为 completed 失败: {e}")
+
     def _analyze_can_ship(self, status_nodes: list) -> tuple:
         """分析订单状态节点，判断是否可以发货
         

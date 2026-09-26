@@ -40,6 +40,13 @@ SEND_BEFORE_CONFIRM_WAIT_TIMEOUT = float(os.getenv('SEND_BEFORE_CONFIRM_WAIT_TIM
 # 避免调用方 HTTP 超时（当前为 30 秒）后重试同一订单。
 DELIVERY_AMOUNT_REFRESH_TIMEOUT = 15.0
 
+# Redis 发货锁 TTL 与续期间隔（D0-21）：
+# 实际发货（平台确认 + 取卡 + 发消息 + 回执等待）可达数分钟，而锁 TTL 仅 120s，
+# 不续期会出现「锁提前过期 → 另一进程再次进入同一订单 → 重复发卡」的资金风险窗口。
+# 续期间隔取 TTL 的 1/3，保证单次续期失败后仍有两次续期机会。
+DELIVERY_LOCK_EXPIRE_SECONDS = 120
+DELIVERY_LOCK_EXTEND_INTERVAL_SECONDS = 40
+
 
 class AutoDeliveryHandler:
     """自动发货处理器"""
@@ -1065,6 +1072,32 @@ class AutoDeliveryHandler:
         self.last_delivery_time[order_id] = current_time
         logger.info(f"【{self.cookie_id}】订单 {order_id} 已标记为发货（冷却期已设置）")
 
+    async def _extend_delivery_lock(self, lock_result, order_id: str, msg_time: str) -> None:
+        """持锁期间定时续期 Redis 发货锁（D0-21）。
+
+        复用 Token 请求锁的续期模式（common/services/token_request_lock.py:50-69）：
+        定时调用 DistributedLock.extend 刷新 TTL；续期失败/异常只告警并结束续期任务，
+        不中断发货主流程，与「Redis 不可用时降级」的既有行为保持一致。
+        """
+        lock = getattr(lock_result, "lock", None)
+        if lock is None:
+            return
+        while True:
+            await asyncio.sleep(DELIVERY_LOCK_EXTEND_INTERVAL_SECONDS)
+            try:
+                if await lock.extend(DELIVERY_LOCK_EXPIRE_SECONDS):
+                    continue
+                logger.warning(
+                    f'[{msg_time}] 【{self.cookie_id}】发货Redis锁续期失败'
+                    f'（锁已被释放或已过期），停止续期: {order_id}'
+                )
+            except Exception as e:
+                logger.warning(
+                    f'[{msg_time}] 【{self.cookie_id}】发货Redis锁续期异常，停止续期: '
+                    f'{order_id}, error={e}'
+                )
+            return
+
 
     # ==================== 统一发货处理 ====================
 
@@ -1192,8 +1225,9 @@ class AutoDeliveryHandler:
             redis_lock_acquired = False
             local_order_lock = None
             local_lock_acquired = False
+            lock_extend_task = None
             try:
-                lock_result = await try_acquire_delivery_lock(order_id, expire=120, holder_info=self.cookie_id, wait_timeout=5)
+                lock_result = await try_acquire_delivery_lock(order_id, expire=DELIVERY_LOCK_EXPIRE_SECONDS, holder_info=self.cookie_id, wait_timeout=5)
                 if lock_result.success:
                     redis_lock_acquired = True
                     logger.info(f'[{msg_time}] 【{self.cookie_id}】获取Redis分布式锁成功: {order_id}')
@@ -1206,6 +1240,14 @@ class AutoDeliveryHandler:
                     logger.warning(f'[{msg_time}] 【{self.cookie_id}】Redis连接异常，降级为本地锁控制: {order_id}')
             except Exception as e:
                 logger.warning(f'[{msg_time}] 【{self.cookie_id}】Redis分布式锁异常，降级为本地锁控制: {order_id}, error={e}')
+
+            # 锁续期（D0-21）：发货耗时可能超过锁 TTL，持锁期间定时 extend，
+            # 避免锁提前过期后另一进程再次进入同一订单导致重复发卡。
+            # Redis 不可用降级（未真正持锁）时不启动续期，保持原降级行为。
+            if redis_lock_acquired and lock_result is not None and getattr(lock_result, 'lock', None) is not None:
+                lock_extend_task = asyncio.create_task(
+                    self._extend_delivery_lock(lock_result, order_id, msg_time)
+                )
             
             try:
                 # Redis正常时作为同进程第二层保护；Redis异常时作为手动/定时/自动发货的降级锁。
@@ -1952,6 +1994,15 @@ class AutoDeliveryHandler:
             finally:
                 if local_lock_acquired and local_order_lock and local_order_lock.locked():
                     local_order_lock.release()
+                # 先停止锁续期任务，再释放锁，避免释放后又被续期
+                if lock_extend_task is not None:
+                    lock_extend_task.cancel()
+                    try:
+                        await lock_extend_task
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as extend_e:
+                        logger.warning(f'[{msg_time}] 【{self.cookie_id}】发货Redis锁续期任务结束异常: {extend_e}')
                 # 处理完成后主动释放Redis分布式锁
                 if redis_lock_acquired and lock_result:
                     try:

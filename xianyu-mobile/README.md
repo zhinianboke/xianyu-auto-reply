@@ -10,7 +10,7 @@
 |---|---|---|
 | 消息 | 会话列表（多账号切换 + WebSocket 实时推送 + 搜索 + 左滑已读/删除） | ![消息](docs/screenshots/messages.png) |
 | 订单 | 订单管理（状态筛选 Tab + 搜索 + 左滑手动发货/拉黑/复制单号/详情） | ![订单](docs/screenshots/orders.png) |
-| 商品 | 商品监控/卡券管理/发货规则 三段 Tab + 统计卡可点跳转 | ![商品](docs/screenshots/products.png) |
+| 商品 | 商品监控/卡券管理/发货规则 三段 Tab（卡券管理为完整页面内嵌）+ 统计卡可点跳转 | ![商品](docs/screenshots/products.png) |
 | 我的 | 用户卡片 + 9 分组菜单 38 入口 + 搜索过滤 | ![我的](docs/screenshots/mine.png) |
 
 ### 我的菜单 9 大分组（43 页）
@@ -31,9 +31,9 @@
 
 | 功能 | 截图 | 说明 |
 |---|---|---|
-| 账号管理 | ![账号](docs/screenshots/accounts.png) | 扫码登录 + 密码登录 + 9 功能开关 + AI 设置 + 默认回复 + 代理/消息等待/回复延迟/人脸验证/确认收货/自动评价/禁止发货/退款注销 |
-| 卡券管理 | ![卡券](docs/screenshots/cards.png) | 4 类型（固定文字/批量数据/API 接口/图片）+ 对接配置 + 多规格 + 延时发货 + 搜索 + 启用禁用 + 商品关联 |
-| AI 上架 | ![AI上架](docs/screenshots/ai-listing.png) | AI 文生文 + 文生图批量生成商品素材 → 素材库 → 批量发布上架，支持进度轮询 + 取消 + 失败明细 |
+| 账号管理 | ![账号](docs/screenshots/accounts.png) | 扫码登录 + 密码登录 + 9 功能开关 + AI 设置 + 默认回复 + 同意后发货（提货链接 + 提货后通知提醒）+ 代理/消息等待/回复延迟/人脸验证/自动评价/禁止发货/退款注销 |
+| 卡券管理 | ![卡券](docs/screenshots/cards.png) | 4 类型（固定文字/批量数据/API 接口/图片）+ 对接配置 + 多规格 + 延时发货 + 搜索 + 启用禁用 + 商品关联；商品 Tab 内嵌完整管理页 |
+| AI 上架 | ![AI上架](docs/screenshots/ai-listing.png) | AI 文生文 + 文生图批量生成商品素材 → 素材库 → 批量发布上架，支持多服务商类型选择 + 进度轮询 + 取消 + 失败明细 |
 | 数据分析 | ![数据分析](docs/screenshots/data-analysis.png) | 10 核心指标卡（涨跌幅红绿）+ 条形图分布可视化 + 自定义日期 + 账号切换 + 31 项字段中文化 |
 | 仪表盘 | ![仪表盘](docs/screenshots/dashboard.png) | 可点击统计卡跳转 + 今日待办 + 账号概览 |
 | 商品搜索 | ![搜索](docs/screenshots/search.png) | 闲鱼市场商品搜索 + 账号选择 + 示例词 + 搜索历史 |
@@ -80,7 +80,7 @@ xianyu-mobile/
 ├── stores/                 # auth/accounts/config（zustand）
 ├── scripts/sync-api.ts     # API 类型同步脚本
 ├── docs/                   # 文档 + 截图
-└── CLAUDE.md               # 开发者指南
+└── android/ ios/           # 原生工程（Expo prebuild 产物）
 ```
 
 ## 快速开始
@@ -130,7 +130,7 @@ npm run sync-api
 
 ## 与后端的关系
 
-- **完全独立**：xianyu-mobile 是独立项目，对 xianyu-auto-reply 后端零修改
+- **独立项目**：xianyu-mobile 是独立项目，默认对 xianyu-auto-reply 后端零修改；「提货后通知」为可选增强，需 3 个后端文件的配套改动与 2 个新增字段（见仓库根 PR 说明）
 - **OpenAPI 契约驱动**：从后端 `/openapi.json` 自动生成 TypeScript 类型
 - **自托管**：用户在 APP 内配置自己的服务器地址，支持多 profile 切换
 - **认证兼容**：JWT Bearer Token，与后端 auth 接口完全兼容
@@ -148,14 +148,31 @@ npm run sync-api
 
 | 文档 | 说明 |
 |---|---|
-| [CLAUDE.md](CLAUDE.md) | 开发者指南（约定 / 陷阱 / 构建流程） |
 | [docs/api-schema.md](docs/api-schema.md) | 103 个写操作接口 Schema + 422 陷阱速查 |
 | [docs/TEST_REPORT_v1.0.7.md](docs/TEST_REPORT_v1.0.7.md) | 3 轮审查测试报告（26 页全量扫描） |
 | [../README.md](../README.md) | 后端 + Web 前端 README |
 
 ## 版本
 
-当前版本：1.0.7
+当前版本：1.14（versionCode 15）
+
+### v1.13 → 1.14 更新记录
+
+- 商品编辑页大改版：折叠卡片式布局，长表单按区块收起/展开
+- 商品通用查询按钮配置入口（配合后端「查询按钮」功能，买家在提货页可一键查余额等）
+- 卡券关联页交互优化
+- 提货页支持卡密 txt 下载
+- versionCode 修正为 15（避免低版本号无法覆盖安装）
+
+### v1.0.7 → 1.13 更新记录
+
+- 商品 Tab 融合完整卡券管理页（不再概要+跳转）
+- 提货后通知：买家同意提货发卡成功后，自动向买家发送确认收货提醒（账号级，默认关闭）
+- AI 上架配置支持服务商类型选择（provider_type）
+- 修复假功能，补齐与 Web 管理端的功能差距（v1.0.8 专项）
+- 卡券列表直接显示具体内容；loadMore 加载守卫修复列表抖动
+- 消息页会话列表底部遮挡修复；release 构建强制 NODE_ENV=production
+- 全部截图与提示文案隐私脱敏
 
 ## 许可证
 

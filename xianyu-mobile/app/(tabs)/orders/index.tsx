@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -26,6 +26,7 @@ import {
   getOrderDetail,
   deleteOrder,
   fetchXianyuOrders,
+  batchDeleteOrders,
   getAutoRateConfig,
   updateAutoRateConfig,
   batchRate,
@@ -33,6 +34,7 @@ import {
   updateConfirmReceiptConfig,
   type Order,
   type OrderDetail,
+  type FetchXianyuStats,
   type AutoRateConfig,
   type ConfirmReceiptConfig,
 } from '@/api/wrappers/orders-tab';
@@ -43,6 +45,12 @@ import { useAccountsStore } from '@/stores/accounts';
 import { usePagedList } from '@/hooks/usePagedList';
 
 const PAGE_SIZE = 20;
+/** 搜索/筛选草稿 → 生效的防抖间隔 */
+const FILTER_DEBOUNCE_MS = 450;
+/** 单账号同步超时 */
+const SYNC_ONE_TIMEOUT_MS = 120000;
+/** 全账号同步超时（账号多时明显更久，对齐 web 的 10 分钟） */
+const SYNC_ALL_TIMEOUT_MS = 600000;
 
 /** 把细粒度订单状态归并为筛选 tab 分组 */
 function groupStatus(status: string): string {
@@ -64,6 +72,79 @@ const STATUS_TABS = [
   { key: 'other', label: '其他' },
 ];
 
+/** 发货方式服务端筛选 chips（key 对应后端 delivery_method 取值） */
+const DELIVERY_FILTERS = [
+  { key: '', label: '全部' },
+  { key: 'none', label: '未发货' },
+  { key: 'manual', label: '手动发货' },
+  { key: 'auto', label: '自动发货' },
+  { key: 'scheduled', label: '定时发货' },
+];
+
+/** 服务端筛选的生效值（防抖后提交给 getOrders 的那一份） */
+interface AppliedFilters {
+  accountId: string;
+  search: string;
+  delivery: string;
+  startDate: string;
+  endDate: string;
+}
+
+const INITIAL_FILTERS: AppliedFilters = {
+  accountId: '',
+  search: '',
+  delivery: '',
+  startDate: '',
+  endDate: '',
+};
+
+/** 拼同步统计摘要：获取/新增/更新（+失败） */
+function syncStatsSummary(stats: FetchXianyuStats): string {
+  let s = `获取 ${stats.total_fetched} 条，新增 ${stats.new_inserted} 条，更新 ${stats.updated} 条`;
+  if (stats.failed > 0) s += `，失败 ${stats.failed} 条`;
+  return s;
+}
+
+/** 拼失败账号提示（最多展示 2 条，避免 Alert 过长） */
+function syncErrorsText(stats: FetchXianyuStats): string {
+  if (stats.errors.length === 0) return '';
+  const head = stats.errors.slice(0, 2).join('；');
+  return `\n失败账号：${head}${stats.errors.length > 2 ? ' 等' : ''}`;
+}
+
+/** 通用筛选 chip（账号/发货方式共用样式，与自动化设置弹窗一致） */
+function FilterChip({
+  label,
+  active,
+  onPress,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  const scheme = useColorScheme();
+  const c = colors[scheme === 'dark' ? 'dark' : 'light'];
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[
+        styles.chip,
+        {
+          borderColor: active ? c.primary : c.border,
+          backgroundColor: active ? c.primaryLight : 'transparent',
+        },
+      ]}
+    >
+      <Text
+        style={[styles.chipText, { color: active ? c.primary : c.textSecondary }]}
+        numberOfLines={1}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
 /** 发货方式 → 中文文案（与 web statusMap 口径一致） */
 function deliveryMethodText(m?: string): string {
   if (!m) return '未发货';
@@ -82,12 +163,86 @@ function sendStatusText(s?: string | null): string {
   return '待确认';
 }
 
+/**
+ * 订单卡片主体（普通模式与多选模式共用）。
+ * selected 传 undefined 表示非多选态（不渲染勾选框），传 boolean 表示多选态。
+ */
+function OrderCardBody({ item, selected }: { item: Order; selected?: boolean }) {
+  const scheme = useColorScheme();
+  const dark = scheme === 'dark';
+  const c: ThemeColors = colors[dark ? 'dark' : 'light'];
+  const meta = getStatusMeta(item.status);
+  const tc = toneColors(meta.tone, dark);
+  return (
+    <Card style={[styles.orderCard, selected === true && { borderColor: c.primary }]}>
+      <View style={styles.titleRow}>
+        {selected !== undefined ? (
+          <View
+            style={[
+              styles.checkbox,
+              {
+                borderColor: selected ? c.primary : c.border,
+                backgroundColor: selected ? c.primary : 'transparent',
+              },
+            ]}
+          >
+            {selected ? <Text style={styles.checkboxCheck}>✓</Text> : null}
+          </View>
+        ) : null}
+        <Text
+          style={[styles.title, { color: c.text, flex: 1 }]}
+          numberOfLines={2}
+        >
+          {item.item_title || '未命名商品'}
+        </Text>
+        <View style={[styles.tag, { backgroundColor: tc.bg }]}>
+          <Text style={[styles.tagText, { color: tc.fg }]}>{meta.label}</Text>
+        </View>
+      </View>
+      <View style={styles.metaRow}>
+        <Text style={[styles.amount, { color: c.warning }]}>
+          ¥{item.amount || '--'}
+        </Text>
+        <Text style={[styles.qty, { color: c.textSecondary }]}>
+          ×{item.quantity}
+        </Text>
+        {item.placed_at ? (
+          <Text style={[styles.subText, { color: c.textMuted }]}>
+            {formatDateTime(item.placed_at)}
+          </Text>
+        ) : null}
+      </View>
+      <View style={styles.subRow}>
+        <Text
+          style={[styles.subText, { color: c.textMuted }]}
+          numberOfLines={1}
+        >
+          买家：{item.buyer_nick || item.buyer_id || '--'}
+        </Text>
+        <Text style={[styles.orderNo, { color: c.textMuted }]} numberOfLines={1}>
+          {item.order_no}
+        </Text>
+      </View>
+    </Card>
+  );
+}
+
 // ---------------------------------------------------------------------------
 
 export default function OrdersPage() {
   const scheme = useColorScheme();
   const dark = scheme === 'dark';
   const c: ThemeColors = colors[dark ? 'dark' : 'light'];
+
+  // 服务端筛选：草稿输入值（即时响应用户输入）
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterAccountId, setFilterAccountId] = useState('');
+  const [filterDelivery, setFilterDelivery] = useState('');
+  const [filterStartDate, setFilterStartDate] = useState('');
+  const [filterEndDate, setFilterEndDate] = useState('');
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  // 防抖后的生效值：真正传给 getOrders 的那一份
+  const [appliedFilters, setAppliedFilters] = useState<AppliedFilters>(INITIAL_FILTERS);
 
   // 订单列表（page 分页）：翻页/竞态序号/跨页去重/hasMore 收口均在 usePagedList 内部处理
   const {
@@ -102,7 +257,13 @@ export default function OrdersPage() {
     pageSize: PAGE_SIZE,
     dedupeBy: (o) => o.order_no,
     fetchPage: async ({ page = 1, limit = PAGE_SIZE }) => {
-      const resp = await getOrders(page, limit);
+      const resp = await getOrders(page, limit, {
+        cookieId: appliedFilters.accountId || undefined,
+        search: appliedFilters.search || undefined,
+        deliveryMethod: appliedFilters.delivery || undefined,
+        startDate: appliedFilters.startDate || undefined,
+        endDate: appliedFilters.endDate || undefined,
+      });
       return { items: resp.data, total: resp.total };
     },
     onError: (e, phase) => {
@@ -111,28 +272,140 @@ export default function OrdersPage() {
     },
   });
 
-  // 状态筛选 + 搜索（客户端过滤当前已加载订单）
+  // 草稿 → 防抖 → 生效（450ms 内连续输入只发一次请求）
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setAppliedFilters((prev) => {
+        const next: AppliedFilters = {
+          accountId: filterAccountId,
+          search: searchQuery.trim(),
+          delivery: filterDelivery,
+          startDate: filterStartDate.trim(),
+          endDate: filterEndDate.trim(),
+        };
+        const same =
+          prev.accountId === next.accountId &&
+          prev.search === next.search &&
+          prev.delivery === next.delivery &&
+          prev.startDate === next.startDate &&
+          prev.endDate === next.endDate;
+        return same ? prev : next;
+      });
+    }, FILTER_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [filterAccountId, searchQuery, filterDelivery, filterStartDate, filterEndDate]);
+
+  // 筛选生效后回第 1 页重新拉取。首跑（初始空筛选）跳过，交给 usePagedList 挂载首载
+  const filterRunSeqRef = useRef(0);
+  const appliedKey = `${appliedFilters.accountId}|${appliedFilters.search}|${appliedFilters.delivery}|${appliedFilters.startDate}|${appliedFilters.endDate}`;
+  useEffect(() => {
+    filterRunSeqRef.current += 1;
+    if (filterRunSeqRef.current === 1) return;
+    refreshOrders();
+  }, [appliedKey, refreshOrders]);
+
+  // 状态筛选（客户端按 tab 分组过滤当前已加载订单，保留原能力；搜索已上移到服务端）
   const [statusFilter, setStatusFilter] = useState('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const filteredOrders = orders.filter((o) => {
-    const byStatus = statusFilter === 'all' || groupStatus(o.status) === statusFilter;
-    const q = searchQuery.trim();
-    const bySearch = !q || o.order_no.includes(q) || (o.item_title || '').includes(q) || (o.buyer_nick || o.buyer_id || '').includes(q);
-    return byStatus && bySearch;
-  });
+  const filteredOrders = orders.filter(
+    (o) => statusFilter === 'all' || groupStatus(o.status) === statusFilter,
+  );
+
+  // 多选批量删除
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchDeleting, setBatchDeleting] = useState(false);
+
+  const enterSelectMode = useCallback((firstId: string) => {
+    if (!firstId) return;
+    setSelectMode(true);
+    setSelectedIds(new Set([firstId]));
+  }, []);
+
+  const exitSelectMode = useCallback(() => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  }, []);
+
+  const toggleSelect = useCallback((id: string) => {
+    if (!id) return;
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const allSelected =
+    filteredOrders.length > 0 &&
+    filteredOrders.every((o) => !o.id || selectedIds.has(o.id));
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(
+        new Set(filteredOrders.map((o) => o.id).filter(Boolean)),
+      );
+    }
+  };
+
+  const doBatchDelete = useCallback(() => {
+    const ids = Array.from(selectedIds).filter(Boolean);
+    if (ids.length === 0) return;
+    Alert.alert(
+      '批量删除确认',
+      `确定删除选中的 ${ids.length} 个订单吗？删除后无法恢复。`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '删除',
+          style: 'destructive',
+          onPress: async () => {
+            setBatchDeleting(true);
+            try {
+              const res = await batchDeleteOrders(ids);
+              Alert.alert(
+                '删除完成',
+                res.message || `成功 ${res.deleted} 条，失败 ${res.failed} 条`,
+              );
+              exitSelectMode();
+              await refreshOrders();
+            } catch (e) {
+              Alert.alert('批量删除失败', (e as Error).message);
+            } finally {
+              setBatchDeleting(false);
+            }
+          },
+        },
+      ],
+      { cancelable: true },
+    );
+  }, [selectedIds, exitSelectMode, refreshOrders]);
 
   // 订单详情弹窗
   const [detailVisible, setDetailVisible] = useState(false);
   const [detail, setDetail] = useState<OrderDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  // 账号列表（用于同步与设置）
+  // 账号列表（用于筛选栏、同步与设置）
   const accounts = useAccountsStore((s) => s.options);
   const loadAccountOptions = useAccountsStore((s) => s.load);
+
+  // 挂载时预取账号（筛选栏 chips 需要；TTL 内复用缓存，不重复请求）
+  useEffect(() => {
+    loadAccountOptions().catch(() => {
+      // 静默失败：筛选栏退化为只有「全部账号」，同步入口会再次尝试加载
+    });
+  }, [loadAccountOptions]);
 
   // 同步闲鱼订单
   const [syncPickerVisible, setSyncPickerVisible] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [syncScopeAll, setSyncScopeAll] = useState(false);
   // 同步代际 token：取消时自增使在途作废（per-invocation generation，替代共享布尔）
   const syncGenRef = useRef(0);
 
@@ -174,7 +447,45 @@ export default function OrdersPage() {
     }
   }, []);
 
-  // ---- 同步闲鱼订单 ----
+  // ---- 同步闲鱼订单（单账号 / 全部账号共用，完成后展示统计）----
+  const runSync = useCallback(
+    async (scopeAll: boolean, account: AccountOption | null) => {
+      setSyncPickerVisible(false);
+      setSyncing(true);
+      setSyncScopeAll(scopeAll);
+      // 代际 token：取消时自增使在途作废，避免"取消→立即重 Sync"时旧请求弹 Alert 或提前关遮罩
+      const myGen = ++syncGenRef.current;
+      try {
+        const task = scopeAll
+          ? fetchXianyuOrders(undefined)
+          : fetchXianyuOrders(account!.id);
+        // 账号离线时后端会阻塞：单账号 120s、全部账号 600s 超时兜底
+        const stats = await withTimeout(
+          task,
+          scopeAll ? SYNC_ALL_TIMEOUT_MS : SYNC_ONE_TIMEOUT_MS,
+          '同步超时，请确认账号在线后重试',
+        );
+        if (syncGenRef.current !== myGen) return; // 已被取消或被新同步取代
+        const summary = syncStatsSummary(stats);
+        const errText = syncErrorsText(stats);
+        Alert.alert(
+          scopeAll ? '同步全部完成' : '同步完成',
+          scopeAll
+            ? `共处理 ${stats.accounts_processed} 个账号：${summary}${errText}`
+            : `账号「${account!.remark || account!.id}」：${summary}${errText}`,
+        );
+        await refreshOrders();
+      } catch (e) {
+        if (syncGenRef.current !== myGen) return;
+        Alert.alert('同步失败', (e as Error).message);
+      } finally {
+        // 仅当前代才动 syncing 状态，避免把新同步的遮罩提前关闭
+        if (syncGenRef.current === myGen) setSyncing(false);
+      }
+    },
+    [refreshOrders],
+  );
+
   const openSync = useCallback(async () => {
     try {
       await loadAccountOptions();
@@ -190,34 +501,31 @@ export default function OrdersPage() {
   }, [loadAccountOptions]);
 
   const doSync = useCallback(
-    async (account: AccountOption) => {
-      setSyncPickerVisible(false);
-      setSyncing(true);
-      // 代际 token：取消时自增使在途作废，避免"取消→立即重 Sync"时旧请求弹 Alert 或提前关遮罩
-      const myGen = ++syncGenRef.current;
-      try {
-        // 120s 超时：账号离线时后端会阻塞，避免无限转圈且模态无法关闭
-        await withTimeout(
-          fetchXianyuOrders(account.id),
-          120000,
-          '同步超时，请确认账号在线后重试',
-        );
-        if (syncGenRef.current !== myGen) return; // 已被取消或被新同步取代
-        Alert.alert(
-          '同步成功',
-          `已同步账号「${account.remark || account.id}」的闲鱼订单`,
-        );
-        await refreshOrders();
-      } catch (e) {
-        if (syncGenRef.current !== myGen) return;
-        Alert.alert('同步失败', (e as Error).message);
-      } finally {
-        // 仅当前代才动 syncing 状态，避免把新同步的遮罩提前关闭
-        if (syncGenRef.current === myGen) setSyncing(false);
-      }
+    (account: AccountOption) => {
+      runSync(false, account);
     },
-    [refreshOrders],
+    [runSync],
   );
+
+  const doSyncAll = useCallback(() => {
+    runSync(true, null);
+  }, [runSync]);
+
+  // ---- 筛选重置 ----
+  const resetFilters = useCallback(() => {
+    setSearchQuery('');
+    setFilterAccountId('');
+    setFilterDelivery('');
+    setFilterStartDate('');
+    setFilterEndDate('');
+  }, []);
+
+  const activeFilterCount = [
+    filterAccountId,
+    filterDelivery,
+    filterStartDate.trim(),
+    filterEndDate.trim(),
+  ].filter(Boolean).length;
 
   // ---- 自动化设置 ----
   const loadSettingsConfig = useCallback(
@@ -338,8 +646,16 @@ export default function OrdersPage() {
   // ---- 渲染订单项（useCallback 避免每次渲染重建导致 FlatList 全量重渲染）----
   const renderItem = useCallback(
     ({ item }: { item: Order }) => {
-      const meta = getStatusMeta(item.status);
-      const tc = toneColors(meta.tone, dark);
+      // 多选模式：整卡可点切换勾选，不再提供滑动操作
+      if (selectMode) {
+        const selected = !!item.id && selectedIds.has(item.id);
+        return (
+          <Pressable onPress={() => toggleSelect(item.id)}>
+            <OrderCardBody item={item} selected={selected} />
+          </Pressable>
+        );
+      }
+
       // 发货守卫：已发货/已完成/卡券已发送时禁用（灰色 + 不可点）
       const deliveryDisabled =
         item.status === 'shipped' ||
@@ -361,15 +677,29 @@ export default function OrdersPage() {
               label: '手动发货',
               bg: deliveryDisabled ? c.surfaceAlt : c.info,
               fg: deliveryDisabled ? c.textMuted : '#FFFFFF',
-              onPress: async () => {
+              onPress: () => {
                 if (deliveryDisabled) return; // 当前状态不可发货
-                try {
-                  await manualDelivery(item.order_no);
-                  Alert.alert('发货成功', `订单 ${item.order_no} 已手动发货`);
-                  refreshOrders();
-                } catch (e) {
-                  Alert.alert('发货失败', (e as Error).message);
-                }
+                // 二次确认：手动发货会真实发送卡券给买家，误触代价高
+                Alert.alert(
+                  '手动发货确认',
+                  `确定对订单 ${item.order_no} 手动发货吗？发货后会向买家发送卡券内容。`,
+                  [
+                    { text: '取消', style: 'cancel' },
+                    {
+                      text: '确认发货',
+                      onPress: async () => {
+                        try {
+                          await manualDelivery(item.order_no);
+                          Alert.alert('发货成功', `订单 ${item.order_no} 已手动发货`);
+                          refreshOrders();
+                        } catch (e) {
+                          Alert.alert('发货失败', (e as Error).message);
+                        }
+                      },
+                    },
+                  ],
+                  { cancelable: true },
+                );
               },
             },
             {
@@ -440,47 +770,17 @@ export default function OrdersPage() {
             { label: '详情', bg: c.primary, onPress: () => openDetail(item.order_no) },
           ]}
         >
-          <Card style={styles.orderCard}>
-            <View style={styles.titleRow}>
-              <Text
-                style={[styles.title, { color: c.text, flex: 1 }]}
-                numberOfLines={2}
-              >
-                {item.item_title || '未命名商品'}
-              </Text>
-              <View style={[styles.tag, { backgroundColor: tc.bg }]}>
-                <Text style={[styles.tagText, { color: tc.fg }]}>{meta.label}</Text>
-              </View>
-            </View>
-            <View style={styles.metaRow}>
-              <Text style={[styles.amount, { color: c.warning }]}>
-                ¥{item.amount || '--'}
-              </Text>
-              <Text style={[styles.qty, { color: c.textSecondary }]}>
-                ×{item.quantity}
-              </Text>
-              {item.placed_at ? (
-                <Text style={[styles.subText, { color: c.textMuted }]}>
-                  {formatDateTime(item.placed_at)}
-                </Text>
-              ) : null}
-            </View>
-            <View style={styles.subRow}>
-              <Text
-                style={[styles.subText, { color: c.textMuted }]}
-                numberOfLines={1}
-              >
-                买家：{item.buyer_nick || item.buyer_id || '--'}
-              </Text>
-              <Text style={[styles.orderNo, { color: c.textMuted }]} numberOfLines={1}>
-                {item.order_no}
-              </Text>
-            </View>
-          </Card>
+          {/* 内层 Pressable 只处理长按（进入多选）；普通点击仍穿透交给外层打开详情 */}
+          <Pressable
+            onLongPress={() => enterSelectMode(item.id)}
+            delayLongPress={400}
+          >
+            <OrderCardBody item={item} />
+          </Pressable>
         </SwipeableRow>
       );
     },
-    [openDetail, refreshOrders, c.text, c.error, c.info, c.surfaceAlt, c.textSecondary, c.textMuted, c.warning, c.primary, dark],
+    [selectMode, selectedIds, toggleSelect, enterSelectMode, openDetail, refreshOrders, c.text, c.error, c.info, c.surfaceAlt, c.textSecondary, c.textMuted, c.warning, c.primary, dark],
   );
 
   if (loading) {
@@ -501,7 +801,7 @@ export default function OrdersPage() {
         </View>
       </View>
 
-      {/* 搜索栏 */}
+      {/* 搜索栏（服务端搜索，防抖后生效） */}
       <View style={[styles.searchBar, { backgroundColor: c.surface, borderBottomColor: c.border }]}>
         <Search size={16} stroke={c.textMuted} />
         <TextInput
@@ -516,10 +816,142 @@ export default function OrdersPage() {
             <Text style={{ color: c.textMuted, fontSize: 18 }}>×</Text>
           </Pressable>
         ) : null}
+        <Pressable
+          onPress={() => setFiltersExpanded((v) => !v)}
+          hitSlop={8}
+          style={styles.filterToggle}
+        >
+          <Text
+            style={[
+              styles.filterToggleText,
+              { color: activeFilterCount > 0 ? c.primary : c.textSecondary },
+            ]}
+          >
+            筛选{activeFilterCount > 0 ? `(${activeFilterCount})` : ''}
+          </Text>
+        </Pressable>
       </View>
+
+      {/* 高级筛选面板：账号 / 发货方式 / 日期范围（均为服务端筛选） */}
+      {filtersExpanded ? (
+        <View
+          style={[
+            styles.filterPanel,
+            { backgroundColor: c.surface, borderBottomColor: c.border },
+          ]}
+        >
+          <Text style={[styles.filterLabel, { color: c.textSecondary }]}>账号</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipsScroll}
+          >
+            <FilterChip
+              label="全部账号"
+              active={filterAccountId === ''}
+              onPress={() => setFilterAccountId('')}
+            />
+            {accounts.map((a) => (
+              <FilterChip
+                key={a.id}
+                label={a.remark || a.id}
+                active={filterAccountId === a.id}
+                onPress={() =>
+                  setFilterAccountId((prev) => (prev === a.id ? '' : a.id))
+                }
+              />
+            ))}
+          </ScrollView>
+
+          <Text style={[styles.filterLabel, { color: c.textSecondary }]}>
+            发货方式
+          </Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipsScroll}
+          >
+            {DELIVERY_FILTERS.map((t) => (
+              <FilterChip
+                key={t.key}
+                label={t.label}
+                active={filterDelivery === t.key}
+                onPress={() => setFilterDelivery(t.key)}
+              />
+            ))}
+          </ScrollView>
+
+          <Text style={[styles.filterLabel, { color: c.textSecondary }]}>
+            日期范围（YYYY-MM-DD）
+          </Text>
+          <View style={styles.dateRow}>
+            <Input
+              value={filterStartDate}
+              onChangeText={setFilterStartDate}
+              placeholder="开始 2026-01-01"
+              maxLength={10}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={styles.dateInput}
+            />
+            <Text style={[styles.dateDivider, { color: c.textMuted }]}>至</Text>
+            <Input
+              value={filterEndDate}
+              onChangeText={setFilterEndDate}
+              placeholder="结束 2026-12-31"
+              maxLength={10}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={styles.dateInput}
+            />
+          </View>
+
+          {activeFilterCount > 0 || searchQuery ? (
+            <Pressable onPress={resetFilters} hitSlop={8} style={styles.resetBtn}>
+              <Text style={[styles.resetBtnText, { color: c.error }]}>
+                重置全部筛选
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
 
       {/* 状态筛选 */}
       <FilterTabs tabs={STATUS_TABS} active={statusFilter} onChange={setStatusFilter} />
+
+      {/* 多选模式操作条 */}
+      {selectMode ? (
+        <View
+          style={[
+            styles.batchBar,
+            { backgroundColor: c.surface, borderBottomColor: c.border },
+          ]}
+        >
+          <Pressable onPress={exitSelectMode} hitSlop={8}>
+            <Text style={[styles.batchBarBtn, { color: c.textSecondary }]}>
+              取消
+            </Text>
+          </Pressable>
+          <Text style={[styles.batchBarText, { color: c.text }]}>
+            已选 {selectedIds.size} 项
+          </Text>
+          <View style={styles.batchBarActions}>
+            <Pressable onPress={toggleSelectAll} hitSlop={8}>
+              <Text style={[styles.batchBarBtn, { color: c.primary }]}>
+                {allSelected ? '取消全选' : '全选'}
+              </Text>
+            </Pressable>
+            <Button
+              label={`删除(${selectedIds.size})`}
+              variant="danger"
+              onPress={doBatchDelete}
+              loading={batchDeleting}
+              disabled={batchDeleting || selectedIds.size === 0}
+              style={styles.batchDeleteBtn}
+            />
+          </View>
+        </View>
+      ) : null}
 
       <FlatList
         data={filteredOrders}
@@ -777,6 +1209,26 @@ export default function OrdersPage() {
                   </Text>
                 </Pressable>
               )}
+              // 一键同步全部账号：cookie_id 留空由后端遍历所有启用账号
+              ListHeaderComponent={
+                <Pressable
+                  style={[styles.accountItem, { borderColor: c.border }]}
+                  onPress={doSyncAll}
+                >
+                  <Text
+                    style={[
+                      styles.accountItemText,
+                      { color: c.text, fontWeight: '600' },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    全部账号（一键同步）
+                  </Text>
+                  <Text style={[styles.accountAction, { color: c.primary }]}>
+                    同步
+                  </Text>
+                </Pressable>
+              }
               style={styles.accountList}
             />
           </Pressable>
@@ -789,7 +1241,7 @@ export default function OrdersPage() {
           <View style={[styles.syncCard, { backgroundColor: c.surface }]}>
             <ActivityIndicator size="large" color={c.primary} />
             <Text style={[styles.syncText, { color: c.text }]}>
-              正在同步闲鱼订单...
+              {syncScopeAll ? '正在同步全部账号的订单...' : '正在同步闲鱼订单...'}
             </Text>
             <Text style={[styles.syncHint, { color: c.textMuted }]}>
               该过程可能需要数分钟
@@ -1026,6 +1478,46 @@ const styles = StyleSheet.create({
   // 顶部搜索栏
   searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1 },
   searchInput: { flex: 1, fontSize: 14, paddingVertical: 4 },
+  filterToggle: { paddingHorizontal: spacing.xs },
+  filterToggleText: { ...typography.small, fontWeight: '600' },
+  // 高级筛选面板
+  filterPanel: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    gap: spacing.xs,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  filterLabel: { ...typography.caption, marginTop: spacing.xs },
+  chipsScroll: { gap: spacing.sm, paddingVertical: spacing.xs, alignItems: 'center' },
+  dateRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  dateInput: { flex: 1, minHeight: 40, paddingVertical: spacing.xs },
+  dateDivider: { ...typography.caption },
+  resetBtn: { alignSelf: 'flex-end', paddingVertical: spacing.xs, paddingHorizontal: spacing.sm },
+  resetBtnText: { ...typography.small, fontWeight: '600' },
+  // 多选操作条
+  batchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+  },
+  batchBarBtn: { ...typography.body, fontWeight: '600' },
+  batchBarText: { ...typography.body, fontWeight: '600', flex: 1 },
+  batchBarActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  batchDeleteBtn: { minHeight: 36, paddingHorizontal: spacing.md },
+  // 多选勾选框
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.sm,
+  },
+  checkboxCheck: { color: '#FFFFFF', fontSize: 13, fontWeight: '700', lineHeight: 16 },
   // 卡片首行：商品名 + 状态徽章
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: 4 },
   // 底部留白避让 tab 栏，避免最后一张订单卡片被遮挡

@@ -28,6 +28,7 @@ from common.db.default_publish_addresses import (
     build_default_publish_addresses,
 )
 from common.db.auto_relist_schema import ensure_auto_relist_schema
+from common.db.display_link_schema import ensure_display_link_schema
 from common.db.session import async_engine, async_session_maker
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.security import generate_secret_key, get_password_hash
@@ -576,6 +577,8 @@ class DatabaseInitializer:
                 auto_polish TINYINT(1) NOT NULL DEFAULT 0 COMMENT '商品自动擦亮开关',
                 confirm_before_send TINYINT(1) NOT NULL DEFAULT 0 COMMENT '发货成功再发卡券开关',
                 only_send_card TINYINT(1) NOT NULL DEFAULT 0 COMMENT '只发卡券不确认发货开关',
+                agree_pickup_notice_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '提货后提醒确认收货开关',
+                agree_pickup_notice_content VARCHAR(2000) DEFAULT NULL COMMENT '提货后提醒内容',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_owner_id (owner_id),
@@ -1431,6 +1434,7 @@ class DatabaseInitializer:
                 brand VARCHAR(100) DEFAULT NULL COMMENT '品牌',
                 `condition` VARCHAR(20) DEFAULT '全新' COMMENT '成色',
                 remark VARCHAR(500) DEFAULT NULL COMMENT '备注（仅内部使用）',
+                item_config JSON DEFAULT NULL COMMENT '商品列表配置(发布回写用)',
                 is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -1959,6 +1963,7 @@ class DatabaseInitializer:
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
     COLUMN_MIGRATIONS = {
         "xy_keyword_rules": [
+            ("reply_type", "VARCHAR(32) DEFAULT NULL COMMENT '回复类型(text/image/external_contact)'", "reply_content"),
             ("location_name", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式定位名称'", "image_url"),
             ("location_longitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式经度'", "location_name"),
             ("location_latitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式纬度'", "location_longitude"),
@@ -1992,6 +1997,7 @@ class DatabaseInitializer:
             ("postage", "DECIMAL(8,2) DEFAULT 0 COMMENT '邮费，0表示包邮'", "support_pickup"),
             ("address_expected_text", "VARCHAR(200) DEFAULT NULL COMMENT '所在地选择时的期望文本'", "address"),
             ("is_deleted", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）'", "remark"),
+            ("item_config", "JSON DEFAULT NULL COMMENT '商品列表配置(发布回写用)'", "remark"),
         ],
         "xy_listing_monitor_tasks": [
             ("monitor_type", "VARCHAR(20) NOT NULL DEFAULT 'listing' COMMENT '监控类型：listing-上新监控，price_drop-降价监控'", "owner_id"),
@@ -2077,6 +2083,10 @@ class DatabaseInitializer:
             ("agree_deliver_enabled", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '同意后发货开关'", "refund_cancel_timeout"),
             ("agree_deliver_notify_message", "VARCHAR(2000) DEFAULT NULL COMMENT '同意后发货-通知用户信息'", "agree_deliver_enabled"),
             ("agree_deliver_pickup_url", "VARCHAR(255) DEFAULT NULL COMMENT '同意后发货-提货URL'", "agree_deliver_notify_message"),
+            # 提货后通知：买家同意提货发卡后主动提醒确认收货（账号级，默认关闭）。
+            # 生产库由手工 ALTER 补列，仓库 DDL/迁移此前缺失（D0-1），全新部署会 1054。
+            ("agree_pickup_notice_enabled", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '提货后提醒确认收货开关'", "agree_deliver_pickup_url"),
+            ("agree_pickup_notice_content", "VARCHAR(2000) DEFAULT NULL COMMENT '提货后提醒内容'", "agree_pickup_notice_enabled"),
         ],
         "xy_orders": [
             ("card_only_delivered", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '仅发卡券流程是否已处理'", "delivery_fail_reason"),
@@ -2111,6 +2121,7 @@ class DatabaseInitializer:
             ("fee_payer", "VARCHAR(32) COMMENT '手续费支付方式：distributor-分销主支付，dealer-分销商支付'", "is_dockable"),
             ("min_price", "VARCHAR(32) COMMENT '最低售价'", "fee_payer"),
             ("dock_visibility", "VARCHAR(32) DEFAULT NULL COMMENT '对接可见性：public-所有人可见，dealer_only-仅分销商可见'", "min_price"),
+            ("auto_delist_on_soldout", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '售罄自动下架开关'", "dock_visibility"),
         ],
         "xy_dock_records": [
             ("delivery_count", "INT NOT NULL DEFAULT 0 COMMENT '发货次数'", "remark"),
@@ -2199,6 +2210,8 @@ class DatabaseInitializer:
                     # 自动续售表和发布日志关联字段独立幂等迁移，避免依赖旧版本 DDL 顺序。
                     async with ddl_connection() as conn:
                         await ensure_auto_relist_schema(conn, get_beijing_now_naive())
+                        # 通用展示入口模板表（用户级）
+                        await ensure_display_link_schema(conn)
 
                     # 2. 创建默认管理员用户
                     await self.create_default_admin()
@@ -2329,6 +2342,23 @@ class DatabaseInitializer:
                                     "ALTER TABLE xy_default_replies MODIFY COLUMN reply_type VARCHAR(32) DEFAULT 'text' COMMENT 'reply type'"
                                 ))
                                 logger.info("Expanded xy_default_replies.reply_type to VARCHAR(32)")
+                        
+                        # Existing installations may still have the original VARCHAR(16) keyword
+                        # rule reply type; expand it to match the model before storing longer values.
+                        if exists and table_name == "xy_keyword_rules" and col_name == "reply_type":
+                            length_result = await conn.execute(text("""
+                                SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS
+                                WHERE TABLE_SCHEMA = DATABASE()
+                                AND TABLE_NAME = 'xy_keyword_rules'
+                                AND COLUMN_NAME = 'reply_type'
+                            """))
+                            current_length = length_result.scalar()
+                            if current_length and current_length < 32:
+                                await conn.execute(text(
+                                    "ALTER TABLE xy_keyword_rules MODIFY COLUMN reply_type VARCHAR(32) "
+                                    "COMMENT '回复类型(text/image/external_contact)'"
+                                ))
+                                logger.info("Expanded xy_keyword_rules.reply_type to VARCHAR(32)")
                         
                         if not exists:
                             # 添加字段

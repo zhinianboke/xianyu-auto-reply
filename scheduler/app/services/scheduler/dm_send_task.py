@@ -380,10 +380,17 @@ class DmSendTaskService:
             return None, reason
 
         # 2) 发送私信内容（等待服务端结果，识别安全拦截）
+        # to_user_id 为 #326 起的必填项（私信收件人=卖家），缺省会导致接收人变成 None@goofish
         send_url = f"{base_url}/internal/accounts/{account_id}/send-message"
         try:
             send_res = await http_client.post(
-                send_url, json={"chat_id": chat_id, "message": content, "wait_result": True}
+                send_url,
+                json={
+                    "chat_id": chat_id,
+                    "message": content,
+                    "to_user_id": str(seller_user_id),
+                    "wait_result": True,
+                },
             )
         except Exception as exc:  # noqa: BLE001
             reason = f"发送私信异常：{exc}"

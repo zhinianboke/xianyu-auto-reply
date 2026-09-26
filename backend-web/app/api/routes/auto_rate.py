@@ -203,9 +203,15 @@ async def _send_thanks_after_rate(db: AsyncSession, account_id: str, order_id: s
             return
 
         # 直接按内部接口契约发送（websocket_client.send_message 的字段与内部接口不一致，见 #326）
+        # to_user_id 为 #326 起的必填项：缺省会导致接收人变成 None@goofish，买家收不到
         send_res = await websocket_client.http_client.post(
             f"{websocket_client.base_url}/internal/accounts/{account_id}/send-message",
-            json={"chat_id": chat_id, "message": content, "wait_result": True},
+            json={
+                "chat_id": chat_id,
+                "message": content,
+                "to_user_id": str(order.buyer_id),
+                "wait_result": True,
+            },
         )
         if not isinstance(send_res, dict) or not send_res.get("success"):
             logger.warning(f"[批量补评价] 订单 {order_id} 好评后消息发送失败: {send_res}")

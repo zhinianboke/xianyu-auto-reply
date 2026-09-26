@@ -487,6 +487,7 @@ class CardService:
         is_multi_spec: bool = False,
         spec_name: Optional[str] = None,
         spec_value: Optional[str] = None,
+        auto_delist_on_soldout: bool = False,
     ) -> int:
         """创建卡券
         
@@ -530,6 +531,7 @@ class CardService:
             is_multi_spec=is_multi_spec,
             spec_name=spec_name,
             spec_value=spec_value,
+            auto_delist_on_soldout=auto_delist_on_soldout,
         )
         self.session.add(card)
         await self.session.commit()
@@ -779,6 +781,7 @@ class CardService:
             "delivery_count": card.delivery_count,
             "price": card.price,
             "is_dockable": card.is_dockable,
+            "auto_delist_on_soldout": card.auto_delist_on_soldout,
             "fee_payer": card.fee_payer,
             "min_price": card.min_price,
             "dock_visibility": card.dock_visibility,
@@ -814,6 +817,7 @@ class CardService:
             "delivery_count": card.delivery_count,
             "price": card.price,
             "is_dockable": card.is_dockable,
+            "auto_delist_on_soldout": card.auto_delist_on_soldout,
             "fee_payer": card.fee_payer,
             "min_price": card.min_price,
             "dock_visibility": card.dock_visibility,
@@ -853,6 +857,7 @@ class CardService:
             "delivery_count": card.delivery_count,
             "price": card.price,
             "is_dockable": card.is_dockable,
+            "auto_delist_on_soldout": card.auto_delist_on_soldout,
             "fee_payer": card.fee_payer,
             "min_price": card.min_price,
             "dock_visibility": card.dock_visibility,
