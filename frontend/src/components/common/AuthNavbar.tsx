@@ -7,7 +7,7 @@
  */
 import { Link, useLocation } from 'react-router-dom'
 import { useState, useEffect } from 'react'
-import { Home, Key, RefreshCw, Monitor, Menu, X, MessageSquare, Code2, Sun, Moon } from 'lucide-react'
+import { Home, Key, RefreshCw, Monitor, Menu, X, MessageSquare, Code2, Sun, Moon, Info } from 'lucide-react'
 import { getDefaultLoginBrandingSettings, LOGIN_BRANDING_UPDATED_EVENT } from '@/api/settings'
 import { getLoginBrandingSettings } from '@/api/auth'
 import type { LoginBrandingSettings } from '@/types'
@@ -26,6 +26,7 @@ const NAV_ITEMS = [
   { path: '/renew-activation', label: '激活码续期', icon: RefreshCw, hideOnLocal: true },
   { path: '/get-local-version', label: '获取本地版', icon: Monitor, hideOnLocal: true },
   { path: '/get-source-code', label: '获取源码', icon: Code2, hideOnLocal: true },
+  { path: '/about-public', label: '关于', icon: Info, hideOnLocal: false },
 ]
 
 interface AuthNavbarProps {
