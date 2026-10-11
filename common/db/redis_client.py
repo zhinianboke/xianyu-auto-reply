@@ -9,61 +9,172 @@ Redis客户端
 from __future__ import annotations
 
 import asyncio
+import socket
 import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 
 import redis.asyncio as redis
+from redis.asyncio.retry import Retry
+from redis.backoff import ExponentialWithJitterBackoff
 from loguru import logger
 
 from common.core.config import get_settings
+from common.db.redis_pool import HealthyRedisConnectionPool
 
 settings = get_settings()
 
 # 全局Redis连接池
-_redis_pool: Optional[redis.ConnectionPool] = None
-_redis_client: Optional[redis.Redis] = None
+redis_pool: Optional[HealthyRedisConnectionPool] = None
+redis_client: Optional[redis.Redis] = None
+_redis_init_lock = asyncio.Lock()
+
+
+def _create_redis_pool() -> HealthyRedisConnectionPool:
+    """
+    创建全局Redis健康连接池
+
+    Returns:
+        使用统一重试策略和超时配置构建的连接池
+    """
+    retry = Retry(
+        ExponentialWithJitterBackoff(base=1, cap=10),
+        retries=3,
+    )
+    socket_keepalive_options = None
+    if settings.redis_socket_keepalive:
+        socket_keepalive_options = {}
+        if hasattr(socket, "TCP_KEEPIDLE"):
+            socket_keepalive_options[socket.TCP_KEEPIDLE] = (
+                settings.redis_socket_keepalive_idle
+            )
+        if hasattr(socket, "TCP_KEEPINTVL"):
+            socket_keepalive_options[socket.TCP_KEEPINTVL] = (
+                settings.redis_socket_keepalive_interval
+            )
+        if hasattr(socket, "TCP_KEEPCNT"):
+            socket_keepalive_options[socket.TCP_KEEPCNT] = (
+                settings.redis_socket_keepalive_count
+            )
+
+    return HealthyRedisConnectionPool.from_url(
+        settings.redis_url,
+        max_connections=settings.redis_pool_size,
+        decode_responses=True,
+        socket_timeout=settings.redis_socket_timeout,
+        socket_connect_timeout=settings.redis_socket_connect_timeout,
+        socket_keepalive=settings.redis_socket_keepalive,
+        socket_keepalive_options=socket_keepalive_options,
+        health_check_interval=settings.redis_health_check_interval,
+        retry=retry,
+        protocol=settings.redis_protocol,
+    )
+
+
+async def _close_redis_resources(
+    client: Optional[redis.Redis],
+    pool: Optional[HealthyRedisConnectionPool],
+) -> None:
+    """
+    按客户端、连接池顺序释放Redis资源
+
+    Args:
+        client: 待释放的Redis客户端
+        pool: 待释放的Redis连接池
+    """
+    if client is not None:
+        try:
+            await client.aclose(close_connection_pool=False)
+        except Exception as exc:
+            logger.warning(
+                f"释放Redis客户端失败: error_type={type(exc).__name__}, error={exc}"
+            )
+
+    if pool is not None:
+        try:
+            await pool.aclose()
+        except Exception as exc:
+            logger.warning(
+                f"断开Redis连接池失败: error_type={type(exc).__name__}, error={exc}"
+            )
+
+
+async def initialize_redis_client() -> redis.Redis:
+    """
+    初始化Redis客户端并执行PING检查
+
+    首次连接失败时按指数退避重试，最终失败会抛出异常并记录完整堆栈。
+
+    Returns:
+        已完成PING检查的全局Redis客户端
+    """
+    global redis_pool, redis_client
+
+    async with _redis_init_lock:
+        if redis_client is not None:
+            return redis_client
+
+        max_retries = settings.redis_startup_max_retries
+        for attempt in range(max_retries + 1):
+            pool: Optional[HealthyRedisConnectionPool] = None
+            client: Optional[redis.Redis] = None
+            try:
+                pool = _create_redis_pool()
+                client = redis.Redis(connection_pool=pool)
+                await client.ping()
+
+                redis_pool = pool
+                redis_client = client
+                logger.info(
+                    "Redis连接成功: "
+                    f"{settings.redis_host}:{settings.redis_port}/{settings.redis_db}"
+                )
+                return client
+            except Exception as exc:
+                await _close_redis_resources(client, pool)
+                if attempt >= max_retries:
+                    logger.exception(
+                        "Redis初始化失败，已达到最大重试次数: "
+                        f"attempt={attempt + 1}/{max_retries + 1}, "
+                        f"error_type={type(exc).__name__}, error={exc}"
+                    )
+                    raise
+
+                delay = min(
+                    settings.redis_startup_retry_cap_delay,
+                    settings.redis_startup_retry_base_delay * (2 ** attempt),
+                )
+                logger.warning(
+                    "Redis初始化失败，准备重试: "
+                    f"attempt={attempt + 1}/{max_retries + 1}, "
+                    f"retry_after={delay:.2f}s, "
+                    f"error_type={type(exc).__name__}, error={exc}"
+                )
+                await asyncio.sleep(delay)
+
+        raise RuntimeError("Redis客户端初始化失败")
 
 
 async def get_redis_client() -> redis.Redis:
-    """获取Redis客户端（单例模式）"""
-    global _redis_pool, _redis_client
-    
-    if _redis_client is None:
-        _redis_pool = redis.ConnectionPool.from_url(
-            settings.redis_url,
-            max_connections=50,
-            decode_responses=True,
-            socket_timeout=5,          # 读写超时 5 秒
-            socket_connect_timeout=3,  # 连接超时 3 秒
-            retry_on_timeout=True,     # 超时后自动重试一次
-            protocol=2,                # 强制使用 RESP2，兼容 Redis 5.x 及以下版本
-        )
-        _redis_client = redis.Redis(connection_pool=_redis_pool)
-        
-        # 测试连接
-        try:
-            await _redis_client.ping()
-            logger.info(f"Redis连接成功: {settings.redis_host}:{settings.redis_port}/{settings.redis_db}")
-        except Exception as e:
-            logger.error(f"Redis连接失败: {e}")
-            raise
-    
-    return _redis_client
+    """
+    获取全局Redis客户端
+
+    Returns:
+        已完成初始化的Redis客户端
+    """
+    return await initialize_redis_client()
 
 
-async def close_redis_client():
-    """关闭Redis连接"""
-    global _redis_pool, _redis_client
-    
-    if _redis_client:
-        await _redis_client.close()
-        _redis_client = None
-    
-    if _redis_pool:
-        await _redis_pool.disconnect()
-        _redis_pool = None
-    
+async def close_redis_client() -> None:
+    """关闭全局Redis客户端并断开整个连接池"""
+    global redis_pool, redis_client
+
+    client = redis_client
+    pool = redis_pool
+    redis_client = None
+    redis_pool = None
+
+    await _close_redis_resources(client, pool)
     logger.info("Redis连接已关闭")
 
 
@@ -109,13 +220,13 @@ class DistributedLock:
         
         if blocking:
             # 阻塞模式：循环尝试获取锁
-            start_time = asyncio.get_event_loop().time()
+            start_time = asyncio.get_running_loop().time()
             while True:
                 if await self._try_acquire(client):
                     return True
                 
                 # 检查超时
-                elapsed = asyncio.get_event_loop().time() - start_time
+                elapsed = asyncio.get_running_loop().time() - start_time
                 if elapsed >= timeout:
                     logger.warning(f"获取锁超时: {self.lock_key}, 等待时间: {elapsed:.2f}s")
                     return False
@@ -138,7 +249,7 @@ class DistributedLock:
         
         if result:
             self._locked = True
-            logger.debug(f"获取锁成功: {self.lock_key}")
+            logger.info(f"获取Redis分布式锁成功: key={self.lock_key}")
             return True
         
         return False
@@ -171,7 +282,7 @@ class DistributedLock:
             self._locked = False
             
             if result:
-                logger.debug(f"释放锁成功: {self.lock_key}")
+                logger.info(f"释放Redis分布式锁成功: key={self.lock_key}")
                 return True
             else:
                 logger.warning(f"释放锁失败（锁已被其他进程持有或已过期）: {self.lock_key}")
@@ -208,7 +319,10 @@ class DistributedLock:
         try:
             result = await client.eval(lua_script, 1, self.lock_key, self.lock_value, extend_time)
             if result:
-                logger.debug(f"延长锁成功: {self.lock_key}, 延长{extend_time}秒")
+                logger.info(
+                    f"延长Redis分布式锁成功: key={self.lock_key}, "
+                    f"extend_seconds={extend_time}"
+                )
                 return True
             else:
                 logger.warning(f"延长锁失败: {self.lock_key}")
@@ -302,8 +416,11 @@ async def try_acquire_delivery_lock(order_no: str, expire: int = 120, holder_inf
             current_holder = await client.get(lock.lock_key)
             ttl = await client.ttl(lock.lock_key)
             logger.warning(f"锁被占用，等待中: key={lock.lock_key}, 持有者={current_holder}, 剩余TTL={ttl}秒")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                f"查询Redis锁持有者信息失败: key={lock.lock_key}, "
+                f"error_type={type(exc).__name__}, error={exc}"
+            )
         
         # 如果配置了等待时间，继续阻塞等待
         if wait_timeout > 0:

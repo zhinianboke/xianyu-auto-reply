@@ -65,6 +65,38 @@ class BaseConfig(BaseSettings):
     redis_port: int = Field(default=6379)
     redis_password: str = Field(default="", repr=False)
     redis_db: int = Field(default=0)
+    redis_pool_size: int = Field(default=800, alias="REDIS_POOL_SIZE", ge=600)
+    redis_socket_timeout: float = Field(
+        default=5.0, alias="REDIS_SOCKET_TIMEOUT", gt=0
+    )
+    redis_socket_connect_timeout: float = Field(
+        default=3.0, alias="REDIS_SOCKET_CONNECT_TIMEOUT", gt=0
+    )
+    redis_socket_keepalive: bool = Field(
+        default=True, alias="REDIS_SOCKET_KEEPALIVE"
+    )
+    redis_socket_keepalive_idle: int = Field(
+        default=60, alias="REDIS_SOCKET_KEEPALIVE_IDLE", ge=1
+    )
+    redis_socket_keepalive_interval: int = Field(
+        default=10, alias="REDIS_SOCKET_KEEPALIVE_INTERVAL", ge=1
+    )
+    redis_socket_keepalive_count: int = Field(
+        default=3, alias="REDIS_SOCKET_KEEPALIVE_COUNT", ge=1
+    )
+    redis_health_check_interval: int = Field(
+        default=30, alias="REDIS_HEALTH_CHECK_INTERVAL", ge=0
+    )
+    redis_protocol: int = Field(default=2, alias="REDIS_PROTOCOL", ge=2, le=3)
+    redis_startup_max_retries: int = Field(
+        default=5, alias="REDIS_STARTUP_MAX_RETRIES", ge=0, le=20
+    )
+    redis_startup_retry_base_delay: float = Field(
+        default=1.0, alias="REDIS_STARTUP_RETRY_BASE_DELAY", gt=0
+    )
+    redis_startup_retry_cap_delay: float = Field(
+        default=10.0, alias="REDIS_STARTUP_RETRY_CAP_DELAY", gt=0
+    )
     
     # JWT配置（用于安全模块）
     # 注意：jwt_secret_key 由数据库统一托管（backend-web 启动时自动生成并持久化），

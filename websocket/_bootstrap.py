@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from app.core.config import get_settings
+from common.db.redis_client import close_redis_client, initialize_redis_client
 from common.services.captcha.slider_mode import refresh_slider_mode_from_database
 from common.services.risk_control_log_cleanup_service import (
     fail_processing_risk_control_logs_on_restart,
@@ -76,6 +77,13 @@ async def lifespan(app: FastAPI):
     if not await check_database_connection():
         logger.error("数据库连接失败，服务退出")
         sys.exit(1)
+
+    # 初始化 Redis 健康连接池；失败时按指数退避重试，最终失败则停止启动。
+    try:
+        await initialize_redis_client()
+    except Exception:
+        logger.exception("Redis连接初始化失败，服务退出")
+        raise
 
     # 只读取 backend 已准备好的服务间 API 令牌，WebSocket 不负责数据库初始化。
     try:
@@ -137,6 +145,12 @@ async def lifespan(app: FastAPI):
     from common.services.order_service import close_goofish_connector
     await close_goofish_connector()
     logger.info("goofish API 连接池已关闭")
+
+    # 先释放Redis客户端，再断开全局连接池
+    try:
+        await close_redis_client()
+    except Exception:
+        logger.exception("关闭Redis连接失败")
 
 
 # 创建FastAPI应用

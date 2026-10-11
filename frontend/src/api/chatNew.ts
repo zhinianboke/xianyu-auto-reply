@@ -89,6 +89,17 @@ export const getChatAccounts = async (page = 1, pageSize = 20): Promise<ChatAcco
   return { data: res.data || [], total: res.total || 0, hasMore: res.hasMore ?? false }
 }
 
+/** 获取当前用户可访问且后端 IM 已连接的账号 ID，用于刷新后自动恢复实时消息订阅 */
+export const getConnectedChatAccountIds = async (): Promise<string[]> => {
+  const res = await get<{
+    success: boolean
+    message?: string
+    data?: { account_ids: string[] }
+  }>(`${PREFIX}/connected-accounts`)
+  if (!res.success) throw new Error(res.message || '获取已连接账号失败')
+  return res.data?.account_ids || []
+}
+
 /** 连接指定账号的IM */
 export const connectAccount = (accountId: string) => {
   return post<{ success: boolean; message: string }>(`${PREFIX}/connect/${accountId}`)

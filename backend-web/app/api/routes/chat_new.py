@@ -24,6 +24,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from app.api.deps import get_current_active_user, get_db_session
+from app.services.account_service import AccountService
 from app.services.chat_new import get_im_session_manager
 from app.services.chat_new.avatar_service import get_owner_user_info, get_user_info, AVATAR_CACHE_PREFIX, AVATAR_CACHE_TTL
 from app.services.chat_new.official_blacklist_service import official_blacklist_request
@@ -160,6 +161,35 @@ async def list_accounts(
     except Exception as e:
         logger.error(f"获取账号列表失败: {e}")
         return ApiResponse(success=False, message=f"获取账号列表失败: {str(e)}")
+
+
+@router.get("/connected-accounts")
+async def list_connected_accounts(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    获取当前用户可访问且后端 IM 已连接的账号 ID 列表。
+
+    用于页面刷新后自动恢复前端 WebSocket 实时消息订阅。
+    """
+    try:
+        connected_ids = set(get_im_session_manager().get_connected_account_ids())
+        if not connected_ids:
+            return ApiResponse(success=True, message="查询成功", data={"account_ids": []})
+
+        owner_id = None if is_admin_user(current_user) else current_user.id
+        accounts = await AccountService(db).get_accounts_for_user(owner_id, list(connected_ids))
+        account_ids = [account.account_id for account in accounts]
+        return ApiResponse(
+            success=True,
+            message="查询成功",
+            data={"account_ids": account_ids},
+        )
+
+    except Exception as e:
+        logger.error(f"获取已连接账号列表失败: {e}")
+        return ApiResponse(success=False, message=f"获取已连接账号列表失败: {str(e)}")
 
 
 @router.post("/connect/{account_id}")

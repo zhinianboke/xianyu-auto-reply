@@ -32,6 +32,22 @@ _PROXY_RULES = {
     "/static/uploads/": "http://127.0.0.1:8089",
 }
 
+# 本地启动器生成 .env 时统一写入的 Redis 连接池参数
+_REDIS_POOL_ENV = (
+    "REDIS_POOL_SIZE=800\n"
+    "REDIS_SOCKET_TIMEOUT=5\n"
+    "REDIS_SOCKET_CONNECT_TIMEOUT=3\n"
+    "REDIS_SOCKET_KEEPALIVE=true\n"
+    "REDIS_SOCKET_KEEPALIVE_IDLE=60\n"
+    "REDIS_SOCKET_KEEPALIVE_INTERVAL=10\n"
+    "REDIS_SOCKET_KEEPALIVE_COUNT=3\n"
+    "REDIS_HEALTH_CHECK_INTERVAL=30\n"
+    "REDIS_PROTOCOL=2\n"
+    "REDIS_STARTUP_MAX_RETRIES=5\n"
+    "REDIS_STARTUP_RETRY_BASE_DELAY=1\n"
+    "REDIS_STARTUP_RETRY_CAP_DELAY=10\n"
+)
+
 
 class FrontendHandler(http.server.SimpleHTTPRequestHandler):
     """
@@ -203,6 +219,7 @@ class ServiceManager:
             f"REDIS_PORT={config['redis_port']}\n"
             f"REDIS_PASSWORD={config['redis_password']}\n"
             f"REDIS_DB={config['redis_db']}\n"
+            f"{_REDIS_POOL_ENV}"
             f"BACKEND_WEB_PORT=8089\n"
             f"JWT_ALGORITHM=HS256\n"
             f"ACCESS_TOKEN_EXPIRE_MINUTES=1440\n"
@@ -230,6 +247,7 @@ class ServiceManager:
             f"REDIS_PORT={config['redis_port']}\n"
             f"REDIS_PASSWORD={config['redis_password']}\n"
             f"REDIS_DB={config['redis_db']}\n"
+            f"{_REDIS_POOL_ENV}"
             f"WEBSOCKET_PORT=8090\n"
             f"MAX_CAPTCHA_CONCURRENT=1\n"
             f"BROWSER_HEADLESS=true\n"
@@ -253,6 +271,7 @@ class ServiceManager:
             f"REDIS_PORT={config['redis_port']}\n"
             f"REDIS_PASSWORD={config['redis_password']}\n"
             f"REDIS_DB={config['redis_db']}\n"
+            f"{_REDIS_POOL_ENV}"
             f"SCHEDULER_PORT=8091\n"
             f"REDELIVERY_INTERVAL=5\n"
             f"RATE_INTERVAL=20\n"
