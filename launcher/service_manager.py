@@ -48,6 +48,21 @@ _REDIS_POOL_ENV = (
     "REDIS_STARTUP_RETRY_CAP_DELAY=10\n"
 )
 
+# 本地启动器按服务写入数据库连接池参数，避免落到各服务不同的代码默认值
+_DB_POOL_COMMON_ENV = (
+    "DB_POOL_SIZE=800\n"
+    "DB_POOL_TIMEOUT=30\n"
+    "DB_POOL_RECYCLE=1800\n"
+    "DB_POOL_PRE_PING=true\n"
+    "DB_POOL_USE_LIFO=true\n"
+    "DB_CONNECT_TIMEOUT=10\n"
+)
+_DB_POOL_SERVICE_ENV = {
+    "backend-web": "DB_MAX_OVERFLOW=60\n",
+    "websocket": "DB_MAX_OVERFLOW=150\n",
+    "scheduler": "DB_MAX_OVERFLOW=30\n",
+}
+
 
 class FrontendHandler(http.server.SimpleHTTPRequestHandler):
     """
@@ -215,6 +230,8 @@ class ServiceManager:
             f"MYSQL_USER={config['mysql_user']}\n"
             f"MYSQL_PASSWORD={config['mysql_password']}\n"
             f"MYSQL_DATABASE={config['mysql_database']}\n"
+            f"{_DB_POOL_SERVICE_ENV['backend-web']}"
+            f"{_DB_POOL_COMMON_ENV}"
             f"REDIS_HOST={config['redis_host']}\n"
             f"REDIS_PORT={config['redis_port']}\n"
             f"REDIS_PASSWORD={config['redis_password']}\n"
@@ -243,6 +260,8 @@ class ServiceManager:
             f"MYSQL_USER={config['mysql_user']}\n"
             f"MYSQL_PASSWORD={config['mysql_password']}\n"
             f"MYSQL_DATABASE={config['mysql_database']}\n"
+            f"{_DB_POOL_SERVICE_ENV['websocket']}"
+            f"{_DB_POOL_COMMON_ENV}"
             f"REDIS_HOST={config['redis_host']}\n"
             f"REDIS_PORT={config['redis_port']}\n"
             f"REDIS_PASSWORD={config['redis_password']}\n"
@@ -267,6 +286,8 @@ class ServiceManager:
             f"MYSQL_USER={config['mysql_user']}\n"
             f"MYSQL_PASSWORD={config['mysql_password']}\n"
             f"MYSQL_DATABASE={config['mysql_database']}\n"
+            f"{_DB_POOL_SERVICE_ENV['scheduler']}"
+            f"{_DB_POOL_COMMON_ENV}"
             f"REDIS_HOST={config['redis_host']}\n"
             f"REDIS_PORT={config['redis_port']}\n"
             f"REDIS_PASSWORD={config['redis_password']}\n"

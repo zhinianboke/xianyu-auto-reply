@@ -21,7 +21,7 @@ from loguru import logger
 from sqlalchemy import select
 
 from app.core.security import decode_token
-from app.services.chat_new import get_im_session_manager
+from app.services.chat_new import ImSessionManager, get_im_session_manager
 from common.db.session import async_session_maker
 from common.models import User, UserRole, UserStatus
 from common.models.xy_account import XYAccount
@@ -32,6 +32,7 @@ router = APIRouter(prefix="/chat-new")
 # WebSocket 自定义关闭码
 WS_CLOSE_UNAUTHORIZED = 4401  # 未认证（token 缺失/无效/用户失效）
 WS_CLOSE_FORBIDDEN = 4403  # 已认证但无权访问该账号
+WS_CLOSE_IM_OFFLINE = 4404  # IM 客户端未连接，前端应稍后重试订阅
 
 
 async def _authenticate_ws_user(token: str | None) -> User | None:
@@ -137,6 +138,11 @@ async def chat_new_websocket(
     logger.info(f"【{account_id}】在线聊天 WebSocket 已连接（用户 {user.id}）")
 
     manager = get_im_session_manager()
+    client = manager.clients.get(account_id)
+    if not client or not client.is_connected:
+        logger.warning(f"【{account_id}】IM 客户端未连接，拒绝注册前端实时消息订阅")
+        await websocket.close(code=WS_CLOSE_IM_OFFLINE)
+        return
 
     try:
         # 注册到管理器，开始接收推送
@@ -150,7 +156,7 @@ async def chat_new_websocket(
         }, ensure_ascii=False))
 
         # 持续接收前端消息（心跳等）
-        await _receive_loop(websocket, account_id)
+        await _receive_loop(websocket, account_id, manager)
 
     except WebSocketDisconnect:
         logger.info(f"【{account_id}】在线聊天 WebSocket 已断开")
@@ -161,7 +167,11 @@ async def chat_new_websocket(
         logger.info(f"【{account_id}】在线聊天 WebSocket 已清理")
 
 
-async def _receive_loop(websocket: WebSocket, account_id: str):
+async def _receive_loop(
+    websocket: WebSocket,
+    account_id: str,
+    manager: ImSessionManager,
+):
     """
     接收前端 WebSocket 消息的循环
 
@@ -172,6 +182,7 @@ async def _receive_loop(websocket: WebSocket, account_id: str):
     Args:
         websocket: WebSocket 连接
         account_id: 账号ID（用于日志）
+        manager: IM 会话管理器
     """
     try:
         while True:
@@ -184,6 +195,13 @@ async def _receive_loop(websocket: WebSocket, account_id: str):
             msg_type = msg.get("type", "")
 
             if msg_type == "ping":
+                client = manager.clients.get(account_id)
+                if not client or not client.is_connected:
+                    logger.warning(
+                        f"【{account_id}】IM 客户端已断开，关闭前端实时消息订阅"
+                    )
+                    await websocket.close(code=WS_CLOSE_IM_OFFLINE)
+                    return
                 await websocket.send_text(
                     json.dumps({"event": "pong"}, ensure_ascii=False)
                 )

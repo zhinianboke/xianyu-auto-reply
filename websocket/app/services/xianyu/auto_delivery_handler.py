@@ -584,7 +584,13 @@ class AutoDeliveryHandler:
 
             log_service = AutoReplyLogService(self.cookie_id)
             log_id = await log_service.record_message(log_payload)
-            logger.info(f"【{self.cookie_id}】自动发货消息日志已记录: 成功{success_count}/失败{fail_count}")
+            if log_id:
+                logger.info(f"【{self.cookie_id}】自动发货消息日志已记录: 成功{success_count}/失败{fail_count}")
+            else:
+                logger.error(
+                    f"【{self.cookie_id}】自动发货审计日志写入失败，未生成日志记录: "
+                    f"成功{success_count}/失败{fail_count}"
+                )
 
             # 发出成功且日志写入成功时，处理服务端响应并回写发送状态
             if log_id and not any_send_failed and pending_send_waiters:

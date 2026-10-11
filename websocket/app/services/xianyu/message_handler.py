@@ -324,6 +324,7 @@ class MessageHandler:
                 "chat_id": chat_id,
                 "item_id": item_id,
                 "msg_time": msg_time,
+                "is_plain_text": self.is_plain_text_message(message),
                 "raw_message": message,
             }
             
@@ -369,6 +370,7 @@ class MessageHandler:
                 "chat_id": chat_id,
                 "item_id": item_id,
                 "msg_time": msg_time,
+                "is_plain_text": False,
                 "raw_message": message,
             }
             
@@ -485,6 +487,63 @@ class MessageHandler:
             message_6 = message_1.get("6", {})
             return isinstance(message_6, dict) and "3" in message_6
         except Exception:
+            return False
+
+    def is_plain_text_message(self, message: dict) -> bool:
+        """判断是否为普通文本消息
+
+        仅当消息内容载荷明确为文本，且不存在 dxCard 卡片结构时返回 True。
+        图片、语音、卡片、卡片更新消息以及无法确认类型的消息均返回 False，
+        保持原有自动发货和免拼发货逻辑。
+
+        Args:
+            message: 原始消息数据
+        Returns:
+            True 表示普通文本消息，False 表示非普通文本或无法确认类型
+        """
+        try:
+            if not isinstance(message, dict):
+                return False
+
+            message_1 = message.get("1")
+            if not isinstance(message_1, dict):
+                return False
+
+            message_10 = message_1.get("10")
+            if not isinstance(message_10, dict):
+                return False
+
+            reminder_content = message_10.get("reminderContent", "")
+            if not reminder_content or reminder_content == "[卡片消息]":
+                return False
+
+            message_6 = message_1.get("6")
+            if not isinstance(message_6, dict):
+                return False
+
+            message_6_3 = message_6.get("3")
+            if not isinstance(message_6_3, dict):
+                return False
+
+            candidates = [message_6_3.get("5", ""), message_6_3.get("1", "")]
+            content_dict = decode_first_content(candidates)
+            if not isinstance(content_dict, dict):
+                return False
+
+            # 卡片结构优先，即使同时携带 text 也不能按普通文本处理。
+            if content_dict.get("dxCard"):
+                return False
+
+            content_type = content_dict.get("contentType")
+            if content_type == 3 or "audio" in content_dict:
+                return False
+            if content_type == 2 or "image" in content_dict or "picUrl" in content_dict:
+                return False
+            if content_type == 1 and "text" in content_dict:
+                return True
+            return "text" in content_dict
+        except Exception as e:
+            logger.warning(f"【{self.cookie_id}】判断普通文本消息失败: {safe_str(e)}")
             return False
     
     async def handle_message(self, message_data: dict, websocket) -> bool:

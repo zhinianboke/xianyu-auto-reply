@@ -34,7 +34,7 @@ class AutoReplyLogService:
         """写入自动回复消息日志（外层错误兜底，避免影响主流程）
 
         实际写库逻辑在 ``_persist_message_record`` 中执行，并由 ``@with_db_retry``
-        装饰器处理"连接断开类"错误的自动重试（如 ``Lost connection``、``WinError 64`` 等）。
+        装饰器处理连接断开和 MySQL 瞬时锁竞争错误的自动重试。
         重试 3 次后仍失败则抛出，由本方法捕获并记录错误日志，避免日志写入失败导致主流程中断。
 
         Returns:
@@ -46,11 +46,16 @@ class AutoReplyLogService:
             logger.error(f"【{self.cookie_id}】写入自动回复消息日志失败（已重试）: {e}")
             return None
 
-    @with_db_retry(max_retries=3, initial_delay=1.0)
+    @with_db_retry(
+        max_retries=3,
+        initial_delay=1.0,
+        retry_on_lock_contention=True,
+    )
     async def _persist_message_record(self, payload: dict[str, Any]) -> int | None:
-        """实际写入消息日志（带数据库连接断开自动重试）
+        """实际写入消息日志（带连接断开和锁竞争自动重试）
 
-        @with_db_retry 仅对连接断开类错误重试，业务错误（如 IntegrityError）会立即抛出。
+        @with_db_retry 仅对连接断开及锁等待超时/死锁重试；
+        业务错误（如 IntegrityError）会立即抛出。
 
         Returns:
             写入记录的主键ID
@@ -96,7 +101,11 @@ class AutoReplyLogService:
             await session.commit()
             return record.id
 
-    @with_db_retry(max_retries=3, initial_delay=1.0)
+    @with_db_retry(
+        max_retries=3,
+        initial_delay=1.0,
+        retry_on_lock_contention=True,
+    )
     async def update_send_status(
         self, log_id: int, send_status: str, send_fail_reason: str | None = None
     ) -> None:

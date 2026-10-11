@@ -2,7 +2,7 @@
  * 公共页面顶部导航栏组件
  *
  * 用于登录页、注册页、获取激活码、激活码续期等无需登录的页面
- * 包含：首页、获取激活码、激活码续期 三个菜单
+ * 包含：首页、获取激活码、激活码续期、获取本地版、获取源码、关于
  * 支持手机端响应式（汉堡菜单）
  */
 import { Link, useLocation } from 'react-router-dom'
@@ -128,7 +128,7 @@ export function AuthNavbar({ systemName }: AuthNavbarProps) {
           </Link>
 
           {/* 桌面端菜单 */}
-          <div className="hidden sm:flex items-center gap-1">
+          <div className="hidden lg:flex items-center gap-1">
             {filteredItems.map((item) => {
               const Icon = item.icon
               const isActive = location.pathname === item.path
@@ -164,7 +164,7 @@ export function AuthNavbar({ systemName }: AuthNavbarProps) {
             {/* 手机端汉堡菜单按钮 */}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="sm:hidden p-2 rounded-md text-slate-600 dark:text-slate-300
+              className="lg:hidden p-2 rounded-md text-slate-600 dark:text-slate-300
                          hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             >
               {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
@@ -175,7 +175,7 @@ export function AuthNavbar({ systemName }: AuthNavbarProps) {
 
       {/* 手机端下拉菜单 */}
       {mobileMenuOpen && (
-        <div className="sm:hidden border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
+        <div className="lg:hidden border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
           <div className="px-3 py-2 space-y-1">
             {filteredItems.map((item) => {
               const Icon = item.icon

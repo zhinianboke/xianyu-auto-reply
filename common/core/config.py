@@ -48,11 +48,9 @@ class BaseConfig(BaseSettings):
     async_driver: str = Field(default="mysql+asyncmy")
 
     # 数据库连接池配置（账号数量较大时可通过环境变量调优）
-    # 重要：db_pool_size + db_max_overflow 不应超过 MySQL 的 max_connections，
-    # 否则连接池打满后还会触发 MySQL 的 "Too many connections"。
-    # 上千账号场景的建议：保持适中的连接池 + 短连接超时，让卡住的连接快速失败并归还，
-    # 而不是无限放大连接数把远程 MySQL 压垮。
-    db_pool_size: int = Field(default=30)            # 常驻连接数
+    # MySQL max_connections 必须大于所有服务进程的连接峰值总和并预留管理连接。
+    # 主服务默认峰值合计 2640；启用推广服务后为 3460，部署默认上限为 4000。
+    db_pool_size: int = Field(default=800, ge=600)   # 连接池容量，连接按需建立
     db_max_overflow: int = Field(default=70)         # 允许的溢出连接数（峰值 = pool_size + max_overflow）
     db_pool_timeout: int = Field(default=30)         # 从连接池获取连接的最长等待秒数
     db_pool_recycle: int = Field(default=1800)       # 连接回收时间（秒），防止 MySQL 主动断开陈旧连接
