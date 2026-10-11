@@ -384,13 +384,14 @@ async def get_messages(
             cid=cid, start_timestamp=cursor, limit=limit
         )
 
-        # 检测IM错误响应（可能是瞬态问题，返回空数据让轮询重试）
+        # IM 返回错误时不能伪装成成功的空分页，否则前端会把断线补偿边界
+        # 当成已补齐并清除待补偿状态，导致真实消息永久漏拉。
         if isinstance(body, dict) and "reason" in body:
             err_msg = body.get("developerMessage", body.get("reason", ""))
-            logger.warning(f"【{account_id}】IM消息列表返回错误: {err_msg}，等待下次轮询重试")
+            logger.warning(f"【{account_id}】IM消息列表返回错误: {err_msg}，保留补偿边界等待重试")
             return ApiResponse(
-                success=True,
-                data={"messages": [], "hasMore": False, "nextCursor": None},
+                success=False,
+                message=f"获取聊天记录失败，IM服务暂时不可用: {err_msg or '未知错误'}",
             )
 
         # 解析消息列表（IM返回倒序，需反转为正序：最旧在前，最新在后）
