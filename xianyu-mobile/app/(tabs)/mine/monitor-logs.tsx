@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useColorScheme } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { Card, Button, Loading } from '@/components/ui';
 import { colors, spacing, typography, radius } from '@/lib/theme';
 import { usePagedList } from '@/hooks/usePagedList';
@@ -18,6 +19,7 @@ import {
   getMonitorLogs,
   getMonitorTaskOptions,
   clearMonitorLogs,
+  copyMonitorLogCookies,
   isEndpointMissing,
   type MonitorLog,
   type MonitorTaskOption,
@@ -31,6 +33,13 @@ const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: 'success', label: '成功' },
   { value: 'partial', label: '部分成功' },
   { value: 'failed', label: '失败' },
+];
+
+/** 监控类型筛选项（value 与后端 monitor_type 枚举一致） */
+const MONITOR_TYPE_FILTERS: { value: string; label: string }[] = [
+  { value: '', label: '全部类型' },
+  { value: 'listing', label: '上新' },
+  { value: 'price_drop', label: '降价' },
 ];
 
 /** 监控类型 → 展示文案（与 listing-monitor 页一致） */
@@ -68,11 +77,16 @@ export default function MonitorLogsScreen() {
   const scheme = useColorScheme();
   const c = colors[scheme === 'dark' ? 'dark' : 'light'];
 
-  // 筛选条件：按任务 / 按状态；变化后由 effect 触发重新加载
+  // 筛选条件：按任务 / 按监控类型 / 按状态；变化后由 effect 触发重新加载
   const [taskFilter, setTaskFilter] = useState<number | null>(null);
+  const [typeFilter, setTypeFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [taskOptions, setTaskOptions] = useState<MonitorTaskOption[]>([]);
   const [clearing, setClearing] = useState(false);
+  // 多选模式：勾选日志后批量复制账号Cookies
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [copying, setCopying] = useState(false);
 
   const list = usePagedList<MonitorLog>({
     mode: 'page',
@@ -85,6 +99,7 @@ export default function MonitorLogsScreen() {
         pageSize: PAGE_SIZE,
         monitorTaskId: taskFilter ?? undefined,
         status: statusFilter || undefined,
+        monitorType: typeFilter || undefined,
       });
       return { items: resp.list, total: resp.total };
     },
@@ -102,7 +117,7 @@ export default function MonitorLogsScreen() {
   useEffect(() => {
     list.refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskFilter, statusFilter]);
+  }, [taskFilter, typeFilter, statusFilter]);
 
   useEffect(() => {
     getMonitorTaskOptions()
@@ -138,6 +153,58 @@ export default function MonitorLogsScreen() {
     );
   }, [list]);
 
+  const exitSelectMode = useCallback(() => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  }, []);
+
+  const toggleSelect = useCallback((id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds((prev) => {
+      const items = list.items;
+      const allSelected = items.length > 0 && items.every((l) => prev.has(l.id));
+      return allSelected ? new Set() : new Set(items.map((l) => l.id));
+    });
+  }, [list.items]);
+
+  /** 批量复制选中日志涉及账号的 Cookies（JSON 串写入剪贴板） */
+  const handleCopyCookies = useCallback(() => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) {
+      Alert.alert('提示', '请先勾选要复制的监控日志');
+      return;
+    }
+    setCopying(true);
+    copyMonitorLogCookies(ids)
+      .then(async (accountList) => {
+        if (accountList.length === 0) {
+          Alert.alert('提示', '选中的日志没有可复制的账号信息');
+          return;
+        }
+        const json = JSON.stringify(accountList, null, 2);
+        try {
+          await Clipboard.setStringAsync(json);
+          Alert.alert('成功', `已复制 ${accountList.length} 个账号的 Cookies 到剪贴板`);
+        } catch {
+          // expo-clipboard 原生模块不可用时降级提示
+          Alert.alert('复制失败', '剪贴板不可用，请升级 App 后重试');
+        }
+      })
+      .catch((e: unknown) => Alert.alert('复制账号Cookies失败', (e as Error).message))
+      .finally(() => setCopying(false));
+  }, [selectedIds]);
+
   const taskKeyword = useCallback(
     (taskId: number | null): string => {
       if (taskId == null) return '';
@@ -160,13 +227,29 @@ export default function MonitorLogsScreen() {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['left', 'right', 'bottom']}>
       <View style={styles.header}>
-        <Button
-          label="清空日志"
-          onPress={handleClear}
-          variant="danger"
-          loading={clearing}
-          disabled={clearing}
-        />
+        {selectMode ? (
+          <>
+            <Button
+              label={`复制Cookies (${selectedIds.size})`}
+              onPress={handleCopyCookies}
+              loading={copying}
+              disabled={copying || selectedIds.size === 0}
+            />
+            <Button label="全选/取消" onPress={toggleSelectAll} variant="secondary" />
+            <Button label="取消" onPress={exitSelectMode} variant="ghost" />
+          </>
+        ) : (
+          <>
+            <Button label="多选" onPress={() => setSelectMode(true)} variant="secondary" />
+            <Button
+              label="清空日志"
+              onPress={handleClear}
+              variant="danger"
+              loading={clearing}
+              disabled={clearing}
+            />
+          </>
+        )}
       </View>
 
       {/* 任务筛选（横向 chips） */}
@@ -214,6 +297,37 @@ export default function MonitorLogsScreen() {
                     numberOfLines={1}
                   >
                     {t.keyword || `任务 #${t.id}`}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </ScrollView>
+
+        {/* 监控类型筛选 */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <View style={styles.chipRow}>
+            {MONITOR_TYPE_FILTERS.map((f) => {
+              const selected = typeFilter === f.value;
+              return (
+                <Pressable
+                  key={f.value || 'all'}
+                  onPress={() => setTypeFilter(f.value)}
+                  style={[
+                    styles.chip,
+                    {
+                      borderColor: selected ? c.primary : c.border,
+                      backgroundColor: selected ? c.primary : 'transparent',
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.chipText,
+                      { color: selected ? '#FFF' : c.text },
+                    ]}
+                  >
+                    {f.label}
                   </Text>
                 </Pressable>
               );
@@ -274,47 +388,71 @@ export default function MonitorLogsScreen() {
         }
         renderItem={({ item }) => {
           const badge = statusStyle(item.status, c);
+          const checked = selectedIds.has(item.id);
           return (
-            <Card style={styles.card}>
-              <View style={styles.cardHeader}>
-                <View style={styles.badgeRow}>
-                  <View style={[styles.statusBadge, { backgroundColor: badge.bg }]}>
-                    <Text style={[styles.statusText, { color: badge.fg }]}>
-                      {badge.label}
+            <Pressable
+              onPress={() => (selectMode ? toggleSelect(item.id) : undefined)}
+              disabled={!selectMode}
+            >
+              <Card style={[styles.card, selectMode && checked && { borderColor: c.primary, borderWidth: 1 }]}>
+                {selectMode && (
+                  <View style={styles.selectRow}>
+                    <View
+                      style={[
+                        styles.checkBoxInner,
+                        {
+                          borderColor: checked ? c.primary : c.border,
+                          backgroundColor: checked ? c.primary : 'transparent',
+                        },
+                      ]}
+                    >
+                      {checked && <Text style={styles.checkMark}>✓</Text>}
+                    </View>
+                    <Text style={[styles.selectHint, { color: c.textMuted }]}>
+                      {checked ? '已勾选' : '点击勾选'}
                     </Text>
                   </View>
-                  <View style={[styles.typeBadge, { backgroundColor: c.primaryLight }]}>
-                    <Text style={[styles.typeText, { color: c.primary }]}>
-                      {monitorTypeLabel(item.monitor_type)}
-                    </Text>
+                )}
+                <View style={styles.cardHeader}>
+                  <View style={styles.badgeRow}>
+                    <View style={[styles.statusBadge, { backgroundColor: badge.bg }]}>
+                      <Text style={[styles.statusText, { color: badge.fg }]}>
+                        {badge.label}
+                      </Text>
+                    </View>
+                    <View style={[styles.typeBadge, { backgroundColor: c.primaryLight }]}>
+                      <Text style={[styles.typeText, { color: c.primary }]}>
+                        {monitorTypeLabel(item.monitor_type)}
+                      </Text>
+                    </View>
+                    {item.trigger_type ? (
+                      <Text style={[styles.trigger, { color: c.textMuted }]}>
+                        {triggerLabel(item.trigger_type)}
+                      </Text>
+                    ) : null}
                   </View>
-                  {item.trigger_type ? (
-                    <Text style={[styles.trigger, { color: c.textMuted }]}>
-                      {triggerLabel(item.trigger_type)}
-                    </Text>
-                  ) : null}
+                  <Text style={[styles.time, { color: c.textMuted }]}>
+                    {formatDate(item.created_at)}
+                  </Text>
                 </View>
-                <Text style={[styles.time, { color: c.textMuted }]}>
-                  {formatDate(item.created_at)}
+
+                <Text style={[styles.keyword, { color: c.text }]} numberOfLines={1}>
+                  {item.keyword || taskKeyword(item.monitor_task_id) || '未知任务'}
                 </Text>
-              </View>
 
-              <Text style={[styles.keyword, { color: c.text }]} numberOfLines={1}>
-                {item.keyword || taskKeyword(item.monitor_task_id) || '未知任务'}
-              </Text>
-
-              <Text style={[styles.meta, { color: c.textMuted }]}>
-                采集 {item.fetched_count} · 新增 {item.inserted_count} · 更新{' '}
-                {item.updated_count}
-                {item.pages > 0 ? ` · ${item.pages} 页` : ''}
-              </Text>
-
-              {item.message ? (
-                <Text style={[styles.message, { color: c.textSecondary }]} numberOfLines={2}>
-                  {item.message}
+                <Text style={[styles.meta, { color: c.textMuted }]}>
+                  采集 {item.fetched_count} · 新增 {item.inserted_count} · 更新{' '}
+                  {item.updated_count}
+                  {item.pages > 0 ? ` · ${item.pages} 页` : ''}
                 </Text>
-              ) : null}
-            </Card>
+
+                {item.message ? (
+                  <Text style={[styles.message, { color: c.textSecondary }]} numberOfLines={2}>
+                    {item.message}
+                  </Text>
+                ) : null}
+              </Card>
+            </Pressable>
           );
         }}
       />
@@ -328,6 +466,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
@@ -346,8 +486,24 @@ const styles = StyleSheet.create({
     maxWidth: 160,
   },
   chipText: { ...typography.small },
-  list: { padding: spacing.lg, paddingTop: spacing.sm, gap: spacing.md },
+  list: { padding: spacing.lg, paddingTop: spacing.sm, gap: spacing.md, paddingBottom: 80 },
   card: { gap: spacing.xs },
+  selectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  checkBoxInner: {
+    width: 20,
+    height: 20,
+    borderRadius: radius.sm,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkMark: { fontSize: 13, fontWeight: '700', color: '#FFF', lineHeight: 15 },
+  selectHint: { ...typography.small },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',

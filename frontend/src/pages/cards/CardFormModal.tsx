@@ -63,6 +63,7 @@ interface CardFormData {
   isMultiSpec: boolean
   specName: string
   specValue: string
+  autoDelistOnSoldout: boolean
 }
 
 interface CardFormModalProps {
@@ -107,6 +108,7 @@ export function cardToFormData(card: CardData): CardFormData {
     isMultiSpec: card.is_multi_spec || false,
     specName: card.spec_name || '',
     specValue: card.spec_value || '',
+    autoDelistOnSoldout: card.auto_delist_on_soldout || false,
   }
 }
 
@@ -141,6 +143,7 @@ export const emptyCardFormData: CardFormData = {
   isMultiSpec: false,
   specName: '',
   specValue: '',
+  autoDelistOnSoldout: false,
 }
 
 export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFormModalProps) {
@@ -291,6 +294,7 @@ export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFor
         is_multi_spec: formData.isMultiSpec,
         spec_name: formData.isMultiSpec ? formData.specName.trim() : undefined,
         spec_value: formData.isMultiSpec ? formData.specValue.trim() : undefined,
+        auto_delist_on_soldout: formData.type === 'data' ? formData.autoDelistOnSoldout : false,
       }
 
       if (formData.type === 'api') {
@@ -507,6 +511,22 @@ export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFor
                     placeholder="请输入数据，每行一个：&#10;卡号1:密码1&#10;卡号2:密码2&#10;或者&#10;兑换码1&#10;兑换码2"
                   />
                   <p className="text-xs text-gray-500 mt-1">支持格式：卡号:密码 或 单独的兑换码</p>
+                </div>
+                <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={formData.autoDelistOnSoldout}
+                      onChange={(e) => updateField('autoDelistOnSoldout', e.target.checked)}
+                      className="w-4 h-4 rounded border-gray-300 mt-0.5"
+                    />
+                    <div>
+                      <span className="text-sm font-medium text-gray-900 dark:text-white">售罄自动下架</span>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        开启后：待发货订单购买数量 ≥ 剩余库存时，自动下架该卡券绑定的全部商品（多账号商品各自下架），防止卡密卖完商品还在卖。补货后需手动重新上架
+                      </p>
+                    </div>
+                  </label>
                 </div>
               </div>
             )}

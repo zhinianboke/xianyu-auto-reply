@@ -4,7 +4,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useColorScheme } from 'react-native';
 import { Card, Loading, Badge } from '@/components/ui';
 import { colors, spacing, typography, radius } from '@/lib/theme';
-import { getScheduledTasks, updateScheduledTask, triggerScheduledTask, type ScheduledTask } from '@/api/wrappers/admin';
+// 定时任务走专用封装：task_code 定位 + query 参数传参（后端契约 admin.py:753-914）
+import { getScheduledTasks, updateScheduledTask, triggerScheduledTask, type ScheduledTask } from '@/api/wrappers/scheduled-tasks';
 
 function formatInterval(seconds: number): string {
   if (seconds >= 3600) return `${(seconds / 3600).toFixed(1)} 小时`;
@@ -36,7 +37,7 @@ export default function ScheduledTasksScreen() {
   async function handleToggle(task: ScheduledTask, next: boolean) {
     setTasks(prev => prev.map(t => t.id === task.id ? { ...t, enabled: next } : t));
     setUpdating(task.id);
-    try { await updateScheduledTask(task.id, { enabled: next }); }
+    try { await updateScheduledTask(task.task_code, { enabled: next }); }
     catch (e) {
       setTasks(prev => prev.map(t => t.id === task.id ? { ...t, enabled: task.enabled } : t));
       Alert.alert('操作失败', (e as Error).message);
@@ -48,9 +49,10 @@ export default function ScheduledTasksScreen() {
     if (!n || n < 1) { Alert.alert('提示', '请输入有效间隔秒数'); return; }
     setUpdating(task.id);
     try {
-      await updateScheduledTask(task.id, { interval_seconds: n });
+      const { message } = await updateScheduledTask(task.task_code, { interval_seconds: n });
       setTasks(prev => prev.map(t => t.id === task.id ? { ...t, interval_seconds: n } : t));
       setEditingId(null);
+      Alert.alert('成功', message);
     } catch (e) { Alert.alert('保存失败', (e as Error).message); }
     finally { setUpdating(null); }
   }
@@ -58,8 +60,9 @@ export default function ScheduledTasksScreen() {
   async function handleTrigger(task: ScheduledTask) {
     setUpdating(task.id);
     try {
-      await triggerScheduledTask(task.id);
-      Alert.alert('已触发', `${task.task_name} 已手动触发`);
+      // 后端 trigger 响应只有 { success, message }，message 即可展示的触发结果
+      const message = await triggerScheduledTask(task.task_code);
+      Alert.alert('已触发', message);
     } catch (e) { Alert.alert('触发失败', (e as Error).message); }
     finally { setUpdating(null); }
   }
@@ -112,8 +115,8 @@ export default function ScheduledTasksScreen() {
             </View>
             <View style={styles.row}>
               <Text style={[styles.label, { color: c.textMuted }]}>状态</Text>
-              <Badge label={item.task_running ? '运行中' : '空闲'} variant={item.task_running ? 'success' : 'gray'} />
-              {!item.enabled && <Badge label="已禁用" variant="danger" />}
+              {/* 后端无 task_running/scheduler_running 字段，仅展示启用状态 */}
+              <Badge label={item.enabled ? '已启用' : '已禁用'} variant={item.enabled ? 'success' : 'danger'} />
             </View>
             <Pressable
               onPress={() => handleTrigger(item)}

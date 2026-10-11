@@ -77,7 +77,7 @@ async def lifespan(app: FastAPI):
         logger.error("数据库连接失败，服务退出")
         sys.exit(1)
 
-    # 只读取 backend 已准备好的服务间 API 令牌，WebSocket 不负责数据库初始化。
+    # 加载服务间 API 令牌；数据库中缺失时本服务会自行生成并持久化，不依赖 backend 先启动。
     try:
         from common.utils.internal_token_service import load_internal_api_token
         await load_internal_api_token(settings)

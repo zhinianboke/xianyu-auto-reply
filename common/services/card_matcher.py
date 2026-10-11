@@ -535,7 +535,9 @@ class CardMatcher:
                             f"多规格卡券匹配失败: 卡券[{card.spec_name}:{card.spec_value}] "
                             f"vs 订单[{spec_name}:{spec_value}]"
                         )
-                # 多规格卡券但没有传入规格信息，跳过
+                else:
+                    # 多规格卡券 + 订单无规格：降级为通配，由后续来源分组处理冲突
+                    matched.append(self._card_to_dict(card))
             else:
                 # 非多规格卡券：只有在没有传入规格信息时才添加
                 if not has_spec_info:
@@ -582,6 +584,9 @@ class CardMatcher:
                             f"多规格卡券匹配失败: 卡券[{cd.get('spec_name')}:{cd.get('spec_value')}] "
                             f"vs 订单[{spec_name}:{spec_value}]"
                         )
+                else:
+                    # 多规格卡券 + 订单无规格：降级为通配，由后续来源分组处理冲突
+                    matched.append(cd)
             else:
                 if not has_spec_info:
                     matched.append(cd)

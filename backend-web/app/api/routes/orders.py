@@ -211,18 +211,23 @@ async def fetch_xianyu_orders(
     errors: list[str] = []
 
     for account in accounts:
+        # 提前取出账号标识：fetch_xianyu_orders 内部对失败订单会 rollback
+        # （如唯一约束并发兜底），该 rollback 会让本 session 内已加载的 ORM 实例过期，
+        # 异步引擎下 rollback 之后再读 account.account_id 会触发隐式 IO
+        # （MissingGreenlet）→ 同步接口 500（P1-2 同类缺陷）。
+        account_identifier = account.account_id
         try:
-            logger.info(f"开始同步闲鱼订单: account_id={account.account_id}")
+            logger.info(f"开始同步闲鱼订单: account_id={account_identifier}")
             result = await order_service.fetch_xianyu_orders(account)
             total_fetched += result.get("total_fetched", 0)
             new_inserted += result.get("new_inserted", 0)
             updated += result.get("updated", 0)
             failed += result.get("failed", 0)
             for error in result.get("errors", []):
-                errors.append(f"{account.account_id}: {error}")
+                errors.append(f"{account_identifier}: {error}")
         except Exception as e:
-            logger.error(f"同步闲鱼订单失败: account_id={account.account_id}, error={e}")
-            errors.append(f"{account.account_id}: {str(e)}")
+            logger.error(f"同步闲鱼订单失败: account_id={account_identifier}, error={e}")
+            errors.append(f"{account_identifier}: {str(e)}")
 
     return {
         "success": True,
@@ -493,7 +498,11 @@ async def manual_delivery(
                         item_id=order.item_id,
                         buyer_id=order.buyer_id
                     )
-                    # 重新获取订单（小刀状态可能已更新）
+                    # 详情刷新由独立 session 写库并 commit，本 session 的 identity map
+                    # 仍持有旧值（expire_on_commit=False，且重查不覆盖已加载属性）。
+                    # 显式 expire_all 后再重查，与 get_order_detail（:270）的写法一致，
+                    # 确保拿到刷新后的小刀/金额/数量等字段（P1-2）。
+                    order_service.session.expire_all()
                     order = await order_service.get_order_by_no(request.order_no)
                     logger.info(f"订单详情已刷新: order_no={request.order_no}, is_bargain={order.is_bargain}")
                 else:
@@ -501,24 +510,40 @@ async def manual_delivery(
             except Exception as e:
                 logger.warning(f"刷新订单详情失败（不影响发货流程）: {e}")
 
+        # 之后不再直接读 order 的 ORM 属性，统一用局部变量：
+        # 任何 service 内部的 rollback（如 update_order_delivery_fail_reason 失败兜底）
+        # 都会 expire 本 session 的 ORM 实例，异步引擎下再读属性会触发隐式 IO
+        # → MissingGreenlet → 500（P1-2 根因）。
+        order_no = order.order_no
+        order_account_id = order.account_id
+        order_item_id = order.item_id
+        order_buyer_id = order.buyer_id
+        order_chat_id = order.chat_id
+        order_spec_name = order.spec_name
+        order_spec_value = order.spec_value
+        order_quantity = int(order.quantity) if order.quantity and order.quantity > 0 else 1
+        order_is_bargain = order.is_bargain or False
+        # 新会话是否成功写回订单表（缺 chat_id 分支会更新；失败时仅告警不中断发货）
+        chat_id_persisted = True
+
         # 检查账号WebSocket连接状态
         from app.services.websocket_client import websocket_client
-        status_result = await websocket_client.get_account_status(order.account_id)
+        status_result = await websocket_client.get_account_status(order_account_id)
         if not status_result.get('success') or not status_result.get('data', {}).get('is_connected'):
-            logger.warning(f"账号未连接: {order.account_id}")
+            logger.warning(f"账号未连接: {order_account_id}")
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="账号未连接，请先启动账号")
         
         # 如果订单缺少 chat_id，先调用闲鱼创建会话接口获取，然后回写到订单
         # 通过 LWP /r/SingleChatConversation/create 幂等创建，已存在会直接返回现有 cid
-        if not order.chat_id:
+        if not order_chat_id:
             logger.info(
-                f"订单 {request.order_no} 缺少 chat_id，开始自动创建会话: "
-                f"account_id={order.account_id}, buyer_id={order.buyer_id}, item_id={order.item_id}"
+                f"订单 {order_no} 缺少 chat_id，开始自动创建会话: "
+                f"account_id={order_account_id}, buyer_id={order_buyer_id}, item_id={order_item_id}"
             )
             create_result = await websocket_client.create_chat(
-                account_id=order.account_id,
-                buyer_id=order.buyer_id,
-                item_id=order.item_id,
+                account_id=order_account_id,
+                buyer_id=order_buyer_id,
+                item_id=order_item_id,
             )
             if not isinstance(create_result, dict) or not create_result.get('success'):
                 result_message = (
@@ -528,13 +553,13 @@ async def manual_delivery(
                 )
                 err_msg = str(result_message or '未知原因')
                 fail_reason = f"创建会话失败：{err_msg}"
-                logger.error(f"自动创建会话失败: order_no={request.order_no}, 错误={err_msg}")
+                logger.error(f"自动创建会话失败: order_no={order_no}, 错误={err_msg}")
                 recorded = await order_service.update_order_delivery_fail_reason(
-                    request.order_no, fail_reason
+                    order_no, fail_reason
                 )
                 if not recorded:
                     logger.warning(
-                        f"自动创建会话失败原因写入订单失败: order_no={request.order_no}"
+                        f"自动创建会话失败原因写入订单失败: order_no={order_no}"
                     )
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -544,31 +569,39 @@ async def manual_delivery(
             if not new_chat_id:
                 fail_reason = "创建会话响应缺少 chat_id"
                 recorded = await order_service.update_order_delivery_fail_reason(
-                    request.order_no, fail_reason
+                    order_no, fail_reason
                 )
                 if not recorded:
                     logger.warning(
-                        f"创建会话响应异常原因写入订单失败: order_no={request.order_no}"
+                        f"创建会话响应异常原因写入订单失败: order_no={order_no}"
                     )
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=fail_reason,
                 )
-            # 持久化到订单表
-            updated = await order_service.update_order_chat_id(request.order_no, new_chat_id)
-            if not updated:
-                logger.warning(f"回写订单 chat_id 失败，但本次发货流程继续使用新 chat_id: {new_chat_id}")
-            # 同步内存对象属性（session 配置 expire_on_commit=False，
-            # commit 后 identity map 仍持有旧实例，重查会命中缓存拿不到新值）
-            order.chat_id = new_chat_id
-            logger.info(f"订单 {request.order_no} 已自动补写 chat_id={new_chat_id}")
+            # 持久化到订单表（update_order_chat_id 内部用独立 session + 1020 有限重试，
+            # 不再复用本 session，避免 rollback 污染）
+            updated = await order_service.update_order_chat_id(order_no, new_chat_id)
+            chat_id_persisted = bool(updated)
+            if not chat_id_persisted:
+                # 会话已创建、卡券即将发出，不能中断发货；但必须让失败可发现：
+                # 订单表 chat_id 仍为空 → 订单列表显示"无会话"，下次发货会重复建会话。
+                logger.error(
+                    f"[chat_id回写失败] 订单 {order_no} 新会话 {new_chat_id} 未写入数据库，"
+                    f"本次发货继续使用该会话；订单表 chat_id 仍为空，请检查数据库并重试"
+                )
+            # 只更新局部变量，不再给 ORM 实例赋值：
+            # expire_on_commit=False 下 identity map 仍持旧实例，赋值只会把实例标脏，
+            # 后续 autoflush 会对同一行发起 UPDATE，可能再次触发 MariaDB 1020。
+            order_chat_id = new_chat_id
+            logger.info(f"订单 {order_no} 已自动补写 chat_id={new_chat_id}")
         
         # 获取卡券
-        spec_name = order.spec_name
-        spec_value = order.spec_value
-        logger.info(f"查询卡券: item_id={order.item_id}, spec_name={spec_name}, spec_value={spec_value}")
+        spec_name = order_spec_name
+        spec_value = order_spec_value
+        logger.info(f"查询卡券: item_id={order_item_id}, spec_name={spec_name}, spec_value={spec_value}")
         
-        cards = await card_service.get_cards_by_item_id_and_spec(order.item_id, spec_name, spec_value)
+        cards = await card_service.get_cards_by_item_id_and_spec(order_item_id, spec_name, spec_value)
         logger.info(f"匹配到 {len(cards)} 个卡券")
         
         if not cards:
@@ -593,9 +626,9 @@ async def manual_delivery(
         try:
             try:
                 delivery_lock = await try_acquire_delivery_lock(
-                    order.order_no,
+                    order_no,
                     expire=120,
-                    holder_info=f"manual:{order.account_id}",
+                    holder_info=f"manual:{order_account_id}",
                     wait_timeout=5,
                 )
                 if delivery_lock.success:
@@ -607,24 +640,24 @@ async def manual_delivery(
                     )
                 elif delivery_lock.has_error:
                     logger.warning(
-                        f"手动发货获取Redis订单锁失败，降级继续: order_no={order.order_no}"
+                        f"手动发货获取Redis订单锁失败，降级继续: order_no={order_no}"
                     )
             except Exception as lock_err:
                 logger.warning(
-                    f"手动发货获取Redis订单锁异常，降级继续: order_no={order.order_no}, error={lock_err}"
+                    f"手动发货获取Redis订单锁异常，降级继续: order_no={order_no}, error={lock_err}"
                 )
 
             # quantity 从订单表读取，>1 时让 internal API 循环发送 N 张卡券（多数量发货）
             delivery_result = await websocket_client.deliver_order(
-                account_id=order.account_id,
-                order_no=request.order_no,
-                item_id=order.item_id,
-                buyer_id=order.buyer_id,
-                chat_id=order.chat_id,
+                account_id=order_account_id,
+                order_no=order_no,
+                item_id=order_item_id,
+                buyer_id=order_buyer_id,
+                chat_id=order_chat_id,
                 card_id=card.get('id'),
-                is_bargain=order.is_bargain or False,
+                is_bargain=order_is_bargain,
                 delivery_method="manual",
-                quantity=int(order.quantity) if order.quantity and order.quantity > 0 else 1,
+                quantity=order_quantity,
             )
         finally:
             if redis_lock_acquired and delivery_lock:
@@ -632,7 +665,7 @@ async def manual_delivery(
                     await release_delivery_lock(delivery_lock)
                 except Exception as release_err:
                     logger.warning(
-                        f"手动发货释放Redis订单锁异常: order_no={order.order_no}, error={release_err}"
+                        f"手动发货释放Redis订单锁异常: order_no={order_no}, error={release_err}"
                     )
         
         if not delivery_result.get('success'):
@@ -643,7 +676,7 @@ async def manual_delivery(
                 # 将失败原因记录到订单表
                 try:
                     await order_service.update_order_delivery_fail_reason(
-                        request.order_no, error_msg
+                        order_no, error_msg
                     )
                 except Exception as rec_err:
                     logger.warning(f"记录发货失败原因到订单表失败: {rec_err}")
@@ -664,14 +697,14 @@ async def manual_delivery(
         quantity_degraded_for_fixed = bool(delivery_data.get('quantity_degraded_for_fixed_content'))
         degraded_warn_msg = None
         if quantity_degraded_for_dock:
-            requested = delivery_data.get('quantity_requested') or order.quantity or 1
+            requested = delivery_data.get('quantity_requested') or order_quantity
             sent = delivery_data.get('quantity_sent') or 1
             degraded_warn_msg = (
                 f"⚠️ 对接卡券暂不支持多数量发货：订单数量 {requested} 张，"
                 f"已发送 {sent} 张，剩余 {max(requested - sent, 0)} 张请手动补发或改用自有卡券"
             )
         elif quantity_degraded_for_fixed:
-            requested = delivery_data.get('quantity_requested') or order.quantity or 1
+            requested = delivery_data.get('quantity_requested') or order_quantity
             sent = delivery_data.get('quantity_sent') or 1
             degraded_warn_msg = (
                 f"⚠️ 固定内容卡券（{delivery_data.get('delivery_type')} 类型）不支持多数量发货："
@@ -681,11 +714,13 @@ async def manual_delivery(
 
         if degraded_warn_msg:
             try:
-                await order_service.update_order_delivery_fail_reason(order.order_no, degraded_warn_msg)
-                logger.warning(f"手动发货：订单 {order.order_no} {degraded_warn_msg}")
+                # 只用局部变量 order_no：update_order_delivery_fail_reason 失败时会
+                # rollback 本 session，之后再读 order.order_no 会触发隐式 IO（P1-2）
+                await order_service.update_order_delivery_fail_reason(order_no, degraded_warn_msg)
+                logger.warning(f"手动发货：订单 {order_no} {degraded_warn_msg}")
             except Exception as warn_err:
                 logger.warning(
-                    f"手动发货：订单 {order.order_no} 写入多数量退化提示失败: {warn_err}"
+                    f"手动发货：订单 {order_no} 写入多数量退化提示失败: {warn_err}"
                 )
 
         # 订单状态写入由 internal API 内部统一处理（card_only 走 record_delivery_for_closed_order，
@@ -697,16 +732,16 @@ async def manual_delivery(
         if is_card_only:
             if skipped_due_to_dock:
                 logger.warning(
-                    f"手动发货：订单 {request.order_no} card_only + 对接卡券，"
+                    f"手动发货：订单 {order_no} card_only + 对接卡券，"
                     f"订单已被关闭但卡券未发送（避免货主财务损失）"
                 )
             else:
                 logger.info(
-                    f"手动发货：订单 {request.order_no} card_only 模式，"
+                    f"手动发货：订单 {order_no} card_only 模式，"
                     f"订单已在闲鱼平台被关闭，仅补发卡券，本地状态保持不变（以闲鱼为准）"
                 )
 
-        logger.info(f"手动发货完成: 订单={request.order_no}, 卡券={card.get('name')}, "
+        logger.info(f"手动发货完成: 订单={order_no}, 卡券={card.get('name')}, "
                     f"is_card_only={is_card_only}, skipped_due_to_dock={skipped_due_to_dock}")
 
         # 直接复用 internal API 已生成的 message，它已经覆盖了所有场景的精确文案：
@@ -721,13 +756,21 @@ async def manual_delivery(
         else:
             response_message = delivery_result.get('message') or "发货成功"
 
+        if not chat_id_persisted:
+            # 卡券已发出，不能中断发货；但回写失败必须让用户/调用方可发现（P1-2 ④）
+            response_message = (
+                f"{response_message}（⚠️ 本次自动创建的会话ID未能写回订单表，"
+                f"订单仍显示无会话，请稍后重试或检查数据库）"
+            )
+
         return {
             "success": True,
             "message": response_message,
             "data": {
-                "order_no": request.order_no,
+                "order_no": order_no,
                 "card_name": card.get('name'),
                 "card_type": card_type,
+                "chat_id_persisted": chat_id_persisted,
                 **delivery_data
             }
         }

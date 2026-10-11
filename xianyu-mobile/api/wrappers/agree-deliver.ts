@@ -9,6 +9,9 @@ export interface AgreeDeliverConfig {
   enabled: boolean;
   notify_message?: string;
   pickup_url?: string;
+  // 提货后通知（买家同意提货发卡后主动提醒确认收货，账号级，默认关闭）
+  pickup_notice_enabled?: boolean;
+  pickup_notice_content?: string;
 }
 
 export interface PickupUrlSuggestion {

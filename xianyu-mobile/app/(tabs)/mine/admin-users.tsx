@@ -74,6 +74,10 @@ export default function AdminUsersScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  // 用户名搜索（后端 GET /admin/users 支持 username 模糊筛选）
+  const [searchInput, setSearchInput] = useState('');
+  const [searchKeyword, setSearchKeyword] = useState('');
+
   // 新增用户
   const [createVisible, setCreateVisible] = useState(false);
   const [createForm, setCreateForm] = useState({
@@ -108,7 +112,7 @@ export default function AdminUsersScreen() {
   const loadUsers = useCallback(async () => {
     setRefreshing(true);
     try {
-      const list = await getAdminUsers();
+      const list = await getAdminUsers(searchKeyword || undefined);
       setUsers(list);
     } catch (e) {
       Alert.alert('加载失败', (e as Error).message);
@@ -116,11 +120,21 @@ export default function AdminUsersScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [searchKeyword]);
 
   useEffect(() => {
     loadUsers();
   }, [loadUsers]);
+
+  /** 应用搜索框关键词；为空则取消筛选（loadUsers 依赖 searchKeyword 自动重查） */
+  function handleSearch() {
+    setSearchKeyword(searchInput.trim());
+  }
+
+  function handleClearSearch() {
+    setSearchInput('');
+    setSearchKeyword('');
+  }
 
   function resetCreateForm() {
     setCreateForm({ username: '', email: '', password: '', role: 'MEMBER' });
@@ -262,6 +276,26 @@ export default function AdminUsersScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['left', 'right', 'bottom']}>
+      <View style={styles.searchRow}>
+        <Input
+          value={searchInput}
+          onChangeText={setSearchInput}
+          placeholder="搜索用户名"
+          autoCapitalize="none"
+          returnKeyType="search"
+          onSubmitEditing={handleSearch}
+          style={styles.searchInput}
+        />
+        <Button label="查询" variant="secondary" onPress={handleSearch} style={styles.searchBtn} />
+      </View>
+      {searchKeyword ? (
+        <Pressable style={styles.searchHint} onPress={handleClearSearch} hitSlop={6}>
+          <Text style={[styles.searchHintText, { color: c.primary }]}>
+            筛选：{searchKeyword}（点击取消）
+          </Text>
+        </Pressable>
+      ) : null}
+
       <View style={styles.header}>
         <Button label="新增用户" onPress={() => setCreateVisible(true)} variant="secondary" />
       </View>
@@ -643,7 +677,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
-  listContent: { padding: spacing.lg, gap: spacing.md },
+  listContent: { padding: spacing.lg, gap: spacing.md, paddingBottom: 80 },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+  },
+  searchInput: { flex: 1, minHeight: 40 },
+  searchBtn: { minHeight: 40, paddingHorizontal: spacing.lg },
+  searchHint: { paddingHorizontal: spacing.lg, paddingTop: spacing.xs },
+  searchHintText: { ...typography.caption },
   card: { gap: spacing.md },
   cardHeader: {
     flexDirection: 'row',

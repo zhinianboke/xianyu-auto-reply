@@ -73,7 +73,8 @@ export default function RootLayout() {
       <AlertProvider>
         <SafeAreaProvider>
           <StatusBar style="auto" />
-          <Stack screenOptions={{ headerShown: false }}>
+          {/* gestureEnabled + fullScreenGestureEnabled：安卓全屏手势返回（屏幕任意位置左滑返回上一级） */}
+          <Stack screenOptions={{ headerShown: false, gestureEnabled: true, fullScreenGestureEnabled: true }}>
             <Stack.Screen name="index" />
             <Stack.Screen name="(onboarding)" />
             <Stack.Screen name="(tabs)" />

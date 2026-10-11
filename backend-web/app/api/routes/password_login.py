@@ -28,6 +28,7 @@ from app.services.password_login.manager import SESSION_PREFIX
 from common.models.system_setting import SystemSetting
 from common.models.user import User
 from common.services.account_limit_service import AccountLimitExceededError, AccountLimitService
+from common.utils.internal_auth import build_internal_auth_headers
 
 router = APIRouter(prefix="/password-login", tags=["密码登录"])
 
@@ -113,7 +114,7 @@ async def password_login(
 
 
 async def _proxy_ws_login(request: PasswordLoginRequest, user_id: int) -> dict:
-    """代理浏览器登录到 websocket 服务。"""
+    """代理浏览器登录到 websocket 服务（websocket 侧 /password-login 已加内部令牌鉴权）。"""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
@@ -125,6 +126,7 @@ async def _proxy_ws_login(request: PasswordLoginRequest, user_id: int) -> dict:
                     "show_browser": True,  # 浏览器方式强制有头
                     "user_id": user_id,
                 },
+                headers=build_internal_auth_headers(settings.internal_api_token),
             )
             if resp.status_code == 200:
                 return resp.json()
@@ -155,7 +157,8 @@ async def check_login_status(
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
-                f"{settings.websocket_service_url}/password-login/check/{session_id}"
+                f"{settings.websocket_service_url}/password-login/check/{session_id}",
+                headers=build_internal_auth_headers(settings.internal_api_token),
             )
             if resp.status_code == 200:
                 return resp.json()
@@ -180,7 +183,8 @@ async def cancel_login(
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.delete(
-                f"{settings.websocket_service_url}/password-login/cancel/{session_id}"
+                f"{settings.websocket_service_url}/password-login/cancel/{session_id}",
+                headers=build_internal_auth_headers(settings.internal_api_token),
             )
             if resp.status_code == 200:
                 return resp.json()

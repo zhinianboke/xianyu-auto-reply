@@ -18,11 +18,11 @@ import { useAuthStore } from '@/stores/auth';
 import { getAccountOptions, type AccountOption } from '@/api/wrappers/accounts';
 import {
   getAdminLogs,
-  clearAdminLogs,
   getAutoReplyLogs,
   getAccountLoginLogs,
   clearAccountLoginLogs,
   type LogEntry,
+  type AutoReplyLogEntry,
   type AccountLoginLog,
 } from '@/api/wrappers/admin';
 import { usePagedList } from '@/hooks/usePagedList';
@@ -46,6 +46,14 @@ const LOGIN_STATUS_LABELS: Record<string, { text: string; variant: BadgeVariant 
   failed: { text: '失败', variant: 'danger' },
   skipped_cooldown: { text: '冷却跳过', variant: 'warning' },
   no_credentials: { text: '未配置账密', variant: 'gray' },
+};
+
+// 自动回复发送状态 -> 中文（对齐后端 send_status 取值）
+const SEND_STATUS_LABELS: Record<string, string> = {
+  success: '发送成功',
+  failed: '发送失败',
+  unknown: '待确认',
+  timeout: '超时',
 };
 
 // 失败/跳过细分原因中文映射（对齐 web FAILURE_REASON_LABELS）
@@ -140,7 +148,6 @@ export default function LogsScreen() {
   const [loginStatus, setLoginStatus] = useState('');
   const [loginDateRange, setLoginDateRange] = useState<DateRange>('today');
 
-  const [clearing, setClearing] = useState(false);
   const [loginClearing, setLoginClearing] = useState(false);
 
   // 首次切到未加载 Tab 时的整屏 loading（对齐原共享 loading 行为）
@@ -148,24 +155,25 @@ export default function LogsScreen() {
   const autoStartedRef = useRef(false);
   const loginStartedRef = useRef(false);
 
-  // ---- 管理员日志（page 分页，带 total，追加按 id 去重） ----
+  // ---- 系统日志（原"管理员日志"Tab）----
+  // 后端 GET /admin/logs 是 logs/*.log 的 tail（query: lines/level），非分页接口：
+  // 一次取最新 1000 行，wrapper 内已解析为 LogEntry 并按时间倒序，无加载更多。
   const adminList = usePagedList<LogEntry>({
     mode: 'page',
     pageSize: PAGE_SIZE,
-    dedupeBy: (l) => l.id,
-    fetchPage: async ({ page = 1 }) => {
-      const resp = await getAdminLogs(page, PAGE_SIZE);
-      return { items: resp.data, total: resp.total };
+    fetchPage: async () => {
+      const items = await getAdminLogs(1000);
+      return { items, total: items.length };
     },
     onError: (e, phase) => {
-      console.error('加载管理员日志失败', e);
+      console.error('加载系统日志失败', e);
       if (phase === 'refresh') Alert.alert('加载失败', e.message);
     },
   });
 
   // ---- 自动回复日志（page 分页；接口无 total，按"是否满一页"折算 hasMore） ----
   const autoLoadedRef = useRef(0);
-  const autoList = usePagedList<LogEntry>({
+  const autoList = usePagedList<AutoReplyLogEntry>({
     mode: 'page',
     pageSize: PAGE_SIZE,
     auto: false, // 首次切到该 Tab 时才加载
@@ -266,28 +274,6 @@ export default function LogsScreen() {
     loginList.refresh();
   }
 
-  async function handleClear() {
-    Alert.alert('清除日志', '确定清除所有管理员日志吗？此操作不可恢复。', [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '清除',
-        style: 'destructive',
-        onPress: async () => {
-          setClearing(true);
-          try {
-            await clearAdminLogs();
-            adminList.reset();
-            Alert.alert('成功', '日志已清除');
-          } catch (e) {
-            Alert.alert('清除失败', (e as Error).message);
-          } finally {
-            setClearing(false);
-          }
-        },
-      },
-    ]);
-  }
-
   function handleClearLogin(mode: 'older_than_10d' | 'all') {
     const is10d = mode === 'older_than_10d';
     Alert.alert(
@@ -369,15 +355,7 @@ export default function LogsScreen() {
       edges={['left', 'right', 'bottom']}
     >
       <View style={styles.header}>
-        {tab === 'admin' && (
-          <Button
-            label="清除日志"
-            onPress={handleClear}
-            variant="danger"
-            loading={clearing}
-            disabled={clearing}
-          />
-        )}
+        {/* 原"清除日志"按钮已移除：后端 POST /admin/logs/clear 会清空全部系统日志文件，语义不符 */}
         {tab === 'login' && (
           <View style={styles.loginActions}>
             <Button
@@ -545,7 +523,11 @@ export default function LogsScreen() {
               </Card>
             );
           }
-          const log = item as LogEntry;
+          const log = item as AutoReplyLogEntry;
+          const isAutoReply = tab === 'autoreply';
+          const sendLabel = log.send_status
+            ? SEND_STATUS_LABELS[log.send_status] ?? log.send_status
+            : null;
           return (
             <Card style={styles.card}>
               {log.type ? (
@@ -567,6 +549,26 @@ export default function LogsScreen() {
               <Text style={[styles.content, { color: c.text }]}>
                 {log.content || '(无内容)'}
               </Text>
+              {isAutoReply && log.keyword ? (
+                <Text style={[styles.sub, { color: c.textSecondary }]} numberOfLines={1}>
+                  关键词：{log.keyword}
+                </Text>
+              ) : null}
+              {isAutoReply && log.strategy ? (
+                <Text style={[styles.sub, { color: c.textSecondary }]}>
+                  策略：{log.strategy}
+                </Text>
+              ) : null}
+              {isAutoReply && sendLabel ? (
+                <Text
+                  style={[
+                    styles.sub,
+                    { color: log.send_status === 'failed' ? c.error : c.textMuted },
+                  ]}
+                >
+                  发送：{sendLabel}
+                </Text>
+              ) : null}
             </Card>
           );
         }}
@@ -734,7 +736,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   chipText: { fontSize: 12, fontWeight: '500' },
-  listContent: { padding: spacing.lg, gap: spacing.md },
+  listContent: { padding: spacing.lg, gap: spacing.md, paddingBottom: 80 },
   card: { gap: spacing.sm, padding: spacing.md },
   cardHeader: {
     flexDirection: 'row',

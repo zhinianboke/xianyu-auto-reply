@@ -14,6 +14,9 @@ export default function MessagesStackLayout() {
         headerTitleStyle: { ...typography.heading },
         headerShadowVisible: false,
         headerBackButtonDisplayMode: 'minimal',
+        // 安卓全屏手势返回
+        gestureEnabled: true,
+        fullScreenGestureEnabled: true,
       }}
     >
       <Stack.Screen name="index" options={{ headerShown: false }} />

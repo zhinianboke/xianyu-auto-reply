@@ -616,6 +616,8 @@ export interface AgreeDeliverConfig {
   enabled: boolean                 // 是否开启同意后发货
   notify_message?: string | null   // 通知用户信息（文本域）
   pickup_url?: string | null       // 提货URL
+  pickup_notice_enabled?: boolean  // 提货后通知：买家同意提货发卡后主动提醒确认收货（默认关闭）
+  pickup_notice_content?: string | null // 提货后通知内容
 }
 
 export interface AgreeDeliverConfigResponse {
@@ -758,14 +760,37 @@ export const getAccountStats = async (): Promise<AccountStats> => {
   return response.data
 }
 
-// 14天订单金额趋势数据项
+// 订单状态汇总单项
+export interface OrderStatusItem {
+  count: number
+  amount: number
+}
+
+// 订单状态汇总响应
+export interface OrderStatusSummary {
+  pending_ship: OrderStatusItem     // 待发货
+  pending_confirm: OrderStatusItem  // 待确认收货
+  pending_rate: OrderStatusItem     // 待评价
+  total_amount: number              // 金额总计（排除已关闭/退款）
+}
+
+// 获取订单状态汇总
+export const getOrderStatusSummary = async (): Promise<OrderStatusSummary> => {
+  const response = await get<ApiResponse<OrderStatusSummary>>(`${COOKIE_PREFIX}/stats/order-summary`)
+  if (!response.success || !response.data) {
+    throw new Error(response.message || '获取订单状态汇总失败')
+  }
+  return response.data
+}
+
+// 30天订单趋势数据项
 export interface OrderTrendItem {
   date: string
   amount: number
   count: number
 }
 
-// 获取近14天订单金额趋势
+// 获取近30天订单金额趋势
 export const getOrderAmountTrend = async (): Promise<OrderTrendItem[]> => {
   const response = await get<ApiResponse<{ trend: OrderTrendItem[] }>>(`${COOKIE_PREFIX}/stats/order-trend`)
   if (!response.success || !response.data) {

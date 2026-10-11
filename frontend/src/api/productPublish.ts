@@ -8,6 +8,7 @@
  */
 import { get, post, put, del } from '@/utils/request'
 import type { ApiResponse } from '@/types'
+import type { QueryButton } from '@/api/itemQuery'
 
 const PREFIX = '/api/v1/product-publish'
 
@@ -112,6 +113,30 @@ export interface PublishSkuRow {
   stock: number
 }
 
+/**
+ * 素材携带的商品列表配置（镜像商品列表项的发布后回写配置）。
+ * 整体以 JSON 存入 xy_product_materials.item_config，发布时一步到位回写新商品。
+ */
+export interface MaterialItemConfig {
+  multi_quantity_delivery: boolean
+  card_ids: number[]
+  default_reply: string
+  ai_prompt: string
+  query_buttons: QueryButton[]
+  display_links?: QueryButton[] | any[]
+  page_hint?: string
+}
+
+/** 从商品列表项采集出的素材草稿 */
+export interface CollectMaterialDraft {
+  title?: string
+  description?: string
+  price?: number
+  images?: string[]
+  specifications?: PublishSpecification[]
+  item_config?: MaterialItemConfig
+}
+
 export interface ProductMaterial {
   id: number
   user_id: number
@@ -145,6 +170,7 @@ export interface ProductMaterial {
   brand?: string | null
   condition: string
   remark?: string | null
+  item_config?: MaterialItemConfig | null
   created_at: string
   updated_at: string
   auto_relist?: AutoRelistRule | null
@@ -241,6 +267,7 @@ export interface MaterialCreateParams {
   brand?: string | null
   condition?: string
   remark?: string | null
+  item_config?: MaterialItemConfig
 }
 
 export interface MaterialListResponse {
@@ -404,6 +431,16 @@ export const deleteMaterial = (id: number): Promise<ApiResponse> =>
 /** 批量删除素材 */
 export const batchDeleteMaterials = (ids: number[]): Promise<ApiResponse> =>
   post(`${PREFIX}/materials/batch-delete`, { ids })
+
+/**
+ * 从商品列表项采集素材草稿（标题/价格/图片/规格 + 完整 item_config）。
+ * 配置来源：商品 ai_prompt、metadata_json(multi_quantity_delivery/query_buttons)、
+ * 已绑卡券 card_ids、命中的默认回复。
+ */
+export const collectMaterialFromItem = (
+  itemId: string,
+): Promise<ApiResponse<CollectMaterialDraft>> =>
+  get(`${PREFIX}/materials/collect-from-item/${encodeURIComponent(itemId)}`)
 
 /** 查询素材自动续售规则。 */
 export const getAutoRelistRule = (materialId: number): Promise<ApiResponse<AutoRelistRule | null>> =>

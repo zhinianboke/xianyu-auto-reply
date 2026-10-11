@@ -4,11 +4,39 @@ import { getApiClient, extractError } from './client';
 // 类型定义
 // ---------------------------------------------------------------------------
 
-export interface DashboardStats {
+/** 首页统计（GET /api/v1/cookies/stats，后端 DashboardStatsService 返回字段） */
+export interface CookieStats {
   total_accounts: number;
   active_accounts: number;
-  today_replies: number;
+  total_keywords: number;
   total_orders: number;
+  today_reply_count: number;
+  yesterday_reply_count: number;
+  /** null 表示不限额 */
+  account_limit: number | null;
+  used_account_count: number;
+  remaining_account_count: number | null;
+}
+
+/** 订单趋势单日数据点（GET /api/v1/cookies/stats/order-trend，date 格式 MM-DD） */
+export interface OrderTrendPoint {
+  date: string;
+  amount: number;
+  count: number;
+}
+
+/** 订单状态汇总单项（笔数 + 金额） */
+export interface OrderStatusItem {
+  count: number;
+  amount: number;
+}
+
+/** 订单状态汇总（待发货 / 待确认 / 待评价 + 金额总计） */
+export interface OrderStatusSummary {
+  pending_ship: OrderStatusItem;
+  pending_confirm: OrderStatusItem;
+  pending_rate: OrderStatusItem;
+  total_amount: number;
 }
 
 export interface Notification {
@@ -194,6 +222,85 @@ function buildSummary(raw: unknown): AnalysisSummary {
       : obj.bannerDataList;
   obj.bannerDataList = normalizeBannerList(bannerSrc);
   return obj;
+}
+
+/**
+ * 首页账号统计：账号总数 / 启用数 / 关键词总数 / 总订单 /
+ * 今日·昨日回复数 / 账号额度（后端 GET /api/v1/cookies/stats）。
+ */
+export async function getCookieStats(): Promise<CookieStats> {
+  const client = await getApiClient();
+  const { data } = (await (client.GET as any)('/api/v1/cookies/stats')) as {
+    data?: unknown;
+    error?: unknown;
+  };
+  const raw = unwrapData<Record<string, unknown>>(data);
+  const obj = raw && typeof raw === 'object' ? raw : {};
+  const nullable = (v: unknown): number | null =>
+    v == null || v === '' ? null : toNumber(v);
+  return {
+    total_accounts: toNumber(obj.total_accounts),
+    active_accounts: toNumber(obj.active_accounts),
+    total_keywords: toNumber(obj.total_keywords),
+    total_orders: toNumber(obj.total_orders),
+    today_reply_count: toNumber(obj.today_reply_count),
+    yesterday_reply_count: toNumber(obj.yesterday_reply_count),
+    account_limit: nullable(obj.account_limit),
+    used_account_count: toNumber(obj.used_account_count),
+    remaining_account_count: nullable(obj.remaining_account_count),
+  };
+}
+
+/**
+ * 订单金额趋势（后端固定返回近 30 天，date 为 MM-DD）。
+ * days 仅用于截取最近 N 天，默认 7。
+ */
+export async function getOrderTrend(days = 7): Promise<OrderTrendPoint[]> {
+  const client = await getApiClient();
+  const { data } = (await (client.GET as any)(
+    '/api/v1/cookies/stats/order-trend',
+  )) as { data?: unknown; error?: unknown };
+  const raw = unwrapData<{ trend?: unknown }>(data);
+  const list = raw && Array.isArray(raw.trend) ? raw.trend : [];
+  const out: OrderTrendPoint[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    out.push({
+      date: String(o.date ?? ''),
+      amount: toNumber(o.amount),
+      count: toNumber(o.count),
+    });
+  }
+  return out.slice(-days);
+}
+
+/**
+ * 订单状态汇总（待发货 / 待确认收货 / 待评价 的笔数与金额 + 金额总计）。
+ * 后端 GET /api/v1/cookies/stats/order-summary。
+ */
+export async function getOrderSummary(): Promise<OrderStatusSummary> {
+  const client = await getApiClient();
+  const { data } = (await (client.GET as any)(
+    '/api/v1/cookies/stats/order-summary',
+  )) as { data?: unknown; error?: unknown };
+  const raw = unwrapData<Record<string, unknown>>(data);
+  const obj = raw && typeof raw === 'object' ? raw : {};
+  const parseItem = (key: string): OrderStatusItem => {
+    const v = obj[key];
+    if (!v || typeof v !== 'object') return { count: 0, amount: 0 };
+    const o = v as Record<string, unknown>;
+    return {
+      count: toNumber(o.count),
+      amount: toNumber(o.amount),
+    };
+  };
+  return {
+    pending_ship: parseItem('pending_ship'),
+    pending_confirm: parseItem('pending_confirm'),
+    pending_rate: parseItem('pending_rate'),
+    total_amount: toNumber(obj.total_amount),
+  };
 }
 
 /**

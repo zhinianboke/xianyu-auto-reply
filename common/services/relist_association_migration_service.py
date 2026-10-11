@@ -31,8 +31,80 @@ class RelistAssociationMigrationService:
         "personal_blacklist",
     )
 
+    # 站外联系方式定位字段必须随回复内容一起复制：缺失时回复链路校验失败，
+    # 规则匹配成功却静默零回复。
+    LOCATION_FIELDS = (
+        "location_name",
+        "location_longitude",
+        "location_latitude",
+        "location_title",
+        "location_subtitle",
+    )
+    KEYWORD_REPLY_FIELDS = ("reply_type", "reply_content", "image_url", *LOCATION_FIELDS)
+    DEFAULT_REPLY_FIELDS = (
+        "reply_type",
+        "reply_content",
+        "reply_image",
+        "api_url",
+        "api_timeout",
+        "reply_once",
+        "enabled",
+        *LOCATION_FIELDS,
+    )
+
     def __init__(self, session: AsyncSession):
         self.session = session
+
+    @staticmethod
+    def _copy_reply_fields(src: Any, dst: Any, fields: tuple[str, ...]) -> None:
+        """按字段名整体复制回复配置，避免两处复制逻辑各自维护时漏掉新增字段。"""
+        for name in fields:
+            setattr(dst, name, getattr(src, name, None))
+
+    @staticmethod
+    def _missing_location_fields(reply: Any) -> list[str]:
+        """返回缺失的定位字段名（副标题可选，与回复链路校验一致）。"""
+        return [
+            name
+            for name in ("location_name", "location_longitude", "location_latitude", "location_title")
+            if not str(getattr(reply, name, None) or "").strip()
+        ]
+
+    @classmethod
+    def _ensure_keyword_reply_usable(cls, rule: Any) -> None:
+        """复制后的启用规则必须仍能产生回复，否则显式失败而非留下零回复规则。"""
+        if not rule.is_active:
+            return
+        reply_type = str(rule.reply_type or "text").strip().lower()
+        if reply_type == "external_contact":
+            missing = cls._missing_location_fields(rule)
+            if missing:
+                raise ValueError(
+                    f"关键词规则「{rule.keyword}」为站外联系方式但缺少定位字段"
+                    f"（{'、'.join(missing)}），迁移后会静默零回复"
+                )
+        elif reply_type == "image":
+            # 回复链路在图片地址为空时会退化为文本回复，故仅两者皆空才算无效。
+            if not str(rule.image_url or "").strip() and not str(rule.reply_content or "").strip():
+                raise ValueError(f"关键词规则「{rule.keyword}」的图片地址与回复内容均为空，迁移后会静默零回复")
+        elif not str(rule.reply_content or "").strip():
+            raise ValueError(f"关键词规则「{rule.keyword}」的回复内容为空，迁移后会静默零回复")
+
+    @classmethod
+    def _ensure_default_reply_usable(cls, reply: Any) -> None:
+        """复制后的启用默认回复必须仍能产生回复，否则显式失败而非留下零回复配置。"""
+        if not reply.enabled:
+            return
+        reply_type = str(reply.reply_type or "text").strip().lower()
+        if reply_type == "external_contact":
+            missing = cls._missing_location_fields(reply)
+            if missing:
+                raise ValueError(f"商品默认回复为站外联系方式但缺少定位字段（{'、'.join(missing)}），迁移后会静默零回复")
+        elif reply_type == "api":
+            if not str(reply.api_url or "").strip():
+                raise ValueError("商品默认回复为接口类型但缺少 API 地址，迁移后会静默零回复")
+        elif not str(reply.reply_content or "").strip() and not str(reply.reply_image or "").strip():
+            raise ValueError("商品默认回复的内容与图片均为空，迁移后会静默零回复")
 
     async def migrate_after_relist(
         self,
@@ -214,19 +286,17 @@ class RelistAssociationMigrationService:
                 )
             ).scalar_one_or_none()
             if not exists:
-                self.session.add(
-                    XYKeywordRule(
-                        owner_id=owner_id,
-                        account_pk=account_pk,
-                        keyword=row.keyword,
-                        reply_content=row.reply_content,
-                        reply_type=row.reply_type,
-                        image_url=row.image_url,
-                        item_id=new_item_id,
-                        priority=row.priority,
-                        is_active=row.is_active,
-                    )
+                new_rule = XYKeywordRule(
+                    owner_id=owner_id,
+                    account_pk=account_pk,
+                    keyword=row.keyword,
+                    item_id=new_item_id,
+                    priority=row.priority,
+                    is_active=row.is_active,
                 )
+                self._copy_reply_fields(row, new_rule, self.KEYWORD_REPLY_FIELDS)
+                self._ensure_keyword_reply_usable(new_rule)
+                self.session.add(new_rule)
         await self.session.flush()
 
     async def _migrate_default_replies(self, account_id: str, old_item_id: str, new_item_id: str) -> None:
@@ -242,19 +312,10 @@ class RelistAssociationMigrationService:
                 )
             ).scalar_one_or_none()
             if not exists:
-                self.session.add(
-                    DefaultReply(
-                        account_id=account_id,
-                        item_id=new_item_id,
-                        enabled=row.enabled,
-                        reply_type=row.reply_type,
-                        reply_content=row.reply_content,
-                        reply_image=row.reply_image,
-                        api_url=row.api_url,
-                        api_timeout=row.api_timeout,
-                        reply_once=row.reply_once,
-                    )
-                )
+                new_reply = DefaultReply(account_id=account_id, item_id=new_item_id)
+                self._copy_reply_fields(row, new_reply, self.DEFAULT_REPLY_FIELDS)
+                self._ensure_default_reply_usable(new_reply)
+                self.session.add(new_reply)
         await self.session.flush()
 
     async def _migrate_ai_prompt(self, owner_id: int, account_pk: int, old_item_id: str, new_item_id: str) -> None:

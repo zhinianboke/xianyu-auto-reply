@@ -29,13 +29,12 @@ from common.services.risk_control_log_query_service import (
     get_account_risk_control_lock,
 )
 from common.services.token_renewal_cache_service import (
-    delete_token_cache,
     mark_token_cache_expired,
     upsert_token_cache,
     write_renewed_token_cache,
 )
 from common.services.token_api_mode import load_token_api_mode
-from common.utils.xianyu_utils import trans_cookies
+from common.utils.xianyu_utils import normalize_xianyu_user_id, trans_cookies
 from app.api.deps import require_internal_auth
 from app.utils.captcha_engine import normalize_captcha_engine
 
@@ -329,10 +328,11 @@ async def restart_account(account_id: str, request: StartAccountRequest = None):
                     logger.warning(f"解析Cookie获取unb失败: {parse_e}")
                     unb = ""
 
-            # 3) 用正确的 unb 作为唯一 user_id 删除 Token 缓存
+            # 3) 用正确的 unb 作为 user_id 标记 Token 缓存失效
             if unb:
-                invalidation = await delete_token_cache(
+                invalidation = await mark_token_cache_expired(
                     token_user_id=unb,
+                    invalidate_valid_cache=True,
                 )
                 logger.info(
                     f"账号重启前{invalidation.message}: "
@@ -988,7 +988,11 @@ async def send_message(account_id: str, request: SendMessageRequest):
                 "data": None,
             }
         
-        if not request.to_user_id:
+        # 归一化接收方ID：剥离 @goofish 后缀与首尾空白后再判空。
+        # send_msg 内部会无条件拼 "@goofish"，带后缀的入参（如 "xxx@goofish"）
+        # 会变成 "xxx@goofish@goofish" 导致买家收不到而接口仍返回成功。
+        to_user_id = normalize_xianyu_user_id(request.to_user_id)
+        if not to_user_id:
             return {
                 "success": False,
                 "code": 400,
@@ -1000,7 +1004,7 @@ async def send_message(account_id: str, request: SendMessageRequest):
         send_result = await instance.send_msg(
             websocket=instance.ws,
             chat_id=request.chat_id,
-            send_user_id=request.to_user_id,
+            send_user_id=to_user_id,
             content=request.message,
         )
 
@@ -1283,6 +1287,189 @@ async def agree_pickup_deliver(request: AgreePickupDeliverRequest):
             local_order_lock.release()
 
 
+def _describe_agree_pickup_consume_failure(card: dict) -> str:
+    """取卡/落库失败时的精确原因（区分「卡券数据已耗尽」与其它取卡失败）。
+
+    D0-18：买家侧只看到「卡券库存不足或获取失败」这类笼统提示，
+    订单失败原因与卖家通知必须带卡券 ID 与卡内剩余行数，便于直接定位补货/改配置。
+    """
+    card_id = card.get('id')
+    card_type = card.get('type')
+    if card_type == 'data':
+        raw = card.get('data_content')
+        if raw is None:
+            return f"卡券数据不足或已耗尽（卡券ID {card_id}，类型 data，卡内无可用卡密行）"
+        remaining = len([ln for ln in str(raw).split('\n') if ln.strip()])
+        if remaining <= 0:
+            return f"卡券数据已耗尽（卡券ID {card_id}，类型 data，剩余 0 条卡密）"
+        return f"卡券取用失败（卡券ID {card_id}，类型 data，卡内仍有 {remaining} 条卡密）"
+    if card_type == 'api':
+        return f"卡券接口取内容失败（卡券ID {card_id}，类型 api）"
+    return f"卡券取用失败（卡券ID {card_id}，类型 {card_type}）"
+
+
+async def _load_seller_notify_targets(account_id: str, item_id: str) -> tuple[list, str]:
+    """加载卖家告警目标：账号所属用户已启用的通知渠道 + 商品标题。
+
+    渠道查询照 common/services/stock_guard_service.py::_notify_owner 的既有模式
+    （按 owner_id 取 xy_notification_channels 中 enabled=True 的全部渠道），
+    不新增表、不做站内落库；取不到账号/渠道时返回 ([], "")，由调用方跳过通知。
+    """
+    from loguru import logger
+
+    if not account_id:
+        return [], ""
+    from sqlalchemy import select
+
+    from common.db.session import async_session_maker
+    from common.models.notification_channel import NotificationChannel
+    from common.models.xy_account import XYAccount
+    from common.services.order_service import OrderService
+
+    async with async_session_maker() as session:
+        owner_id = (
+            await session.execute(
+                select(XYAccount.owner_id).where(XYAccount.account_id == account_id).limit(1)
+            )
+        ).scalar_one_or_none()
+        if owner_id is None:
+            logger.warning(f"【同意后发货】未找到账号 {account_id} 的所属用户，跳过卖家通知")
+            return [], ""
+        channels = list(
+            (
+                await session.execute(
+                    select(NotificationChannel).where(
+                        NotificationChannel.owner_id == owner_id,
+                        NotificationChannel.enabled == True,  # noqa: E712
+                    )
+                )
+            ).scalars().all()
+        )
+        item_title = ""
+        try:
+            item_title = await OrderService(session).resolve_item_title(owner_id, item_id or "")
+        except Exception as e:
+            logger.warning(f"【同意后发货】读取商品标题失败（不影响通知发送）: {e}")
+        return channels, item_title
+
+
+async def _notify_agree_pickup_failure(
+    order_no: str, snapshot: dict, fail_reason: str, *, platform_shipped: bool
+) -> None:
+    """同意后发货失败 → 通知卖家（复用既有通知渠道；任何异常只记日志，不影响买家侧返回）。"""
+    from loguru import logger
+
+    try:
+        channels, item_title = await _load_seller_notify_targets(
+            snapshot.get('account_id') or '', snapshot.get('item_id') or ''
+        )
+        if not channels:
+            logger.warning(
+                f"【同意后发货】订单 {order_no} 卖家未配置启用的通知渠道，跳过卖家告警"
+            )
+            return
+
+        from common.utils.notification_utils import (
+            parse_notification_config,
+            send_bark_notification,
+            send_dingtalk_notification,
+            send_email_notification,
+            send_feishu_notification,
+            send_pushplus_notification,
+            send_telegram_notification,
+            send_webhook_notification,
+            send_wechat_notification,
+        )
+        from common.utils.time_utils import get_beijing_now_naive
+
+        item_desc = (
+            f"{item_title}（商品ID: {snapshot.get('item_id') or '未知'}）"
+            if item_title
+            else f"商品ID: {snapshot.get('item_id') or '未知'}"
+        )
+        if platform_shipped:
+            title = "⚠️ 平台已发货但未发出卡密，需人工补发"
+            tail = (
+                "平台侧已确认发货且不可逆，买家尚未拿到卡密，"
+                "请在订单列表核对该订单并人工补发（或联系买家在提货页重新点击「同意」重试）。"
+            )
+        else:
+            title = "⚠️ 买家提货失败（平台未发货），需检查卡券配置"
+            tail = "平台侧未发货，买家可稍后重新发起提货；请检查该商品的卡券配置（数量/来源/库存）。"
+        message = (
+            f"{title}\n\n"
+            f"订单号: {order_no}\n"
+            f"商品: {item_desc}\n"
+            f"失败原因: {fail_reason}\n"
+            f"时间: {get_beijing_now_naive().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            f"{tail}"
+        )
+
+        sent = 0
+        for ch in channels:
+            try:
+                cfg = parse_notification_config(ch.config_payload)
+                t = ch.channel_type
+                if t in ("ding_talk", "dingtalk"):
+                    await send_dingtalk_notification(cfg, message)
+                elif t in ("feishu", "lark"):
+                    await send_feishu_notification(cfg, message)
+                elif t == "bark":
+                    await send_bark_notification(cfg, message)
+                elif t == "email":
+                    await send_email_notification(cfg, message, None)
+                elif t == "webhook":
+                    await send_webhook_notification(cfg, message)
+                elif t in ("wechat", "wechat_work"):
+                    await send_wechat_notification(cfg, message)
+                elif t == "pushplus":
+                    await send_pushplus_notification(cfg, message)
+                elif t == "telegram":
+                    await send_telegram_notification(cfg, message)
+                else:
+                    logger.warning(f"【同意后发货】不支持的通知渠道类型: {t}")
+                    continue
+                sent += 1
+            except Exception as e:
+                logger.warning(
+                    f"【同意后发货】通知渠道 {getattr(ch, 'id', '?')}"
+                    f"({getattr(ch, 'channel_type', '?')}) 发送失败: {e}"
+                )
+        logger.info(f"【同意后发货】订单 {order_no} 卖家告警已发送（成功渠道数 {sent}）")
+    except Exception as e:
+        logger.warning(f"【同意后发货】订单 {order_no} 卖家告警发送异常（不影响买家侧）: {e}")
+
+
+async def _record_and_notify_agree_pickup_failure(
+    order_no: str, snapshot: dict, *, fail_reason: str, platform_shipped: bool
+) -> None:
+    """同意后发货失败收口：写订单失败原因 + 通知卖家。
+
+    - 写库复用 OrderService.update_order_delivery_fail_reason（service 内 commit/rollback，
+      独立 session），与同文件其它发货路径的既有写法一致；
+    - 幂等：订单已有 delivery_fail_reason 与本次原因相同 → 只记日志，不重复通知卖家，
+      避免买家反复点击提货页造成通知轰炸（不新增表）。
+    """
+    from loguru import logger
+
+    try:
+        from common.db.session import async_session_maker
+        from common.services.order_service import OrderService
+
+        async with async_session_maker() as session:
+            await OrderService(session).update_order_delivery_fail_reason(order_no, fail_reason)
+    except Exception as e:
+        logger.warning(f"【同意后发货】订单 {order_no} 写入失败原因异常: {e}")
+
+    previous = (snapshot.get('delivery_fail_reason') or '').strip()
+    if previous and previous == fail_reason.strip():
+        logger.info(f"【同意后发货】订单 {order_no} 失败原因未变化，跳过重复卖家告警")
+        return
+    await _notify_agree_pickup_failure(
+        order_no, snapshot, fail_reason, platform_shipped=platform_shipped
+    )
+
+
 async def _agree_pickup_deliver_impl(xianyu_live, order_no: str):
     """同意后发货核心流程（调用方已持有本地订单锁）"""
     from loguru import logger
@@ -1312,8 +1499,16 @@ async def _agree_pickup_deliver_impl(xianyu_live, order_no: str):
 
     # 先选卡（存在性校验）：无可用/非自有卡券则不触发确认发货，直接提示
     cards = db_manager.get_cards_by_item_id(item_id, snapshot['spec_name'], snapshot['spec_value'])
-    card, card_err = pick_unique_own_card(cards)
+    card, card_err, card_fail_reason = pick_unique_own_card(cards)
     if card_err:
+        # 选卡失败发生在平台动作之前（平台未发货），但卖家仍需知情：
+        # 否则卡券配置错误（无卡/同来源多卡冲突）只能靠买家主动联系才被发现。
+        await _record_and_notify_agree_pickup_failure(
+            order_no,
+            snapshot,
+            fail_reason=f"提货选卡失败（未触发平台发货）：{card_fail_reason or card_err}",
+            platform_shipped=False,
+        )
         return {"success": False, "code": 200, "message": card_err, "data": None}
 
     card_type = card.get('type')
@@ -1354,9 +1549,24 @@ async def _agree_pickup_deliver_impl(xianyu_live, order_no: str):
         'buyer_id': snapshot['buyer_id'] or '',
         'buyer_name': snapshot['buyer_fish_nick'] or '',
     }
-    ok, msg, content = await consume_card_and_record(order_no, card.get('id'), quantity, context)
+    consume_exc_reason = None
+    try:
+        ok, msg, content = await consume_card_and_record(order_no, card.get('id'), quantity, context)
+    except Exception as e:
+        # 取卡/落库抛异常同样属于「平台已发货但本地无卡」：必须与返回失败分支一样上报，
+        # 不能让异常直接冒泡成 500（否则买家无卡、卖家无告警）。
+        ok, msg, content = False, "取卡/落库异常，请联系卖家", None
+        consume_exc_reason = f"取卡/落库异常: {e}"
     if not ok:
         logger.warning(f"【同意后发货】订单 {order_no} 取卡/落库失败: {msg}")
+        # 走到这里平台侧「确认发货」已成功且不可逆：写订单失败原因 + 通知卖家人工补发
+        fail_reason = consume_exc_reason or _describe_agree_pickup_consume_failure(card)
+        await _record_and_notify_agree_pickup_failure(
+            order_no,
+            snapshot,
+            fail_reason=f"⚠️ 平台已发货但未发出卡密，需人工补发：{fail_reason}",
+            platform_shipped=True,
+        )
         return {"success": False, "code": 200, "message": msg, "data": None}
 
     logger.info(f"【同意后发货】订单 {order_no} 买家已同意，发货完成，卡券内容已生成")
@@ -2135,6 +2345,16 @@ async def _deliver_order_impl(request: DeliverOrderRequest):
             if quantity > 1 and i < quantity - 1:
                 await asyncio.sleep(1)
 
+        # 售罄守卫：data 卡库存被消费后检查（自带开关/类型判断，异常只记日志）
+        if card.type == 'data':
+            try:
+                from common.db.session import async_session_maker as _sg_asm
+                from common.services.stock_guard_service import delist_card_if_empty
+                async with _sg_asm() as _sg_session:
+                    await delist_card_if_empty(_sg_session, request.card_id, trigger="delivery_internal")
+            except Exception as _sg_e:
+                logger.warning(f"【内部API】售罄守卫异常(忽略): {_sg_e}")
+
         # 没有获取到任何内容：双重保险（前面已 return，这里防御性兜底）
         if not raw_contents:
             logger.error(f"【内部API】未获取到任何发货内容: order_no={request.order_no}")
@@ -2545,8 +2765,14 @@ async def refresh_token(account_id: str):
     # 触发 Token 刷新
     try:
         if instance.token_manager:
-            # 使用 token_manager 触发刷新
-            await instance.token_manager.trigger_refresh()
+            # TokenManager.trigger_refresh 内部复用既有刷新实现，并在后台执行一次
+            # 即时刷新（刷新可能超过 backend-web 调用方的 10s 超时，故为"已提交"语义）
+            accepted = await instance.token_manager.trigger_refresh()
+            if not accepted:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Token刷新请求未被接受"
+                )
             logger.info(f"【内部API】Token刷新请求已提交: account_id={account_id}")
             
             return {
@@ -2562,6 +2788,10 @@ async def refresh_token(account_id: str):
                 status_code=500,
                 detail="Token管理器未初始化"
             )
+    except HTTPException:
+        # 上面的 404/500 语义要原样透出，避免被下面的兜底包装成
+        # "Token刷新失败: 500: ..." 之类的嵌套文案
+        raise
     except Exception as e:
         logger.error(f"【内部API】Token刷新失败: {e}")
         raise HTTPException(

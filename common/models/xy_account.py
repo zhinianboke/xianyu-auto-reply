@@ -62,6 +62,9 @@ class XYAccount(TimestampMixin, Base):
     agree_deliver_enabled: Mapped[bool] = mapped_column(Boolean, default=False, comment="同意后发货开关")
     agree_deliver_notify_message: Mapped[str | None] = mapped_column(String(2000), comment="同意后发货-通知用户信息")
     agree_deliver_pickup_url: Mapped[str | None] = mapped_column(String(255), comment="同意后发货-提货URL")
+    # 提货后通知：买家同意提货发卡后主动提醒确认收货（账号级，默认关闭）
+    agree_pickup_notice_enabled: Mapped[bool] = mapped_column(Boolean, default=False, comment="提货后提醒确认收货开关")
+    agree_pickup_notice_content: Mapped[str | None] = mapped_column(String(2000), comment="提货后提醒内容")
 
     # 相同消息等待时间(秒)
     message_expire_time: Mapped[int] = mapped_column(Integer, default=3600, comment="相同消息等待时间(秒)")

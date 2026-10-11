@@ -23,6 +23,7 @@ type ModelOption = { id: string; name?: string };
 
 interface FormState {
   name: string;
+  provider_type: string;
   text_base_url: string;
   text_api_key: string;
   text_model: string;
@@ -37,8 +38,15 @@ interface FormState {
   image_count: string;
 }
 
+const PROVIDER_OPTIONS = [
+  { value: 'openai_compatible', label: 'OpenAI兼容' },
+  { value: 'gemini', label: 'Google Gemini' },
+  { value: 'dashscope_app', label: 'DashScope应用' },
+];
+
 const EMPTY_FORM: FormState = {
   name: '',
+  provider_type: 'openai_compatible',
   text_base_url: '',
   text_api_key: '',
   text_model: '',
@@ -68,6 +76,7 @@ function formFromConfig(cfg: AiListingConfig): FormState {
     image_model: cfg.image_model,
     image_size: cfg.image_size,
     image_count: String(cfg.image_count),
+    provider_type: cfg.provider_type || 'openai_compatible',
   };
 }
 
@@ -164,6 +173,7 @@ export default function AiListingConfigsScreen() {
     try {
       const apiKey = form.text_api_key.trim() || undefined;
       const models = await getAiListingModels({
+        provider_type: form.provider_type,
         base_url: form.text_base_url.trim(),
         api_key: apiKey,
         config_id: editing && !apiKey ? editing.id : undefined,
@@ -183,6 +193,7 @@ export default function AiListingConfigsScreen() {
     try {
       const apiKey = form.image_api_key.trim() || undefined;
       const models = await getAiListingModels({
+        provider_type: form.provider_type,
         base_url: form.image_base_url.trim(),
         api_key: apiKey,
         config_id: editing && !apiKey ? editing.id : undefined,
@@ -209,6 +220,7 @@ export default function AiListingConfigsScreen() {
     }
     const params: AiListingConfigParams = {
       name: form.name.trim(),
+      provider_type: form.provider_type,
       text_base_url: form.text_base_url.trim(),
       text_api_key: form.text_api_key,
       text_model: form.text_model.trim(),
@@ -242,9 +254,14 @@ export default function AiListingConfigsScreen() {
     setTestingId(item.id);
     try {
       const reply = await testAiListingConfig(item.id);
-      Alert.alert('测试结果', reply || '(无回复)');
+      Alert.alert('测试结果', reply || '(AI 返回空回复，请检查模型名与 API Key)');
     } catch (e) {
-      Alert.alert('测试失败', (e as Error).message);
+      const msg = (e as Error).message || '未知错误';
+      // 后端业务错误（success:false）会原样透传，常见于模型名错或 Key 失效
+      Alert.alert(
+        '测试失败',
+        `${msg}\n\n排查建议：\n1) 模型名需为服务商真实模型（智谱用 glm-4-plus/glm-4-flash/glm-4.5 等，glm-5.2 不是智谱公开模型）\n2) API Key 是否为该网关生成的有效令牌\n3) base_url 是否可达`,
+      );
     } finally {
       setTestingId(null);
     }
@@ -372,6 +389,27 @@ export default function AiListingConfigsScreen() {
           <View style={styles.fieldGroup}>
             <Text style={[styles.fieldLabel, { color: c.textSecondary }]}>配置名</Text>
             <Input value={form.name} onChangeText={(v) => update({ name: v })} placeholder="如 默认配置" />
+          </View>
+
+          <View style={styles.fieldGroup}>
+            <Text style={[styles.fieldLabel, { color: c.textSecondary }]}>服务商类型</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
+              {PROVIDER_OPTIONS.map((o) => {
+                const active = form.provider_type === o.value;
+                return (
+                  <Pressable
+                    key={o.value}
+                    onPress={() => update({ provider_type: o.value })}
+                    style={[
+                      styles.modelChip,
+                      { backgroundColor: active ? c.primary : c.surface, borderColor: active ? c.primary : c.border },
+                    ]}
+                  >
+                    <Text style={{ color: active ? '#FFF' : c.text, ...typography.small }}>{o.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
           </View>
 
           <View style={styles.fieldGroup}>

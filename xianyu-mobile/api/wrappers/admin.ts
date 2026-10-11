@@ -96,15 +96,25 @@ function parseList<T>(
   return { items, total: typeof total === 'number' ? total : items.length };
 }
 
-/** 获取用户列表（管理员） */
-export async function getAdminUsers(): Promise<AdminUser[]> {
+/**
+ * 获取用户列表（管理员）。
+ * 后端返回 `{ users: [...], success, total, limit, offset }`（admin.py list_users），
+ * 用户数组在 users 键而非 data 键。
+ * @param username 用户名筛选（模糊匹配，后端 username query 参数）
+ */
+export async function getAdminUsers(username?: string): Promise<AdminUser[]> {
   const client = await getApiClient();
-  const { data } = (await (client.GET as any)('/api/v1/admin/users')) as {
-    data?: unknown;
-    error?: unknown;
-  };
-  const body = unwrapData<unknown>(data);
-  return Array.isArray(body) ? (body as AdminUser[]) : [];
+  const query: Record<string, string | number> = { limit: 100 };
+  if (username && username.trim()) query.username = username.trim();
+  const { data } = (await (client.GET as any)('/api/v1/admin/users', {
+    params: { query },
+  })) as { data?: unknown; error?: unknown };
+  const body = unwrapData<Record<string, unknown>>(data);
+  if (Array.isArray(body?.users)) return body.users as AdminUser[];
+  // 兼容可能的裸数组 / data 包裹形态
+  if (Array.isArray(body)) return body as AdminUser[];
+  if (Array.isArray(body?.data)) return body.data as AdminUser[];
+  return [];
 }
 
 /** 创建用户（管理员） */
@@ -146,50 +156,98 @@ export async function rechargeUser(
   });
 }
 
-/** 获取管理员日志（分页） */
-export async function getAdminLogs(
-  page: number,
-  pageSize: number,
-): Promise<{ data: LogEntry[]; total: number }> {
+/**
+ * 获取系统日志（后端 GET /api/v1/admin/logs 实为 logs/*.log 的 tail）。
+ * query 为 lines（1-1000）/level，返回 `{ success, logs: ["字符串", ...], total }`，
+ * 不是分页的 { data: [LogEntry] } 结构。
+ * 每行解析行首时间戳与日志级别；无时间戳的行（如堆栈续行）沿用上一行时间以便排序后保持相邻，
+ * 最后按时间倒序返回（最新在前）。
+ */
+export async function getAdminLogs(lines = 500): Promise<LogEntry[]> {
   const client = await getApiClient();
   const { data } = (await (client.GET as any)('/api/v1/admin/logs', {
-    params: { query: { page, page_size: pageSize } },
+    params: { query: { lines } },
   })) as { data?: unknown; error?: unknown };
-  const body = unwrapData<unknown>(data);
-  if (body && typeof body === 'object' && 'data' in body) {
-    const obj = body as { data?: unknown; total?: number };
-    const arr = Array.isArray(obj.data) ? (obj.data as LogEntry[]) : [];
-    return { data: arr, total: obj.total ?? arr.length };
-  }
-  if (Array.isArray(body)) {
-    return { data: body as LogEntry[], total: body.length };
-  }
-  return { data: [], total: 0 };
+  const body = (data ?? {}) as Record<string, unknown>;
+  const arr = Array.isArray(body.logs) ? (body.logs as unknown[]) : [];
+  let seq = 0;
+  let lastTs = '';
+  const entries = arr.map((raw) => {
+    const line = String(raw ?? '');
+    const tsMatch = line.match(/^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})/);
+    if (tsMatch) lastTs = tsMatch[1].replace('T', ' ');
+    const levelMatch = line.match(
+      /\|\s*(TRACE|DEBUG|INFO|SUCCESS|WARNING|WARN|ERROR|CRITICAL)\s*\|/,
+    );
+    return {
+      id: seq++,
+      type: levelMatch ? levelMatch[1] : undefined,
+      content: line,
+      created_at: lastTs,
+    };
+  });
+  // 字符串时间戳格式统一，字典序即时间序；sort 稳定，同刻保持原相对顺序
+  return entries.sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
 }
 
-/** 清除管理员日志 */
-export async function clearAdminLogs(): Promise<void> {
-  const client = await getApiClient();
-  await (client.POST as any)('/api/v1/admin/logs/clear');
+/** 自动回复日志条目：content 取 reply_text，附带关键词与回复策略 */
+export interface AutoReplyLogEntry extends LogEntry {
+  /** 命中的关键词（后端 matched_keyword） */
+  keyword?: string;
+  /** 回复策略（后端 reply_strategy 的中文标签） */
+  strategy?: string;
+  /** 发送状态（success/failed/unknown/timeout） */
+  send_status?: string;
 }
 
-/** 获取自动回复日志（分页） */
-export async function getAutoReplyLogs(page: number): Promise<LogEntry[]> {
+/** 回复策略 → 中文标签（后端 reply_strategy: keyword/ai/default/auto_delivery/none...） */
+function replyStrategyLabel(strategy: unknown): string | undefined {
+  if (strategy == null) return undefined;
+  const s = String(strategy);
+  switch (s) {
+    case 'keyword':
+      return '关键词回复';
+    case 'ai':
+      return 'AI 回复';
+    case 'default':
+      return '默认回复';
+    case 'auto_delivery':
+      return '自动发货';
+    case 'none':
+      return '未匹配';
+    default:
+      return s;
+  }
+}
+
+/** 获取自动回复日志（分页）；后端字段为 keyword/reply_text/reply_strategy/created_at */
+export async function getAutoReplyLogs(page: number): Promise<AutoReplyLogEntry[]> {
   const client = await getApiClient();
   const { data } = (await (client.GET as any)('/api/v1/auto-reply-logs', {
-    params: { query: { page } },
+    params: { query: { page, page_size: 20 } },
   })) as { data?: unknown; error?: unknown };
   const body = unwrapData<unknown>(data);
-  if (Array.isArray(body)) return body as LogEntry[];
-  if (
+  let arr: unknown[] = [];
+  if (Array.isArray(body)) arr = body;
+  else if (
     body &&
     typeof body === 'object' &&
-    'data' in body &&
     Array.isArray((body as { data?: unknown }).data)
   ) {
-    return (body as { data: LogEntry[] }).data;
+    arr = (body as { data: unknown[] }).data;
   }
-  return [];
+  return arr.map((raw) => {
+    const r = (raw ?? {}) as Record<string, unknown>;
+    return {
+      id: Number(r.id ?? 0),
+      type: r.matched_rule_type != null ? String(r.matched_rule_type) : undefined,
+      content: r.reply_text != null ? String(r.reply_text) : '',
+      created_at: r.created_at != null ? String(r.created_at) : '',
+      keyword: r.matched_keyword != null ? String(r.matched_keyword) : undefined,
+      strategy: replyStrategyLabel(r.reply_strategy),
+      send_status: r.send_status != null ? String(r.send_status) : undefined,
+    } as AutoReplyLogEntry;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -547,37 +605,9 @@ export async function testRemoteSliderSolve(
   }
 }
 
-// ==================== 定时任务 ====================
-
-export interface ScheduledTask {
-  id: number;
-  task_code: string;
-  task_name: string;
-  interval_seconds: number;
-  enabled: boolean;
-  description: string | null;
-  task_running: boolean;
-}
-
-export async function getScheduledTasks(): Promise<{ tasks: ScheduledTask[]; schedulerRunning: boolean }> {
-  const client = await getApiClient();
-  const { data } = (await (client.GET as any)('/api/v1/admin/scheduled-tasks')) as { data?: unknown };
-  const body = unwrapData<Record<string, unknown>>(data);
-  const tasks = Array.isArray(body) ? body as ScheduledTask[] : (body as { data?: ScheduledTask[] })?.data ?? [];
-  return { tasks, schedulerRunning: Boolean((body as { scheduler_running?: boolean })?.scheduler_running) };
-}
-
-export async function updateScheduledTask(id: number, params: { interval_seconds?: number; enabled?: boolean }): Promise<void> {
-  const client = await getApiClient();
-  await (client.PUT as any)(`/api/v1/admin/scheduled-tasks/${id}`, { body: params });
-}
-
-export async function triggerScheduledTask(id: number): Promise<void> {
-  const client = await getApiClient();
-  await (client.POST as any)(`/api/v1/admin/scheduled-tasks/${id}/trigger`, { body: {} });
-}
-
 // ==================== 数据管理 ====================
+// 注意：定时任务封装在 api/wrappers/scheduled-tasks.ts（task_code + query 参数），
+// 此处不再提供 id 版定时任务封装，避免与后端契约不符产生 404。
 
 export async function getTableData(tableName: string): Promise<{ rows: Record<string, unknown>[]; count: number; columns: string[] }> {
   const client = await getApiClient();
@@ -588,8 +618,5 @@ export async function getTableData(tableName: string): Promise<{ rows: Record<st
   const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
   return { rows, count, columns };
 }
-
-export async function clearTableData(tableName: string): Promise<void> {
-  const client = await getApiClient();
-  await (client.DELETE as any)(`/api/v1/admin/data/${tableName}`);
-}
+// 后端 DELETE /api/v1/admin/data/{table} 为 501 占位（admin.py clear_table_placeholder），
+// 不提供清空表封装。

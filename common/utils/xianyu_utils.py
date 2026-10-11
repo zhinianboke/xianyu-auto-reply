@@ -26,6 +26,18 @@ def canonical_goofish_item_url(item_id: Any) -> str:
     return f"https://www.goofish.com/item?id={normalized_id}" if normalized_id else ""
 
 
+def normalize_xianyu_user_id(user_id: Any) -> str:
+    """归一化闲鱼用户ID：去掉首尾空白与 @ 后缀（如 @goofish）。
+
+    发送协议里接收人会无条件拼接 "@goofish"，调用方若已带后缀会变成
+    "xxx@goofish@goofish"，接口仍返回成功但买家收不到，因此入口统一归一化。
+    """
+    normalized = str(user_id or "").strip()
+    if "@" in normalized:
+        normalized = normalized.split("@", 1)[0].strip()
+    return normalized
+
+
 def trans_cookies(cookies_str: str) -> Dict[str, str]:
     """将cookies字符串转换为字典
     

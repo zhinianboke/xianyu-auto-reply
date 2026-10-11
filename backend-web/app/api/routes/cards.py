@@ -39,6 +39,7 @@ class CardCreate(BaseModel):
     is_multi_spec: Optional[bool] = False
     spec_name: Optional[str] = None
     spec_value: Optional[str] = None
+    auto_delist_on_soldout: Optional[bool] = None  # 售罄自动下架开关（仅data类型）
     api_config: Optional[Dict[str, Any]] = None
     text_content: Optional[str] = None
     data_content: Optional[str] = None
@@ -62,6 +63,7 @@ class CardUpdate(BaseModel):
     is_multi_spec: Optional[bool] = None
     spec_name: Optional[str] = None
     spec_value: Optional[str] = None
+    auto_delist_on_soldout: Optional[bool] = None  # 售罄自动下架开关（仅data类型）
     api_config: Optional[Dict[str, Any]] = None
     text_content: Optional[str] = None
     data_content: Optional[str] = None
@@ -270,6 +272,7 @@ async def create_card(
             is_multi_spec=card_data.is_multi_spec or False,
             spec_name=card_data.spec_name if card_data.is_multi_spec else None,
             spec_value=card_data.spec_value if card_data.is_multi_spec else None,
+            auto_delist_on_soldout=bool(card_data.auto_delist_on_soldout),
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

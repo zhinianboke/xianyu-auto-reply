@@ -157,6 +157,10 @@ class RateTask:
         result = await session.execute(stmt)
         return list(result.scalars().all())
     
+    # 待评价订单回溯天数：买家确认收货通常发生在下单数日后，
+    # 若只查当天下单会漏掉跨天收货的订单；闲鱼评价有效期约30天，取25天留有余量
+    PENDING_LOOKBACK_DAYS = 25
+
     async def _get_pending_rate_orders(
         self,
         session: AsyncSession,
@@ -164,27 +168,27 @@ class RateTask:
     ) -> List[XYOrder]:
         """
         获取待评价订单
-        
+
         条件：
         - account_id 匹配
-        - 真实下单时间(placed_at)在当天（不是数据库写入时间，
-          避免同步历史订单时 created_at 被误判为今日订单）
+        - 真实下单时间(placed_at)在最近 PENDING_LOOKBACK_DAYS 天内
+          （不能只看当天：买家收货往往跨天，只查当天下单会漏掉已收货的旧订单；
+           同时不能全量查历史，避免闲鱼接口轮询量过大。评价有效期约30天，取25天兜底）
         - placed_at 不为 NULL（历史空值数据跳过，防误伤）
         - 状态为 'shipped'（已发货）或 'completed'（已完成）
         - 未评价（is_rated = False 或 NULL）
         """
-        # 获取今天的开始时间（北京时间）
         now = get_beijing_now_naive()
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        
+        lookback_start = now - timedelta(days=self.PENDING_LOOKBACK_DAYS)
+
         stmt = select(XYOrder).where(
             XYOrder.account_id == account_id,
             XYOrder.placed_at.is_not(None),
-            XYOrder.placed_at >= today_start,
+            XYOrder.placed_at >= lookback_start,
             XYOrder.status.in_(["shipped", "completed"]),
             (XYOrder.is_rated == False) | (XYOrder.is_rated == None),
         ).order_by(XYOrder.placed_at)
-        
+
         result = await session.execute(stmt)
         return list(result.scalars().all())
     
@@ -349,13 +353,16 @@ class RateTask:
         
         logger.debug(f"[定时补评价] 开始处理订单: {order_no}，商品ID: {item_id}，当前状态: {order.status}")
         
-        # 检查商品是否属于当前账号（只有商品ID存在时才检查）
+        # 商品归属校验：仅当商品在库且明确属于"其它账号"时才拦截。
+        # 商品重新上架会换 item_id 导致旧记录被删，此时查不到记录并不代表是别家订单，
+        # 后续 check_can_rate / rate_buyer 用当前账号 Cookie 调闲鱼接口，
+        # 闲鱼服务端会拒绝非本账号订单的评价，交由其兜底即可。
         if item_id:
             belongs_to_account = await self._check_item_belongs_to_account(account.id, item_id)
-            if not belongs_to_account:
-                logger.info(f"[定时补评价] 商品 {item_id} 不属于账号 {account_id}，跳过评价")
+            if belongs_to_account is False:
+                logger.info(f"[定时补评价] 商品 {item_id} 明确属于其它账号，跳过评价")
                 return False, f"商品 {item_id} 不属于当前账号", cookie_string
-        # 商品ID不存在时继续执行原有逻辑
+            # belongs_to_account 为 None（记录缺失）时放行
         
         # 调用check_can_rate检查订单是否可以评价（传入account_id支持令牌过期自动刷新Cookie）
         from common.services.order_service import check_can_rate
@@ -470,9 +477,16 @@ class RateTask:
                 return
             
             # 2) 发送消息内容（等待服务端结果，识别安全拦截）
+            # to_user_id 为 #326 起的必填项：缺省会导致接收人变成 None@goofish，买家收不到
             send_url = f"{base_url}/internal/accounts/{order.account_id}/send-message"
             send_res = await http_client.post(
-                send_url, json={"chat_id": chat_id, "message": content, "wait_result": True}
+                send_url,
+                json={
+                    "chat_id": chat_id,
+                    "message": content,
+                    "to_user_id": str(order.buyer_id),
+                    "wait_result": True,
+                },
             )
             if not isinstance(send_res, dict) or not send_res.get("success"):
                 msg = send_res.get("message") if isinstance(send_res, dict) else send_res
@@ -493,29 +507,40 @@ class RateTask:
             logger.info(f"[定时补评价] 订单 {order_no} 好评后消息已发送: {content[:50]}...")
         except Exception as e:
             logger.warning(f"[定时补评价] 订单 {order_no} 好评后消息发送异常: {e}")
-    
-    async def _check_item_belongs_to_account(self, account_pk: int, item_id: str) -> bool:
-        """检查商品是否属于指定账号
-        
+
+    async def _check_item_belongs_to_account(self, account_pk: int, item_id: str) -> Optional[bool]:
+        """检查商品归属，三态返回
         Args:
             account_pk: 账号主键ID
             item_id: 商品ID
-            
+
         Returns:
-            True表示商品属于该账号，False表示不属于
+            True  - 商品在库且属于本账号
+            False - 商品在库但属于其它账号（应拦截）
+            None  - 商品记录缺失（商品已删除/重新上架），交由闲鱼接口兜底
         """
         try:
             from common.models.xy_catalog_item import XYCatalogItem
-            
+
             async with async_session_maker() as session:
+                # 先查该商品是否在库（不限账号）
+                stmt_any = select(XYCatalogItem).where(XYCatalogItem.item_id == item_id)
+                result_any = await session.execute(stmt_any)
+                item_any = result_any.scalars().first()
+
+                # 商品记录缺失：无法判断归属，返回 None 由闲鱼侧兜底
+                if item_any is None:
+                    return None
+
+                # 商品在库，校验是否属于当前账号
                 stmt = select(XYCatalogItem).where(
                     XYCatalogItem.account_pk == account_pk,
                     XYCatalogItem.item_id == item_id
                 )
                 result = await session.execute(stmt)
-                item = result.scalars().first()
-                return item is not None
-                
+                return result.scalars().first() is not None
+
         except Exception as e:
             logger.error(f"[定时补评价] 检查商品归属失败: account_pk={account_pk}, item_id={item_id}, error={e}")
-            return False
+            # 异常时返回 None 放行，避免因校验故障漏评（闲鱼接口会兜底）
+            return None

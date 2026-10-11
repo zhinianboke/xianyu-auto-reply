@@ -19,6 +19,7 @@ import aiohttp
 from loguru import logger
 from sqlalchemy import delete as sql_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from common.db.session import async_session_maker
 from common.models.xy_account import XYAccount
@@ -35,8 +36,48 @@ class PolishTaskService:
     # 擦亮日志保留天数，超过该天数的日志在每次任务执行时主动清理
     LOG_RETENTION_DAYS = 10
 
+    # 平台侧已下架商品的重试间隔（小时）：期间不发擦亮请求，避免每 2 分钟一次无效调用
+    PLATFORM_OFFLINE_RETRY_HOURS = 2
+
+    # 商品元数据中记录「平台侧已下架」的时间戳键名
+    PLATFORM_OFFLINE_KEY = "platform_offline_at"
+
     def __init__(self):
         self.task_name = "定时擦亮"
+
+    @classmethod
+    def _mark_platform_offline(cls, item: XYCatalogItem) -> None:
+        """记录商品在平台侧处于已下架状态（本次跳过擦亮，但保留本地记录与配置）。
+
+        擦亮接口对已下架商品返回 UNSUPPORTED_ITEM_STATUS，这只是商品在平台的瞬时状态：
+        卖家补货 / 重新上架后同一 item_id 会重新在售。故此处只写标记，**绝不删除
+        xy_catalog_items 行**——删行会连带丢掉 ai_prompt 与 metadata（展示入口、
+        查询按钮、多规格开关等本地配置），商品同步重建行时无法恢复，行 id 也会变化。
+        """
+        metadata = dict(item.metadata_json or {})
+        metadata[cls.PLATFORM_OFFLINE_KEY] = get_beijing_now_naive().isoformat(timespec="seconds")
+        item.metadata_json = metadata
+        flag_modified(item, "metadata_json")
+
+    @classmethod
+    def _platform_offline_cooldown_active(cls, item: XYCatalogItem) -> bool:
+        """已下架标记仍在退避窗口内 → 本轮跳过（不调用擦亮接口）。"""
+        raw = (item.metadata_json or {}).get(cls.PLATFORM_OFFLINE_KEY)
+        if not raw:
+            return False
+        try:
+            marked_at = datetime.fromisoformat(str(raw))
+        except ValueError:
+            return False
+        return get_beijing_now_naive() - marked_at < timedelta(hours=cls.PLATFORM_OFFLINE_RETRY_HOURS)
+
+    @classmethod
+    def _clear_platform_offline(cls, item: XYCatalogItem) -> None:
+        """擦亮成功说明商品已重新在售，清掉此前的已下架标记。"""
+        metadata = dict(item.metadata_json or {})
+        if metadata.pop(cls.PLATFORM_OFFLINE_KEY, None) is not None:
+            item.metadata_json = metadata
+            flag_modified(item, "metadata_json")
 
     async def execute(self):
         """执行定时擦亮任务"""
@@ -161,12 +202,22 @@ class PolishTaskService:
             # 2. 遍历商品，执行擦亮
             success_count = 0
             failed_count = 0
+            skipped_count = 0
 
             # 使用可变的cookie_str，令牌过期刷新后后续商品能用新cookie
             current_cookie_str = account.cookie
             
             for item in items:
                 try:
+                    # 平台侧已下架且仍在退避窗口内：本轮不发请求（标记见 _mark_platform_offline）
+                    if self._platform_offline_cooldown_active(item):
+                        skipped_count += 1
+                        logger.debug(
+                            f"【{self.task_name}】账号 {account.account_id} 商品 {item.item_id} "
+                            f"平台侧已下架，退避窗口内跳过"
+                        )
+                        continue
+
                     # 执行擦亮
                     result = await self._polish_item(current_cookie_str, item.item_id)
                     
@@ -188,6 +239,7 @@ class PolishTaskService:
                     if is_success:
                         # 擦亮成功，更新商品状态
                         item.is_polished = True
+                        self._clear_platform_offline(item)
                         session.add(item)
                         success_count += 1
                         logger.info(f"【{self.task_name}】账号 {account.account_id} 商品 {item.item_id} 擦亮成功")
@@ -227,12 +279,15 @@ class PolishTaskService:
                             )
                             break
                         
-                        # 已下架商品，直接删除商品记录
+                        # 已下架商品：只标记跳过，绝不删除本地商品记录。
+                        # 卖家「改库存 / 重新上架」会让同一商品在「在售 ↔ 已下架」之间反复切换，
+                        # 删行会连带丢掉 ai_prompt 与 metadata（展示入口/查询按钮/多规格），
+                        # 下次商品同步重建行时无法恢复（行 id 也会变），故此处仅写退避标记。
                         if 'UNSUPPORTED_ITEM_STATUS' in error_msg or '已下架商品不支持该操作' in error_msg:
-                            await session.delete(item)
-                            logger.info(
+                            self._mark_platform_offline(item)
+                            logger.warning(
                                 f"【{self.task_name}】账号 {account.account_id} 商品 {item.item_id} "
-                                f"已下架，已删除商品记录"
+                                f"平台侧已下架，本次跳过擦亮（保留本地商品记录与配置）"
                             )
                         
                         # 记录失败日志
@@ -268,7 +323,7 @@ class PolishTaskService:
             
             logger.info(
                 f"【{self.task_name}】账号 {account.account_id} 处理完成，"
-                f"成功: {success_count}, 失败: {failed_count}"
+                f"成功: {success_count}, 失败: {failed_count}, 跳过: {skipped_count}"
             )
             
             return success_count, failed_count

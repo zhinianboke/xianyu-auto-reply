@@ -19,7 +19,7 @@ import {
   getNotificationChannels,
   getMessageNotifications,
   createMessageNotification,
-  updateMessageNotification,
+  upsertMessageNotification,
   deleteMessageNotification,
   type MessageNotificationBinding,
 } from '@/api/wrappers/notifications';
@@ -68,7 +68,8 @@ export default function MessageNotificationsScreen() {
   async function handleToggle(item: MessageNotificationBinding) {
     const next = !item.enabled;
     setBindings((prev) => prev.map((b) => (b.id === item.id ? { ...b, enabled: next } : b)));
-    try { await updateMessageNotification(item.id, next); }
+    // 后端无 PUT /{id}，用 POST /{cookie_id} upsert（按账号+渠道更新 enabled）
+    try { await upsertMessageNotification(item.account_id, item.channel_id, next); }
     catch (e) {
       setBindings((prev) => prev.map((b) => (b.id === item.id ? { ...b, enabled: !next } : b)));
       Alert.alert('操作失败', (e as Error).message);

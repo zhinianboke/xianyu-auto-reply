@@ -12,7 +12,11 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from common.models.card_item_relation import CardItemRelation
+from common.models.default_reply import DefaultReply
 from common.models.product_material import ProductMaterial
+from common.models.xy_account import XYAccount
+from common.models.xy_catalog_item import XYCatalogItem
 from app.services.xianyu_item_snapshot import as_bool
 
 
@@ -143,6 +147,7 @@ class ProductMaterialService:
             brand=data.get("brand"),
             condition=data.get("condition", "全新"),
             remark=data.get("remark"),
+            item_config=data.get("item_config"),
         )
         self.session.add(material)
         await self.session.commit()
@@ -250,7 +255,7 @@ class ProductMaterialService:
             "platform_channel_category_id", "platform_channel_category_name",
             "platform_leaf_id", "platform_tb_category_id", "platform_category_path", "platform_attributes",
             "category_source", "category_confidence", "images", "videos", "specifications", "sku_rows", "quantity",
-            "delivery_method", "shipping_method", "support_pickup", "postage", "address", "address_expected_text", "brand", "condition", "remark",
+            "delivery_method", "shipping_method", "support_pickup", "postage", "address", "address_expected_text", "brand", "condition", "remark", "item_config",
         ]
         for field in updatable:
             if field in data:
@@ -297,6 +302,79 @@ class ProductMaterialService:
         await self.session.commit()
         return len(rows)
 
+    async def collect_from_item(self, item_id: str, owner_id: int | None = None) -> dict | None:
+        """从已有商品列表项采集素材草稿（标题/价格/规格为空 + 完整 item_config）。
+
+        配置来源：xy_catalog_items（title/price/ai_prompt + metadata 的
+        multi_quantity_delivery/query_buttons）、xy_card_item_relations（card_ids）、
+        xy_default_replies（account_id+item_id 命中的 reply_content）。
+
+        Args:
+            item_id: 商品列表项ID
+            owner_id: 所属用户ID，None表示管理员不限用户
+        """
+        stmt = (
+            select(XYCatalogItem, XYAccount.account_id)
+            .outerjoin(XYAccount, XYCatalogItem.account_pk == XYAccount.id)
+            .where(XYCatalogItem.item_id == item_id)
+        )
+        if owner_id is not None:
+            stmt = stmt.where(XYCatalogItem.owner_id == owner_id)
+        stmt = stmt.order_by(desc(XYCatalogItem.id)).limit(1)
+        row = (await self.session.execute(stmt)).first()
+        if not row:
+            return None
+        catalog_item, account_id = row[0], row[1]
+
+        metadata = catalog_item.metadata_json or {}
+        try:
+            price = float(catalog_item.price) if catalog_item.price not in (None, "") else 0.0
+        except (TypeError, ValueError):
+            price = 0.0
+
+        # card_ids：关联表已绑定的卡券ID（去重保序）
+        card_stmt = (
+            select(CardItemRelation.card_id)
+            .where(CardItemRelation.item_id == item_id)
+            .order_by(CardItemRelation.card_id)
+        )
+        card_rows = (await self.session.execute(card_stmt)).all()
+        card_ids: list[int] = []
+        seen: set[int] = set()
+        for cr in card_rows:
+            cid = cr[0]
+            if cid is not None and cid not in seen:
+                seen.add(cid)
+                card_ids.append(cid)
+
+        # default_reply：account_id + item_id 命中的回复内容
+        default_reply_content: str | None = None
+        if account_id:
+            reply_stmt = select(DefaultReply).where(
+                DefaultReply.account_id == account_id,
+                DefaultReply.item_id == item_id,
+            )
+            reply = (await self.session.execute(reply_stmt)).scalar_one_or_none()
+            if reply is not None:
+                default_reply_content = reply.reply_content
+
+        return {
+            "title": catalog_item.title or "",
+            "description": metadata.get("description") or "",
+            "price": price,
+            "images": [],
+            "specifications": [],
+            "item_config": {
+                "multi_quantity_delivery": bool(metadata.get("multi_quantity_delivery", False)),
+                "card_ids": card_ids,
+                "default_reply": default_reply_content or "",
+                "ai_prompt": catalog_item.ai_prompt or "",
+                "query_buttons": metadata.get("query_buttons") or [],
+                "display_links": metadata.get("display_links") or [],
+                "page_hint": metadata.get("page_hint") or "",
+            },
+        }
+
 
 # ==================== 工具函数 ====================
 
@@ -336,6 +414,7 @@ def _material_to_dict(m: ProductMaterial) -> dict:
         "brand": m.brand,
         "condition": m.condition,
         "remark": m.remark,
+        "item_config": m.item_config,
         "created_at": safe_isoformat(m.created_at),
         "updated_at": safe_isoformat(m.updated_at),
     }

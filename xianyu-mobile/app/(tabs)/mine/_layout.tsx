@@ -14,6 +14,9 @@ export default function MineStackLayout() {
         headerTitleStyle: { ...typography.heading },
         headerShadowVisible: false,
         headerBackButtonDisplayMode: 'minimal',
+        // 安卓全屏手势返回
+        gestureEnabled: true,
+        fullScreenGestureEnabled: true,
       }}
     >
       <Stack.Screen name="index" options={{ headerShown: false }} />
@@ -35,10 +38,15 @@ export default function MineStackLayout() {
       <Stack.Screen name="listing-monitor" options={{ title: '上新监控' }} />
       <Stack.Screen name="monitor-categories" options={{ title: '监控分类' }} />
       <Stack.Screen name="monitor-logs" options={{ title: '监控日志' }} />
+      <Stack.Screen name="monitor-items" options={{ title: '采集商品' }} />
       <Stack.Screen name="monitor-fallback" options={{ title: '兜底账号' }} />
+      <Stack.Screen name="popup-announcements" options={{ title: '弹窗公告' }} />
       <Stack.Screen name="product-publish" options={{ title: '商品发布' }} />
       <Stack.Screen name="items" options={{ title: '商品管理' }} />
       <Stack.Screen name="item-edit" options={{ title: '编辑商品' }} />
+      <Stack.Screen name="materials" options={{ title: '素材管理' }} />
+      <Stack.Screen name="material-edit" options={{ title: '编辑素材' }} />
+      <Stack.Screen name="display-link-templates" options={{ title: '通用展示入口' }} />
       <Stack.Screen name="shared-scan" options={{ title: '共享扫码' }} />
       <Stack.Screen name="settings" options={{ title: '系统设置' }} />
       <Stack.Screen name="personal" options={{ title: '个人设置' }} />

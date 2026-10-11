@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from loguru import logger
-from sqlalchemy import delete as sql_delete, or_, select, update as sql_update
+from sqlalchemy import and_, delete as sql_delete, or_, select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.db.session import async_session_maker
@@ -35,6 +35,11 @@ _order_cooldown_cache: Dict[str, datetime] = {}
 
 # 冷却时间（秒）
 ORDER_COOLDOWN_SECONDS = 600  # 10分钟
+
+# 跨天补发窗口的回溯天数（P1-14）：
+# 曾发货失败（delivery_fail_reason 非空）且本地仍无发货内容的订单不再受「当天」限制，
+# 但为避免无限回溯历史订单，只回溯最近 N 天（当天由原有窗口覆盖）。
+CROSS_DAY_FAILED_RETRY_DAYS = 30
 
 
 def is_order_in_cooldown(order_no: str) -> bool:
@@ -231,22 +236,42 @@ class RedeliveryTask:
     ) -> List[XYOrder]:
         """
         获取待发货订单
-        
+
         条件：
         - account_id 匹配
-        - 真实下单时间(placed_at)在当天（不是数据库写入时间，
-          避免同步历史订单时 created_at 被误判为今日订单）
         - placed_at 不为 NULL（历史空值数据跳过，防误伤）
+        - 时间窗口（满足其一即可）：
+          a) 真实下单时间(placed_at)在当天（不是数据库写入时间，
+             避免同步历史订单时 created_at 被误判为今日订单）
+          b) **跨天补发**：曾经发货失败（delivery_fail_reason 非空）且本地仍无发货内容，
+             回溯 CROSS_DAY_FAILED_RETRY_DAYS 天，不受当天限制。
+             修复 P1-14：取卡失败（平台已确认发货、本地无卡内容）的订单原先跨天即永久
+             不再重试，只能人工补发。
         - 状态为 'pending_payment'（待付款）、'processing'（处理中）、'pending_ship'（待发货）
+        - 幂等短路：card_only_delivered / agree_deliver_agreed 为 True 的订单不再捞取，
+          已成功发货的订单不会被重复发卡（_process_order 内还有 shipped 复查兜底）
         """
         # 获取今天的开始时间（北京时间）
         now = get_beijing_now_naive()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        
+        # 跨天失败订单的回溯下限
+        cross_day_start = today_start - timedelta(days=CROSS_DAY_FAILED_RETRY_DAYS)
+
+        # 窗口 a：当天订单
+        today_window = XYOrder.placed_at >= today_start
+        # 窗口 b：曾发货失败且仍无发货内容的订单（含「平台已发货但本地无卡」的取卡失败单）
+        cross_day_failed_window = and_(
+            XYOrder.placed_at.is_not(None),
+            XYOrder.placed_at >= cross_day_start,
+            XYOrder.delivery_fail_reason.is_not(None),
+            XYOrder.delivery_fail_reason != "",
+            or_(XYOrder.delivery_content.is_(None), XYOrder.delivery_content == ""),
+        )
+
         stmt = select(XYOrder).where(
             XYOrder.account_id == account_id,
             XYOrder.placed_at.is_not(None),
-            XYOrder.placed_at >= today_start,
+            or_(today_window, cross_day_failed_window),
             XYOrder.status.in_(["pending_payment", "processing", "pending_ship"]),
             XYOrder.card_only_delivered.is_(False),
             # 双保险：买家已在提货页点「同意」的订单已单独发货，不再走定时补发货
@@ -440,6 +465,15 @@ class RedeliveryTask:
 
                 # 如果订单已发货或已交易成功，只更新本地数据库状态，不触发实际发货
                 if '已发货' in reason or '已交易成功' in reason:
+                    # 平台已发货但本地既无发货内容、也无「仅发卡券」标记：卡密实际未发出
+                    # （如同意后发货取卡失败：平台确认发货成功、本地取卡回滚）。
+                    # 这里只同步状态、不重发（平台发货不可逆，重发有资损风险），
+                    # 显式告警提醒人工补发；订单原 delivery_fail_reason 保留不清空。
+                    if not (order.delivery_content or '').strip() and not order.card_only_delivered:
+                        logger.warning(
+                            f"[定时补发货] 订单 {order_no} 平台已发货但本地无发货内容，"
+                            f"需人工补发（不自动重发，避免重复发卡）"
+                        )
                     stmt = sql_update(XYOrder).where(XYOrder.order_no == order_no).values(status="shipped")
                     await session.execute(stmt)
                     await session.commit()

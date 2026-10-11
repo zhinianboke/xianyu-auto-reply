@@ -39,7 +39,9 @@ async def read_order_snapshot(order_no: str) -> Optional[Dict[str, Any]]:
         order_no: 闲鱼订单号
     Returns:
         含 id/item_id/buyer_id/is_bargain/quantity/spec_name/spec_value/
-        buyer_fish_nick/account_id/status/agree_deliver_agreed/delivery_content 的字典
+        buyer_fish_nick/account_id/status/agree_deliver_agreed/delivery_content/
+        delivery_fail_reason 的字典
+        （delivery_fail_reason 供调用方做「失败原因未变化则不重复通知卖家」的幂等短路）
     """
     async with async_session_maker() as session:
         result = await session.execute(select(XYOrder).where(XYOrder.order_no == order_no))
@@ -59,10 +61,13 @@ async def read_order_snapshot(order_no: str) -> Optional[Dict[str, Any]]:
             "status": order.status,
             "agree_deliver_agreed": bool(order.agree_deliver_agreed),
             "delivery_content": order.delivery_content,
+            "delivery_fail_reason": order.delivery_fail_reason,
         }
 
 
-def pick_unique_own_card(cards: List[Dict[str, Any]]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def pick_unique_own_card(
+    cards: List[Dict[str, Any]],
+) -> Tuple[Optional[Dict[str, Any]], Optional[str], Optional[str]]:
     """按来源优先级(own→dock_l1→dock_l2)挑选唯一匹配卡券。
 
     与自动发货选卡语义一致：某来源分组「有且仅有一张」才命中；多张则跳过该来源。
@@ -72,21 +77,55 @@ def pick_unique_own_card(cards: List[Dict[str, Any]]) -> Tuple[Optional[Dict[str
     Args:
         cards: db_manager.get_cards_by_item_id 返回的卡券字典列表
     Returns:
-        (card, error_message)。命中返回 (card, None)；未命中或不支持返回 (None, 提示语)
+        (card, buyer_message, fail_reason)
+        - 命中：(card, None, None)
+        - 未命中：(None, 买家友好提示, 精确失败原因)
+          精确原因区分三种情形（D0-18），供订单 delivery_fail_reason 与卖家通知使用：
+          ① 无可用卡券（0 张 / 全部卡券均未关联到该商品或规格）
+          ② 同来源多张卡券冲突（含冲突来源、张数与卡券 ID，需卖家改为「一个规格一张卡」）
+          ③ 卡券类型不支持（唯一命中的是对接卡券）
     """
-    groups = group_cards_by_source(cards)
+    groups = group_cards_by_source(cards or [])
+    conflicts: List[str] = []
 
     for src in CARD_SOURCE_PRIORITY:
         group = groups.get(src, [])
         if len(group) == 1:
             card = group[0]
             if src in ("dock_l1", "dock_l2"):
-                return None, "该商品为对接卡券，暂不支持自助提货，请联系卖家"
-            return card, None
+                reason = (
+                    f"该商品唯一匹配到对接卡券（来源 {src}，卡券ID {card.get('id')}），"
+                    f"本流程不支持自助提货"
+                )
+                if conflicts:
+                    reason = f"{reason}；另有同来源卡券冲突：{'；'.join(conflicts)}"
+                return None, "该商品为对接卡券，暂不支持自助提货，请联系卖家", reason
+            if conflicts:
+                # 低优先级来源存在冲突但本次已按优先级命中：不影响发货，仅留痕便于卖家修正配置
+                logger.warning(
+                    f"【同意后发货】已按优先级命中卡券 {card.get('id')}，"
+                    f"但仍存在同来源卡券冲突：{'；'.join(conflicts)}"
+                )
+            return card, None, None
         if len(group) > 1:
-            logger.warning(f"【同意后发货】来源 {src} 匹配到 {len(group)} 张卡券，需唯一匹配，跳过该来源")
+            ids = ", ".join(str(c.get('id')) for c in group)
+            conflict = f"来源 {src} 匹配到 {len(group)} 张卡券（ID: {ids}），需唯一匹配"
+            conflicts.append(conflict)
+            logger.warning(f"【同意后发货】{conflict}，跳过该来源")
 
-    return None, "暂无可用卡券，请联系卖家"
+    if conflicts:
+        # 真实原因是「配置冲突」而非「没有卡券」：买家侧文案不得再谎报为暂无可用卡券
+        return (
+            None,
+            "该商品卡券配置异常，请联系卖家",
+            "同来源多张卡券冲突，无法唯一选卡：" + "；".join(conflicts),
+        )
+
+    return (
+        None,
+        "暂无可用卡券，请联系卖家",
+        "该商品未配置可用卡券（无卡券，或卡券未关联到该商品/规格）",
+    )
 
 
 async def consume_card_and_record(
@@ -152,5 +191,10 @@ async def consume_card_and_record(
         else:
             logger.info(f"【同意后发货】订单 {order_no} 当前状态 {old_status} 为终态/退款中，保留不覆盖")
         await session.commit()
+
+        # 售罄守卫：提货发货成功后检查（自带开关/类型判断，异常只记日志）
+        if card.type == 'data':
+            from common.services.stock_guard_service import delist_card_if_empty
+            await delist_card_if_empty(session, card_id, trigger="delivery_pickup")
 
     return True, "发货成功", content

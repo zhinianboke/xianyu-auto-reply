@@ -2,12 +2,14 @@
  * 商品素材新建 / 编辑弹窗。
  * 商品发布字段复用 ProductPublishForm，确保素材导入发布页时字段完全一致。
  */
-import React, { useRef, useState } from 'react'
-import { Loader2, Trash2, Upload, X } from 'lucide-react'
+import React, { useEffect, useRef, useState } from 'react'
+import { ChevronDown, Download, Loader2, Trash2, Upload, X } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import {
   createMaterial,
+  type CollectMaterialDraft,
   type MaterialCreateParams,
+  type MaterialItemConfig,
   type MaterialVideo,
   type ProductMaterial,
   type PublishSpecification,
@@ -16,11 +18,14 @@ import {
   uploadProductImages,
   uploadProductVideos,
 } from '@/api/productPublish'
+import { getAllCards, type CardData } from '@/api/cards'
+import { ItemQueryConfigModal } from '@/pages/items/ItemQueryConfigModal'
 import ProductPublishForm from './ProductPublishForm'
 import ProductVideoUploader from './ProductVideoUploader'
+import CollectFromItemModal from './CollectFromItemModal'
 import { buildSkuKey, findDuplicateSpecificationValue, type ProductSpecification, type PublishForm, type SkuRow } from './publishTypes'
 
-type MaterialFormState = PublishForm & { images: string[]; remark: string }
+type MaterialFormState = PublishForm & { images: string[]; remark: string; item_config: MaterialItemConfig }
 
 interface Props {
   initial: ProductMaterial | null
@@ -57,6 +62,21 @@ function hasSavedPlatformCategory(material: ProductMaterial | null): boolean {
   )
 }
 
+/** 把素材透传的 item_config 归一化为可编辑态（补齐缺省字段、卡券ID去重为数组） */
+const normalizeItemConfig = (cfg: ProductMaterial['item_config']): MaterialItemConfig => {
+  const source = cfg && typeof cfg === 'object' ? cfg : null
+  const rawCardIds = source?.card_ids
+  return {
+    multi_quantity_delivery: Boolean(source?.multi_quantity_delivery),
+    card_ids: Array.isArray(rawCardIds) ? rawCardIds.filter((id): id is number => typeof id === 'number') : [],
+    default_reply: source?.default_reply ?? '',
+    ai_prompt: source?.ai_prompt ?? '',
+    query_buttons: Array.isArray(source?.query_buttons) ? source!.query_buttons : [],
+    display_links: Array.isArray(source?.display_links) ? source!.display_links : [],
+    page_hint: typeof source?.page_hint === 'string' ? source.page_hint : '',
+  }
+}
+
 const initialForm = (material: ProductMaterial | null): MaterialFormState => {
   const specifications = createInternalSpecifications(material?.specifications)
   return {
@@ -90,6 +110,7 @@ const initialForm = (material: ProductMaterial | null): MaterialFormState => {
   sku_rows: createInternalSkuRows(material?.sku_rows, specifications),
   images: material?.images ?? [],
   remark: material?.remark ?? '',
+  item_config: normalizeItemConfig(material?.item_config),
   }
 }
 
@@ -129,6 +150,7 @@ function toMaterialPayload(form: MaterialFormState): MaterialCreateParams {
     brand: form.brand.trim() || null,
     condition: form.condition,
     remark: form.remark.trim() || null,
+    item_config: form.item_config,
   }
 }
 
@@ -140,12 +162,71 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
   const [categoryLocked, setCategoryLocked] = useState(() => hasSavedPlatformCategory(initial))
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [cards, setCards] = useState<CardData[]>([])
+  const [cardsLoading, setCardsLoading] = useState(false)
+  const [configOpen, setConfigOpen] = useState(true)
+  const [showQueryModal, setShowQueryModal] = useState(false)
+  const [showCollect, setShowCollect] = useState(false)
+
+  // 关联卡券下拉数据：弹窗打开即拉取一次，供 item_config.card_ids 勾选
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      setCardsLoading(true)
+      try {
+        const list = await getAllCards()
+        if (!cancelled) setCards(list)
+      } catch {
+        if (!cancelled) addToast({ type: 'error', message: '加载卡券列表失败' })
+      } finally {
+        if (!cancelled) setCardsLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [addToast])
 
   const setPublishForm: React.Dispatch<React.SetStateAction<PublishForm>> = (value) => {
     setForm((current) => {
       const next = typeof value === 'function' ? value(current) : value
       return { ...current, ...next }
     })
+  }
+
+  const updateItemConfig = (patch: Partial<MaterialItemConfig>) =>
+    setForm((current) => ({ ...current, item_config: { ...current.item_config, ...patch } }))
+
+  const toggleCardId = (cardId: number) =>
+    setForm((current) => {
+      const exists = current.item_config.card_ids.includes(cardId)
+      return {
+        ...current,
+        item_config: {
+          ...current.item_config,
+          card_ids: exists
+            ? current.item_config.card_ids.filter((id) => id !== cardId)
+            : [...current.item_config.card_ids, cardId],
+        },
+      }
+    })
+
+  // 从商品列表采集：把草稿的标题/价格/图片/规格 + item_config 整体回填当前素材
+  const handleCollect = (draft: CollectMaterialDraft) => {
+    setForm((current) => {
+      const specifications = createInternalSpecifications(draft.specifications)
+      return {
+        ...current,
+        title: draft.title ?? current.title,
+        description: draft.description ?? current.description,
+        price: draft.price != null ? String(draft.price) : current.price,
+        images: draft.images?.length ? draft.images : current.images,
+        specifications,
+        sku_rows: createInternalSkuRows([], specifications),
+        item_config: draft.item_config ? normalizeItemConfig(draft.item_config) : current.item_config,
+      }
+    })
+    addToast({ type: 'success', message: '已采集并回填表单' })
+    setShowCollect(false)
   }
 
   const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -244,6 +325,9 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
           <button type="button" className="modal-close" title="关闭" onClick={onClose}><X className="w-5 h-5" /></button>
         </div>
         <div className="modal-body overflow-y-auto space-y-4">
+          <button type="button" className="btn-ios-secondary w-full" onClick={() => setShowCollect(true)}>
+            <Download className="w-4 h-4" />从商品列表采集
+          </button>
           <div className="vben-card">
             <div className="vben-card-header"><h2 className="vben-card-title">商品图片与视频</h2><span className="text-xs text-slate-400">{form.images.length}/9 图 · {form.videos.length}/3 视频</span></div>
             <div className="vben-card-body"><div className="flex flex-wrap gap-2">{form.images.map((url, index) => <div key={`${url}-${index}`} className="relative h-20 w-20 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-600 group"><img src={url} alt="" className="h-full w-full object-cover" />{index === 0 && <span className="absolute bottom-0 left-0 right-0 bg-blue-500/80 py-0.5 text-center text-[10px] text-white">首图</span>}<button type="button" title="移除图片" onClick={() => setForm((current) => ({ ...current, images: current.images.filter((_, itemIndex) => itemIndex !== index) }))} className="absolute right-0.5 top-0.5 rounded bg-black/60 p-0.5 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-500"><Trash2 className="h-3 w-3" /></button></div>)}{form.images.length < 9 && <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-20 w-20 flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-300 text-slate-400 transition-colors hover:border-blue-400 hover:text-blue-500 disabled:opacity-50 dark:border-slate-600">{uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Upload className="h-5 w-5" />}<span className="mt-1 text-xs">{uploading ? '上传中' : '添加图片'}</span></button>}</div><input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleUpload} /><ProductVideoUploader videos={form.videos} onUploadVideo={handleVideoUpload} onChange={(videos) => setForm((current) => ({ ...current, videos }))} /></div>
@@ -261,9 +345,92 @@ export function MaterialFormModal({ initial, onClose, onSaved }: Props) {
           />
 
           <div className="input-group"><label className="input-label">备注（内部使用，不公开）</label><input className="input-ios" maxLength={500} placeholder="选填" value={form.remark} onChange={(event) => setForm((current) => ({ ...current, remark: event.target.value }))} /></div>
+
+          {/* 商品列表配置：随素材保存为 item_config，发布时一步到位回写新商品 */}
+          <div className="vben-card">
+            <button type="button" onClick={() => setConfigOpen((open) => !open)} className="vben-card-header w-full cursor-pointer text-left">
+              <h2 className="vben-card-title">商品列表配置</h2>
+              <ChevronDown className={`w-4 h-4 flex-shrink-0 text-slate-400 transition-transform ${configOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {configOpen && (
+              <div className="vben-card-body space-y-4">
+                <div className="flex items-center justify-between">
+                  <label className="input-label mb-0">多数量发货</label>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.item_config.multi_quantity_delivery}
+                    title={form.item_config.multi_quantity_delivery ? '点击关闭' : '点击开启'}
+                    onClick={() => updateItemConfig({ multi_quantity_delivery: !form.item_config.multi_quantity_delivery })}
+                    className={`relative w-9 h-5 rounded-full transition-colors ${form.item_config.multi_quantity_delivery ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                  >
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${form.item_config.multi_quantity_delivery ? 'left-[18px]' : 'left-0.5'}`} />
+                  </button>
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">关联卡券{form.item_config.card_ids.length > 0 && <span className="ml-1 text-xs text-slate-400">（已选 {form.item_config.card_ids.length}）</span>}</label>
+                  {cardsLoading ? (
+                    <div className="flex items-center gap-2 text-sm text-slate-400"><Loader2 className="w-4 h-4 animate-spin" /> 加载卡券中...</div>
+                  ) : cards.length === 0 ? (
+                    <p className="text-sm text-slate-400">暂无可用卡券</p>
+                  ) : (
+                    <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-600 p-2 space-y-0.5">
+                      {cards.map((card) => {
+                        const cardId = card.id
+                        if (cardId == null) return null
+                        const checked = form.item_config.card_ids.includes(cardId)
+                        return (
+                          <label key={cardId} className="flex items-center gap-2 p-1.5 rounded cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700">
+                            <input type="checkbox" checked={checked} onChange={() => toggleCardId(cardId)} className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                            <span className="text-sm text-slate-700 dark:text-slate-200 truncate">{card.name}</span>
+                            <span className="badge-gray ml-auto">{card.type}</span>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">默认回复</label>
+                  <textarea className="input-ios h-20 resize-none" maxLength={1000} placeholder="买家咨询时未命中关键词/卡券时的兜底回复" value={form.item_config.default_reply} onChange={(event) => updateItemConfig({ default_reply: event.target.value })} />
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">AI 提示</label>
+                  <textarea className="input-ios h-20 resize-none" maxLength={2000} placeholder="AI 客服角色与回复风格提示词" value={form.item_config.ai_prompt} onChange={(event) => updateItemConfig({ ai_prompt: event.target.value })} />
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">查询按钮</label>
+                  <p className="text-xs text-slate-400 mb-2">配置买家在提货页可点击的查询按钮（{form.item_config.query_buttons.length} 个）</p>
+                  <button type="button" className="btn-ios-secondary" onClick={() => setShowQueryModal(true)}>配置查询按钮</button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
         <div className="modal-footer flex-shrink-0"><button type="button" className="btn-ios-secondary" onClick={onClose} disabled={saving}>取消</button><button type="button" className="btn-ios-primary" onClick={handleSave} disabled={saving || uploading}>{saving && <Loader2 className="w-4 h-4 animate-spin" />}{initial ? '保存修改' : '创建素材'}</button></div>
       </div>
+
+      {showCollect && (
+        <CollectFromItemModal onClose={() => setShowCollect(false)} onCollect={handleCollect} />
+      )}
+
+      {showQueryModal && (
+        <ItemQueryConfigModal
+          draftMode
+          itemName={form.title.trim() || '商品素材'}
+          initialButtons={form.item_config.query_buttons}
+          onClose={() => setShowQueryModal(false)}
+          onSavedButtons={(buttons) => {
+            updateItemConfig({ query_buttons: buttons })
+            setShowQueryModal(false)
+            addToast({ type: 'success', message: '查询按钮已更新，保存素材后生效' })
+          }}
+        />
+      )}
     </div>
   )
 }

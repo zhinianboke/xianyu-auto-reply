@@ -2,7 +2,7 @@
   "expo": {
     "name": "闲鱼管家",
     "slug": "xianyu-mobile",
-    "version": "1.0.11",
+    "version": "1.19",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",

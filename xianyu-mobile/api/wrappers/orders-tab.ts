@@ -52,6 +52,11 @@ export interface AutoRateConfig {
   enabled: boolean;
   text?: string;
   api_mode?: boolean;
+  /** 后端 api_url：本页无编辑入口，读入后原样回传，避免清空 Web 端配置 */
+  api_url?: string;
+  /** 好评后自动发送消息（#232）：本页无编辑入口，读入后原样回传 */
+  thanks_enabled?: boolean;
+  thanks_content?: string;
 }
 
 /**
@@ -151,18 +156,69 @@ function mapOrderDetail(raw: Record<string, unknown>): OrderDetail {
 }
 
 /**
- * 分页获取订单列表。
+ * 订单列表服务端筛选参数（与后端 GET /api/v1/orders 的 Query 参数一一对应，
+ * 见 backend-web app/api/routes/orders.py list_orders）。
+ * 除 page/pageSize 外均为可选；空字符串/undefined 不会拼进 query。
+ */
+export interface OrderListFilters {
+  /** 账号 cookie_id */
+  cookieId?: string;
+  /** 细粒度订单状态（pending_ship/shipped/completed/refunded 等，后端精确匹配） */
+  status?: string;
+  /** 搜索关键词：订单号 / 商品ID / 买家ID */
+  search?: string;
+  /** 发货方式：manual/auto/scheduled/none */
+  deliveryMethod?: string;
+  /** 是否小刀 */
+  isBargain?: boolean;
+  /** 是否已评价 */
+  isRated?: boolean;
+  /** 开始日期，格式 YYYY-MM-DD */
+  startDate?: string;
+  /** 结束日期，格式 YYYY-MM-DD */
+  endDate?: string;
+  /** 关联消息发送状态：success/failed/unknown/timeout */
+  deliverySendStatus?: string;
+}
+
+/** YYYY-MM-DD 严格校验：不合法的日期不发给后端（避免半输入状态触发 500） */
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * 分页获取订单列表（支持服务端多条件筛选）。
  *
- * 后端响应约定为 `{ data: Order[], total }`，但也可能包一层 `{ success, data }`
- * 或直接返回裸数组，三种形态均兼容。
+ * 后端响应约定为 `{ success, data: Order[], total }`，但也可能裸返回数组，
+ * 多种形态均兼容。
  */
 export async function getOrders(
   page: number,
   pageSize: number,
+  filters?: OrderListFilters,
 ): Promise<{ data: Order[]; total: number }> {
   const client = await getApiClient();
+  const query: Record<string, string | number | boolean> = {
+    page,
+    page_size: pageSize,
+  };
+  if (filters) {
+    if (filters.cookieId) query.cookie_id = filters.cookieId;
+    if (filters.status) query.status = filters.status;
+    if (filters.search) query.search = filters.search;
+    if (filters.deliveryMethod) query.delivery_method = filters.deliveryMethod;
+    if (filters.isBargain != null) query.is_bargain = filters.isBargain;
+    if (filters.isRated != null) query.is_rated = filters.isRated;
+    if (filters.startDate && DATE_RE.test(filters.startDate)) {
+      query.start_date = filters.startDate;
+    }
+    if (filters.endDate && DATE_RE.test(filters.endDate)) {
+      query.end_date = filters.endDate;
+    }
+    if (filters.deliverySendStatus) {
+      query.delivery_send_status = filters.deliverySendStatus;
+    }
+  }
   const { data } = (await (client.GET as any)('/api/v1/orders', {
-    params: { query: { page, page_size: pageSize } },
+    params: { query },
   })) as { data?: unknown; error?: unknown };
 
   const body = data;
@@ -243,17 +299,120 @@ export async function deleteOrder(id: string): Promise<void> {
 // 同步闲鱼订单
 // ---------------------------------------------------------------------------
 
+/** 同步闲鱼订单的统计结果（后端 fetch-xianyu 的 data 字段） */
+export interface FetchXianyuStats {
+  /** 从闲鱼获取到的订单条数 */
+  total_fetched: number;
+  /** 新插入数据库条数 */
+  new_inserted: number;
+  /** 更新条数 */
+  updated: number;
+  /** 失败条数 */
+  failed: number;
+  /** 处理的账号数（同步全部时 > 1） */
+  accounts_processed: number;
+  /** 失败账号与原因，格式 "账号ID: 原因" */
+  errors: string[];
+}
+
+function emptyStats(): FetchXianyuStats {
+  return {
+    total_fetched: 0,
+    new_inserted: 0,
+    updated: 0,
+    failed: 0,
+    accounts_processed: 0,
+    errors: [],
+  };
+}
+
 /**
  * 同步闲鱼订单到数据库。
  *
- * 注意：请求体字段为 `cookie_id`（与后端 FetchXianyuOrdersRequest schema 一致，
- * 而非 account_id）。该接口可能耗时较长，通过 AbortController 设置 10 分钟超时。
+ * 请求体字段为 `cookie_id`（与后端 FetchXianyuOrdersRequest schema 一致）：
+ * - 传具体账号 ID → 只同步该账号；
+ * - 传 undefined/null → 同步全部账号（后端会跳过 inactive/disabled 等状态）。
+ *
+ * 返回获取/新增/更新统计与失败账号列表。该接口可能耗时较长，
+ * 调用方应通过 AbortController/withTimeout 自行控制超时
+ * （单账号建议 120s，全部账号建议 600s）。
  */
-export async function fetchXianyuOrders(cookieId: string): Promise<void> {
+export async function fetchXianyuOrders(
+  cookieId?: string | null,
+): Promise<FetchXianyuStats> {
   const client = await getApiClient();
-  await (client.POST as any)('/api/v1/orders/fetch-xianyu', {
-    body: { cookie_id: cookieId },
-  });
+  const { data } = (await (client.POST as any)('/api/v1/orders/fetch-xianyu', {
+    body: { cookie_id: cookieId ?? null },
+  })) as { data?: unknown; error?: unknown };
+
+  const body = (data ?? {}) as Record<string, unknown>;
+  if (body.success === false) {
+    throw new Error(
+      typeof body.message === 'string' && body.message
+        ? body.message
+        : '同步闲鱼订单失败',
+    );
+  }
+  const stats = unwrap(body) as Record<string, unknown> | null;
+  if (!stats || typeof stats !== 'object') return emptyStats();
+  return {
+    total_fetched: Number(stats.total_fetched ?? 0) || 0,
+    new_inserted: Number(stats.new_inserted ?? 0) || 0,
+    updated: Number(stats.updated ?? 0) || 0,
+    failed: Number(stats.failed ?? 0) || 0,
+    accounts_processed: Number(stats.accounts_processed ?? 0) || 0,
+    errors: Array.isArray(stats.errors) ? stats.errors.map(String) : [],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 批量删除
+// ---------------------------------------------------------------------------
+
+/** 批量删除结果（后端 batch-delete 的 message 与 data 字段） */
+export interface BatchDeleteResult {
+  /** 后端提示消息，如「删除完成，成功3条，失败1条」 */
+  message: string;
+  /** 成功删除条数 */
+  deleted: number;
+  /** 失败条数 */
+  failed: number;
+}
+
+/**
+ * 批量删除订单。
+ *
+ * 后端 POST /api/v1/orders/batch-delete 的 body 为 `{ ids: number[] }`
+ * （数据库主键）。Order.id 是字符串化的主键，这里转回数字。
+ */
+export async function batchDeleteOrders(
+  ids: string[],
+): Promise<BatchDeleteResult> {
+  const numericIds = ids
+    .map((id) => Number(id))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (numericIds.length === 0) {
+    throw new Error('请选择要删除的订单');
+  }
+  const client = await getApiClient();
+  const { data } = (await (client.POST as any)('/api/v1/orders/batch-delete', {
+    body: { ids: numericIds },
+  })) as { data?: unknown; error?: unknown };
+
+  const body = (data ?? {}) as Record<string, unknown>;
+  if (body.success === false) {
+    throw new Error(
+      typeof body.message === 'string' && body.message
+        ? body.message
+        : '批量删除失败',
+    );
+  }
+  const inner = unwrap(body) as Record<string, unknown> | null;
+  return {
+    message: typeof body.message === 'string' ? body.message : '',
+    deleted: Number(inner?.deleted ?? 0) || 0,
+    failed: Number(inner?.failed ?? 0) || 0,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -263,8 +422,8 @@ export async function fetchXianyuOrders(cookieId: string): Promise<void> {
 /**
  * 获取账号的自动评价配置。
  *
- * 后端字段 enabled / rate_type / text_content / api_url → 翻译为
- * { enabled, text, api_mode }。
+ * 后端字段 enabled / rate_type / text_content / api_url / thanks_* → 翻译为
+ * { enabled, text, api_mode, api_url, thanks_enabled, thanks_content }。
  */
 export async function getAutoRateConfig(
   accountId: string,
@@ -275,13 +434,23 @@ export async function getAutoRateConfig(
   )) as { data?: unknown; error?: unknown };
   const body = unwrap(data) as Record<string, unknown> | null;
   if (!body || typeof body !== 'object') {
-    return { enabled: false, text: '', api_mode: false };
+    return {
+      enabled: false,
+      text: '',
+      api_mode: false,
+      api_url: '',
+      thanks_enabled: false,
+      thanks_content: '',
+    };
   }
   const rateType = str(body, 'rate_type');
   return {
     enabled: bool(body, 'enabled'),
     text: str(body, 'text_content', 'text') ?? '',
     api_mode: rateType != null ? rateType === 'api' : bool(body, 'api_mode'),
+    api_url: str(body, 'api_url') ?? '',
+    thanks_enabled: bool(body, 'thanks_enabled'),
+    thanks_content: str(body, 'thanks_content') ?? '',
   };
 }
 
@@ -289,7 +458,8 @@ export async function getAutoRateConfig(
  * 更新账号的自动评价配置。
  *
  * 将 { enabled, text, api_mode } 翻译为后端 AutoRateConfigUpdate：
- * { enabled, rate_type, text_content, api_url }。
+ * { enabled, rate_type, text_content, api_url, thanks_enabled, thanks_content }。
+ * 后端整体覆盖：api_url 与 thanks_* 本页不编辑，必须回传读到的原值。
  */
 export async function updateAutoRateConfig(
   accountId: string,
@@ -301,7 +471,9 @@ export async function updateAutoRateConfig(
       enabled: config.enabled,
       rate_type: config.api_mode ? 'api' : 'text',
       text_content: config.text ?? '',
-      api_url: null,
+      api_url: config.api_url ?? '',
+      thanks_enabled: config.thanks_enabled ?? false,
+      thanks_content: config.thanks_content ?? '',
     },
   });
 }

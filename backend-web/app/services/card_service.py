@@ -371,7 +371,7 @@ class CardService:
             cas_stmt = (
                 update(Card)
                 .where(Card.id == card_id, Card.data_content == current_content)
-                .values(data_content=new_content)
+                .values(data_content=new_content, delivery_count=len(remaining_lines))
             )
             cas_result = await self.session.execute(cas_stmt)
             await self.session.commit()
@@ -487,6 +487,7 @@ class CardService:
         is_multi_spec: bool = False,
         spec_name: Optional[str] = None,
         spec_value: Optional[str] = None,
+        auto_delist_on_soldout: bool = False,
     ) -> int:
         """创建卡券
         
@@ -530,7 +531,13 @@ class CardService:
             is_multi_spec=is_multi_spec,
             spec_name=spec_name,
             spec_value=spec_value,
+            auto_delist_on_soldout=auto_delist_on_soldout,
         )
+        # data_content 导入时自动同步 delivery_count = 卡密行数（2026-10-06 修复：
+        # 之前不设 delivery_count，默认 0，前端显示"库存=0"但实际有卡密）
+        if data_content and card_type == "data":
+            lines = [ln for ln in data_content.split('\n') if ln.strip()]
+            card.delivery_count = len(lines)
         self.session.add(card)
         await self.session.commit()
         await self.session.refresh(card)
@@ -587,6 +594,13 @@ class CardService:
                 elif key == "image_urls" and isinstance(value, list):
                     value = json.dumps(value)
                 setattr(card, key, value)
+
+        # data_content 更新时自动同步 delivery_count = 卡密行数（2026-10-06 修复：
+        # 导入新卡密后 delivery_count 仍为旧值（如 0），前端显示"库存=0"但实际有卡密）
+        new_data_content = kwargs.get("data_content")
+        if new_data_content is not None and card.type == "data":
+            lines = [ln for ln in str(new_data_content).split('\n') if ln.strip()]
+            card.delivery_count = len(lines)
 
         await self.session.commit()
         return True
@@ -679,6 +693,10 @@ class CardService:
             spec_name=spec_name,
             spec_value=spec_value,
         )
+        # data_content 导入时自动同步 delivery_count = 卡密行数
+        if data_content and card_type == "data":
+            lines = [ln for ln in data_content.split('\n') if ln.strip()]
+            card.delivery_count = len(lines)
         self.session.add(card)
         await self.session.flush()  # 获取 card.id
         
@@ -779,6 +797,7 @@ class CardService:
             "delivery_count": card.delivery_count,
             "price": card.price,
             "is_dockable": card.is_dockable,
+            "auto_delist_on_soldout": card.auto_delist_on_soldout,
             "fee_payer": card.fee_payer,
             "min_price": card.min_price,
             "dock_visibility": card.dock_visibility,
@@ -814,6 +833,7 @@ class CardService:
             "delivery_count": card.delivery_count,
             "price": card.price,
             "is_dockable": card.is_dockable,
+            "auto_delist_on_soldout": card.auto_delist_on_soldout,
             "fee_payer": card.fee_payer,
             "min_price": card.min_price,
             "dock_visibility": card.dock_visibility,
@@ -853,6 +873,7 @@ class CardService:
             "delivery_count": card.delivery_count,
             "price": card.price,
             "is_dockable": card.is_dockable,
+            "auto_delist_on_soldout": card.auto_delist_on_soldout,
             "fee_payer": card.fee_payer,
             "min_price": card.min_price,
             "dock_visibility": card.dock_visibility,

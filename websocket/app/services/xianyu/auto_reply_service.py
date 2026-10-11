@@ -2305,11 +2305,15 @@ class AutoReplyService:
             })
             return True
         except Exception as e:
-            logger.warning(f"【{self.cookie_id}】设置人工回复 AI 暂停失败: {e}")
+            # 兜底失败不应中断主流程；保留异常类型与堆栈，避免编程错误被静默吞掉
+            logger.warning(
+                f"【{self.cookie_id}】设置人工回复 AI 暂停失败: {type(e).__name__}: {e}"
+            )
+            logger.debug(traceback.format_exc())
             return False
 
     async def _lookup_buyer_context_from_db(
-        self, chat_id: str
+        self, chat_id: str, item_id: str
     ) -> tuple[str, str]:
         """从自动回复日志表兜底反查会话最近一次的真实买家上下文。
 
@@ -2318,6 +2322,8 @@ class AutoReplyService:
 
         Args:
             chat_id: 会话ID
+            item_id: 本次人工消息携带的商品ID（可能为空）。与内存路径
+                pause_ai_reply_for_manual_message 一致，非空时优先作为暂停维度
         Returns:
             (buyer_id, item_id)；查不到时返回 ("", "")
         """
@@ -2346,10 +2352,14 @@ class AutoReplyService:
             if not row:
                 return "", ""
             buyer_id = str(row[0] or "").strip()
-            item_id = str(row[1] or "").strip()
-            return buyer_id, item_id
+            # 商品ID优先取本次人工消息携带的，缺失时回退到日志中买家消息的商品
+            resolved_item_id = str(item_id or "").strip() or str(row[1] or "").strip()
+            return buyer_id, resolved_item_id
         except Exception as e:
-            logger.warning(f"【{self.cookie_id}】从数据库反查买家上下文失败: {e}")
+            logger.warning(
+                f"【{self.cookie_id}】从数据库反查买家上下文失败: {type(e).__name__}: {e}"
+            )
+            logger.debug(traceback.format_exc())
             return "", ""
 
     async def _check_user_has_orders(self, session: AsyncSession, buyer_user_id: str) -> bool:
