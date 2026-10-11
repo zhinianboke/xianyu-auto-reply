@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   ArrowUpCircle, BarChart3, Bell, Bot, Code, Github, Gift,
-  Globe, Loader2, MessageCircle, MessageSquare, RefreshCw, Truck,
+  Globe, Loader2, MessageCircle, MessageSquare, RefreshCw, Truck, Cloud,
   UserCheck, Users, X,
 } from 'lucide-react'
 import { getQrcodeUrl } from '@/api/settings'
@@ -438,6 +438,15 @@ export function About() {
         </div>
         <div className="vben-card-body">
           <div className="flex gap-3">
+            <a
+              href="https://pan.quark.cn/s/deaafecd8824"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-500 text-white hover:bg-blue-600 transition-colors text-sm"
+            >
+              <Cloud className="w-4 h-4" />
+              <span>Windows本地版</span>
+            </a>
             <a
               href="https://github.com/zhinianboke/xianyu-auto-reply"
               target="_blank"

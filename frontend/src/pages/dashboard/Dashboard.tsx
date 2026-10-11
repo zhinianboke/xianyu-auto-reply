@@ -25,6 +25,15 @@ interface AdsData {
   text: Advertisement[]
 }
 
+function shuffle<T>(items: T[]): T[] {
+  const shuffled = [...items]
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1))
+    ;[shuffled[index], shuffled[randomIndex]] = [shuffled[randomIndex], shuffled[index]]
+  }
+  return shuffled
+}
+
 export function Dashboard() {
   const { addToast } = useUIStore()
   const { isAuthenticated, token, _hasHydrated, user } = useAuthStore()
@@ -120,7 +129,11 @@ export function Dashboard() {
       setAdsLoading(true)
       const adsResult = await getPublicAds()
       if (adsResult.success && adsResult.data) {
-        setAdsData(adsResult.data)
+        setAdsData({
+          carousel: shuffle(adsResult.data.carousel),
+          text: shuffle(adsResult.data.text),
+        })
+        setCarouselIndex(0)
       }
     } catch {
       // ignore
