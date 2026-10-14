@@ -20,6 +20,13 @@ from common.schemas.common import ApiResponse
 from common.schemas.user import UserCreate, UserPublic
 from app.services.auth import AuthService
 from app.services.user_service import UserService
+from app.services.user_login_log_service import (
+    LOGIN_METHOD_EMAIL_CODE,
+    LOGIN_METHOD_EMAIL_PASSWORD,
+    LOGIN_METHOD_USERNAME_PASSWORD,
+    UserLoginLogService,
+)
+from common.utils.http_utils import get_client_ip
 
 router = APIRouter(tags=["auth"])
 
@@ -34,11 +41,38 @@ class ResetPasswordRequest(BaseModel):
 @router.post("/login", response_model=LoginResponse)
 async def login_user(
     payload: LoginRequest,
+    request: Request,
     auth_service: AuthService = Depends(deps.get_auth_service),
     session: AsyncSession = Depends(deps.get_db_session),
+    login_log_service: UserLoginLogService = Depends(deps.get_user_login_log_service),
 ) -> LoginResponse:
     user: User | None = None
     error_message: str | None = None
+
+    client_ip = get_client_ip(request)
+
+    # 解析登录方式与登录账号（用于写入用户登录日志）
+    if payload.username and payload.password:
+        login_method = LOGIN_METHOD_USERNAME_PASSWORD
+    elif payload.email and payload.password:
+        login_method = LOGIN_METHOD_EMAIL_PASSWORD
+    elif payload.email and payload.verification_code:
+        login_method = LOGIN_METHOD_EMAIL_CODE
+    else:
+        login_method = LOGIN_METHOD_USERNAME_PASSWORD
+    login_account = payload.username or payload.email
+
+    async def fail_login(message: str) -> LoginResponse:
+        """记录失败登录日志（成功/失败都必须落库）并返回统一失败响应。"""
+        await login_log_service.record(
+            login_method=login_method,
+            success=False,
+            owner_id=None,
+            login_account=login_account,
+            client_ip=client_ip,
+            result_message=message,
+        )
+        return LoginResponse(success=False, message=message)
 
     # 检查是否启用了登录滑动验证码
     from app.services.system_setting_service import SystemSettingService
@@ -52,50 +86,59 @@ async def login_user(
         # 账号密码登录 - 需要滑动验证（如果开启）
         if captcha_enabled:
             from app.api.routes.geetest import check_geetest_verified
-            
+
             if not payload.geetest_challenge:
-                return LoginResponse(success=False, message="请完成滑动验证")
-            
+                return await fail_login("请完成滑动验证")
+
             geetest_ok, geetest_msg = check_geetest_verified(payload.geetest_challenge)
             if not geetest_ok:
-                return LoginResponse(success=False, message=geetest_msg)
-        
+                return await fail_login(geetest_msg)
+
         user, error_message = await auth_service.authenticate_by_username(payload.username, payload.password)
     elif payload.email and payload.password:
         # 邮箱密码登录 - 需要滑动验证（如果开启）
         if captcha_enabled:
             from app.api.routes.geetest import check_geetest_verified
-            
+
             if not payload.geetest_challenge:
-                return LoginResponse(success=False, message="请完成滑动验证")
-            
+                return await fail_login("请完成滑动验证")
+
             geetest_ok, geetest_msg = check_geetest_verified(payload.geetest_challenge)
             if not geetest_ok:
-                return LoginResponse(success=False, message=geetest_msg)
-        
+                return await fail_login(geetest_msg)
+
         user, error_message = await auth_service.authenticate_by_email(payload.email, payload.password)
     elif payload.email and payload.verification_code:
         # 邮箱验证码登录
         # 验证验证码
         code_valid, code_msg = check_email_code(payload.email, payload.verification_code, "login")
         if not code_valid:
-            return LoginResponse(success=False, message=code_msg)
-        
+            return await fail_login(code_msg)
+
         # 根据邮箱查找用户
         user_service = UserService(session)
         user = await user_service.get_by_email(payload.email)
         if not user:
-            return LoginResponse(success=False, message="该邮箱未注册")
+            return await fail_login("该邮箱未注册")
     else:
-        return LoginResponse(success=False, message="请提供有效的登录信息")
+        return await fail_login("请提供有效的登录信息")
 
     if not user:
-        return LoginResponse(success=False, message=error_message or "登录失败")
+        return await fail_login(error_message or "登录失败")
 
     if user.status != UserStatus.ACTIVE:
-        return LoginResponse(success=False, message="账号已禁用，请联系管理员")
+        return await fail_login("账号已禁用，请联系管理员")
 
     await auth_service.mark_login(user)
+    # 记录成功登录日志
+    await login_log_service.record(
+        login_method=login_method,
+        success=True,
+        owner_id=user.id,
+        login_account=user.username or login_account,
+        client_ip=client_ip,
+        result_message="登录成功",
+    )
     return LoginResponse(
         success=True,
         message="登录成功",
