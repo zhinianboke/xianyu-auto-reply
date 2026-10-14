@@ -46,6 +46,92 @@ RETRYABLE_DOWNLOAD_STATUS = {420, 429, 500, 502, 503, 504}
 # 重试等待秒数，长度即额外重试次数
 DOWNLOAD_RETRY_DELAYS = (1.0, 3.0)
 
+# ---------------------------------------------------------------------------
+# [代理支持补丁 2026-09-20] 媒体上传/下载按账号代理走代理。
+# 背景：服务器在境外时直连闲鱼图床（stream-upload.goofish.com）上传会被限速，
+# 导致发布图片 90 秒超时（"闲鱼图片上传请求失败"）。此处支持 socks5/socks4/http
+# 代理；无代理配置或依赖缺失时保持原有直连行为。
+# ---------------------------------------------------------------------------
+
+_PROXY_TYPE_MAP = {
+    "socks5": "SOCKS5",
+    "socks4": "SOCKS4",
+    "http": "HTTP",
+    "https": "HTTP",
+}
+
+
+def resolve_account_proxy(account_id: str | None) -> dict[str, Any] | None:
+    """读取账号代理配置；无代理或读取失败时返回 None（回退直连）。"""
+    if not account_id:
+        return None
+    try:
+        from common.db.compat import db_manager
+
+        config = db_manager.get_cookie_proxy_config(account_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"媒体上传读取账号代理配置失败，将直连: account_id={account_id}, error={exc}")
+        return None
+    if not config:
+        return None
+    if str(config.get("proxy_type") or "none").lower() in ("", "none"):
+        return None
+    if not config.get("proxy_host") or not config.get("proxy_port"):
+        return None
+    return config
+
+
+def build_proxy_connector(proxy: dict[str, Any] | None):
+    """按代理配置构建 aiohttp 连接器；无代理/依赖缺失/配置异常时返回 None。"""
+    if not proxy:
+        return None
+    proxy_type = str(proxy.get("proxy_type") or "").lower()
+    mapped = _PROXY_TYPE_MAP.get(proxy_type)
+    host = str(proxy.get("proxy_host") or "").strip()
+    try:
+        port = int(proxy.get("proxy_port") or 0)
+    except (TypeError, ValueError):
+        port = 0
+    if mapped is None or not host or port <= 0:
+        return None
+    try:
+        from aiohttp_socks import ProxyConnector, ProxyType
+    except ImportError:
+        # 兼容挂载式补丁部署：依赖库位于 /app/patch_libs
+        import sys
+
+        if "/app/patch_libs" not in sys.path:
+            sys.path.insert(0, "/app/patch_libs")
+        try:
+            from aiohttp_socks import ProxyConnector, ProxyType
+        except ImportError:
+            logger.error("aiohttp_socks 不可用，媒体上传无法走代理，回退直连")
+            return None
+    try:
+        connector = ProxyConnector(
+            proxy_type=getattr(ProxyType, mapped),
+            host=host,
+            port=port,
+            username=proxy.get("proxy_user") or None,
+            password=proxy.get("proxy_pass") or None,
+            rdns=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"构建代理连接器失败，媒体上传回退直连: {exc}")
+        return None
+    logger.info(f"媒体上传启用账号代理: {proxy_type}://{host}:{port}")
+    return connector
+
+
+async def close_proxy_connector(connector) -> None:
+    """关闭本次调用自建的连接器；None 时安全跳过。"""
+    if connector is None:
+        return
+    try:
+        await connector.close()
+    except Exception:  # noqa: BLE001
+        pass
+
 
 class PublishMediaError(RuntimeError):
     """媒体读取、上传或平台响应异常。"""
@@ -82,6 +168,59 @@ def _dimensions(content: bytes) -> tuple[int, int]:
             return int(image.width), int(image.height)
     except Exception as exc:  # noqa: BLE001
         raise PublishMediaError(f"图片无法解析，不能发布：{exc}") from exc
+
+
+COMPRESS_THRESHOLD_BYTES = 600 * 1024
+COMPRESS_MAX_DIMENSION = 1920
+COMPRESS_QUALITY = 85
+UPLOAD_MAX_ATTEMPTS = 3
+
+
+def _maybe_compress_image(content: bytes, name: str) -> tuple[bytes, str]:
+    """大图先压缩再上传，降低代理链路传输量（策略对齐聊天图片上传）。
+
+    代理带宽有限（实测 ~15-55KB/s），1-2MB 的原图会触发 90 秒上传超时；
+    超过阈值的非 GIF 图片转为 JPEG（最长边 1920、质量 85），通常可压到 1/5 以下。
+    压缩失败或未变小则按原图上传。
+    """
+    if len(content) <= COMPRESS_THRESHOLD_BYTES:
+        return content, name
+    if Path(name).suffix.lower() == ".gif":
+        return content, name
+    try:
+        with Image.open(BytesIO(content)) as img:
+            if img.mode in ("RGBA", "LA", "P"):
+                background = Image.new("RGB", img.size, (255, 255, 255))
+                if img.mode == "P":
+                    img = img.convert("RGBA")
+                background.paste(img, mask=img.split()[-1] if img.mode in ("RGBA", "LA") else None)
+                img = background
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+            width, height = img.size
+            if width > COMPRESS_MAX_DIMENSION or height > COMPRESS_MAX_DIMENSION:
+                if width > height:
+                    new_width = COMPRESS_MAX_DIMENSION
+                    new_height = max(1, int(height * COMPRESS_MAX_DIMENSION / width))
+                else:
+                    new_height = COMPRESS_MAX_DIMENSION
+                    new_width = max(1, int(width * COMPRESS_MAX_DIMENSION / height))
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            buffer = BytesIO()
+            img.save(buffer, "JPEG", quality=COMPRESS_QUALITY, optimize=True)
+            compressed = buffer.getvalue()
+            if len(compressed) > 800 * 1024:
+                buffer = BytesIO()
+                img.save(buffer, "JPEG", quality=70, optimize=True)
+                compressed = buffer.getvalue()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"图片压缩失败，按原图上传: {exc}")
+        return content, name
+    if len(compressed) >= len(content):
+        return content, name
+    new_name = f"{Path(name).stem or 'publish-image'}.jpg"
+    logger.info(f"图片压缩完成: {len(content) / 1024:.0f}KB -> {len(compressed) / 1024:.0f}KB")
+    return compressed, new_name
 
 
 async def _download_image(url: str) -> tuple[bytes, str]:
@@ -157,16 +296,23 @@ async def upload_publish_image(
     cookie: str,
     *,
     static_root: str | Path | None = None,
+    account_id: str | None = None,
+    proxy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """上传一张图片并返回闲鱼 imageInfoDOList 元素。"""
+    """上传一张图片并返回闲鱼 imageInfoDOList 元素（可按账号代理）。"""
+    resolved_proxy = proxy if proxy is not None else resolve_account_proxy(account_id)
     root = Path(static_root) if static_root else None
     content, name, content_type = await _read_image(value, root)
+    content, name = _maybe_compress_image(content, name)
+    if name.lower().endswith((".jpg", ".jpeg")):
+        content_type = "image/jpeg"
     return await upload_publish_image_content(
         content,
         name,
         cookie,
         content_type=content_type,
         source=value,
+        proxy=resolved_proxy,
     )
 
 
@@ -177,10 +323,15 @@ async def upload_publish_image_content(
     *,
     content_type: str | None = None,
     source: str = "内存图片",
+    account_id: str | None = None,
+    proxy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """上传内存中的图片字节，用于视频封面等派生媒体。"""
     if not content:
         raise PublishMediaError("图片文件为空")
+    content, name = _maybe_compress_image(content, name)
+    if name.lower().endswith((".jpg", ".jpeg")):
+        content_type = "image/jpeg"
     content_type = content_type or _content_type_for(name)
     width, height = _dimensions(content)
     suffix = Path(name).suffix.lower()
@@ -197,27 +348,45 @@ async def upload_publish_image_content(
         "User-Agent": BROWSER_USER_AGENT,
         "X-Requested-With": "XMLHttpRequest",
     }
-    try:
-        async with aiohttp.ClientSession(
-            timeout=MEDIA_TIMEOUT,
-            cookie_jar=aiohttp.DummyCookieJar(),
-        ) as session:
-            async with session.post(IMAGE_UPLOAD_URL, data=form, headers=headers) as response:
-                response_text = await response.text()
-                logger.info(
-                    f"闲鱼图片上传完整返回: source={source}, "
-                    f"http_status={response.status}, response={response_text}"
+    resolved_proxy = proxy if proxy is not None else resolve_account_proxy(account_id)
+    body: Any = None
+    last_error: Exception | None = None
+    for attempt in range(1, UPLOAD_MAX_ATTEMPTS + 1):
+        connector = build_proxy_connector(resolved_proxy)
+        try:
+            session_kwargs: dict[str, Any] = {
+                "timeout": MEDIA_TIMEOUT,
+                "cookie_jar": aiohttp.DummyCookieJar(),
+            }
+            if connector is not None:
+                session_kwargs["connector"] = connector
+            async with aiohttp.ClientSession(**session_kwargs) as session:
+                async with session.post(IMAGE_UPLOAD_URL, data=form, headers=headers) as response:
+                    response_text = await response.text()
+                    logger.info(
+                        f"闲鱼图片上传完整返回: source={source}, attempt={attempt}, "
+                        f"http_status={response.status}, response={response_text}"
+                    )
+                    if response.status != 200:
+                        raise PublishMediaError(f"闲鱼图片上传失败：HTTP {response.status}")
+                    try:
+                        body = await response.json(content_type=None)
+                    except ValueError as exc:
+                        raise PublishMediaError("闲鱼图片上传返回不是有效JSON") from exc
+            break
+        except PublishMediaError:
+            raise
+        except (aiohttp.ClientError, OSError, TimeoutError) as exc:
+            last_error = exc
+            if attempt < UPLOAD_MAX_ATTEMPTS:
+                logger.warning(
+                    f"闲鱼图片上传连接异常（第 {attempt}/{UPLOAD_MAX_ATTEMPTS} 次），准备重试: {exc}"
                 )
-                if response.status != 200:
-                    raise PublishMediaError(f"闲鱼图片上传失败：HTTP {response.status}")
-                try:
-                    body = await response.json(content_type=None)
-                except ValueError as exc:
-                    raise PublishMediaError("闲鱼图片上传返回不是有效JSON") from exc
-    except PublishMediaError:
-        raise
-    except (aiohttp.ClientError, OSError, TimeoutError) as exc:
-        raise PublishMediaError(f"闲鱼图片上传请求失败：{exc}") from exc
+                await asyncio.sleep(1.0)
+        finally:
+            await close_proxy_connector(connector)
+    else:
+        raise PublishMediaError(f"闲鱼图片上传请求失败：{last_error}") from last_error
 
     uploaded = body.get("object") if isinstance(body, dict) else None
     if not isinstance(uploaded, dict) or not uploaded.get("url") or body.get("success") is not True:
@@ -239,4 +408,11 @@ async def upload_publish_image_content(
     }
 
 
-__all__ = ["PublishMediaError", "upload_publish_image", "upload_publish_image_content"]
+__all__ = [
+    "PublishMediaError",
+    "upload_publish_image",
+    "upload_publish_image_content",
+    "resolve_account_proxy",
+    "build_proxy_connector",
+    "close_proxy_connector",
+]
