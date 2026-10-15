@@ -37,6 +37,7 @@ const postParams = [
   { name: 'spec_value', desc: '规格值' },
   { name: 'cookie_id', desc: 'cookies账号id' },
   { name: 'buyer_id', desc: '买家id' },
+  { name: 'buyer_name', desc: '买家昵称' },
 ]
 
 // 卡券表单数据类型
