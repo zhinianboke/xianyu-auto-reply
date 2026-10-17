@@ -839,6 +839,40 @@ class DatabaseInitializer:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户登录日志表';
         """,
 
+        # 14.3 邮件发送日志表（记录所有邮件触发尝试，成功/失败/限流/配置缺失都写入）
+        "xy_email_logs": """
+            CREATE TABLE IF NOT EXISTS xy_email_logs (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '日志ID',
+                owner_id BIGINT DEFAULT NULL COMMENT '触发用户ID（找不到对应用户时为空）',
+                recipient_email VARCHAR(255) NOT NULL COMMENT '收件邮箱',
+                trigger_operation VARCHAR(64) NOT NULL COMMENT '触发操作',
+                success TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否成功：1-成功，0-失败',
+                client_ip VARCHAR(255) DEFAULT NULL COMMENT '客户端IP',
+                result_message TEXT DEFAULT NULL COMMENT '结果说明（成功结果或失败原因）',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '发生时间',
+                INDEX idx_el_owner_id (owner_id),
+                INDEX idx_el_trigger_operation (trigger_operation),
+                INDEX idx_el_created_at (created_at),
+                INDEX idx_el_owner_created (owner_id, created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='邮件发送日志表';
+        """,
+
+        # 14.4 通用数据字典表（所有枚举值统一入库）
+        "xy_data_dictionaries": """
+            CREATE TABLE IF NOT EXISTS xy_data_dictionaries (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '字典项ID',
+                dict_type VARCHAR(64) NOT NULL COMMENT '字典类型',
+                dict_value VARCHAR(64) NOT NULL COMMENT '字典值',
+                dict_label VARCHAR(128) NOT NULL COMMENT '中文名称',
+                sort_order INT NOT NULL DEFAULT 0 COMMENT '排序序号',
+                enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                UNIQUE KEY uk_dd_type_value (dict_type, dict_value),
+                INDEX idx_dd_type_sort (dict_type, sort_order)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='通用数据字典表';
+        """,
+
         # 15. 通知渠道表
         "xy_notification_channels": """
             CREATE TABLE IF NOT EXISTS xy_notification_channels (
@@ -2214,6 +2248,9 @@ class DatabaseInitializer:
                     # 1. 创建所有表
                     await self.create_all_tables()
 
+                    # 1.1 初始化所有枚举数据字典
+                    await self.init_data_dictionaries()
+
                     # 自动续售表和发布日志关联字段独立幂等迁移，避免依赖旧版本 DDL 顺序。
                     async with ddl_connection() as conn:
                         await ensure_auto_relist_schema(conn, get_beijing_now_naive())
@@ -2279,6 +2316,49 @@ class DatabaseInitializer:
         # 执行索引迁移
         await self.migrate_indexes()
     
+    async def init_data_dictionaries(self):
+        """幂等初始化数据字典中的枚举值。"""
+        items = (
+            # 邮件触发操作
+            ("email_trigger_operation", "register_verification_code", "注册验证码", 10),
+            ("email_trigger_operation", "reset_password_verification_code", "找回密码验证码", 20),
+            ("email_trigger_operation", "email_login_verification_code", "邮箱验证码登录", 30),
+            ("email_trigger_operation", "test_email", "测试邮件", 40),
+            ("email_trigger_operation", "withdraw_notification", "提现通知邮件", 50),
+            ("email_trigger_operation", "notification_channel_test", "通知渠道测试邮件", 60),
+            # 邮件发送结果
+            ("email_send_result", "success", "成功", 10),
+            ("email_send_result", "failure", "失败", 20),
+        )
+        async with ddl_connection() as conn:
+            for dict_type, dict_value, dict_label, sort_order in items:
+                await conn.execute(
+                    text(
+                        "INSERT IGNORE INTO xy_data_dictionaries "
+                        "(dict_type, dict_value, dict_label, sort_order, enabled) "
+                        "VALUES (:dict_type, :dict_value, :dict_label, :sort_order, 1)"
+                    ),
+                    {
+                        "dict_type": dict_type,
+                        "dict_value": dict_value,
+                        "dict_label": dict_label,
+                        "sort_order": sort_order,
+                    },
+                )
+            await conn.execute(
+                text(
+                    "UPDATE xy_data_dictionaries SET enabled = 0 "
+                    "WHERE dict_type = :dict_type "
+                    "AND dict_value IN (:notification_email, :auto_reply_notification)"
+                ),
+                {
+                    "dict_type": "email_trigger_operation",
+                    "notification_email": "notification_email",
+                    "auto_reply_notification": "auto_reply_notification",
+                },
+            )
+        logger.info(f"数据字典初始化完成，共 {len(items)} 项")
+
     async def rename_legacy_tables(self):
         """重命名旧表（统一加 xy_ 前缀）"""
         async with ddl_connection() as conn:

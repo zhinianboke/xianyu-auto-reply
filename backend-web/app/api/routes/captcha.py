@@ -12,7 +12,7 @@ import string
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,6 +36,13 @@ from common.db.session import async_session_maker
 from common.models.system_setting import SystemSetting
 from common.models.user import User
 from common.schemas.common import ApiResponse
+from common.services.email_log_service import (
+    EMAIL_OPERATION_EMAIL_LOGIN_VERIFICATION_CODE,
+    EMAIL_OPERATION_REGISTER_VERIFICATION_CODE,
+    EMAIL_OPERATION_RESET_PASSWORD_VERIFICATION_CODE,
+    record_email_log,
+)
+from common.utils.http_utils import get_client_ip
 from common.utils.internal_auth import build_internal_auth_headers, is_internal_api_url
 
 router = APIRouter(prefix="/captcha", tags=["验证码"])
@@ -382,12 +389,24 @@ async def verify_captcha(request: VerifyCaptchaRequest) -> ApiResponse:
 
 @router.post("/send-email-code")
 async def send_email_verification_code(
+    http_request: Request,
     request: SendCodeRequest,
     db: AsyncSession = Depends(deps.get_db_session),
 ) -> ApiResponse:
     """发送邮箱验证码"""
+    # 触发操作枚举与客户端IP，用于邮件发送日志
+    if request.type == "login":
+        trigger_operation = EMAIL_OPERATION_EMAIL_LOGIN_VERIFICATION_CODE
+    elif request.type == "register":
+        trigger_operation = EMAIL_OPERATION_REGISTER_VERIFICATION_CODE
+    else:
+        trigger_operation = EMAIL_OPERATION_RESET_PASSWORD_VERIFICATION_CODE
+    client_ip = get_client_ip(http_request)
+
     try:
         cleanup_expired_email_codes()
+        # 触发用户（用于邮件日志），先置空，后续按类型补充
+        existing_user = None
 
         from app.services.user_service import UserService
         user_service = UserService(db)
@@ -402,16 +421,42 @@ async def send_email_verification_code(
                 from app.api.routes.geetest import check_geetest_verified
 
                 if not request.geetest_challenge:
+                    # 被校验拒绝也必须落库邮件日志
+                    await record_email_log(
+                        recipient_email=request.email,
+                        trigger_operation=trigger_operation,
+                        success=False,
+                        owner_id=None,
+                        client_ip=client_ip,
+                        result_message="请完成滑动验证",
+                    )
                     return ApiResponse(success=False, message="请完成滑动验证")
 
                 geetest_ok, geetest_msg = check_geetest_verified(request.geetest_challenge)
                 if not geetest_ok:
+                    # 被校验拒绝也必须落库邮件日志
+                    await record_email_log(
+                        recipient_email=request.email,
+                        trigger_operation=trigger_operation,
+                        success=False,
+                        owner_id=None,
+                        client_ip=client_ip,
+                        result_message=geetest_msg,
+                    )
                     return ApiResponse(success=False, message=geetest_msg)
 
         # 根据类型检查邮箱
         if request.type == "register":
             existing_user = await user_service.get_by_email(request.email)
             if existing_user:
+                await record_email_log(
+                    recipient_email=request.email,
+                    trigger_operation=trigger_operation,
+                    success=False,
+                    owner_id=existing_user.id,
+                    client_ip=client_ip,
+                    result_message="该邮箱已被注册",
+                )
                 return ApiResponse(
                     success=False,
                     message="该邮箱已被注册"
@@ -419,6 +464,14 @@ async def send_email_verification_code(
         elif request.type == "login":
             existing_user = await user_service.get_by_email(request.email)
             if not existing_user:
+                await record_email_log(
+                    recipient_email=request.email,
+                    trigger_operation=trigger_operation,
+                    success=False,
+                    owner_id=None,
+                    client_ip=client_ip,
+                    result_message="该邮箱未注册",
+                )
                 return ApiResponse(
                     success=False,
                     message="该邮箱未注册"
@@ -426,6 +479,14 @@ async def send_email_verification_code(
         elif request.type == "reset_password":
             existing_user = await user_service.get_by_email(request.email)
             if not existing_user:
+                await record_email_log(
+                    recipient_email=request.email,
+                    trigger_operation=trigger_operation,
+                    success=False,
+                    owner_id=None,
+                    client_ip=client_ip,
+                    result_message="该邮箱未注册",
+                )
                 return ApiResponse(
                     success=False,
                     message="该邮箱未注册"
@@ -434,6 +495,14 @@ async def send_email_verification_code(
         # 检查发送频率（1分钟内只能发送一次）
         stored = email_code_store.get(request.email)
         if stored and stored["expires_at"] - 240 > time.time():
+            await record_email_log(
+                recipient_email=request.email,
+                trigger_operation=trigger_operation,
+                success=False,
+                owner_id=(existing_user.id if existing_user else None),
+                client_ip=client_ip,
+                result_message="验证码发送过于频繁，请稍后再试",
+            )
             return ApiResponse(
                 success=False,
                 message="验证码发送过于频繁，请稍后再试"
@@ -451,7 +520,13 @@ async def send_email_verification_code(
         
         # 发送邮件
         from app.services.email_service import send_verification_code_email
-        success, message = await send_verification_code_email(request.email, code, request.type)
+        success, message = await send_verification_code_email(
+            request.email,
+            code,
+            request.type,
+            owner_id=(existing_user.id if existing_user else None),
+            client_ip=client_ip,
+        )
         
         if not success:
             # 发送失败，删除验证码
@@ -470,6 +545,15 @@ async def send_email_verification_code(
         
     except Exception as e:
         logger.error(f"发送邮箱验证码失败: {e}")
+        # 兜底记录：异常也必须落库邮件日志，禁止静默失败
+        await record_email_log(
+            recipient_email=str(getattr(request, "email", "") or ""),
+            trigger_operation=trigger_operation,
+            success=False,
+            owner_id=None,
+            client_ip=client_ip,
+            result_message=f"发送邮箱验证码异常: {type(e).__name__}: {e}",
+        )
         return ApiResponse(
             success=False,
             message="验证码发送失败，请稍后重试"

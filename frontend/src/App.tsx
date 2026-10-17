@@ -83,6 +83,7 @@ const AutoReplyLogs = React.lazy(() => import('@/pages/autoReplyLogs/AutoReplyLo
 const RiskLogs = React.lazy(() => import('@/pages/admin/RiskLogs').then(m => ({ default: m.RiskLogs })))
 const AccountLoginLogs = React.lazy(() => import('@/pages/admin/AccountLoginLogs').then(m => ({ default: m.AccountLoginLogs })))
 const UserLoginLogs = React.lazy(() => import('@/pages/admin/UserLoginLogs').then(m => ({ default: m.UserLoginLogs })))
+const EmailLogs = React.lazy(() => import('@/pages/admin/EmailLogs').then(m => ({ default: m.EmailLogs })))
 const DbBackupLogs = React.lazy(() => import('@/pages/admin/DbBackupLogs').then(m => ({ default: m.DbBackupLogs })))
 const DataManagement = React.lazy(() => import('@/pages/admin/DataManagement').then(m => ({ default: m.DataManagement })))
 const ScheduledTasks = React.lazy(() => import('@/pages/admin/ScheduledTasks').then(m => ({ default: m.ScheduledTasks })))
@@ -398,6 +399,7 @@ function App() {
             <Route path="admin/logs" element={<Logs />} />
             <Route path="admin/account-login-logs" element={<AccountLoginLogs />} />
             <Route path="admin/user-login-logs" element={<UserLoginLogs />} />
+            <Route path="admin/email-logs" element={<EmailLogs />} />
             <Route path="admin/db-backup-logs" element={<DbBackupLogs />} />
             <Route path="admin/auto-reply-logs" element={<Navigate to="/message-logs" replace />} />
             <Route path="admin/risk-logs" element={<Navigate to="/risk-logs" replace />} />

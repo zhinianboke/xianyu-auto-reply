@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from loguru import logger
 
 from app.api import deps
@@ -43,6 +43,7 @@ from common.services.token_api_mode import (
 )
 from common.utils.logging_utils import update_log_retention
 from common.utils.browser_utils import is_frozen
+from common.utils.http_utils import get_client_ip
 
 router = APIRouter(tags=["system_settings"])
 
@@ -386,12 +387,18 @@ async def update_system_setting(
 @router.post("/test-email", response_model=ApiResponse)
 async def test_email_send(
     email: str,
+    http_request: Request,
     current_user: User = Depends(deps.get_current_admin_user),
 ) -> ApiResponse:
     """发送测试邮件"""
     from app.services.email_service import send_test_email
-    
-    success, message = await send_test_email(email)
+
+    # 发送结果（成功/失败/配置缺失）由 email_service 统一写入邮件发送日志
+    success, message = await send_test_email(
+        email,
+        owner_id=current_user.id,
+        client_ip=get_client_ip(http_request),
+    )
     return ApiResponse(success=success, message=message)
 
 

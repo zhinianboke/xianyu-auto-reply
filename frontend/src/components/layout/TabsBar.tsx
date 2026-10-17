@@ -53,6 +53,7 @@ const routeTitles: Record<string, string> = {
   '/admin/auto-reply-logs': '消息日志',
   '/admin/account-login-logs': '账号登录日志',
   '/admin/user-login-logs': '用户登录日志',
+  '/admin/email-logs': '邮件日志',
   '/admin/risk-logs': '风控日志',
   '/admin/data': '数据管理',
   '/admin/redelivery-batches': '补发货日志',

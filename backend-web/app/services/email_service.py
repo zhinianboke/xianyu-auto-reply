@@ -19,6 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from common.db.session import async_session_maker
+from common.services.email_log_service import (
+    EMAIL_OPERATION_EMAIL_LOGIN_VERIFICATION_CODE,
+    EMAIL_OPERATION_REGISTER_VERIFICATION_CODE,
+    EMAIL_OPERATION_RESET_PASSWORD_VERIFICATION_CODE,
+    EMAIL_OPERATION_TEST_EMAIL,
+    EMAIL_OPERATION_WITHDRAW_NOTIFICATION,
+    record_email_log,
+)
 from common.utils.time_utils import get_beijing_now_naive
 
 
@@ -219,25 +227,67 @@ def send_email_sync(
                 pass
 
 
-async def send_verification_code_email(to_email: str, code: str, code_type: str = "register") -> tuple[bool, str]:
+async def send_verification_code_email(
+    to_email: str,
+    code: str,
+    code_type: str = "register",
+    owner_id: Optional[int] = None,
+    client_ip: Optional[str] = None,
+) -> tuple[bool, str]:
     """
     发送验证码邮件
-    返回: (是否成功, 消息)
+
+    Args:
+        to_email: 收件邮箱
+        code: 验证码
+        code_type: 验证码类型 register / login / reset_password
+        owner_id: 触发用户ID（找不到用户时为空）
+        client_ip: 客户端IP
+    Returns:
+        (是否成功, 消息)
     """
+    # 触发操作枚举：写入邮件发送日志时标识来源
+    if code_type == "login":
+        trigger_operation = EMAIL_OPERATION_EMAIL_LOGIN_VERIFICATION_CODE
+    elif code_type == "register":
+        trigger_operation = EMAIL_OPERATION_REGISTER_VERIFICATION_CODE
+    else:
+        trigger_operation = EMAIL_OPERATION_RESET_PASSWORD_VERIFICATION_CODE
+
     # 获取SMTP配置
-    settings = await get_smtp_settings()
-    
-    smtp_server = settings.get('server', '')
-    smtp_port = int(settings.get('port', 587))
-    smtp_user = settings.get('user', '')
-    smtp_password = settings.get('password', '')
-    smtp_from = settings.get('from', '') or smtp_user
+    try:
+        settings = await get_smtp_settings()
+        smtp_server = settings.get('server', '')
+        smtp_port = int(settings.get('port', 587))
+        smtp_user = settings.get('user', '')
+        smtp_password = settings.get('password', '')
+        smtp_from = settings.get('from', '') or smtp_user
+    except Exception as exc:
+        logger.opt(exception=exc).error("读取验证码邮件配置失败")
+        await record_email_log(
+            recipient_email=to_email,
+            trigger_operation=trigger_operation,
+            success=False,
+            owner_id=owner_id,
+            client_ip=client_ip,
+            result_message=f"读取邮件配置失败: {type(exc).__name__}: {exc}",
+        )
+        return False, "读取邮件配置失败，请稍后重试"
     
     # 根据端口自动判断加密方式
     use_tls, use_ssl = get_encryption_by_port(smtp_port)
     
     if not smtp_server or not smtp_user or not smtp_password:
         logger.warning("SMTP配置不完整，无法发送邮件")
+        # 配置缺失同样必须落库邮件日志
+        await record_email_log(
+            recipient_email=to_email,
+            trigger_operation=trigger_operation,
+            success=False,
+            owner_id=owner_id,
+            client_ip=client_ip,
+            result_message="邮件服务未配置，请联系管理员",
+        )
         return False, "邮件服务未配置，请联系管理员"
     
     # 根据类型设置邮件内容
@@ -313,7 +363,7 @@ async def send_verification_code_email(to_email: str, code: str, code_type: str 
 </html>
 """
     
-    return send_email_sync(
+    success, message = send_email_sync(
         to_email=to_email,
         subject=subject,
         content=content,
@@ -325,26 +375,64 @@ async def send_verification_code_email(to_email: str, code: str, code_type: str 
         use_tls=use_tls,
         use_ssl=use_ssl,
     )
+    await record_email_log(
+        recipient_email=to_email,
+        trigger_operation=trigger_operation,
+        success=success,
+        owner_id=owner_id,
+        client_ip=client_ip,
+        result_message=message,
+    )
+    return success, message
 
 
-async def send_test_email(to_email: str) -> tuple[bool, str]:
+async def send_test_email(
+    to_email: str,
+    owner_id: Optional[int] = None,
+    client_ip: Optional[str] = None,
+) -> tuple[bool, str]:
     """
     发送测试邮件
-    返回: (是否成功, 消息)
+
+    Args:
+        to_email: 收件邮箱
+        owner_id: 触发用户ID
+        client_ip: 客户端IP
+    Returns:
+        (是否成功, 消息)
     """
-    # 获取SMTP配置
-    settings = await get_smtp_settings()
-    
-    smtp_server = settings.get('server', '')
-    smtp_port = int(settings.get('port', 587))
-    smtp_user = settings.get('user', '')
-    smtp_password = settings.get('password', '')
-    smtp_from = settings.get('from', '') or smtp_user
+    try:
+        settings = await get_smtp_settings()
+        smtp_server = settings.get('server', '')
+        smtp_port = int(settings.get('port', 587))
+        smtp_user = settings.get('user', '')
+        smtp_password = settings.get('password', '')
+        smtp_from = settings.get('from', '') or smtp_user
+    except Exception as exc:
+        logger.opt(exception=exc).error("读取测试邮件配置失败")
+        await record_email_log(
+            recipient_email=to_email,
+            trigger_operation=EMAIL_OPERATION_TEST_EMAIL,
+            success=False,
+            owner_id=owner_id,
+            client_ip=client_ip,
+            result_message=f"读取邮件配置失败: {type(exc).__name__}: {exc}",
+        )
+        return False, "读取邮件配置失败，请稍后重试"
     
     # 根据端口自动判断加密方式
     use_tls, use_ssl = get_encryption_by_port(smtp_port)
     
     if not smtp_server or not smtp_user or not smtp_password:
+        # 配置缺失同样必须落库邮件日志
+        await record_email_log(
+            recipient_email=to_email,
+            trigger_operation=EMAIL_OPERATION_TEST_EMAIL,
+            success=False,
+            owner_id=owner_id,
+            client_ip=client_ip,
+            result_message="SMTP配置不完整，请先填写SMTP服务器、用户名和密码",
+        )
         return False, "SMTP配置不完整，请先填写SMTP服务器、用户名和密码"
     
     content = """
@@ -395,7 +483,7 @@ async def send_test_email(to_email: str) -> tuple[bool, str]:
 </html>
 """
     
-    return send_email_sync(
+    success, message = send_email_sync(
         to_email=to_email,
         subject="邮件配置测试",
         content=content,
@@ -407,6 +495,15 @@ async def send_test_email(to_email: str) -> tuple[bool, str]:
         use_tls=use_tls,
         use_ssl=use_ssl,
     )
+    await record_email_log(
+        recipient_email=to_email,
+        trigger_operation=EMAIL_OPERATION_TEST_EMAIL,
+        success=success,
+        owner_id=owner_id,
+        client_ip=client_ip,
+        result_message=message,
+    )
+    return success, message
 
 
 def _build_risk_html(risk_result) -> str:
@@ -479,6 +576,14 @@ async def send_withdraw_notification_email(
     to_email = await get_withdraw_notify_email()
     if not to_email:
         logger.warning("系统未配置提现通知邮箱，无法发送提现通知")
+        # 收件邮箱未知，仍必须落库邮件日志
+        await record_email_log(
+            recipient_email="",
+            trigger_operation=EMAIL_OPERATION_WITHDRAW_NOTIFICATION,
+            success=False,
+            owner_id=user_id,
+            result_message="系统未配置提现通知邮箱",
+        )
         return False, "系统未配置提现通知邮箱"
     
     # 获取SMTP配置
@@ -494,6 +599,13 @@ async def send_withdraw_notification_email(
     
     if not smtp_server or not smtp_user or not smtp_password:
         logger.warning("SMTP配置不完整，无法发送提现通知邮件")
+        await record_email_log(
+            recipient_email=to_email,
+            trigger_operation=EMAIL_OPERATION_WITHDRAW_NOTIFICATION,
+            success=False,
+            owner_id=user_id,
+            result_message="邮件服务未配置",
+        )
         return False, "邮件服务未配置"
     
     
@@ -644,7 +756,7 @@ async def send_withdraw_notification_email(
 </html>
 """
     
-    return send_email_sync(
+    success, message = send_email_sync(
         to_email=to_email,
         subject=f"【提现通知】用户 {username} 申请提现 ¥{amount}",
         content=content,
@@ -656,3 +768,12 @@ async def send_withdraw_notification_email(
         use_tls=use_tls,
         use_ssl=use_ssl,
     )
+    await record_email_log(
+        recipient_email=to_email,
+        trigger_operation=EMAIL_OPERATION_WITHDRAW_NOTIFICATION,
+        success=success,
+        owner_id=user_id,
+        client_ip=None,
+        result_message=message,
+    )
+    return success, message

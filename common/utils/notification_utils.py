@@ -16,6 +16,8 @@ from urllib.parse import quote
 import aiohttp
 from loguru import logger
 
+from common.services.email_log_service import record_email_log
+
 
 def parse_notification_config(config) -> Dict[str, Any]:
     """解析通知配置数据
@@ -263,13 +265,28 @@ def _send_smtp_message_blocking(
 async def send_email_notification(
     config_data: Dict[str, Any],
     message: str,
-    attachment_path: str = None
+    attachment_path: str = None,
+    owner_id: Optional[int] = None,
+    trigger_operation: str | None = None,
+    client_ip: Optional[str] = None,
+    record_log: bool = True,
 ) -> bool:
     """发送邮件通知
 
     将阻塞的 smtplib 调用放到线程池中执行，避免阻塞 asyncio 事件循环；
     分步记录错误，区分认证失败、服务器主动断开、连接失败等情况；
     遇到 SMTPServerDisconnected 这种瞬态错误时尝试重试一次。
+
+    Args:
+        config_data: 通知渠道邮件配置
+        message: 邮件正文
+        attachment_path: 附件路径
+        owner_id: 触发用户ID（触发账号归属用户）
+        trigger_operation: 触发操作枚举值；未提供时不写入邮件日志
+        client_ip: 客户端IP
+        record_log: 是否写入邮件发送日志
+    Returns:
+        是否发送成功
     """
     import asyncio
     import os
@@ -280,12 +297,26 @@ async def send_email_notification(
     from email.mime.image import MIMEImage
     from email.mime.application import MIMEApplication
 
+    async def _record(success: bool, reason: str, email: Optional[str] = None) -> None:
+        """记录一条邮件发送日志；email 缺省时取配置中的收件邮箱"""
+        if not record_log or not trigger_operation:
+            return
+        await record_email_log(
+            recipient_email=(email if email is not None else (config_data.get('recipient_email') or '')),
+            trigger_operation=trigger_operation,
+            success=success,
+            owner_id=owner_id,
+            client_ip=client_ip,
+            result_message=reason,
+        )
+
     try:
         smtp_server = (config_data.get('smtp_server') or '').strip()
         try:
             smtp_port = int(config_data.get('smtp_port', 587) or 587)
         except (TypeError, ValueError):
             logger.warning("📱 邮件通知 smtp_port 配置无效，跳过发送")
+            await _record(False, "邮件通知 smtp_port 配置无效")
             return False
         email_user = (config_data.get('email_user') or '').strip()
         email_password = config_data.get('email_password') or ''
@@ -300,6 +331,7 @@ async def send_email_notification(
 
         if not all([smtp_server, email_user, email_password, recipient_email]):
             logger.warning("📱 邮件通知配置不完整")
+            await _record(False, "邮件通知配置不完整")
             return False
 
         # 检查配置是否包含中文占位符或无效字符
@@ -318,6 +350,7 @@ async def send_email_notification(
         # 验证邮箱配置
         if not is_valid_config(email_user) or not is_valid_config(recipient_email):
             logger.warning(f"📱 邮件配置包含无效值或占位符，跳过发送")
+            await _record(False, "邮件配置包含无效值或占位符")
             return False
 
         msg = MIMEMultipart()
@@ -357,6 +390,7 @@ async def send_email_notification(
                     smtp_use_tls,
                 )
                 logger.info(f"📱 邮件通知发送成功: {recipient_email}")
+                await _record(True, f"邮件通知发送成功: {recipient_email}")
                 return True
             except smtplib.SMTPServerDisconnected as exc:
                 last_exc = exc
@@ -373,34 +407,41 @@ async def send_email_notification(
                     f"(465=SSL, 587=STARTTLS, 25=不加密)，"
                     f"以及邮箱是否开启 SMTP 服务、授权码是否正确"
                 )
+                await _record(False, f"邮件服务器在[{step}]步骤连接被关闭: {exc}")
                 return False
             except smtplib.SMTPAuthenticationError as exc:
                 logger.error(
                     f"📱 邮件通知认证失败: {exc}; "
                     f"请检查邮箱用户名与授权码是否正确（多数邮箱要求使用授权码而非登录密码）"
                 )
+                await _record(False, f"邮件通知认证失败: {exc}")
                 return False
             except smtplib.SMTPConnectError as exc:
                 logger.error(
                     f"📱 邮件服务器连接失败: {exc}; "
                     f"请检查 smtp_server={smtp_server!r}, smtp_port={smtp_port} 是否可达"
                 )
+                await _record(False, f"邮件服务器连接失败: {exc}")
                 return False
             except smtplib.SMTPException as exc:
                 step = getattr(exc, "_smtp_step", "unknown")
                 logger.error(f"📱 SMTP 协议错误[{step}]: {exc}")
+                await _record(False, f"SMTP 协议错误[{step}]: {exc}")
                 return False
             except (OSError, TimeoutError) as exc:
                 step = getattr(exc, "_smtp_step", "unknown")
                 logger.error(f"📱 邮件网络错误[{step}]: {exc}")
+                await _record(False, f"邮件网络错误[{step}]: {exc}")
                 return False
         # 理论上不会走到这里
         if last_exc is not None:
             logger.error(f"📱 发送邮件通知重试后仍失败: {last_exc}")
+            await _record(False, f"发送邮件通知重试后仍失败: {last_exc}")
         return False
 
     except Exception as e:
         logger.error(f"📱 发送邮件通知异常: {e}")
+        await _record(False, f"发送邮件通知异常: {e}")
         return False
 
 

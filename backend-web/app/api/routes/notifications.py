@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
 from app.api import deps
 from common.models.user import User
 from common.schemas.common import ApiResponse
+from common.services.email_log_service import EMAIL_OPERATION_NOTIFICATION_CHANNEL_TEST
+from common.utils.http_utils import get_client_ip
 from common.schemas.notification import (
     MessageNotificationSet,
     NotificationChannelCreate,
@@ -73,6 +75,7 @@ async def delete_notification_channel(
 @channels_router.post("/{channel_id}/test", response_model=ApiResponse)
 async def test_notification_channel(
     channel_id: int,
+    http_request: Request,
     current_user: User = Depends(deps.get_current_active_user),
     service: NotificationChannelService = Depends(deps.get_notification_channel_service),
 ) -> ApiResponse:
@@ -117,7 +120,16 @@ async def test_notification_channel(
         elif channel_type == 'bark':
             await send_bark_notification(config_data, test_message)
         elif channel_type == 'email':
-            await send_email_notification(config_data, test_message)
+            # 邮件发送结果（成功/失败/配置缺失）由 send_email_notification 写入邮件发送日志
+            ok = await send_email_notification(
+                config_data,
+                test_message,
+                owner_id=current_user.id,
+                trigger_operation=EMAIL_OPERATION_NOTIFICATION_CHANNEL_TEST,
+                client_ip=get_client_ip(http_request),
+            )
+            if not ok:
+                return ApiResponse(success=False, message="邮件通知发送失败，请检查邮件渠道配置")
         elif channel_type == 'webhook':
             await send_webhook_notification(config_data, test_message)
         elif channel_type == 'wechat':

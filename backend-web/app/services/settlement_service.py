@@ -22,6 +22,7 @@ from common.models.settlement_record import SettlementRecord
 from common.models.user_setting import UserSetting
 from common.models.user import User
 from common.models.system_setting import SystemSetting
+from common.services.email_log_service import EMAIL_OPERATION_WITHDRAW_NOTIFICATION, record_email_log
 from common.utils.pagination import (
     build_pagination_response,
     execute_paginated_with_filters,
@@ -174,23 +175,46 @@ class SettlementService:
             user = user_result.scalar_one_or_none()
             username = user.username if user else f"用户{user_id}"
             
-            # 创建后台任务发送邮件
-            asyncio.create_task(
-                send_withdraw_notification_email(
-                    user_id=user_id,
-                    username=username,
-                    amount=str(withdraw_amount),
-                    alipay_id=alipay_id or '',
-                    payment_type=payment_type,
-                    payment_qrcode=payment_qrcode,
-                    record_id=record.id,
-                    balance_after=str(balance_after),
-                )
-            )
+            # 后台任务发送提现通知邮件；内部已负责写入成功/失败邮件日志
+            async def _send_withdraw_notification_safely() -> None:
+                """后台执行提现通知邮件发送，异常兜底记录邮件日志，避免静默失败。"""
+                try:
+                    await send_withdraw_notification_email(
+                        user_id=user_id,
+                        username=username,
+                        amount=str(withdraw_amount),
+                        alipay_id=alipay_id or '',
+                        payment_type=payment_type,
+                        payment_qrcode=payment_qrcode,
+                        record_id=record.id,
+                        balance_after=str(balance_after),
+                    )
+                except Exception as task_exc:
+                    logger.error(
+                        f"提现通知邮件发送异常: 用户={username}, 金额={withdraw_amount}, "
+                        f"error={type(task_exc).__name__}: {task_exc}",
+                        exc_info=True,
+                    )
+                    await record_email_log(
+                        recipient_email="",
+                        trigger_operation=EMAIL_OPERATION_WITHDRAW_NOTIFICATION,
+                        success=False,
+                        owner_id=user_id,
+                        result_message=f"提现通知邮件发送异常: {type(task_exc).__name__}: {task_exc}",
+                    )
+
+            asyncio.create_task(_send_withdraw_notification_safely())
             logger.info(f"提现通知邮件任务已创建: 用户={username}, 金额={withdraw_amount}")
         except Exception as e:
-            # 邮件发送失败不影响提现主流程
+            # 邮件发送失败不影响提现主流程，但异常必须落库邮件日志，禁止静默失败
             logger.warning(f"创建提现通知邮件任务失败: {e}")
+            await record_email_log(
+                recipient_email="",
+                trigger_operation=EMAIL_OPERATION_WITHDRAW_NOTIFICATION,
+                success=False,
+                owner_id=user_id,
+                result_message=f"创建提现通知邮件任务失败: {type(e).__name__}: {e}",
+            )
 
         return {
             'success': True,
