@@ -4,7 +4,8 @@
 功能：
 1. 数据库备份日志分页查询（按状态、时间范围筛选）
 2. 根据日志ID获取备份文件路径，用于下载
-3. 仅管理员可访问（鉴权在路由层处理）
+3. 删除备份日志及其关联的备份文件
+4. 仅管理员可访问（鉴权在路由层处理）
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ from common.utils.time_utils import safe_isoformat
 
 
 class DbBackupLogService:
-    """数据库备份日志只读访问 + 备份文件下载解析。"""
+    """数据库备份日志只读访问 + 备份文件下载/删除。"""
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -114,3 +115,31 @@ class DbBackupLogService:
         if not file_path:
             return None, None
         return file_path, log.file_name
+
+    async def delete_log(self, log_id: int) -> tuple[bool, str]:
+        """删除备份日志及其关联的备份文件。
+
+        文件不存在（如失败记录）时仅删除日志记录；
+        文件删除失败（权限等）时中止并返回失败，避免出现文件残留。
+
+        Returns:
+            (是否成功, 提示消息)
+        """
+        result = await self.session.execute(
+            select(DbBackupLog).where(DbBackupLog.id == log_id)
+        )
+        log = result.scalar_one_or_none()
+        if not log:
+            return False, "备份日志不存在或已被删除"
+
+        file_path = locate_backup_file(log.file_name, log.file_path)
+        if file_path:
+            try:
+                # missing_ok：容忍定位与删除之间文件被移除的极端情况
+                file_path.unlink(missing_ok=True)
+            except OSError:
+                return False, "备份文件删除失败，请检查文件权限"
+
+        await self.session.delete(log)
+        await self.session.commit()
+        return True, "备份日志已删除"
