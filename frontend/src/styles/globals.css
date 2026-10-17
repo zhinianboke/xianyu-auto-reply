@@ -630,6 +630,16 @@
     animation: scale-in 0.15s ease-out;
   }
 
+  /* 跑马灯横向滚动（内容超宽时无缝循环滚动） */
+  @keyframes marquee-scroll {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+
+  .animate-marquee {
+    animation: marquee-scroll 10s linear infinite;
+  }
+
   /* 安全区域 */
   .safe-area-inset {
     padding-bottom: env(safe-area-inset-bottom);
