@@ -11,7 +11,9 @@ import { Check, ChevronDown, Loader2, X } from 'lucide-react'
 import {
   createListingMonitorTask,
   updateListingMonitorTask,
+  KEYWORD_MATCH_MODE_OPTIONS,
   MONITOR_TYPE_OPTIONS,
+  type KeywordMatchMode,
   type ListingMonitorTask,
   type MonitorType,
 } from '@/api/listingMonitor'
@@ -38,6 +40,7 @@ interface ListingMonitorFormState {
   monitorType: MonitorType
   categoryId: string
   keyword: string
+  keywordMatchMode: KeywordMatchMode
   priceMin: string
   priceMax: string
   publishDays: string
@@ -50,12 +53,14 @@ interface ListingMonitorFormState {
   dmBatchSize: string
   orderBatchSize: string
   directOrder: boolean
+  notifyOnCollect: boolean
 }
 
 const buildInitialState = (initial?: ListingMonitorTask | null): ListingMonitorFormState => ({
   monitorType: initial?.monitor_type ?? 'listing',
   categoryId: initial?.category_id != null ? String(initial.category_id) : '',
   keyword: initial?.keyword ?? '',
+  keywordMatchMode: initial?.keyword_match_mode ?? 'off',
   priceMin: initial?.price_min != null ? String(initial.price_min) : '',
   priceMax: initial?.price_max != null ? String(initial.price_max) : '',
   publishDays: initial?.publish_days != null ? String(initial.publish_days) : '',
@@ -68,6 +73,7 @@ const buildInitialState = (initial?: ListingMonitorTask | null): ListingMonitorF
   dmBatchSize: initial?.dm_batch_size != null ? String(initial.dm_batch_size) : '5',
   orderBatchSize: initial?.order_batch_size != null ? String(initial.order_batch_size) : '5',
   directOrder: Boolean(initial?.direct_order),
+  notifyOnCollect: Boolean(initial?.notify_on_collect),
 })
 
 export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMonitorFormModalProps) {
@@ -244,6 +250,7 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
         monitor_type: form.monitorType,
         category_id: Number(form.categoryId),
         keyword,
+        keyword_match_mode: form.keywordMatchMode,
         price_min: priceMin,
         price_max: priceMax,
         publish_days: form.monitorType === 'listing'
@@ -258,6 +265,7 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
         dm_batch_size: dmBatchSize,
         order_batch_size: orderBatchSize,
         direct_order: form.directOrder,
+        notify_on_collect: form.notifyOnCollect,
       }
       const result = isEditMode && initial
         ? await updateListingMonitorTask(initial.id, payload)
@@ -319,9 +327,26 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
               <label className="input-label">商品关键字 <span className="text-red-500">*</span></label>
               <input
                 className="input-ios"
-                placeholder="如：iPhone 15 黄金"
+                placeholder="多词可用空格或逗号分隔，如：鱼力值互评,互动服务"
                 value={form.keyword}
                 onChange={(e) => setForm((prev) => ({ ...prev, keyword: e.target.value }))}
+              />
+            </div>
+
+            <div className="input-group">
+              <label className="input-label">
+                关键词匹配模式
+                <span className="text-xs text-slate-400 ml-1">
+                  （开启后按标题或内容本地过滤，词出现在任一处即可；搜索用第一个词）
+                </span>
+              </label>
+              <Select
+                value={form.keywordMatchMode}
+                onChange={(value) =>
+                  setForm((prev) => ({ ...prev, keywordMatchMode: value as KeywordMatchMode }))
+                }
+                options={KEYWORD_MATCH_MODE_OPTIONS}
+                placeholder="请选择匹配模式"
               />
             </div>
 
@@ -602,6 +627,19 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
                 <span className="input-label mb-0">采集后直接下单</span>
               </label>
               <p className="text-xs text-slate-400 mt-1">开启后，新采集到的商品立即用下单账号下单（跳过私信），下单完成后再入库，避免与定时下单任务并发。需配置下单账号。</p>
+            </div>
+
+            <div className="input-group">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  checked={form.notifyOnCollect}
+                  onChange={(e) => setForm((prev) => ({ ...prev, notifyOnCollect: e.target.checked }))}
+                />
+                <span className="input-label mb-0">采集后推送通知</span>
+              </label>
+              <p className="text-xs text-slate-400 mt-1">开启后，本次采集出现新增商品时，推送到你在「通知渠道」中已启用的渠道；仅更新已有商品不会推送。请先配置通知渠道。</p>
             </div>
           </div>
         </div>

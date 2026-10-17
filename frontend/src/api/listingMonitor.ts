@@ -12,10 +12,19 @@ const PREFIX = '/api/v1/product-monitor/listing-tasks'
 
 export type MonitorType = 'listing' | 'price_drop'
 
+/** 多关键词标题匹配：off=不本地过滤；any=含任一；all=含全部 */
+export type KeywordMatchMode = 'off' | 'any' | 'all'
+
 // 监控类型选项（前端统一展示中文）
 export const MONITOR_TYPE_OPTIONS: { value: MonitorType; label: string }[] = [
   { value: 'listing', label: '上新监控' },
   { value: 'price_drop', label: '降价监控' },
+]
+
+export const KEYWORD_MATCH_MODE_OPTIONS: { value: KeywordMatchMode; label: string }[] = [
+  { value: 'off', label: '不本地过滤（仅平台搜索）' },
+  { value: 'any', label: '标题或内容含任一关键词' },
+  { value: 'all', label: '标题或内容含全部关键词' },
 ]
 
 export const MONITOR_TYPE_LABELS: Record<string, string> = MONITOR_TYPE_OPTIONS.reduce(
@@ -31,6 +40,7 @@ export interface ListingMonitorTask {
   category_id?: number | null
   monitor_type: MonitorType
   keyword: string
+  keyword_match_mode?: KeywordMatchMode
   price_min?: number | null
   price_max?: number | null
   publish_days?: number | null
@@ -42,6 +52,7 @@ export interface ListingMonitorTask {
   dm_batch_size?: number
   order_batch_size?: number
   direct_order?: boolean
+  notify_on_collect?: boolean
   is_enabled: boolean
   last_run_at?: string | null
   remark?: string | null
@@ -88,6 +99,7 @@ export interface ListingMonitorTaskSaveParams {
   monitor_type: MonitorType
   category_id: number
   keyword: string
+  keyword_match_mode?: KeywordMatchMode
   price_min?: number | null
   price_max?: number | null
   publish_days?: number | null
@@ -99,6 +111,7 @@ export interface ListingMonitorTaskSaveParams {
   dm_batch_size?: number
   order_batch_size?: number
   direct_order?: boolean
+  notify_on_collect?: boolean
   is_enabled?: boolean
   remark?: string | null
   proxy_url?: string | null
