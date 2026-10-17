@@ -1,16 +1,18 @@
 /**
  * 通用确认弹窗组件
- * 
+ *
  * 用于替代系统自带的 confirm 弹窗，提供更好的视觉效果
+ * message 支持传入 ReactNode，以展示多行/多色等富文本内容
  */
 import { motion, AnimatePresence } from 'framer-motion'
 import { AlertTriangle, Info, Loader2, X } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { cn } from '@/utils/cn'
 
 export interface ConfirmModalProps {
   isOpen: boolean
   title?: string
-  message: string
+  message: ReactNode
   confirmText?: string
   cancelText?: string
   type?: 'warning' | 'danger' | 'info'
@@ -81,9 +83,9 @@ export function ConfirmModal({
               <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">
                 {title}
               </h3>
-              <p className="text-slate-600 dark:text-slate-400">
+              <div className="text-slate-600 dark:text-slate-400">
                 {message}
-              </p>
+              </div>
             </div>
 
             {/* 按钮 */}

@@ -1,10 +1,11 @@
 """
-数据库备份日志查询与下载路由
+数据库备份日志查询、下载与删除路由
 
 功能：
 1. 仅管理员可查询数据库备份日志（按状态、时间范围筛选 + 分页）
 2. 仅管理员可下载指定的备份文件
-3. 与前端「日志管理 / 数据库备份日志」页面对接
+3. 仅管理员可删除备份日志及其关联的备份文件
+4. 与前端「日志管理 / 数据库备份日志」页面对接
 """
 from __future__ import annotations
 
@@ -84,3 +85,17 @@ async def download_db_backup_file(
         media_type="application/gzip",
         headers={"Content-Disposition": disposition},
     )
+
+
+@router.delete("/db-backup-logs/{log_id}")
+async def delete_db_backup_log(
+    log_id: int,
+    _: User = Depends(deps.get_current_admin_user),
+    backup_log_service: DbBackupLogService = Depends(deps.get_db_backup_log_service),
+) -> dict:
+    """删除指定的备份日志及其关联的备份文件（仅管理员）。
+
+    返回统一的 success/message 结构，由前端弹窗提示。
+    """
+    success, message = await backup_log_service.delete_log(log_id)
+    return {"success": success, "message": message}

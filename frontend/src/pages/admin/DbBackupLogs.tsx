@@ -5,8 +5,9 @@
  * 1. 显示数据库备份任务的执行日志列表（每小时自动备份一次，每次一条记录）
  * 2. 支持按状态、时间范围筛选与分页查询
  * 3. 支持下载备份文件（.sql.gz）
+ * 4. 支持删除备份日志（关联的备份文件一并删除）
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Calendar,
   ChevronLeft,
@@ -15,13 +16,16 @@ import {
   Download,
   Loader2,
   RefreshCw,
+  Trash2,
 } from 'lucide-react'
 
 import {
+  deleteDbBackupLog,
   downloadDbBackupFile,
   getDbBackupLogs,
   type DbBackupLog,
 } from '@/api/admin'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { PageLoading } from '@/components/common/Loading'
 import { useAuthStore } from '@/store/authStore'
 import { useUIStore } from '@/store/uiStore'
@@ -55,6 +59,31 @@ const formatDuration = (ms: number | null): string => {
   return `${(ms / 1000).toFixed(1)} s`
 }
 
+// 跑马灯文本：内容超出容器宽度时横向无缝滚动（用于弹窗中展示长文件名）
+function MarqueeText({ text }: { text: string }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [scrolling, setScrolling] = useState(false)
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    setScrolling(el.scrollWidth > el.clientWidth)
+  }, [text])
+
+  return (
+    <div ref={containerRef} className="w-full overflow-hidden">
+      <div className={`inline-flex whitespace-nowrap ${scrolling ? 'animate-marquee' : ''}`}>
+        <span className="pr-8 font-mono text-blue-600 dark:text-blue-400">{text}</span>
+        {scrolling && (
+          <span className="pr-8 font-mono text-blue-600 dark:text-blue-400" aria-hidden="true">
+            {text}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function DbBackupLogs() {
   const { addToast } = useUIStore()
   const { isAuthenticated, token, _hasHydrated } = useAuthStore()
@@ -72,6 +101,13 @@ export function DbBackupLogs() {
 
   // 下载中的日志ID
   const [downloadingId, setDownloadingId] = useState<number | null>(null)
+
+  // 删除确认弹窗
+  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; log: DbBackupLog | null }>({
+    open: false,
+    log: null,
+  })
+  const [deleting, setDeleting] = useState(false)
 
   // 分页
   const [currentPage, setCurrentPage] = useState(1)
@@ -142,6 +178,29 @@ export function DbBackupLogs() {
       addToast({ type: 'error', message: getApiErrorMessage(error, '下载失败') })
     } finally {
       setDownloadingId(null)
+    }
+  }
+
+  // 删除备份日志（日志记录 + 关联备份文件）
+  const handleDelete = async () => {
+    const log = deleteConfirm.log
+    if (!log) return
+    setDeleting(true)
+    try {
+      const result = await deleteDbBackupLog(log.id)
+      if (result.success) {
+        addToast({ type: 'success', message: '备份日志已删除' })
+        setDeleteConfirm({ open: false, log: null })
+        // 当前页删完最后一条时回退到上一页
+        const nextPage = logs.length === 1 && currentPage > 1 ? currentPage - 1 : currentPage
+        loadLogs(nextPage, pageSize)
+      } else {
+        addToast({ type: 'error', message: result.message || '删除失败' })
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '删除失败') })
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -255,15 +314,15 @@ export function DbBackupLogs() {
           <table className="table-ios">
             <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
               <tr>
-                <th className="min-w-[100px]">状态</th>
-                <th className="min-w-[280px]">备份文件名</th>
-                <th className="min-w-[100px]">文件大小</th>
-                <th className="min-w-[80px]">表数量</th>
-                <th className="min-w-[100px]">数据行数</th>
-                <th className="min-w-[90px]">耗时</th>
-                <th className="min-w-[250px]">错误详情</th>
-                <th className="min-w-[155px]">备份时间</th>
-                <th className="min-w-[100px]">操作</th>
+                <th className="min-w-[100px] !text-center">状态</th>
+                <th className="min-w-[280px] !text-center">备份文件名</th>
+                <th className="min-w-[100px] !text-center">文件大小</th>
+                <th className="min-w-[80px] !text-center">表数量</th>
+                <th className="min-w-[100px] !text-center">数据行数</th>
+                <th className="min-w-[90px] !text-center">耗时</th>
+                <th className="min-w-[250px] !text-center">错误详情</th>
+                <th className="min-w-[155px] !text-center">备份时间</th>
+                <th className="min-w-[140px] !text-center">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -279,50 +338,60 @@ export function DbBackupLogs() {
               ) : (
                 logs.map((log) => (
                   <tr key={log.id}>
-                    <td className="whitespace-nowrap">{renderStatus(log.status)}</td>
-                    <td className="font-medium text-blue-600 dark:text-blue-400 max-w-[300px]">
+                    <td className="whitespace-nowrap !text-center">{renderStatus(log.status)}</td>
+                    <td className="font-medium text-blue-600 dark:text-blue-400 max-w-[300px] !text-center">
                       <span className="block truncate" title={log.file_name || ''}>
                         {log.file_name || '-'}
                       </span>
                     </td>
-                    <td className="text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                    <td className="text-slate-600 dark:text-slate-300 whitespace-nowrap !text-center">
                       {formatFileSize(log.file_size)}
                     </td>
-                    <td className="text-slate-600 dark:text-slate-300">
+                    <td className="text-slate-600 dark:text-slate-300 !text-center">
                       {log.table_count ?? '-'}
                     </td>
-                    <td className="text-slate-600 dark:text-slate-300">
+                    <td className="text-slate-600 dark:text-slate-300 !text-center">
                       {log.total_rows ?? '-'}
                     </td>
-                    <td className="text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                    <td className="text-slate-500 dark:text-slate-400 whitespace-nowrap !text-center">
                       {formatDuration(log.duration_ms)}
                     </td>
-                    <td className="max-w-[260px] text-slate-500 dark:text-slate-400">
+                    <td className="max-w-[260px] text-slate-500 dark:text-slate-400 !text-center">
                       <span className="block truncate cursor-help" title={log.error_message || ''}>
                         {log.error_message || '-'}
                       </span>
                     </td>
-                    <td className="text-slate-500 dark:text-slate-400 text-sm whitespace-nowrap">
+                    <td className="text-slate-500 dark:text-slate-400 text-sm whitespace-nowrap !text-center">
                       {new Date(log.created_at).toLocaleString()}
                     </td>
-                    <td className="whitespace-nowrap">
-                      {log.downloadable ? (
+                    <td className="whitespace-nowrap !text-center">
+                      <div className="inline-flex items-center gap-1.5">
+                        {log.downloadable ? (
+                          <button
+                            onClick={() => handleDownload(log)}
+                            disabled={downloadingId === log.id}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/20 dark:text-blue-400 dark:hover:bg-blue-900/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="下载备份文件"
+                          >
+                            {downloadingId === log.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Download className="w-4 h-4" />
+                            )}
+                            下载
+                          </button>
+                        ) : (
+                          <span className="text-xs text-slate-400 dark:text-slate-500">不可下载</span>
+                        )}
                         <button
-                          onClick={() => handleDownload(log)}
-                          disabled={downloadingId === log.id}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/20 dark:text-blue-400 dark:hover:bg-blue-900/30 disabled:opacity-50 disabled:cursor-not-allowed"
-                          title="下载备份文件"
+                          onClick={() => setDeleteConfirm({ open: true, log })}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30"
+                          title="删除备份日志"
                         >
-                          {downloadingId === log.id ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <Download className="w-4 h-4" />
-                          )}
-                          下载
+                          <Trash2 className="w-4 h-4" />
+                          删除
                         </button>
-                      ) : (
-                        <span className="text-xs text-slate-400 dark:text-slate-500">不可下载</span>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -373,6 +442,27 @@ export function DbBackupLogs() {
           </div>
         )}
       </div>
+
+      {/* 删除确认弹窗（沿用删除卡券的弹窗风格） */}
+      <ConfirmModal
+        isOpen={deleteConfirm.open}
+        type="danger"
+        title="删除备份日志"
+        confirmText="删除"
+        loading={deleting}
+        message={
+          <div className="space-y-1.5">
+            <div>确认要删除备份日志</div>
+            <MarqueeText text={deleteConfirm.log?.file_name || '-'} />
+            <div className="text-amber-500 dark:text-amber-400">
+              该记录关联的备份文件也会一并删除
+            </div>
+            <div className="font-bold text-red-500 dark:text-red-400">此操作不可恢复</div>
+          </div>
+        }
+        onConfirm={handleDelete}
+        onCancel={() => setDeleteConfirm({ open: false, log: null })}
+      />
     </div>
   )
 }
