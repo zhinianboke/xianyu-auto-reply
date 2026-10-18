@@ -443,6 +443,13 @@ export const downloadDbBackupFile = async (
   return { success: true, blob, filename }
 }
 
+// 删除数据库备份日志及其关联的备份文件
+export const deleteDbBackupLog = async (
+  logId: number,
+): Promise<{ success: boolean; message?: string }> => {
+  return del(`${API_PREFIX}/db-backup-logs/${logId}`)
+}
+
 // ========== 数据管理 ==========
 
 // 获取表数据
