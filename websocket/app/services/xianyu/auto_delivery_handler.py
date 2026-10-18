@@ -1382,6 +1382,7 @@ class AutoDeliveryHandler:
                     quantity_degraded_for_fixed_content = False
                     # 账号开关可能在发货过程中变化；最终必须以平台接口是否已经成功为准落库。
                     platform_shipping_confirmed = bool(pre_check.get('platform_shipping_confirmed'))
+                    auto_submit_card = False
 
                     # 在循环开始前清空上次的卡券来源/类型记录，避免跨订单残留
                     self._last_delivery_card_source = None
@@ -1398,6 +1399,9 @@ class AutoDeliveryHandler:
                             )
                             if isinstance(delivery_result, dict):
                                 delivery_content = delivery_result.get('content')
+                                auto_submit_card = auto_submit_card or bool(
+                                    delivery_result.get('auto_submit_card', False)
+                                )
                                 if delivery_result.get('form_only_delivered'):
                                     form_delivery_content = delivery_content
                                 platform_shipping_confirmed = (
@@ -1466,6 +1470,7 @@ class AutoDeliveryHandler:
                                     delivery_method="auto",
                                     delivery_content=form_delivery_content,
                                     buyer_fish_nick=local_buyer_fish_nick,
+                                    auto_submit_card=auto_submit_card,
                                 )
                             logger.info(
                                 f"【{self.cookie_id}】订单 {order_id} 已通过无需邮寄表单发货，未发送聊天消息"
@@ -1826,6 +1831,7 @@ class AutoDeliveryHandler:
                                         delivery_method="auto",
                                         delivery_content=combined_content,
                                         buyer_fish_nick=local_buyer_fish_nick,
+                                        auto_submit_card=auto_submit_card,
                                     )
                                     logger.info(
                                         f"【{self.cookie_id}】订单 {order_id} card_only 模式：已记录补发卡券内容（订单状态保持已关闭）"
@@ -1836,6 +1842,7 @@ class AutoDeliveryHandler:
                                         delivery_method="auto",
                                         delivery_content=combined_content,
                                         buyer_fish_nick=local_buyer_fish_nick,
+                                        auto_submit_card=auto_submit_card,
                                     )
                                     logger.info(
                                         f"【{self.cookie_id}】订单 {order_id} 只发卡券完成，"
@@ -1849,6 +1856,7 @@ class AutoDeliveryHandler:
                                         delivery_method="auto",
                                         delivery_content=combined_content,
                                         buyer_fish_nick=local_buyer_fish_nick,
+                                        auto_submit_card=auto_submit_card,
                                     )
                                     logger.info(f"【{self.cookie_id}】订单 {order_id} 状态已更新为已发货（自动发货）")
 
@@ -2647,6 +2655,7 @@ class AutoDeliveryHandler:
                         'platform_shipping_confirmed': platform_shipping_confirmed,
                         'skipped_only_send_card': skipped_only_send_card,
                         'form_only_delivered': use_no_logistics_form,
+                        'auto_submit_card': bool(card.get('auto_submit_card', False)),
                     }
                 else:
                     self._last_delivery_fail_reason = f"获取发货内容失败: 卡券ID={rule['card_id']}, 卡券名称={rule.get('card_name')}, 类型={rule.get('card_type')}"

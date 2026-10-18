@@ -48,6 +48,11 @@ export interface FetchXianyuOrdersResponse {
 
 // 订单筛选参数
 export interface OrderFilterParams {
+  auto_submit_card?: boolean | null  // ????????
+  card_submitted?: boolean | null  // ???????
+  card_submit_notified?: boolean | null  // ??????????
+  card_process_result?: string | null  // ????????
+  invite_code?: string | null           // 邀请码
   search?: string | null           // 搜索关键词（订单号、商品ID、买家ID）
   delivery_method?: string | null  // 发货方式：manual/auto/scheduled/none
   is_bargain?: boolean | null      // 是否小刀
@@ -72,8 +77,23 @@ export const getOrders = (
   params.append('page_size', String(pageSize))
   
   if (filters) {
+    if (filters.invite_code) {
+      params.append('invite_code', filters.invite_code)
+    }
     if (filters.search) {
       params.append('search', filters.search)
+    }
+    if (filters.auto_submit_card !== null && filters.auto_submit_card !== undefined) {
+      params.append('auto_submit_card', String(filters.auto_submit_card))
+    }
+    if (filters.card_submitted !== null && filters.card_submitted !== undefined) {
+      params.append('card_submitted', String(filters.card_submitted))
+    }
+    if (filters.card_submit_notified !== null && filters.card_submit_notified !== undefined) {
+      params.append('card_submit_notified', String(filters.card_submit_notified))
+    }
+    if (filters.card_process_result) {
+      params.append('card_process_result', filters.card_process_result)
     }
     if (filters.delivery_method !== null && filters.delivery_method !== undefined) {
       params.append('delivery_method', filters.delivery_method)

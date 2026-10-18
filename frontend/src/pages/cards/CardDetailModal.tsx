@@ -52,6 +52,7 @@ export function CardDetailModal({ card, onClose, zIndex = 60 }: CardDetailModalP
           <DetailRow label="卡券类型" value={cardTypeLabels[card.type] || card.type} />
           <DetailRow label="状态" value={card.enabled ? '启用' : '禁用'} />
           <DetailRow label="延迟发送" value={`${card.delay_seconds || 0} 秒`} />
+          <DetailRow label="自动提交卡密" value={card.auto_submit_card ? '是' : '否'} />
           <DetailRow label="发货次数" value={String(card.delivery_count ?? 0)} />
           <DetailRow label="对接价格" value={card.price ? `¥${card.price}` : '-'} />
           <DetailRow label="是否可对接" value={card.is_dockable ? '可对接' : '不可对接'} />

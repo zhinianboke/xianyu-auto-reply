@@ -17,6 +17,7 @@ import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { RechargeModal } from './RechargeModal'
 import { FundFlowModal } from './FundFlowModal'
 import { RenewModal } from './RenewModal'
+import { CardPushRemoteConfig } from './CardPushRemoteConfig'
 
 // 余额设置的 key
 const BALANCE_KEY = 'balance'
@@ -968,41 +969,44 @@ export function PersonalSettings() {
       </div>
 
       {activeTab === 'remote' && (
-        <div className="vben-card">
-          <div className="vben-card-header">
-            <h2 className="vben-card-title">
-              <Link2 className="w-4 h-4" />
-              位置聊天配置
-            </h2>
-          </div>
-          <div className="vben-card-body space-y-5">
-            <p className="text-sm text-slate-500 dark:text-slate-400">
-              配置位置消息生成接口，用于测试远程服务是否能够正常生成位置聊天报文。
-            </p>
-            <div className="space-y-4">
-              <div className="input-group">
-                <label className="input-label">远程URL</label>
-                <input type="url" value={locationRemoteUrl} onChange={(e) => setLocationRemoteUrl(e.target.value)} placeholder={DEFAULT_LOCATION_CHAT_REMOTE_URL} className="input-ios" />
-              </div>
-              <div className="input-group">
-                <label className="input-label">秘钥</label>
-                <input type="password" value={locationRemoteSecretKey} onChange={(e) => setLocationRemoteSecretKey(e.target.value)} placeholder="请输入远程接口秘钥" className="input-ios" autoComplete="off" />
-                <p className="text-xs text-red-500 mt-2">
-                  秘钥请到 <a className="underline" href="https://api.xianyushop.shop" target="_blank" rel="noopener noreferrer">https://api.xianyushop.shop</a> 网站的接口列表 “通过定位进行聊天” 接口获取
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-3">
-                <button type="button" onClick={handleTestLocationRemote} disabled={testingLocationRemote || savingLocationRemote} className="btn-ios-secondary">
-                  {testingLocationRemote ? <ButtonLoading /> : <RefreshCw className="w-4 h-4" />}
-                  测试
-                </button>
-                <button type="button" onClick={handleSaveLocationRemote} disabled={savingLocationRemote || testingLocationRemote} className="btn-ios-primary">
-                  {savingLocationRemote ? <ButtonLoading /> : <Save className="w-4 h-4" />}
-                  保存
-                </button>
+        <div className="space-y-4">
+          <div className="vben-card">
+            <div className="vben-card-header">
+              <h2 className="vben-card-title">
+                <Link2 className="w-4 h-4" />
+                位置聊天配置
+              </h2>
+            </div>
+            <div className="vben-card-body space-y-5">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                配置位置消息生成接口，用于测试远程服务是否能够正常生成位置聊天报文。
+              </p>
+              <div className="space-y-4">
+                <div className="input-group">
+                  <label className="input-label">远程URL</label>
+                  <input type="url" value={locationRemoteUrl} onChange={(e) => setLocationRemoteUrl(e.target.value)} placeholder={DEFAULT_LOCATION_CHAT_REMOTE_URL} className="input-ios" />
+                </div>
+                <div className="input-group">
+                  <label className="input-label">秘钥</label>
+                  <input type="password" value={locationRemoteSecretKey} onChange={(e) => setLocationRemoteSecretKey(e.target.value)} placeholder="请输入远程接口秘钥" className="input-ios" autoComplete="off" />
+                  <p className="text-xs text-red-500 mt-2">
+                    秘钥请到 <a className="underline" href="https://api.xianyushop.shop" target="_blank" rel="noopener noreferrer">https://api.xianyushop.shop</a> 网站的接口列表 “通过定位进行聊天” 接口获取
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <button type="button" onClick={handleTestLocationRemote} disabled={testingLocationRemote || savingLocationRemote} className="btn-ios-secondary">
+                    {testingLocationRemote ? <ButtonLoading /> : <RefreshCw className="w-4 h-4" />}
+                    测试
+                  </button>
+                  <button type="button" onClick={handleSaveLocationRemote} disabled={savingLocationRemote || testingLocationRemote} className="btn-ios-primary">
+                    {savingLocationRemote ? <ButtonLoading /> : <Save className="w-4 h-4" />}
+                    保存
+                  </button>
+                </div>
               </div>
             </div>
           </div>
+          <CardPushRemoteConfig />
         </div>
       )}
 

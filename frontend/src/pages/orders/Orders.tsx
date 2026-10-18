@@ -12,7 +12,7 @@ import { BlacklistLevelModal } from './BlacklistLevelModal'
 import type { Order, Account } from '@/types'
 
 // 列配置类型
-type ColumnKey = 'cookie_id' | 'order_id' | 'receiver' | 'item_id' | 'sku_info' | 'buyer_id' | 'buyer_fish_nick' | 'chat_id' | 'quantity' | 'amount' | 'status' | 'delivery_method' | 'delivery_send_status' | 'delivery_fail_reason' | 'is_bargain' | 'is_rated' | 'is_red_flower' | 'is_unregistered' | 'unregister_error_reason' | 'is_agent_order' | 'source' | 'placed_at' | 'created_at'
+type ColumnKey = 'invite_code' | 'auto_submit_card' | 'card_submitted' | 'card_submit_notified' | 'card_process_result' | 'cookie_id' | 'order_id' | 'receiver' | 'item_id' | 'sku_info' | 'buyer_id' | 'buyer_fish_nick' | 'chat_id' | 'quantity' | 'amount' | 'status' | 'delivery_method' | 'delivery_send_status' | 'delivery_fail_reason' | 'is_bargain' | 'is_rated' | 'is_red_flower' | 'is_unregistered' | 'unregister_error_reason' | 'is_agent_order' | 'source' | 'placed_at' | 'created_at'
 
 interface ColumnConfig {
   key: ColumnKey
@@ -23,6 +23,11 @@ interface ColumnConfig {
 
 // 默认列配置
 const defaultColumns: ColumnConfig[] = [
+  { key: 'invite_code', label: '邀请码', visible: true, fixed: true },
+  { key: 'auto_submit_card', label: '自动提交卡密', visible: true, fixed: true },
+  { key: 'card_submitted', label: '卡密已提交', visible: true, fixed: true },
+  { key: 'card_submit_notified', label: '已通知买家', visible: true, fixed: true },
+  { key: 'card_process_result', label: '卡密处理结果', visible: true, fixed: true },
   { key: 'cookie_id', label: '账号ID', visible: true, fixed: true },
   { key: 'order_id', label: '订单ID', visible: true, fixed: true },
   { key: 'receiver', label: '收货人', visible: false },
@@ -83,6 +88,11 @@ export function Orders() {
   
   // 筛选状态
   const [filters, setFilters] = useState<OrderFilterParams>({
+    invite_code: null,
+    auto_submit_card: null,
+    card_submitted: null,
+    card_submit_notified: null,
+    card_process_result: null,
     search: null,
     delivery_method: null,
     is_bargain: null,
@@ -169,6 +179,11 @@ export function Orders() {
   // 重置筛选条件
   const handleResetFilters = () => {
     const emptyFilters: OrderFilterParams = {
+      invite_code: null,
+      auto_submit_card: null,
+      card_submitted: null,
+      card_submit_notified: null,
+      card_process_result: null,
       search: null,
       delivery_method: null,
       is_bargain: null,
@@ -560,6 +575,53 @@ export function Orders() {
                 />
               </div>
               <div className="input-group">
+                <label className="input-label">自动提交卡密</label>
+                <select
+                  value={filters.auto_submit_card === null ? '' : String(filters.auto_submit_card)}
+                  onChange={(e) => handleFilterChange('auto_submit_card', e.target.value === '' ? null : e.target.value === 'true')}
+                  className="input-ios"
+                >
+                  <option value="">全部</option>
+                  <option value="true">是</option>
+                  <option value="false">否</option>
+                </select>
+              </div>
+              <div className="input-group">
+                <label className="input-label">卡密已提交</label>
+                <select
+                  value={filters.card_submitted === null ? '' : String(filters.card_submitted)}
+                  onChange={(e) => handleFilterChange('card_submitted', e.target.value === '' ? null : e.target.value === 'true')}
+                  className="input-ios"
+                >
+                  <option value="">全部</option>
+                  <option value="true">是</option>
+                  <option value="false">否</option>
+                </select>
+              </div>
+              <div className="input-group">
+                <label className="input-label">已通知买家</label>
+                <select
+                  value={filters.card_submit_notified === null ? '' : String(filters.card_submit_notified)}
+                  onChange={(e) => handleFilterChange('card_submit_notified', e.target.value === '' ? null : e.target.value === 'true')}
+                  className="input-ios"
+                >
+                  <option value="">全部</option>
+                  <option value="true">是</option>
+                  <option value="false">否</option>
+                </select>
+              </div>
+              <div className="input-group">
+                <label className="input-label">邀请码</label>
+                <input
+                  type="text"
+                  value={filters.invite_code || ''}
+                  onChange={(e) => handleFilterChange('invite_code', e.target.value || null)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
+                  placeholder="请输入邀请码"
+                  className="input-ios"
+                />
+              </div>
+              <div className="input-group">
                 <label className="input-label">搜索订单</label>
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -586,7 +648,7 @@ export function Orders() {
             </div>
           </div>
         )}
-        <div className="flex-1 overflow-x-auto overflow-y-auto scrollbar-visible">
+        <div className="table-scroll flex-1">
           <table className="table-ios min-w-[1800px]">
             <thead className="sticky top-0 bg-slate-50 dark:bg-slate-700/50 z-10">
               <tr>
@@ -629,6 +691,28 @@ export function Orders() {
                       </td>
                       {visibleColumns.map(col => {
                         switch (col.key) {
+                          case 'auto_submit_card':
+                            return (
+                              <td key={col.key} className="whitespace-nowrap">
+                                {order.auto_submit_card ? <span className="badge-success">是</span> : <span className="badge-gray">否</span>}
+                              </td>
+                            )
+                          case 'card_submitted':
+                            return (
+                              <td key={col.key} className="whitespace-nowrap">
+                                {order.card_submitted ? <span className="badge-success">是</span> : <span className="badge-gray">否</span>}
+                              </td>
+                            )
+                          case 'card_submit_notified':
+                            return (
+                              <td key={col.key} className="whitespace-nowrap">
+                                {order.card_submit_notified ? <span className="badge-success">是</span> : <span className="badge-gray">否</span>}
+                              </td>
+                            )
+                          case 'card_process_result':
+                            return <td key={col.key} className="whitespace-nowrap">{order.card_process_result || '-'}</td>
+                          case 'invite_code':
+                            return <td key={col.key} className="whitespace-nowrap font-mono text-sm text-slate-600 dark:text-slate-300">{order.invite_code || '-'}</td>
                           case 'cookie_id':
                             return (
                               <td key={col.key} className="whitespace-nowrap font-medium text-blue-600 dark:text-blue-400 max-w-[180px] truncate" title={(() => {
@@ -977,6 +1061,10 @@ export function Orders() {
                       <div className="flex justify-between py-1 border-b border-gray-100 dark:border-gray-700">
                         <span className="text-gray-500">订单ID</span>
                         <span className="font-mono">{orderDetail.order_id}</span>
+                      </div>
+                      <div className="flex justify-between py-1 border-b border-gray-100 dark:border-gray-700">
+                        <span className="text-gray-500">???</span>
+                        <span className="font-mono">{orderDetail.invite_code || '-'}</span>
                       </div>
                       <div className="flex justify-between py-1 border-b border-gray-100 dark:border-gray-700">
                         <span className="text-gray-500">商品ID</span>

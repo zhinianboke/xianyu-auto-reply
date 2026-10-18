@@ -163,6 +163,8 @@ export const adminNavItems: NavEntry[] = [
       { key: 'admin-red-flower-batches', icon: Flower2, label: '求小红花日志', path: '/admin/red-flower-batches', adminOnly: true },
       { key: 'admin-db-backup-logs', icon: Database, label: '数据库备份日志', path: '/admin/db-backup-logs', adminOnly: true },
       { key: 'admin-email-logs', icon: Mail, label: '邮件日志', path: '/admin/email-logs', adminOnly: true },
+      { key: 'admin-card-submit-logs', icon: Send, label: '卡密提交日志', path: '/admin/card-submit-logs', adminOnly: true },
+{ key: 'admin-card-process-result-logs', icon: Send, label: '卡密处理结果日志', path: '/admin/card-process-result-logs', adminOnly: true },
     ],
   },
   { key: 'admin-scheduled-tasks', icon: Timer, label: '定时任务', path: '/admin/scheduled-tasks', adminOnly: true },

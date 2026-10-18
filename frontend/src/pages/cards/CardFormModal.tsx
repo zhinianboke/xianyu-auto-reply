@@ -54,6 +54,7 @@ interface CardFormData {
   imageUrls: string[]
   delaySeconds: number
   useNoLogisticsForm: boolean
+  autoSubmitCard: boolean
   price: string
   isDockable: boolean
   feePayer: string
@@ -98,6 +99,7 @@ export function cardToFormData(card: CardData): CardFormData {
     imageUrls: imageUrlsList,
     delaySeconds: card.delay_seconds || 0,
     useNoLogisticsForm: card.use_no_logistics_form || false,
+    autoSubmitCard: card.auto_submit_card || false,
     price: card.price || '',
     isDockable: card.is_dockable || false,
     feePayer: card.fee_payer || '',
@@ -132,6 +134,7 @@ export const emptyCardFormData: CardFormData = {
   imageUrls: [],
   delaySeconds: 0,
   useNoLogisticsForm: false,
+  autoSubmitCard: false,
   price: '',
   isDockable: false,
   feePayer: '',
@@ -283,6 +286,7 @@ export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFor
         enabled: true,
         delay_seconds: formData.delaySeconds,
         use_no_logistics_form: formData.type === 'text' && formData.useNoLogisticsForm,
+        auto_submit_card: formData.autoSubmitCard,
         price: formData.price.trim() || null,
         is_dockable: formData.isDockable,
         fee_payer: formData.isDockable ? formData.feePayer : null,
@@ -363,6 +367,23 @@ export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFor
                   options={cardTypeOptions}
                 />
               </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+              <div>
+                <p className="font-medium text-slate-900 dark:text-slate-100">自动提交卡密</p>
+                <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
+                  开启后，订单发货完成会自动将发货内容中的卡密提交到远程接口
+                </p>
+              </div>
+              <label className="switch-ios shrink-0">
+                <input
+                  type="checkbox"
+                  checked={formData.autoSubmitCard}
+                  onChange={(event) => updateField('autoSubmitCard', event.target.checked)}
+                />
+                <span className="switch-slider"></span>
+              </label>
             </div>
 
             {/* API 配置 */}

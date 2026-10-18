@@ -99,6 +99,7 @@ class OrderService:
         account_id: str | None = None,
         item_ids: list[str] | None = None,
         order_no: str | None = None,
+        invite_code: str | None = None,
         status: str | None = None,
         search: str | None = None,
         delivery_method: str | None = None,
@@ -107,6 +108,10 @@ class OrderService:
         start_date: str | None = None,
         end_date: str | None = None,
         delivery_send_status: str | None = None,
+        auto_submit_card: bool | None = None,
+        card_submitted: bool | None = None,
+        card_submit_notified: bool | None = None,
+        card_process_result: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[XYOrder], int, Dict[str, str]]:
@@ -145,6 +150,8 @@ class OrderService:
             conditions.append(XYOrder.item_id.in_(item_ids))
         if order_no:
             conditions.append(XYOrder.order_no == order_no)
+        if invite_code and invite_code.strip():
+            conditions.append(XYOrder.invite_code == invite_code.strip())
         if status:
             conditions.append(XYOrder.status == status)
         
@@ -178,6 +185,15 @@ class OrderService:
         # 是否已评价筛选
         if is_rated is not None:
             conditions.append(XYOrder.is_rated == is_rated)
+
+        if auto_submit_card is not None:
+            conditions.append(XYOrder.auto_submit_card == auto_submit_card)
+        if card_submitted is not None:
+            conditions.append(XYOrder.card_submitted == card_submitted)
+        if card_submit_notified is not None:
+            conditions.append(XYOrder.card_submit_notified == card_submit_notified)
+        if card_process_result and card_process_result.strip():
+            conditions.append(XYOrder.card_process_result == card_process_result.strip())
         
         # 时间范围筛选
         if start_date:
@@ -464,6 +480,7 @@ class OrderService:
         delivery_method: str,
         delivery_content: str | None = None,
         buyer_fish_nick: str | None = None,
+        auto_submit_card: bool = False,
     ) -> bool:
         """更新订单发货信息
         
@@ -473,6 +490,7 @@ class OrderService:
             delivery_method: 发货方式 (manual-手动发货, auto-自动发货, scheduled-定时发货)
             delivery_content: 发货内容（卡券内容）
             buyer_fish_nick: 买家闲鱼昵称（明文）
+            auto_submit_card: 是否自动提交卡密
             
         Returns:
             是否更新成功
@@ -486,6 +504,9 @@ class OrderService:
                 "delivery_method": delivery_method,
                 "delivery_content": delivery_content,
                 "delivery_fail_reason": None,  # 发货成功，清空失败原因
+                "auto_submit_card": bool(auto_submit_card),
+                "card_submitted": False,
+                "card_submit_notified": False,
             }
             if buyer_fish_nick:
                 values["buyer_fish_nick"] = buyer_fish_nick
@@ -509,6 +530,7 @@ class OrderService:
         delivery_method: str,
         delivery_content: str | None = None,
         buyer_fish_nick: str | None = None,
+        auto_submit_card: bool = False,
     ) -> bool:
         """专为「禁止发货 + 主动关闭订单 + 关闭后只发卡券」场景设计的记录方法
 
@@ -526,6 +548,7 @@ class OrderService:
             delivery_method: 发货方式（沿用 'auto' / 'manual' / 'scheduled' 等）
             delivery_content: 补发的卡券内容（>2000 字会截断）
             buyer_fish_nick: 买家闲鱼昵称（明文）
+            auto_submit_card: 是否自动提交卡密
 
         Returns:
             是否更新成功
@@ -538,6 +561,9 @@ class OrderService:
                 "card_only_delivered": True,
                 "delivery_method": delivery_method,
                 "delivery_content": delivery_content,
+                "auto_submit_card": bool(auto_submit_card),
+                "card_submitted": False,
+                "card_submit_notified": False,
             }
             if buyer_fish_nick:
                 values["buyer_fish_nick"] = buyer_fish_nick
@@ -561,6 +587,7 @@ class OrderService:
         delivery_method: str,
         delivery_content: str | None = None,
         buyer_fish_nick: str | None = None,
+        auto_submit_card: bool = False,
     ) -> bool:
         """记录账号级“只发卡券”已处理结果，不伪造闲鱼平台订单状态。
 
@@ -576,6 +603,9 @@ class OrderService:
                 "delivery_method": delivery_method,
                 "delivery_content": delivery_content,
                 "delivery_fail_reason": None,
+                "auto_submit_card": bool(auto_submit_card),
+                "card_submitted": False,
+                "card_submit_notified": False,
             }
             if buyer_fish_nick:
                 values["buyer_fish_nick"] = buyer_fish_nick

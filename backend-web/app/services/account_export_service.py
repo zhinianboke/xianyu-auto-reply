@@ -272,14 +272,14 @@ class AccountExportService:
 
     def _write_cards(self, wb: Workbook, cards: list[Card]) -> None:
         headers = [
-            "卡券名称", "类型", "启用", "延迟秒数",
+            "卡券名称", "类型", "启用", "延迟秒数", "自动提交卡密",
             "多规格", "规格名", "规格值",
             "API配置", "文本内容", "数据内容", "图片URL", "多图片URL",
         ]
         rows = []
         for card in cards:
             rows.append([
-                card.name, card.type, card.enabled, card.delay_seconds,
+                card.name, card.type, card.enabled, card.delay_seconds, card.auto_submit_card,
                 card.is_multi_spec, card.spec_name, card.spec_value,
                 card.api_config, card.text_content, card.data_content,
                 card.image_url, card.image_urls,

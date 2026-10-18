@@ -2334,6 +2334,7 @@ async def _deliver_order_impl(request: DeliverOrderRequest):
                         delivery_method=request.delivery_method,
                         delivery_content=combined_content,
                         buyer_fish_nick=xianyu_live.auto_delivery_handler._current_buyer_fish_nick,
+                        auto_submit_card=bool(card.auto_submit_card),
                     )
                     logger.info(
                         f"【内部API】订单 {request.order_no} card_only 模式：已记录补发卡券内容（订单状态保持已关闭，共 {actual_count} 张）"
@@ -2344,6 +2345,7 @@ async def _deliver_order_impl(request: DeliverOrderRequest):
                         delivery_method=request.delivery_method,
                         delivery_content=combined_content,
                         buyer_fish_nick=xianyu_live.auto_delivery_handler._current_buyer_fish_nick,
+                        auto_submit_card=bool(card.auto_submit_card),
                     )
                     logger.info(
                         f"【内部API】订单 {request.order_no} 只发卡券完成，"
@@ -2356,6 +2358,7 @@ async def _deliver_order_impl(request: DeliverOrderRequest):
                         delivery_method=request.delivery_method,
                         delivery_content=combined_content,
                         buyer_fish_nick=xianyu_live.auto_delivery_handler._current_buyer_fish_nick,
+                        auto_submit_card=bool(card.auto_submit_card),
                     )
                     logger.info(
                         f"【内部API】订单 {request.order_no} 状态已更新为已发货（共 {actual_count} 张）"
@@ -2387,6 +2390,7 @@ async def _deliver_order_impl(request: DeliverOrderRequest):
         if card_source in ('dock_l1', 'dock_l2') and dock_record_id:
             card_dict = {
                 'id': request.card_id,
+                'auto_submit_card': bool(card.auto_submit_card),
                 'card_source': card_source,
                 'dock_record_id': dock_record_id,
             }
@@ -2468,6 +2472,7 @@ async def _deliver_order_impl(request: DeliverOrderRequest):
             "delivery_type": card.type,
             "content": combined_content,
             "delivery_method": request.delivery_method,
+            "auto_submit_card": bool(card.auto_submit_card),
             # is_card_only=True 告知调用方：订单已被关闭，调用方不要再把本地状态改为 'shipped'
             "is_card_only": closed_order_card_only,
             "only_send_card": only_send_card_result,

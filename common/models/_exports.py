@@ -16,6 +16,8 @@ from common.models.risk_control_log import XYRiskControlLog as RiskControlLog
 from common.models.account_login_log import XYAccountLoginLog
 from common.models.user_login_log import XYUserLoginLog
 from common.models.email_log import XYEmailLog
+from common.models.card_submit_log import XYCardSubmitLog
+from common.models.card_process_result_log import XYCardProcessResultLog
 from common.models.data_dictionary import XYDataDictionary
 from common.models.system_setting import SystemSetting
 from common.models.user_setting import UserSetting
@@ -88,6 +90,7 @@ __all__ = [
     "XYAccountLoginLog",
     "XYUserLoginLog",
     "XYEmailLog",
+    "XYCardSubmitLog",
     "XYDataDictionary",
     "SystemSetting",
     "UserSetting",

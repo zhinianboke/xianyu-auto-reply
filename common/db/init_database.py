@@ -489,6 +489,27 @@ class DatabaseInitializer:
             True,
             "检测已成交并完成发货的商品，确认旧商品下架后使用原素材自动续售",
         ),
+        (
+            "card_submit",
+            "卡密提交任务",
+            10,
+            True,
+            "定时提交已发货且邀请码非空订单的卡密",
+        ),
+        (
+            "card_submit_notify",
+            "卡密提交后通知买家",
+            10,
+            True,
+            "定时通知卡密提交结果",
+        ),
+        (
+            "card_process_result",
+            "卡密处理结果",
+            1800,
+            True,
+            "定时查询卡密处理结果并通知买家",
+        ),
     )
     
     # ========== 所有数据表的DDL定义 ==========
@@ -641,6 +662,7 @@ class DatabaseInitializer:
                 id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '订单ID',
                 owner_id BIGINT NOT NULL COMMENT '所属用户ID',
                 order_no VARCHAR(64) NOT NULL COMMENT '订单号',
+                invite_code VARCHAR(64) DEFAULT NULL COMMENT '邀请码',
                 status VARCHAR(32) NOT NULL COMMENT '订单状态',
                 buyer_nick VARCHAR(120) COMMENT '买家昵称',
                 buyer_id VARCHAR(64) COMMENT '买家ID',
@@ -658,6 +680,12 @@ class DatabaseInitializer:
                 receiver_phone VARCHAR(32) COMMENT '收货人手机号',
                 receiver_address VARCHAR(512) COMMENT '收货地址',
                 delivery_fail_reason VARCHAR(2000) COMMENT '发货失败原因',
+                delivery_method VARCHAR(32) COMMENT '发货方式',
+                delivery_content VARCHAR(2000) COMMENT '发货内容',
+                auto_submit_card TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否自动提交卡密',
+                card_submitted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '卡密是否已提交',
+                card_submit_notified TINYINT(1) NOT NULL DEFAULT 0 COMMENT '提交后是否已通知买家',
+                card_process_result VARCHAR(32) DEFAULT NULL COMMENT '卡密处理结果',
                 card_only_delivered TINYINT(1) NOT NULL DEFAULT 0 COMMENT '仅发卡券流程是否已处理',
                 item_snapshot JSON COMMENT '商品快照',
                 metadata JSON COMMENT '元数据',
@@ -691,6 +719,7 @@ class DatabaseInitializer:
                 description TEXT COMMENT '卡券描述',
                 enabled TINYINT(1) DEFAULT 1 COMMENT '是否启用',
                 delay_seconds INT DEFAULT 0 COMMENT '延迟秒数',
+                auto_submit_card TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否自动提交卡密',
                 use_no_logistics_form TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否通过无需邮寄表单发货',
                 delivery_count INT DEFAULT 0 COMMENT '发货次数',
                 price VARCHAR(32) COMMENT '对接价格',
@@ -2009,6 +2038,35 @@ class DatabaseInitializer:
     }
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
+    TABLES_DDL["xy_card_submit_logs"] = """
+        CREATE TABLE IF NOT EXISTS xy_card_submit_logs (
+            id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '日志ID',
+            owner_id BIGINT NOT NULL COMMENT '所属用户ID',
+            order_no VARCHAR(64) NOT NULL COMMENT '订单号',
+            response_body LONGTEXT NOT NULL COMMENT '提交接口请求参数和返回值',
+            success TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否提交成功',
+            result_message TEXT NOT NULL COMMENT '提交结果说明',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+            INDEX idx_card_submit_owner_created (owner_id, created_at),
+            INDEX idx_card_submit_order_created (order_no, created_at),
+            INDEX idx_card_submit_success_created (success, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='卡密提交日志表';
+    """
+
+    TABLES_DDL["xy_card_process_result_logs"] = """
+        CREATE TABLE IF NOT EXISTS xy_card_process_result_logs (
+            id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '日志ID',
+            owner_id BIGINT NOT NULL COMMENT '所属用户ID',
+            order_no VARCHAR(64) NOT NULL COMMENT '订单号',
+            request_body LONGTEXT NOT NULL COMMENT '查询接口请求参数',
+            response_body LONGTEXT NOT NULL COMMENT '查询接口返回值',
+            trigger_scene VARCHAR(32) NOT NULL COMMENT '触发场景',
+            success TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否处理成功',
+            result_message TEXT NOT NULL COMMENT '处理结果说明',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='卡密处理结果日志表';
+    """
+
     COLUMN_MIGRATIONS = {
         "xy_keyword_rules": [
             ("location_name", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式定位名称'", "image_url"),
@@ -2131,6 +2189,7 @@ class DatabaseInitializer:
             ("agree_deliver_pickup_url", "VARCHAR(255) DEFAULT NULL COMMENT '同意后发货-提货URL'", "agree_deliver_notify_message"),
         ],
         "xy_orders": [
+            ("invite_code", "VARCHAR(64) DEFAULT NULL COMMENT '邀请码'", "order_no"),
             ("card_only_delivered", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '仅发卡券流程是否已处理'", "delivery_fail_reason"),
             ("is_bargain", "TINYINT(1) DEFAULT 0 COMMENT '是否小刀'", "account_name"),
             ("chat_id", "VARCHAR(64) COMMENT '聊天会话ID'", "buyer_id"),
@@ -2142,6 +2201,10 @@ class DatabaseInitializer:
             ("delivery_method", "VARCHAR(32) COMMENT '发货方式'", "is_rated"),
             ("delivery_content", "VARCHAR(2000) COMMENT '发货内容'", "delivery_method"),
             ("delivery_fail_reason", "VARCHAR(2000) COMMENT '发货失败原因'", "delivery_content"),
+            ("auto_submit_card", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否自动提交卡密'", "delivery_fail_reason"),
+            ("card_submitted", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '卡密是否已提交'", "auto_submit_card"),
+            ("card_submit_notified", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '提交后是否已通知买家'", "card_submitted"),
+            ("card_process_result", "VARCHAR(32) DEFAULT NULL COMMENT '卡密处理结果'", "card_submit_notified"),
             ("source", "VARCHAR(32) COMMENT '数据来源：fetch_xianyu-获取闲鱼订单按钮'", "metadata"),
             ("is_red_flower", "TINYINT(1) DEFAULT 0 COMMENT '是否已求小红花'", "is_rated"),
             ("is_thanks_sent", "TINYINT(1) DEFAULT 0 COMMENT '是否已发送好评后消息'", "is_red_flower"),
@@ -2155,6 +2218,7 @@ class DatabaseInitializer:
             ("thanks_content", "TEXT COMMENT '好评后发送的消息内容'", "thanks_enabled"),
         ],
         "xy_cards": [
+            ("auto_submit_card", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否自动提交卡密'", "delay_seconds"),
             ("delivery_count", "INT DEFAULT 0 COMMENT '发货次数'", "delay_seconds"),
             ("use_no_logistics_form", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否通过无需邮寄表单发货'", "delay_seconds"),
             ("price", "VARCHAR(32) COMMENT '对接价格'", "delivery_count"),
@@ -2319,6 +2383,11 @@ class DatabaseInitializer:
     async def init_data_dictionaries(self):
         """幂等初始化数据字典中的枚举值。"""
         items = (
+            ("card_process_trigger_scene", "scheduled", "定时任务", 10),
+            ("card_process_trigger_scene", "buyer", "买家触发", 20),
+            ("card_process_result", "success", "成功", 10),
+            ("card_process_result", "processing", "处理中", 20),
+            ("card_process_result", "failure", "失败", 30),
             # 邮件触发操作
             ("email_trigger_operation", "register_verification_code", "注册验证码", 10),
             ("email_trigger_operation", "reset_password_verification_code", "找回密码验证码", 20),

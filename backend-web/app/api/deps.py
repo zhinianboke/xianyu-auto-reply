@@ -154,6 +154,17 @@ async def get_email_log_service(session: AsyncSession = Depends(get_db_session))
     return EmailLogService(session)
 
 
+async def get_card_submit_log_service(session: AsyncSession = Depends(get_db_session)):
+    """提供卡密提交日志查询服务。"""
+    from app.services.card_submit_log_service import CardSubmitLogService
+    return CardSubmitLogService(session)
+
+async def get_card_process_result_log_service(session: AsyncSession = Depends(get_db_session)):
+    """提供卡密处理结果日志查询服务。"""
+    from app.services.card_process_result_log_service import CardProcessResultLogService
+    return CardProcessResultLogService(session)
+
+
 async def get_db_backup_log_service(session: AsyncSession = Depends(get_db_session)):
     """获取数据库备份日志服务"""
     from app.services.db_backup_log_service import DbBackupLogService

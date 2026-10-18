@@ -138,6 +138,9 @@ async def consume_card_and_record(
 
         content = "\n".join(contents)
         order.delivery_content = content
+        order.auto_submit_card = bool(card.auto_submit_card)
+        order.card_submitted = False
+        order.card_submit_notified = False
         order.agree_deliver_agreed = True
         order.agree_deliver_agreed_at = get_beijing_now_naive()
         # 复用「仅发卡券」的防重复语义：内容已取出即标记，定时补发货不再处理

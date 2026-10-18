@@ -28,11 +28,13 @@ class XYOrder(TimestampMixin, Base):
         Index("idx_order_owner_created", "owner_id", "created_at"),
         Index("idx_order_owner_account_placed", "owner_id", "account_id", "placed_at"),
         Index("idx_order_owner_account_buyer_created", "owner_id", "account_id", "buyer_id", "created_at"),
+        Index("idx_order_invite_code", "invite_code"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="订单ID")
     owner_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="所属用户ID")
     order_no: Mapped[str] = mapped_column(String(64), nullable=False, comment="订单号")
+    invite_code: Mapped[str | None] = mapped_column(String(64), comment="邀请码")
     status: Mapped[str] = mapped_column(String(32), nullable=False, comment="订单状态")
     buyer_nick: Mapped[str | None] = mapped_column(String(120), comment="买家昵称")
     buyer_fish_nick: Mapped[str | None] = mapped_column(String(120), comment="买家闲鱼昵称（明文）")
@@ -60,6 +62,18 @@ class XYOrder(TimestampMixin, Base):
     delivery_method: Mapped[str | None] = mapped_column(String(32), comment="发货方式：manual-手动发货, auto-自动发货, scheduled-定时发货")
     delivery_content: Mapped[str | None] = mapped_column(String(2000), comment="发货内容（卡券内容）")
     delivery_fail_reason: Mapped[str | None] = mapped_column(String(2000), comment="发货失败原因")
+    auto_submit_card: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, comment="是否自动提交卡密"
+    )
+    card_submitted: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, comment="卡密是否已提交"
+    )
+    card_submit_notified: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, comment="提交后是否已通知买家"
+    )
+    card_process_result: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="卡密处理结果"
+    )
     # 账号开启“只发卡券”时，平台状态仍可能是待发货；内容一旦取出即标记，防止重复耗卡。
     # 若消息发送失败，卡券内容会保存在 delivery_content 中并记录失败原因，交由人工补发。
     card_only_delivered: Mapped[bool] = mapped_column(

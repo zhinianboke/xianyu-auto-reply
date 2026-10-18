@@ -625,6 +625,9 @@ class RedeliveryTask:
                         order.card_only_delivered = True
                         order.delivery_method = "scheduled"
                         order.delivery_content = result_data.get('content', '')
+                        order.auto_submit_card = bool(card.auto_submit_card)
+                        order.card_submitted = False
+                        order.card_submit_notified = False
                         await session.commit()
                         logger.info(
                             f"[定时补发货] 订单 {order_no} 只发卡券完成，"
@@ -635,6 +638,9 @@ class RedeliveryTask:
                         order.status = "shipped"
                         order.delivery_method = "scheduled"
                         order.delivery_content = result_data.get('content', '')
+                        order.auto_submit_card = bool(card.auto_submit_card)
+                        order.card_submitted = False
+                        order.card_submit_notified = False
                         await session.commit()
 
                     # 多数量退化提示：订单 quantity>1 但因卡券类型限制只发了 1 张，

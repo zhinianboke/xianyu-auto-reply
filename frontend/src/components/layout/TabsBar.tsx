@@ -54,6 +54,8 @@ const routeTitles: Record<string, string> = {
   '/admin/account-login-logs': '账号登录日志',
   '/admin/user-login-logs': '用户登录日志',
   '/admin/email-logs': '邮件日志',
+  '/admin/card-submit-logs': '卡密提交日志',
+  '/admin/card-process-result-logs': '卡密处理结果日志',
   '/admin/risk-logs': '风控日志',
   '/admin/data': '数据管理',
   '/admin/redelivery-batches': '补发货日志',

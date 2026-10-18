@@ -43,6 +43,9 @@ TASK_CODE_DM_SEND = "dm_send"
 TASK_CODE_AUTO_ORDER = "auto_order"
 TASK_CODE_IMAGE_CLEANUP = "image_cleanup"
 TASK_CODE_AUTO_RELIST = "auto_relist_scan"
+TASK_CODE_CARD_SUBMIT = "card_submit"
+TASK_CODE_CARD_SUBMIT_NOTIFY = "card_submit_notify"
+TASK_CODE_CARD_PROCESS_RESULT = "card_process_result"
 
 # 默认配置（数据库无配置时使用）
 DEFAULT_CONFIGS = {
@@ -70,6 +73,9 @@ DEFAULT_CONFIGS = {
     TASK_CODE_AUTO_ORDER: {"interval_seconds": 60, "enabled": True},
     TASK_CODE_IMAGE_CLEANUP: {"interval_seconds": 1200, "enabled": True},
     TASK_CODE_AUTO_RELIST: {"interval_seconds": 30, "enabled": True},
+    TASK_CODE_CARD_SUBMIT: {"interval_seconds": 10, "enabled": True},
+    TASK_CODE_CARD_SUBMIT_NOTIFY: {"interval_seconds": 10, "enabled": True},
+    TASK_CODE_CARD_PROCESS_RESULT: {"interval_seconds": 1800, "enabled": True},
 }
 
 
@@ -106,6 +112,9 @@ class ScheduledTaskService:
         """
         try:
             task = await self.get_task_by_code(task_code)
+            # 兼容历史数据库中使用 card_process_query 的任务代码。
+            if task is None and task_code == TASK_CODE_CARD_PROCESS_RESULT:
+                task = await self.get_task_by_code("card_process_query")
             
             if task:
                 config = {

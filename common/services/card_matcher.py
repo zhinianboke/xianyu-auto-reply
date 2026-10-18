@@ -625,6 +625,7 @@ class CardMatcher:
             "enabled": card.enabled,
             "delay_seconds": card.delay_seconds or 0,
             "use_no_logistics_form": bool(card.use_no_logistics_form),
+            "auto_submit_card": bool(card.auto_submit_card),
             "delivery_count": card.delivery_count,
             "is_multi_spec": card.is_multi_spec or False,
             "spec_name": card.spec_name,

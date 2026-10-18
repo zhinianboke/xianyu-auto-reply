@@ -154,6 +154,7 @@ export interface Item {
 
 // 订单相关类型
 export interface Order {
+  invite_code?: string  // 邀请码
   id: string
   order_id: string
   cookie_id: string
@@ -170,6 +171,10 @@ export interface Order {
   is_rated?: boolean  // 是否已评价
   is_red_flower?: boolean  // 是否已求小红花
   is_unregistered?: boolean  // 是否已请求注销接口
+  auto_submit_card?: boolean  // ????????
+  card_submitted?: boolean  // ???????
+  card_submit_notified?: boolean  // ??????????
+  card_process_result?: string  // ????????
   unregister_error_reason?: string  // 注销接口错误原因
   // 收货人信息
   receiver_name?: string  // 收货人姓名

@@ -8,6 +8,7 @@ from pydantic import BaseModel
 class OrderOut(BaseModel):
     id: str
     order_id: str
+    invite_code: str | None = None  # 邀请码
     cookie_id: str | None = None
     item_id: str | None = None
     item_title: str | None = None  # 商品标题
@@ -32,6 +33,10 @@ class OrderOut(BaseModel):
     delivery_content: str | None = None  # 发货内容（卡券内容）
     delivery_fail_reason: str | None = None  # 发货失败原因
     card_only_delivered: bool = False  # 只发卡券流程已处理，防止平台待发货状态导致重复耗卡
+    auto_submit_card: bool = False  # 是否自动提交卡密
+    card_submitted: bool = False  # 卡密是否已提交
+    card_submit_notified: bool = False  # 提交后是否已通知买家
+    card_process_result: str | None = None  # 卡密处理结果
     # 关联自动发货消息日志的发送状态
     delivery_send_status: str | None = None  # 消息日志发送状态：success/failed/unknown/timeout
     delivery_send_fail_reason: str | None = None  # 消息日志发送失败原因

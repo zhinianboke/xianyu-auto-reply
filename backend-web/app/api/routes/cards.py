@@ -31,6 +31,7 @@ class CardCreate(BaseModel):
     enabled: Optional[bool] = True
     delay_seconds: Optional[int] = 0
     use_no_logistics_form: bool = False
+    auto_submit_card: bool = False
     price: Optional[str] = None  # 对接价格
     is_dockable: Optional[bool] = False  # 是否可对接
     fee_payer: Optional[str] = None  # 手续费支付方式：distributor/dealer
@@ -54,6 +55,7 @@ class CardUpdate(BaseModel):
     enabled: Optional[bool] = None
     delay_seconds: Optional[int] = None
     use_no_logistics_form: Optional[bool] = None
+    auto_submit_card: Optional[bool] = None
     price: Optional[str] = None  # 对接价格
     is_dockable: Optional[bool] = None  # 是否可对接
     fee_payer: Optional[str] = None  # 手续费支付方式：distributor/dealer
@@ -82,6 +84,7 @@ class BatchSaveCardRequest(BaseModel):
     enabled: Optional[bool] = True
     delay_seconds: Optional[int] = 0
     use_no_logistics_form: bool = False
+    auto_submit_card: bool = False
     price: Optional[str] = None  # 对接价格
     is_dockable: Optional[bool] = False  # 是否可对接
     fee_payer: Optional[str] = None  # 手续费支付方式：distributor/dealer
@@ -262,6 +265,7 @@ async def create_card(
             enabled=card_data.enabled or True,
             delay_seconds=card_data.delay_seconds or 0,
             use_no_logistics_form=card_data.use_no_logistics_form,
+            auto_submit_card=card_data.auto_submit_card,
             price=card_data.price,
             is_dockable=card_data.is_dockable or False,
             fee_payer=card_data.fee_payer if card_data.is_dockable else None,
@@ -459,6 +463,7 @@ async def batch_save_card(
             enabled=request.enabled or True,
             delay_seconds=request.delay_seconds or 0,
             use_no_logistics_form=request.use_no_logistics_form,
+            auto_submit_card=request.auto_submit_card,
             price=request.price,
             is_dockable=request.is_dockable or False,
             fee_payer=request.fee_payer if request.is_dockable else None,

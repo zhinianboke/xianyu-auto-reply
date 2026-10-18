@@ -395,6 +395,7 @@ class AccountImportService:
                 existing.type = card_type
                 existing.enabled = _parse_bool(row.get("启用"))
                 existing.delay_seconds = _parse_int(row.get("延迟秒数"), 0)
+                existing.auto_submit_card = _parse_bool(row.get("自动提交卡密"))
                 existing.is_multi_spec = _parse_bool(row.get("多规格"))
                 existing.spec_name = _parse_str(row.get("规格名")) or existing.spec_name
                 existing.spec_value = spec_value or existing.spec_value
@@ -412,6 +413,7 @@ class AccountImportService:
                     type=card_type,
                     enabled=_parse_bool(row.get("启用")),
                     delay_seconds=_parse_int(row.get("延迟秒数"), 0),
+                    auto_submit_card=_parse_bool(row.get("自动提交卡密")),
                     is_multi_spec=_parse_bool(row.get("多规格")),
                     spec_name=_parse_str(row.get("规格名")) or None,
                     spec_value=spec_value or None,

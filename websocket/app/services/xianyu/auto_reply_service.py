@@ -17,6 +17,7 @@ import asyncio
 import os
 import time
 import traceback
+import json
 from typing import Optional, List, Dict, Any
 from contextvars import ContextVar
 
@@ -31,6 +32,8 @@ from common.models.default_reply import DefaultReply, DefaultReplyRecord
 from common.models.auto_reply_message_log import XYAutoReplyMessageLog
 from common.models.user_setting import UserSetting
 from common.models.xy_order import XYOrder
+from common.models.card_process_result_log import XYCardProcessResultLog
+from common.services.card_submit_utils import extract_card_codes
 from common.db.session import async_session_maker
 from common.db.redis_client import distributed_lock
 from common.utils.default_reply_api import call_reply_api
@@ -43,6 +46,8 @@ from common.utils.default_reply_location import validate_external_contact_fields
 
 from app.services.xianyu.resource_manager import pause_manager
 from app.services.xianyu.auto_reply_log_service import AutoReplyLogService
+from app.core.http_client import get_http_client
+from app.core.config import get_settings
 
 
 class AutoReplyService:
@@ -638,6 +643,10 @@ class AutoReplyService:
                 # 未启用时保留原有按会话暂停全部自动回复的行为。
                 log_payload["process_status"] = "skipped"
                 log_payload["decision_reason"] = "self_message"
+                if await self._is_card_push_trigger_message(send_message):
+                    log_payload["decision_reason"] = "card_push_trigger_self_message"
+                    logger.info(f"?{self.cookie_id}????????????????????: {send_message}")
+                    return
                 ai_pause_enabled = await self._pause_ai_reply_after_manual_message(
                     chat_id, item_id, log_payload
                 )
@@ -645,9 +654,11 @@ class AutoReplyService:
                     pause_manager.pause_chat(chat_id, self.cookie_id)
                 return
             
+            card_push_trigger = await self._is_card_push_trigger_message(send_message)
+
             # 2. 检查是否是系统消息（参照旧框架message_handler_core.py）
             # 这些系统消息不需要自动回复
-            if self.is_system_message_to_skip(send_message):
+            if self.is_system_message_to_skip(send_message) and not card_push_trigger:
                 logger.info(f"【{self.cookie_id}】系统消息跳过自动回复: {send_message}")
                 log_payload["process_status"] = "skipped"
                 log_payload["decision_reason"] = "system_message"
@@ -667,7 +678,7 @@ class AutoReplyService:
             
             # 3. 检查是否是自动发货触发消息（参照旧框架）
             # 这些消息应该由自动发货流程处理，不进行自动回复
-            if self.is_auto_delivery_trigger(send_message):
+            if self.is_auto_delivery_trigger(send_message) and not card_push_trigger:
                 logger.info(f"【{self.cookie_id}】自动发货触发消息，跳过自动回复: {send_message}")
                 log_payload["process_status"] = "skipped"
                 log_payload["decision_reason"] = "auto_delivery_trigger"
@@ -687,7 +698,7 @@ class AutoReplyService:
             
             # 4. 检查商品是否属于当前账号
             # 只有商品ID存在时才检查归属，商品ID不存在则继续执行原有逻辑
-            if item_id:
+            if item_id and not card_push_trigger:
                 from app.services.xianyu.rate_service import check_item_belongs_to_account
                 belongs_to_account = await check_item_belongs_to_account(self.cookie_id, item_id)
                 self._merge_log_context(log_payload, belongs_to_account=belongs_to_account)
@@ -719,7 +730,7 @@ class AutoReplyService:
             
             # 5. 检查消息等待时间(去重，参照旧框架reply_scheduler.py)
             # 同一会话的同一消息内容在等待时间内不重复回复
-            if await self._check_chat_processed(chat_id, send_message):
+            if await self._check_chat_processed(chat_id, send_message) and not card_push_trigger:
                 logger.info(f"【{self.cookie_id}】消息 '{send_message[:30]}...' 在等待时间内已处理过，跳过自动回复")
                 log_payload["process_status"] = "skipped"
                 log_payload["decision_reason"] = "duplicate_message"
@@ -728,7 +739,7 @@ class AutoReplyService:
             # 6. 检查消息过滤(跳过自动回复)
             skip_reply_keywords = await self.get_filter_keywords('skip_reply')
             logger.debug(f"【{self.cookie_id}】消息过滤关键词: {skip_reply_keywords}")
-            should_skip = self.should_skip_reply(send_message, skip_reply_keywords)
+            should_skip = self.should_skip_reply(send_message, skip_reply_keywords) and not card_push_trigger
             self._merge_log_context(
                 log_payload,
                 skip_reply_keywords=skip_reply_keywords,
@@ -1186,6 +1197,84 @@ class AutoReplyService:
     
     # ==================== 自动回复核心逻辑 ====================
     
+    async def _is_card_push_trigger_message(self, message: str) -> bool:
+        """??????????????????????"""
+        try:
+            async with async_session_maker() as session:
+                result = await session.execute(
+                    select(UserSetting.value).join(
+                        XYAccount, XYAccount.owner_id == UserSetting.user_id
+                    ).where(
+                        XYAccount.account_id == self.cookie_id,
+                        UserSetting.key.in_(("card_push.query_keywords", "card_push.invite_keywords")),
+                    )
+                )
+                for raw in result.scalars().all():
+                    keywords = [item.strip() for item in str(raw or "").split(",") if item.strip()]
+                    if any(keyword in message for keyword in keywords):
+                        return True
+        except Exception as exc:
+            logger.error(f"?{self.cookie_id}????????????: {type(exc).__name__}: {exc}", exc_info=True)
+        return False
+
+    async def _get_card_query_reply(self, session: AsyncSession, message: str) -> str | None:
+        """按卡密查询关键词识别订单号并返回卡密处理结果。"""
+        setting = await session.execute(select(UserSetting.value).join(XYAccount, XYAccount.owner_id == UserSetting.user_id).where(XYAccount.account_id == self.cookie_id, UserSetting.key == "card_push.query_keywords").limit(1))
+        raw = str(setting.scalar_one_or_none() or "")
+        keywords = [item.strip() for item in raw.split(",") if item.strip()]
+        matched = next((item for item in keywords if item in message), None)
+        if not matched:
+            return None
+        order_no = message.replace(matched, "", 1).strip()
+        if not order_no:
+            return "请在关键词后填写订单号。"
+        order_result = await session.execute(select(XYOrder).join(XYAccount, XYAccount.account_id == self.cookie_id).where(XYOrder.order_no == order_no, XYOrder.owner_id == XYAccount.owner_id).limit(1))
+        order = order_result.scalar_one_or_none()
+        if not order or not order.delivery_content:
+            return "未找到该订单或订单没有发货卡密。"
+        codes = extract_card_codes(order.delivery_content)
+        url_result = await session.execute(select(UserSetting.value).where(UserSetting.user_id == order.owner_id, UserSetting.key == "card_push.status_query_url"))
+        query_url = str(url_result.scalar_one_or_none() or "").strip()
+        if not query_url or not codes:
+            return "卡密查询配置不完整。"
+        try:
+            response = await get_http_client().post(query_url, json={"codes": codes}, timeout=30, max_retries=1)
+            cards = response.get("cards") if isinstance(response, dict) else None
+            session.add(XYCardProcessResultLog(owner_id=order.owner_id, order_no=order_no, request_body=json.dumps({"codes": codes}, ensure_ascii=False), response_body=json.dumps(response, ensure_ascii=False), trigger_scene="buyer", success=isinstance(cards, list), result_message="查询成功" if isinstance(cards, list) else "接口返回异常"))
+            await session.commit()
+            if not isinstance(cards, list):
+                return "卡密查询接口返回数据异常。"
+            lines = [f"尊敬的买家，您的订单{order_no}处理结果如下："]
+            lines.extend(f"卡密{item.get('code')}：结果：{item.get('status')}" for item in cards if isinstance(item, dict) and item.get("code") and item.get("status"))
+            return "\n".join(lines) if len(lines) > 1 else "未查询到卡密处理结果。"
+        except Exception as exc:
+            session.add(XYCardProcessResultLog(owner_id=order.owner_id, order_no=order_no, request_body=json.dumps({"codes": codes}, ensure_ascii=False), response_body="", trigger_scene="buyer", success=False, result_message=str(exc)))
+            await session.commit()
+            logger.error(f"卡密查询失败 order={order_no}: {type(exc).__name__}: {exc}", exc_info=True)
+            return "卡密查询失败，请稍后再试。"
+
+    async def _get_invite_code_reply(self, session: AsyncSession, message: str, buyer_id: str) -> str | None:
+        """按邀请码关键词识别并保存订单邀请码。"""
+        setting = await session.execute(select(UserSetting.value).join(XYAccount, XYAccount.owner_id == UserSetting.user_id).where(XYAccount.account_id == self.cookie_id, UserSetting.key == "card_push.invite_keywords").limit(1))
+        raw = str(setting.scalar_one_or_none() or "")
+        keywords = [item.strip() for item in raw.split(",") if item.strip()]
+        matched = next((item for item in keywords if item in message), None)
+        if not matched:
+            return None
+        invite_code = message.replace(matched, "", 1).strip()
+        if not invite_code:
+            return "请在关键词后填写邀请码。"
+        if len(invite_code) > 32:
+            return "邀请码长度不能超过32个字符。"
+        order_result = await session.execute(select(XYOrder).join(XYAccount, XYAccount.account_id == self.cookie_id).where(XYOrder.owner_id == XYAccount.owner_id, XYOrder.buyer_id == str(buyer_id)).order_by(XYOrder.created_at.desc()).limit(1))
+        order = order_result.scalar_one_or_none()
+        if not order:
+            return "未找到您的有效订单，暂时无法保存邀请码。"
+        order.invite_code = invite_code
+        await session.commit()
+        logger.info(f"【{self.cookie_id}】买家 {buyer_id} 提交邀请码并保存成功: {invite_code}")
+        return f"已接收到您的邀请码，您的邀请码为：{invite_code[:64]}，请耐心等待任务执行，成功后会及时通知您"
+
     async def get_reply(
         self,
         send_user_name: str,
@@ -1213,16 +1302,21 @@ class AutoReplyService:
         """
         reply_trace = self._reply_trace_var.get()
         try:
-            if pause_manager.is_chat_paused(chat_id, self.cookie_id):
-                remaining = pause_manager.get_remaining_pause_time(chat_id, self.cookie_id)
-                logger.info(f"【{self.cookie_id}】chat_id {chat_id} 自动回复暂停中,剩余 {remaining} 秒")
-                if reply_trace is not None:
-                    reply_trace["process_status"] = "skipped"
-                    reply_trace["decision_reason"] = "chat_paused"
-                    reply_trace.setdefault("context_snapshot", {})["pause_remaining_seconds"] = remaining
-                return None
-            
             async with async_session_maker() as session:
+                invite_code_reply = await self._get_invite_code_reply(session, send_message, send_user_id)
+                if invite_code_reply:
+                    return invite_code_reply
+                card_query_reply = await self._get_card_query_reply(session, send_message)
+                if card_query_reply:
+                    return card_query_reply
+                if pause_manager.is_chat_paused(chat_id, self.cookie_id):
+                    remaining = pause_manager.get_remaining_pause_time(chat_id, self.cookie_id)
+                    logger.info(f"?{self.cookie_id}?chat_id {chat_id} ???????,?? {remaining} ?")
+                    if reply_trace is not None:
+                        reply_trace["process_status"] = "skipped"
+                        reply_trace["decision_reason"] = "chat_paused"
+                        reply_trace.setdefault("context_snapshot", {})["pause_remaining_seconds"] = remaining
+                    return None
                 keyword_reply = await self.get_keyword_reply(
                     session, send_user_name, send_user_id, send_message, item_id, chat_id
                 )
