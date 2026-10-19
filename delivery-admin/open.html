@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>在浏览器中打开</title>
+<title>在浏览器中打开（尝试通过淘宝唤起）</title>
 <style>
   body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;margin:0;padding:24px;background:#f6f7fb;color:#222}
   .box{max-width:720px;margin:48px auto;background:#fff;padding:20px;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.06);text-align:center}
@@ -58,6 +58,26 @@ function tryOpen(url){
   return false;
 }
 
+function tryOpenTaobao(target){
+  try {
+    // Android: use intent to open Taobao app package
+    if (isAndroid()){
+      var tmp = target.replace(/^https?:\/\//i,'');
+      var intentUrl = 'intent://' + tmp + '#Intent;scheme=https;package=com.taobao.taobao;S.browser_fallback_url=' + encodeURIComponent(target) + ';end';
+      location.href = intentUrl;
+      return true;
+    }
+    // iOS: attempt taobao:// scheme (best-effort)
+    if (isiOS()){
+      // Common taobao URL schemes vary; this is a conservative attempt
+      var taobaoUrl = 'taobao://' + encodeURIComponent(target);
+      location.href = taobaoUrl;
+      return true;
+    }
+  } catch(e){}
+  return false;
+}
+
 function detectSwitchAndFallback(fallbackFn, timeout){
   timeout = timeout || 1200;
   var hidden = false;
@@ -73,6 +93,8 @@ function detectSwitchAndFallback(fallbackFn, timeout){
 (function(){
   var params = new URLSearchParams(location.search);
   var target = params.get('url') || params.get('u') || '';
+  var via = (params.get('via') || '').toLowerCase();
+
   if (!target){
     document.getElementById('title').textContent = '无效链接';
     document.getElementById('desc').textContent = '请在 ?url= 中传入目标链接';
@@ -83,6 +105,23 @@ function detectSwitchAndFallback(fallbackFn, timeout){
   document.getElementById('fallbackBtn').href = target;
   document.getElementById('openBtn').addEventListener('click', function(){ tryOpen(target); });
 
+  // 如果需要通过淘宝先唤起（via=taobao）且处于 App 内置 WebView，则先尝试唤起淘宝
+  if (via === 'taobao' && isLikelyInAppWebView()){
+    document.getElementById('desc').textContent = '正在尝试通过淘宝打开…若未生效，将在短时间后打开浏览器。';
+    tryOpenTaobao(target);
+    // 无论是否成功，1.2s 后回退到尝试打开浏览器
+    detectSwitchAndFallback(function(){
+      // 如果没有切走，回退并显示按钮
+      document.getElementById('desc').textContent = '未能通过淘宝自动跳转， 请手动点击按钮在浏览器中打开：';
+      document.getElementById('controls').style.display = 'block';
+      tryOpen(target);
+    }, 1200);
+    // 同时显示按钮以便用户手动点击
+    setTimeout(function(){ document.getElementById('controls').style.display = 'block'; }, 600);
+    return;
+  }
+
+  // 否则按常规流程：若处于内置 WebView，尝试自动外跳并回退到显示按钮；若不是则直接尝试打开
   if (isLikelyInAppWebView()){
     tryOpen(target);
     detectSwitchAndFallback(function(){
