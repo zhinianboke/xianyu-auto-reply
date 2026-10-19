@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>在浏览器中打开</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;margin:0;padding:24px;background:#f6f7fb;color:#222}
+  .box{max-width:720px;margin:48px auto;background:#fff;padding:20px;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.06);text-align:center}
+  h1{font-size:18px;margin-bottom:12px}
+  .desc{color:#666;font-size:14px;margin-bottom:18px}
+  .btn{display:inline-block;padding:12px 18px;border-radius:8px;font-size:16px;color:#fff;background:#1677ff;text-decoration:none}
+  .btn.alt{background:#f5f5f5;color:#333;margin-left:8px}
+  .link{word-break:break-all;color:#888;font-size:13px;margin-top:12px}
+  .hint{margin-top:12px;color:#999;font-size:13px}
+</style>
+</head>
+<body>
+  <div class="box">
+    <h1 id="title">正在尝试在浏览器中打开</h1>
+    <p class="desc" id="desc">如果页面没有自动跳转，请点击下面按钮或复制链接在浏览器中打开。</p>
+
+    <div id="controls" style="display:none">
+      <a id="openBtn" class="btn" href="javascript:;">在浏览器中打开</a>
+      <a id="fallbackBtn" class="btn alt" href="#" target="_blank">在新标签打开 / 复制链接</a>
+      <div class="link" id="rawLink"></div>
+      <div class="hint">若点击无效，请长按链接复制并在浏览器粘贴打开。</div>
+    </div>
+  </div>
+
+<script>
+function isAndroid(){ return /Android/i.test(navigator.userAgent); }
+function isiOS(){ return /iPhone|iPad|iPod/i.test(navigator.userAgent); }
+function isLikelyInAppWebView(){ var ua = navigator.userAgent || ''; return /AliApp|AlipayClient|Taobao|TUnionSdk|Xianyu/i.test(ua); }
+
+function buildIntentUrl(url){
+  try {
+    var tmp = url.replace(/^https?:\/\//i, '');
+    return 'intent://' + tmp + '#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=' + encodeURIComponent(url) + ';end';
+  } catch(e){
+    return null;
+  }
+}
+
+function tryOpen(url){
+  try {
+    var w = window.open(url, '_blank');
+    if (w) return true;
+  } catch(e){}
+  if (isAndroid()){
+    var intentUrl = buildIntentUrl(url);
+    if (intentUrl) {
+      location.href = intentUrl;
+      return true;
+    }
+  }
+  try { location.href = url; return true; } catch(e){}
+  return false;
+}
+
+function detectSwitchAndFallback(fallbackFn, timeout){
+  timeout = timeout || 1200;
+  var hidden = false;
+  function onVis(){ hidden = document.hidden || document.visibilityState === 'hidden'; }
+  document.addEventListener('visibilitychange', onVis);
+  var t0 = Date.now();
+  setTimeout(function(){
+    document.removeEventListener('visibilitychange', onVis);
+    if (!hidden && Date.now() - t0 >= timeout) fallbackFn();
+  }, timeout + 50);
+}
+
+(function(){
+  var params = new URLSearchParams(location.search);
+  var target = params.get('url') || params.get('u') || '';
+  if (!target){
+    document.getElementById('title').textContent = '无效链接';
+    document.getElementById('desc').textContent = '请在 ?url= 中传入目标链接';
+    return;
+  }
+
+  document.getElementById('rawLink').textContent = target;
+  document.getElementById('fallbackBtn').href = target;
+  document.getElementById('openBtn').addEventListener('click', function(){ tryOpen(target); });
+
+  if (isLikelyInAppWebView()){
+    tryOpen(target);
+    detectSwitchAndFallback(function(){
+      document.getElementById('desc').textContent = '未能自动跳出，请手动点击按钮在浏览器中打开：';
+      document.getElementById('controls').style.display = 'block';
+      tryOpen(target);
+    }, 1200);
+    setTimeout(function(){ document.getElementById('controls').style.display = 'block'; }, 600);
+    return;
+  }
+
+  document.getElementById('desc').textContent = '正在为您打开浏览器…';
+  setTimeout(function(){ tryOpen(target); }, 200);
+})();
+</script>
+</body>
+</html>
