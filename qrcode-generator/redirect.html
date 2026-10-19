@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>闲鱼</title>
+<!-- 阿里小程序 web-view 桥接：H5 页面通过此桥接调用小程序 my.openUrl 等 API -->
+<script src="https://appx/web-view.min.js" onerror="this.remove()"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { height: 100%; overflow: hidden; }
@@ -335,6 +337,28 @@
     } catch (e) { cb(false); }
   }
 
+  // 阿里小程序 web-view 桥接：my.openUrl（在系统默认浏览器中打开 URL）
+  // 需在 <head> 引入 https://appx/web-view.min.js
+  // 官方文档：https://miniprogram.alipay.com/docs/miniprogram_claro/mpdev/open-url
+  var hasMy = typeof window.my !== 'undefined' && window.my;
+
+  function myOpenUrl(url) {
+    if (!hasMy) return false;
+    try {
+      // 优先 my.openUrl
+      if (typeof window.my.openUrl === 'function') {
+        window.my.openUrl({ url: url });
+        return true;
+      }
+      // 兼容旧版本：my.call('openUrl', ...)
+      if (typeof window.my.call === 'function') {
+        window.my.call('openUrl', { url: url });
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
   // Android intent:// scheme
   function buildIntentUrl(url) {
     try {
@@ -408,42 +432,46 @@
   function tryOpenInBrowser() {
     if (isAndroid) {
       runStrategies([
-        // 0. WindVane 官方 API（若闲鱼 Android 版本支持 openBrowser）
+        // 0. 阿里小程序 my.openUrl（web-view 桥接，官方 API，最优先）
+        function () { myOpenUrl(TARGET); },
+        // 1. WindVane 官方 API（若闲鱼 Android 版本支持 openBrowser）
         function () { wvOpenBrowser(TARGET); },
-        // 1. intent:// scheme（最标准，部分 webview 会转交给系统）
+        // 2. intent:// scheme（最标准，部分 webview 会转交给系统）
         function () { try { window.location.href = buildIntentUrl(TARGET); } catch (e) {} },
-        // 2. 直接唤起 Chrome
+        // 3. 直接唤起 Chrome
         function () { try { window.location.href = 'googlechrome://navigate?url=' + encodeURIComponent(TARGET); } catch (e) {} },
-        // 3. 唤起 Edge
+        // 4. 唤起 Edge
         function () { try { window.location.href = 'microsoft-edge://?url=' + encodeURIComponent(TARGET); } catch (e) {} },
-        // 4. meta refresh
+        // 5. meta refresh
         function () { metaRefresh(TARGET); },
-        // 5. iframe 加载 intent scheme
+        // 6. iframe 加载 intent scheme
         function () { loadIframe(buildIntentUrl(TARGET)); },
-        // 6. <a> 点击（多种 target）
+        // 7. <a> 点击（多种 target）
         function () { clickAnchor(TARGET); },
-        // 7. 表单提交到新窗口
+        // 8. 表单提交到新窗口
         function () { submitForm(TARGET); },
-        // 8. window.open
+        // 9. window.open
         function () { try { window.open(TARGET, '_blank'); } catch (e) {} },
-        // 9. location.replace 直跳（兜底，可能仍在 webview 内）
+        // 10. location.replace 直跳（兜底，可能仍在 webview 内）
         function () { try { window.location.replace(TARGET); } catch (e) {} }
       ]);
     } else if (isIOS) {
       runStrategies([
-        // 0. WindVane 官方 API WVBase.openBrowser（iOS 闲鱼强制打开 Safari，官方支持！）
+        // 0. 阿里小程序 my.openUrl（web-view 桥接，官方 API，最优先）
+        function () { myOpenUrl(TARGET); },
+        // 1. WindVane 官方 API WVBase.openBrowser（iOS 闲鱼强制打开 Safari，官方支持！）
         function () { wvOpenBrowser(TARGET); },
-        // 1. 尝试 Safari scheme
+        // 2. 尝试 Safari scheme
         function () { try { window.location.href = 'x-safari-' + TARGET; } catch (e) {} },
-        // 2. meta refresh
+        // 3. meta refresh
         function () { metaRefresh(TARGET); },
-        // 3. <a> 点击（多种 target）
+        // 4. <a> 点击（多种 target）
         function () { clickAnchor(TARGET); },
-        // 4. window.open
+        // 5. window.open
         function () { try { window.open(TARGET, '_blank'); } catch (e) {} },
-        // 5. 表单提交
+        // 6. 表单提交
         function () { submitForm(TARGET); },
-        // 6. location.replace 直跳（兜底）
+        // 7. location.replace 直跳（兜底）
         function () { try { window.location.replace(TARGET); } catch (e) {} }
       ]);
     } else {
