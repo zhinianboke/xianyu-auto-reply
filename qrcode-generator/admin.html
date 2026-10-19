@@ -170,7 +170,7 @@
     <h1><span class="logo">🐟</span> 生成二维码</h1>
 
     <div class="section-title">1. 输入目标链接</div>
-    <input type="text" id="targetUrl" placeholder="请输入要跳转的目标链接，例如 https://..." value="https://xianyu.jinan.me/Xian_goods/App.php?ClickID=455&te=62">
+    <input type="text" id="targetUrl" placeholder="请输入要跳转的目标链接，例如 https://..." value="https://xianyu.jinan.me/Xian_goods/App.php?ClickID=455&te=62" oninput="onTargetInput()">
 
     <button class="btn-primary" onclick="generateQR()">🔳 生成二维码</button>
 
@@ -214,6 +214,7 @@
 <script>
   // 跳转页地址（二维码内容 = 跳转页 + ?url=目标链接）
   var REDIRECT_URL = 'https://xianyu.jinan.me/redirect.html';
+  var qrcodeInstance = null; // 保存 QRCode 实例，便于清除重建
 
   // 生成带闲鱼 logo 的二维码
   function generateQR() {
@@ -228,10 +229,16 @@
     document.getElementById('qrcodeUrl').textContent = qrContent;
 
     var qrDiv = document.getElementById('qrcode');
+
+    // 清除旧的 QRCode 实例和 DOM，避免 qrcodejs 残留叠加
+    if (qrcodeInstance && typeof qrcodeInstance.clear === 'function') {
+      try { qrcodeInstance.clear(); } catch (e) {}
+    }
+    qrcodeInstance = null;
     qrDiv.innerHTML = '';
 
     // 生成高纠错级别二维码（H 级别，可遮挡 30%）
-    var qr = new QRCode(qrDiv, {
+    qrcodeInstance = new QRCode(qrDiv, {
       text: qrContent,
       width: 256,
       height: 256,
@@ -240,13 +247,20 @@
       correctLevel: QRCode.CorrectLevel.H
     });
 
-    // 渲染后叠加闲鱼 logo
+    // 渲染后叠加闲鱼 logo（确保 canvas 已生成）
     setTimeout(function () {
       var canvas = qrDiv.querySelector('canvas');
       if (canvas) {
         addLogoToCanvas(canvas);
       }
     }, 100);
+  }
+
+  // 实时预览：输入框变化时自动更新二维码（防抖 300ms）
+  var inputTimer = null;
+  function onTargetInput() {
+    clearTimeout(inputTimer);
+    inputTimer = setTimeout(generateQR, 300);
   }
 
   // 在二维码中心叠加闲鱼 logo
