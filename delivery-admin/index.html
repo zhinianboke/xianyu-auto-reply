@@ -237,6 +237,41 @@
 </head>
 <body>
 
+<!-- client-side auth (not secure) -->
+<style>
+  #authMask { position:fixed; inset:0; background:#fff; z-index:9999; display:flex; align-items:center; justify-content:center }
+  #authBox { width:320px; padding:20px; border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,0.06); background:#fff; text-align:center; font-family:inherit}
+  #authBox input{width:100%;padding:8px;margin:8px 0;border:1px solid #ddd;border-radius:6px}
+  #authBox button{padding:8px 12px;border-radius:6px;background:#667eea;color:#fff;border:none;cursor:pointer}
+</style>
+<div id="authMask" aria-hidden="false">
+  <div id="authBox">
+    <div style="font-weight:600;margin-bottom:8px">管理后台登录</div>
+    <input id="authUser" placeholder="用户名" value="" />
+    <input id="authPass" placeholder="密码" type="password" />
+    <div style="text-align:right;margin-top:8px">
+      <button id="authBtn">登录</button>
+    </div>
+    <div style="font-size:12px;color:#999;margin-top:8px">提示：此保护仅为基本前端校验，不能替代服务器端鉴权。</div>
+  </div>
+</div>
+<script>
+  (function(){
+    var USER = 'admin168';
+    var PASS = '223366';
+    var mask = document.getElementById('authMask');
+    var btn = document.getElementById('authBtn');
+    function ok(){ mask.style.display='none'; mask.setAttribute('aria-hidden','true'); }
+    btn.addEventListener('click', function(){
+      var u = document.getElementById('authUser').value || '';
+      var p = document.getElementById('authPass').value || '';
+      if(u===USER && p===PASS){ ok(); }
+      else { alert('用户名或密码错误'); }
+    });
+    document.getElementById('authPass').addEventListener('keydown', function(e){ if(e.key==='Enter') btn.click(); });
+  })();
+</script>
+
 <div class="header">
   <div>
     <h1>📦 闲鱼发货管理后台</h1>
@@ -346,412 +381,8 @@
   </div>
 </div>
 
-<!-- 二维码弹窗 -->
+<!-- ��维码弹窗 -->
 <div class="modal-mask" id="qrModal">
   <div class="modal" style="max-width:420px;text-align:center;">
     <h2 id="qrGoodsName">商品二维码</h2>
-    <div id="qrDisplay" style="padding:20px;background:#f8f9fc;border-radius:8px;margin:16px 0;"></div>
-    <div id="qrUrl" style="font-size:12px;color:#888;word-break:break-all;margin-bottom:16px;"></div>
-    <div style="display:flex;gap:10px;justify-content:center;">
-      <button class="btn btn-secondary" onclick="copyQrUrl()">复制链接</button>
-      <button class="btn btn-primary" onclick="downloadQr()">下载二维码</button>
-      <button class="btn btn-secondary" onclick="closeQrModal()">关闭</button>
-    </div>
-  </div>
-</div>
-
-<!-- 发货记录弹窗 -->
-<div class="modal-mask" id="orderModal">
-  <div class="modal">
-    <h2>记录发货</h2>
-    <div class="form-group">
-      <label>关联商品 *</label>
-      <select id="orderGoods"></select>
-    </div>
-    <div class="form-grid">
-      <div class="form-group">
-        <label>订单号 *</label>
-        <input type="text" id="orderNo" placeholder="闲鱼订单号">
-      </div>
-      <div class="form-group">
-        <label>买家昵称</label>
-        <input type="text" id="orderBuyer" placeholder="选填">
-      </div>
-    </div>
-    <div class="form-group">
-      <label>备注</label>
-      <textarea id="orderRemark" placeholder="选填"></textarea>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary" onclick="closeOrderModal()">取消</button>
-      <button class="btn btn-primary" onclick="saveOrder()">保存</button>
-    </div>
-  </div>
-</div>
-
-<script>
-const STORAGE_KEY = 'xianyu_delivery_data';
-
-// 数据结构
-let data = {
-  baseUrl: '',
-  goods: [],    // {id, name, link, code, category, desc, createdAt}
-  orders: []    // {id, goodsId, goodsName, orderNo, buyer, remark, status, createdAt}
-};
-
-// 初始化
-function init() {
-  loadData();
-  renderGoods();
-  renderOrders();
-  renderOrderGoodsSelect();
-  document.getElementById('baseUrl').value = data.baseUrl || '';
-}
-
-function loadData() {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved) {
-    try { data = JSON.parse(saved); } catch(e) {}
-  }
-  if (!data.goods) data.goods = [];
-  if (!data.orders) data.orders = [];
-}
-
-function saveData() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-}
-
-// Tab 切换
-function switchTab(name) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  event.target.classList.add('active');
-  document.getElementById('panel-' + name).classList.add('active');
-}
-
-// ========== 商品管理 ==========
-function renderGoods() {
-  const list = document.getElementById('goodsList');
-  if (data.goods.length === 0) {
-    list.innerHTML = '<div class="empty" style="grid-column:1/-1;"><div class="empty-icon">📦</div><p>暂无商品，点击右上角「添加商品」</p></div>';
-    return;
-  }
-  list.innerHTML = data.goods.map(g => `
-    <div class="goods-card">
-      <h3>${escapeHtml(g.name)}</h3>
-      <div class="meta">
-        链接：<span style="font-size:12px;">${escapeHtml(g.link.substring(0, 30))}...</span><br>
-        提取码：<span>${g.code || '无'}</span><br>
-        ${g.category ? '分类：<span>' + escapeHtml(g.category) + '</span>' : ''}
-      </div>
-      <div class="qr-wrap" id="qr-${g.id}"></div>
-      <div class="actions">
-        <button class="btn btn-primary btn-sm" onclick="showQr('${g.id}')">📱 二维码</button>
-        <button class="btn btn-secondary btn-sm" onclick="editGoods('${g.id}')">✏️ 编辑</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteGoods('${g.id}')">🗑️ 删除</button>
-      </div>
-    </div>
-  `).join('');
-
-  // 渲染每个商品的二维码
-  data.goods.forEach(g => {
-    const url = getDeliveryUrl(g.id);
-    const el = document.getElementById('qr-' + g.id);
-    if (el && url) {
-      el.innerHTML = '';
-      new QRCode(el, {
-        text: url,
-        width: 160,
-        height: 160,
-        colorDark: '#000000',
-        colorLight: '#ffffff',
-        correctLevel: QRCode.CorrectLevel.M
-      });
-    } else if (el) {
-      el.innerHTML = '<div style="color:#ccc;font-size:12px;text-align:center;padding:20px 0;">请先在设置中<br>配置基础地址</div>';
-    }
-  });
-}
-
-function getDeliveryUrl(goodsId) {
-  if (!data.baseUrl) return '';
-  const g = data.goods.find(x => x.id === goodsId);
-  if (!g) return '';
-  let base = data.baseUrl;
-  if (!base.endsWith('/')) base += '/';
-  // 指向 open.html 并加 via=taobao：open.html 会先尝试唤起淘宝（若在内置 WebView 中），再回退并尝试在外部浏览器打开目标链接
-  return base + 'open.html?url=' + encodeURIComponent(g.link) + '&via=taobao';
-}
-
-function openGoodsModal() {
-  document.getElementById('goodsModalTitle').textContent = '添加商品';
-  document.getElementById('goodsId').value = '';
-  document.getElementById('goodsName').value = '';
-  document.getElementById('goodsLink').value = '';
-  document.getElementById('goodsCode').value = '';
-  document.getElementById('goodsCategory').value = '';
-  document.getElementById('goodsDesc').value = '';
-  document.getElementById('goodsModal').classList.add('show');
-}
-
-function editGoods(id) {
-  const g = data.goods.find(x => x.id === id);
-  if (!g) return;
-  document.getElementById('goodsModalTitle').textContent = '编辑商品';
-  document.getElementById('goodsId').value = g.id;
-  document.getElementById('goodsName').value = g.name;
-  document.getElementById('goodsLink').value = g.link;
-  document.getElementById('goodsCode').value = g.code || '';
-  document.getElementById('goodsCategory').value = g.category || '';
-  document.getElementById('goodsDesc').value = g.desc || '';
-  document.getElementById('goodsModal').classList.add('show');
-}
-
-function closeGoodsModal() {
-  document.getElementById('goodsModal').classList.remove('show');
-}
-
-function saveGoods() {
-  const id = document.getElementById('goodsId').value;
-  const name = document.getElementById('goodsName').value.trim();
-  const link = document.getElementById('goodsLink').value.trim();
-  const code = document.getElementById('goodsCode').value.trim();
-  const category = document.getElementById('goodsCategory').value.trim();
-  const desc = document.getElementById('goodsDesc').value.trim();
-
-  if (!name) { alert('请输入商品名称'); return; }
-  if (!link) { alert('请输入网盘链接'); return; }
-
-  if (id) {
-    const g = data.goods.find(x => x.id === id);
-    if (g) Object.assign(g, { name, link, code, category, desc });
-  } else {
-    data.goods.push({
-      id: 'g_' + Date.now(),
-      name, link, code, category, desc,
-      createdAt: new Date().toISOString()
-    });
-  }
-  saveData();
-  renderGoods();
-  renderOrderGoodsSelect();
-  closeGoodsModal();
-}
-
-function deleteGoods(id) {
-  if (!confirm('确定删除该商品？相关发货记录不会被删除。')) return;
-  data.goods = data.goods.filter(g => g.id !== id);
-  saveData();
-  renderGoods();
-  renderOrderGoodsSelect();
-}
-
-// ========== 二维码 ==========
-let currentQrGoods = null;
-
-function showQr(id) {
-  const g = data.goods.find(x => x.id === id);
-  if (!g) return;
-  const url = getDeliveryUrl(id);
-  if (!url) {
-    alert('请先在「系统设置」中配置发货页面基础地址');
-    switchTab('settings');
-    return;
-  }
-  currentQrGoods = g;
-  document.getElementById('qrGoodsName').textContent = g.name + ' - 二维码';
-  document.getElementById('qrUrl').textContent = url;
-  const display = document.getElementById('qrDisplay');
-  display.innerHTML = '';
-  new QRCode(display, {
-    text: url,
-    width: 260,
-    height: 260,
-    colorDark: '#000000',
-    colorLight: '#ffffff',
-    correctLevel: QRCode.CorrectLevel.H
-  });
-  document.getElementById('qrModal').classList.add('show');
-}
-
-function closeQrModal() {
-  document.getElementById('qrModal').classList.remove('show');
-  currentQrGoods = null;
-}
-
-function copyQrUrl() {
-  const url = document.getElementById('qrUrl').textContent;
-  navigator.clipboard.writeText(url).then(() => {
-    alert('链接已复制');
-  }).catch(() => alert('复制失败'));
-}
-
-function downloadQr() {
-  const display = document.getElementById('qrDisplay');
-  const canvas = display.querySelector('canvas');
-  if (!canvas) return;
-  const a = document.createElement('a');
-  a.href = canvas.toDataURL('image/png');
-  a.download = (currentQrGoods ? currentQrGoods.name : 'qrcode') + '_' + Date.now() + '.png';
-  a.click();
-}
-
-// ========== 发货记录 ==========
-function renderOrderGoodsSelect() {
-  const sel = document.getElementById('orderGoods');
-  sel.innerHTML = '<option value="">请选择商品</option>' +
-    data.goods.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
-}
-
-function renderOrders() {
-  const list = document.getElementById('orderList');
-  if (data.orders.length === 0) {
-    list.innerHTML = '<div class="empty"><div class="empty-icon">📋</div><p>暂无发货记录</p></div>';
-    return;
-  }
-  const sorted = [...data.orders].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  list.innerHTML = `
-    <table>
-      <thead>
-        <tr><th>订单号</th><th>商品</th><th>买家</th><th>发货时间</th><th>状态</th><th>操作</th></tr>
-      </thead>
-      <tbody>
-        ${sorted.map(o => `
-          <tr>
-            <td>${escapeHtml(o.orderNo)}</td>
-            <td>${escapeHtml(o.goodsName)}</td>
-            <td>${escapeHtml(o.buyer || '-')}</td>
-            <td>${formatDate(o.createdAt)}</td>
-            <td><span class="tag tag-green">已发货</span></td>
-            <td>
-              <button class="btn btn-secondary btn-sm" onclick="showQr('${o.goodsId}')">📱 二维码</button>
-              <button class="btn btn-danger btn-sm" onclick="deleteOrder('${o.id}')">🗑️</button>
-            </td>
-          </tr>
-        `).join('')}
-      </tbody>
-    </table>
-  `;
-}
-
-function openOrderModal() {
-  if (data.goods.length === 0) {
-    alert('请先添加商品');
-    switchTab('goods');
-    return;
-  }
-  document.getElementById('orderGoods').value = '';
-  document.getElementById('orderNo').value = '';
-  document.getElementById('orderBuyer').value = '';
-  document.getElementById('orderRemark').value = '';
-  document.getElementById('orderModal').classList.add('show');
-}
-
-function closeOrderModal() {
-  document.getElementById('orderModal').classList.remove('show');
-}
-
-function saveOrder() {
-  const goodsId = document.getElementById('orderGoods').value;
-  const orderNo = document.getElementById('orderNo').value.trim();
-  const buyer = document.getElementById('orderBuyer').value.trim();
-  const remark = document.getElementById('orderRemark').value.trim();
-
-  if (!goodsId) { alert('请选择商品'); return; }
-  if (!orderNo) { alert('请输入订单号'); return; }
-
-  const g = data.goods.find(x => x.id === goodsId);
-  data.orders.push({
-    id: 'o_' + Date.now(),
-    goodsId,
-    goodsName: g.name,
-    orderNo, buyer, remark,
-    status: 'shipped',
-    createdAt: new Date().toISOString()
-  });
-  saveData();
-  renderOrders();
-  closeOrderModal();
-}
-
-function deleteOrder(id) {
-  if (!confirm('确定删除该发货记录？')) return;
-  data.orders = data.orders.filter(o => o.id !== id);
-  saveData();
-  renderOrders();
-}
-
-// ========== 系统设置 ==========
-function saveBaseUrl() {
-  data.baseUrl = document.getElementById('baseUrl').value.trim();
-  saveData();
-  renderGoods();
-  alert('保存成功');
-}
-
-function exportData() {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'xianyu_delivery_backup_' + Date.now() + '.json';
-  a.click();
-}
-
-function importData(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    try {
-      const imported = JSON.parse(e.target.result);
-      if (imported.goods || imported.orders) {
-        if (confirm('导入将覆盖现有数据，确定继续？')) {
-          data = imported;
-          saveData();
-          init();
-          alert('导入成功');
-        }
-      } else {
-        alert('文件格式不正确');
-      }
-    } catch (err) {
-      alert('文件解析失败');
-    }
-  };
-  reader.readAsText(file);
-  event.target.value = '';
-}
-
-function clearAllData() {
-  if (!confirm('确定清空全部商品和发货记录？此操作不可恢复！')) return;
-  if (!confirm('再次确认：真的要清空所有数据吗？')) return;
-  data = { baseUrl: '', goods: [], orders: [] };
-  saveData();
-  init();
-  alert('已清空');
-}
-
-// ========== 工具 ==========
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
-
-function formatDate(iso) {
-  const d = new Date(iso);
-  const pad = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-// 点击遮罩关闭弹窗
-document.querySelectorAll('.modal-mask').forEach(m => {
-  m.addEventListener('click', (e) => {
-    if (e.target === m) m.classList.remove('show');
-  });
-});
-
-init();
-</script>
-</body>
-</html>
+    <div id="qrDisplay" style="padding:20px;background:#f8f9fc;border-radius:8px;margin:16px 0;
