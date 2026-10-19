@@ -214,46 +214,57 @@
 <script>
   // 跳转页地址（二维码内容 = 跳转页 + ?url=目标链接）
   var REDIRECT_URL = 'https://xianyu.jinan.me/redirect.html';
-  var qrcodeInstance = null; // 保存 QRCode 实例，便于清除重建
 
   // 生成带闲鱼 logo 的二维码
   function generateQR() {
-    var target = document.getElementById('targetUrl').value.trim();
+    // 1. 检查 qrcodejs 库是否已加载
+    if (typeof QRCode === 'undefined') {
+      alert('二维码库未加载，请刷新页面重试');
+      return;
+    }
+
+    // 2. 从输入框读取最新目标链接（每次都重新读取，确保是最新值）
+    var input = document.getElementById('targetUrl');
+    var target = input ? input.value.trim() : '';
     if (!target) {
       alert('请输入目标链接');
       return;
     }
 
-    // 二维码内容 = 跳转页 + ?url=目标链接（URL 编码）
+    // 3. 构建二维码内容 = 跳转页 + ?url=目标链接（URL 编码）
     var qrContent = REDIRECT_URL + '?url=' + encodeURIComponent(target);
-    document.getElementById('qrcodeUrl').textContent = qrContent;
+    var urlDisplay = document.getElementById('qrcodeUrl');
+    if (urlDisplay) urlDisplay.textContent = qrContent;
 
+    // 4. 获取二维码容器并彻底清空（最可靠的清除方式）
     var qrDiv = document.getElementById('qrcode');
-
-    // 清除旧的 QRCode 实例和 DOM，避免 qrcodejs 残留叠加
-    if (qrcodeInstance && typeof qrcodeInstance.clear === 'function') {
-      try { qrcodeInstance.clear(); } catch (e) {}
-    }
-    qrcodeInstance = null;
+    if (!qrDiv) return;
     qrDiv.innerHTML = '';
 
-    // 生成高纠错级别二维码（H 级别，可遮挡 30%）
-    qrcodeInstance = new QRCode(qrDiv, {
-      text: qrContent,
-      width: 256,
-      height: 256,
-      colorDark: '#1a1a1a',
-      colorLight: '#ffffff',
-      correctLevel: QRCode.CorrectLevel.H
-    });
+    // 5. 创建新的二维码实例
+    try {
+      new QRCode(qrDiv, {
+        text: qrContent,
+        width: 256,
+        height: 256,
+        colorDark: '#1a1a1a',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.H
+      });
+    } catch (e) {
+      console.error('二维码生成失败：', e);
+      return;
+    }
 
-    // 渲染后叠加闲鱼 logo（确保 canvas 已生成）
+    // 6. 渲染后叠加闲鱼 logo（延迟确保 canvas 已生成）
     setTimeout(function () {
-      var canvas = qrDiv.querySelector('canvas');
+      // 重新获取容器内的 canvas（确保是最新生成的）
+      var div = document.getElementById('qrcode');
+      var canvas = div ? div.querySelector('canvas') : null;
       if (canvas) {
         addLogoToCanvas(canvas);
       }
-    }, 100);
+    }, 120);
   }
 
   // 实时预览：输入框变化时自动更新二维码（防抖 300ms）
