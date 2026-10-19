@@ -183,24 +183,6 @@
       二维码内容格式：<code>https://xianyu.jinan.me/redirect.html?url=目标链接</code><br>
       扫码后闲鱼会加载 redirect.html，再自动跳转到你输入的目标链接。
     </div>
-
-    <!-- 可选：保存到服务器（API 方式，二维码不带参数） -->
-    <div class="section-title">3. 可选：保存到服务器</div>
-    <div style="font-size:12px;color:#999;margin-bottom:10px;">
-      保存后，可使用不带参数的固定二维码（redirect.html），扫码从服务器获取链接。
-    </div>
-    <label>当前服务器链接</label>
-    <div class="current-url" id="currentUrl">加载中...</div>
-    <div class="updated-at" id="updatedAt"></div>
-
-    <label>管理账号</label>
-    <input type="text" id="username" placeholder="请输入管理账号">
-
-    <label>管理密码</label>
-    <input type="password" id="password" placeholder="请输入管理密码">
-
-    <button class="btn-secondary" onclick="saveToServer()">💾 保存当前链接到服务器</button>
-    <div class="msg" id="msg"></div>
   </div>
 
   <!-- 右侧：二维码预览 -->
