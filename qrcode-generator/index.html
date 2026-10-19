@@ -223,7 +223,7 @@
       <p>输入链接后点击「生成二维码」</p>
     </div>
     <div id="qrcode-container" style="display:none;"></div>
-    <div class="qr-content-label" id="qrLabel" style="display:none;">二维码实际内容：</div>
+    <div class="qr-content-label" id="qrLabel" style="display:none;">名称：</div>
     <div class="qr-content" id="qrContent" style="display:none;"></div>
   </div>
 </div>
@@ -268,7 +268,7 @@
       });
       container.style.display = 'block';
       placeholder.style.display = 'none';
-      document.getElementById('qrContent').textContent = qrText;
+      document.getElementById('qrContent').textContent = '闲鱼商品';
       document.getElementById('qrContent').style.display = 'block';
       document.getElementById('qrLabel').style.display = 'block';
     } catch (err) {
