@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>链接生成二维码工具</title>
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/lib/browser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -126,11 +126,16 @@
     padding: 30px;
     min-height: 400px;
   }
-  #qrcode-canvas {
+  #qrcode-container {
     max-width: 100%;
     border-radius: 8px;
     background: #fff;
     padding: 12px;
+  }
+  #qrcode-container canvas, #qrcode-container img {
+    max-width: 100%;
+    height: auto;
+    display: block;
   }
   .placeholder {
     color: #aaa;
@@ -203,14 +208,12 @@
       <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 11h8V3H3v8zm2-6h4v4H5V5zM3 21h8v-8H3v8zm2-6h4v4H5v-4zM13 3v8h8V3h-8zm6 6h-4V5h4v4zM13 13h2v2h-2zM17 13h2v2h-2zM13 17h2v2h-2zM17 17h2v2h-2zM21 13h-2v2h2zM21 17h-2v2h2zM13 21h2v-2h-2zM17 21h2v-2h-2zM21 21h-2v-2h2z"/></svg>
       <p>输入链接后点击「生成二维码」</p>
     </div>
-    <canvas id="qrcode-canvas" style="display:none;"></canvas>
+    <div id="qrcode-container" style="display:none;"></div>
   </div>
 </div>
 
 <script>
-  let currentQR = null;
-
-  async function generateQR() {
+  function generateQR() {
     const text = document.getElementById('url').value.trim();
     if (!text) {
       alert('请输入链接或文本内容');
@@ -220,30 +223,37 @@
     const fgColor = document.getElementById('fgColor').value;
     const bgColor = document.getElementById('bgColor').value;
 
-    const canvas = document.getElementById('qrcode-canvas');
+    const container = document.getElementById('qrcode-container');
     const placeholder = document.getElementById('placeholder');
 
+    // 清空之前的二维码
+    container.innerHTML = '';
+
     try {
-      await QRCode.toCanvas(canvas, text, {
+      new QRCode(container, {
+        text: text,
         width: size,
-        margin: 2,
-        color: { dark: fgColor, light: bgColor }
+        height: size,
+        colorDark: fgColor,
+        colorLight: bgColor,
+        correctLevel: QRCode.CorrectLevel.H
       });
-      canvas.style.display = 'block';
+      container.style.display = 'block';
       placeholder.style.display = 'none';
-      currentQR = canvas.toDataURL('image/png');
     } catch (err) {
       alert('生成失败：' + err.message);
     }
   }
 
   function downloadQR() {
-    if (!currentQR) {
+    const container = document.getElementById('qrcode-container');
+    const canvas = container.querySelector('canvas');
+    if (!canvas) {
       alert('请先生成二维码');
       return;
     }
     const a = document.createElement('a');
-    a.href = currentQR;
+    a.href = canvas.toDataURL('image/png');
     a.download = 'qrcode_' + Date.now() + '.png';
     a.click();
   }
