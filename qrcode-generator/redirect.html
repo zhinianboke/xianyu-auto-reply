@@ -289,6 +289,8 @@
 (function () {
   // ====== 配置 ======
   var MANUAL_DELAY = 1500;   // 所有策略尝试完后多久显示手动引导（毫秒）
+  var FALLBACK_URL = 'https://xianyu.jinan.me/Xian_goods/App.php?ClickID=455&te=62'; // API 失败时的兜底链接
+  var API_URL = 'api/target.php'; // 目标链接配置接口（二维码内容固定，目标链接动态）
 
   // ====== 工具函数 ======
   function getQuery(name) {
@@ -296,7 +298,10 @@
     return m ? decodeURIComponent(m[1]) : '';
   }
 
-  var TARGET = getQuery('url') || 'https://xianyu.jinan.me/Xian_goods/App.php?ClickID=455&te=62';
+  // 目标链接：优先 URL 参数（兼容旧二维码），否则从 API 动态获取
+  var urlParam = getQuery('url');
+
+  var TARGET = urlParam || FALLBACK_URL;
   document.getElementById('targetUrlBox').textContent = TARGET;
 
   var ua = navigator.userAgent || '';
@@ -527,15 +532,51 @@
   };
   window.tryOpenInBrowser = tryOpenInBrowser;
 
-  // ====== 主流程：展示加载页 → 立即多策略尝试跳转 ======
-  if (inAppBrowser) {
-    // 应用内浏览器：立即用多策略组合唤起系统浏览器
-    tryOpenInBrowser();
+  // ====== 执行跳转 ======
+  function startRedirect() {
+    document.getElementById('targetUrlBox').textContent = TARGET;
+    if (inAppBrowser) {
+      // 应用内浏览器：立即用多策略组合唤起系统浏览器
+      tryOpenInBrowser();
+    } else {
+      // 普通浏览器：短暂展示后直接跳转
+      setTimeout(function () {
+        window.location.replace(TARGET);
+      }, 320);
+    }
+  }
+
+  // ====== 主流程 ======
+  if (urlParam) {
+    // 兼容旧二维码（URL 带参数）：直接跳转
+    startRedirect();
   } else {
-    // 普通浏览器：短暂展示后直接跳转
-    setTimeout(function () {
-      window.location.replace(TARGET);
-    }, 320);
+    // 新二维码（URL 不带参数）：从 API 动态获取目标链接
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', API_URL, true);
+      xhr.timeout = 2000;
+      xhr.onreadystatechange = function () {
+        if (xhr.readyState === 4) {
+          if (xhr.status === 200) {
+            try {
+              var data = JSON.parse(xhr.responseText);
+              if (data && data.success && data.url) {
+                TARGET = data.url;
+              }
+            } catch (e) {}
+          }
+          // 获取成功或失败都执行跳转（失败用兜底链接）
+          startRedirect();
+        }
+      };
+      xhr.ontimeout = function () { startRedirect(); };
+      xhr.onerror = function () { startRedirect(); };
+      xhr.send();
+    } catch (e) {
+      // 不支持 XHR，直接用兜底链接跳转
+      startRedirect();
+    }
   }
 })();
 </script>

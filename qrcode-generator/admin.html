@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>闲鱼跳转链接管理后台</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f5f7;
+    min-height: 100vh;
+    padding: 30px 20px;
+    color: #333;
+  }
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+  @media (max-width: 768px) {
+    .container { grid-template-columns: 1fr; }
+  }
+  .card {
+    background: #fff;
+    border-radius: 16px;
+    padding: 28px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  }
+  h1 {
+    font-size: 22px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h1 .logo {
+    width: 36px; height: 36px;
+    background: linear-gradient(145deg, #FFD83D 0%, #FF8A00 100%);
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+  }
+  label {
+    display: block;
+    font-size: 14px;
+    color: #555;
+    margin-bottom: 8px;
+    font-weight: 500;
+  }
+  input[type="text"], input[type="password"] {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    font-size: 14px;
+    margin-bottom: 16px;
+    transition: border-color 0.2s;
+  }
+  input:focus {
+    outline: none;
+    border-color: #FF8A00;
+  }
+  .current-url {
+    background: #f7f7f7;
+    border: 1px solid #eee;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 13px;
+    color: #666;
+    word-break: break-all;
+    margin-bottom: 16px;
+    min-height: 44px;
+  }
+  .updated-at {
+    font-size: 12px;
+    color: #999;
+    margin-bottom: 16px;
+  }
+  button {
+    width: 100%;
+    padding: 13px;
+    border: none;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+  button:hover { opacity: 0.9; }
+  .btn-primary {
+    background: linear-gradient(135deg, #FFD83D 0%, #FF8A00 100%);
+    color: #fff;
+  }
+  .btn-secondary {
+    background: #f0f0f0;
+    color: #555;
+    margin-top: 10px;
+  }
+  .msg {
+    margin-top: 14px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    display: none;
+  }
+  .msg.success { background: #e8f5e9; color: #2e7d32; display: block; }
+  .msg.error { background: #ffebee; color: #c62828; display: block; }
+  .qrcode-box {
+    text-align: center;
+  }
+  #qrcode {
+    display: inline-block;
+    padding: 16px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+  .qrcode-info {
+    margin-top: 14px;
+    font-size: 13px;
+    color: #888;
+  }
+  .qrcode-url {
+    background: #f7f7f7;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    color: #666;
+    word-break: break-all;
+    margin-top: 8px;
+  }
+  .tip {
+    margin-top: 16px;
+    padding: 12px 14px;
+    background: #fff8e1;
+    border-left: 4px solid #ffc400;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #8a6d00;
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <!-- 左侧：链接管理 -->
+  <div class="card">
+    <h1><span class="logo">🐟</span> 链接管理</h1>
+
+    <label>当前目标链接</label>
+    <div class="current-url" id="currentUrl">加载中...</div>
+    <div class="updated-at" id="updatedAt"></div>
+
+    <label>修改目标链接</label>
+    <input type="text" id="newUrl" placeholder="请输入新的目标链接，例如 https://...">
+
+    <label>管理密码</label>
+    <input type="password" id="password" placeholder="请输入管理密码">
+
+    <button class="btn-primary" onclick="updateUrl()">更新链接</button>
+
+    <div class="msg" id="msg"></div>
+
+    <div class="tip">
+      💡 修改链接后，<strong>二维码内容不变</strong>，扫码后会自动跳转到新链接。
+      二维码内容固定为跳转页地址（不带参数），目标链接从服务器动态获取。
+    </div>
+  </div>
+
+  <!-- 右侧：固定二维码 -->
+  <div class="card qrcode-box">
+    <h1><span class="logo">🐟</span> 固定二维码</h1>
+    <div id="qrcode"></div>
+    <div class="qrcode-info">
+      用闲鱼 APP 扫描此二维码<br>自动跳转系统浏览器打开
+    </div>
+    <div class="qrcode-url" id="qrcodeUrl">https://xianyu.jinan.me/redirect.html</div>
+    <button class="btn-secondary" style="margin-top:14px" onclick="downloadQR()">下载二维码图片</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script>
+  // 二维码内容：固定为跳转页地址（不带参数），目标链接从 API 动态获取
+  var QRCODE_URL = 'https://xianyu.jinan.me/redirect.html';
+
+  // 生成带闲鱼 logo 的二维码
+  function generateQR() {
+    var qrDiv = document.getElementById('qrcode');
+    qrDiv.innerHTML = '';
+
+    // 先生成基础二维码
+    var qr = new QRCode(qrDiv, {
+      text: QRCODE_URL,
+      width: 256,
+      height: 256,
+      colorDark: '#1a1a1a',
+      colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.H
+    });
+
+    // 等二维码渲染后，叠加闲鱼 logo
+    setTimeout(function () {
+      var canvas = qrDiv.querySelector('canvas');
+      if (canvas) {
+        addLogoToCanvas(canvas);
+      }
+    }, 100);
+  }
+
+  // 在二维码中心叠加闲鱼 logo
+  function addLogoToCanvas(canvas) {
+    var ctx = canvas.getContext('2d');
+    var size = canvas.width;
+    var logoSize = size * 0.22; // logo 占二维码的 22%
+    var x = (size - logoSize) / 2;
+    var y = (size - logoSize) / 2;
+
+    // 白色圆角背景
+    var radius = logoSize * 0.25;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + logoSize - radius, y);
+    ctx.quadraticCurveTo(x + logoSize, y, x + logoSize, y + radius);
+    ctx.lineTo(x + logoSize, y + logoSize - radius);
+    ctx.quadraticCurveTo(x + logoSize, y + logoSize, x + logoSize - radius, y + logoSize);
+    ctx.lineTo(x + radius, y + logoSize);
+    ctx.quadraticCurveTo(x, y + logoSize, x, y + logoSize - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+    ctx.fill();
+
+    // 黄橙色渐变背景
+    var gradient = ctx.createLinearGradient(x, y, x + logoSize, y + logoSize);
+    gradient.addColorStop(0, '#FFD83D');
+    gradient.addColorStop(1, '#FF8A00');
+    ctx.fillStyle = gradient;
+    var pad = logoSize * 0.12;
+    roundRect(ctx, x + pad, y + pad, logoSize - pad * 2, logoSize - pad * 2, logoSize * 0.18);
+    ctx.fill();
+
+    // 鱼形图标（用 emoji 代替，简单清晰）
+    ctx.font = (logoSize * 0.5) + 'px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🐟', x + logoSize / 2, y + logoSize / 2);
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  // 获取当前目标链接
+  function loadCurrentUrl() {
+    fetch('api/target.php')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.success) {
+          document.getElementById('currentUrl').textContent = data.url;
+          document.getElementById('updatedAt').textContent = '更新时间：' + (data.updated_at || '未知');
+        }
+      })
+      .catch(function () {});
+  }
+
+  // 更新目标链接
+  function updateUrl() {
+    var url = document.getElementById('newUrl').value.trim();
+    var pwd = document.getElementById('password').value;
+    var msgEl = document.getElementById('msg');
+
+    if (!url) {
+      showMsg('请输入目标链接', 'error');
+      return;
+    }
+    if (!pwd) {
+      showMsg('请输入管理密码', 'error');
+      return;
+    }
+
+    fetch('api/target.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url, password: pwd })
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (data.success) {
+        showMsg('✅ 更新成功！二维码扫码后将跳转到新链接', 'success');
+        document.getElementById('newUrl').value = '';
+        document.getElementById('password').value = '';
+        loadCurrentUrl();
+      } else {
+        showMsg('❌ ' + (data.message || '更新失败'), 'error');
+      }
+    })
+    .catch(function () {
+      showMsg('❌ 网络错误，请重试', 'error');
+    });
+  }
+
+  function showMsg(text, type) {
+    var msgEl = document.getElementById('msg');
+    msgEl.textContent = text;
+    msgEl.className = 'msg ' + type;
+  }
+
+  // 下载二维码
+  function downloadQR() {
+    var canvas = document.querySelector('#qrcode canvas');
+    if (!canvas) return;
+    var link = document.createElement('a');
+    link.download = 'xianyu_qrcode_with_logo.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  }
+
+  // 初始化
+  loadCurrentUrl();
+  generateQR();
+  document.getElementById('qrcodeUrl').textContent = QRCODE_URL;
+</script>
+
+</body>
+</html>
