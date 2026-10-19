@@ -477,16 +477,10 @@ function getDeliveryUrl(goodsId) {
   if (!data.baseUrl) return '';
   const g = data.goods.find(x => x.id === goodsId);
   if (!g) return '';
-  const goodsData = {
-    name: g.name,
-    link: g.link,
-    code: g.code || '',
-    desc: g.desc || ''
-  };
-  const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(goodsData))));
   let base = data.baseUrl;
   if (!base.endsWith('/')) base += '/';
-  return base + 'delivery.html?data=' + encodeURIComponent(encoded);
+  // 指向 open.html 并加 via=taobao：open.html 会先尝试唤起淘宝（若在内置 WebView 中），再回退并尝试在外部浏览器打开目标链接
+  return base + 'open.html?url=' + encodeURIComponent(g.link) + '&via=taobao';
 }
 
 function openGoodsModal() {
