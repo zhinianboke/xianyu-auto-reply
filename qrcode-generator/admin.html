@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>闲鱼跳转链接管理后台</title>
+<title>闲鱼跳转二维码生成器</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -14,7 +14,7 @@
     color: #333;
   }
   .container {
-    max-width: 900px;
+    max-width: 960px;
     margin: 0 auto;
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -119,6 +119,8 @@
     background: #fff;
     border-radius: 12px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    min-height: 288px;
+    min-width: 288px;
   }
   .qrcode-info {
     margin-top: 14px;
@@ -133,6 +135,7 @@
     color: #666;
     word-break: break-all;
     margin-top: 8px;
+    text-align: left;
   }
   .tip {
     margin-top: 16px;
@@ -144,60 +147,92 @@
     color: #8a6d00;
     line-height: 1.6;
   }
+  .section-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #333;
+    margin: 20px 0 12px;
+    padding-top: 16px;
+    border-top: 1px solid #eee;
+  }
+  .section-title:first-child {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+  }
 </style>
 </head>
 <body>
 
 <div class="container">
-  <!-- 左侧：链接管理 -->
+  <!-- 左侧：生成二维码 -->
   <div class="card">
-    <h1><span class="logo">🐟</span> 链接管理</h1>
+    <h1><span class="logo">🐟</span> 生成二维码</h1>
 
-    <label>当前目标链接</label>
+    <div class="section-title">1. 输入目标链接</div>
+    <input type="text" id="targetUrl" placeholder="请输入要跳转的目标链接，例如 https://..." value="https://xianyu.jinan.me/Xian_goods/App.php?ClickID=455&te=62">
+
+    <button class="btn-primary" onclick="generateQR()">🔳 生成二维码</button>
+
+    <div class="section-title">2. 二维码内容（可变）</div>
+    <div class="qrcode-url" id="qrcodeUrl">点击「生成二维码」后显示</div>
+
+    <div class="tip">
+      💡 <strong>二维码内容可变</strong>：每次输入不同的目标链接，生成的二维码内容也不同。<br>
+      二维码内容格式：<code>https://xianyu.jinan.me/redirect.html?url=目标链接</code><br>
+      扫码后闲鱼会加载 redirect.html，再自动跳转到你输入的目标链接。
+    </div>
+
+    <!-- 可选：保存到服务器（API 方式，二维码不带参数） -->
+    <div class="section-title">3. 可选：保存到服务器</div>
+    <div style="font-size:12px;color:#999;margin-bottom:10px;">
+      保存后，可使用不带参数的固定二维码（redirect.html），扫码从服务器获取链接。
+    </div>
+    <label>当前服务器链接</label>
     <div class="current-url" id="currentUrl">加载中...</div>
     <div class="updated-at" id="updatedAt"></div>
-
-    <label>修改目标链接</label>
-    <input type="text" id="newUrl" placeholder="请输入新的目标链接，例如 https://...">
 
     <label>管理密码</label>
     <input type="password" id="password" placeholder="请输入管理密码">
 
-    <button class="btn-primary" onclick="updateUrl()">更新链接</button>
-
+    <button class="btn-secondary" onclick="saveToServer()">💾 保存当前链接到服务器</button>
     <div class="msg" id="msg"></div>
-
-    <div class="tip">
-      💡 修改链接后，<strong>二维码内容不变</strong>，扫码后会自动跳转到新链接。
-      二维码内容固定为跳转页地址（不带参数），目标链接从服务器动态获取。
-    </div>
   </div>
 
-  <!-- 右侧：固定二维码 -->
+  <!-- 右侧：二维码预览 -->
   <div class="card qrcode-box">
-    <h1><span class="logo">🐟</span> 固定二维码</h1>
+    <h1><span class="logo">🐟</span> 二维码预览</h1>
     <div id="qrcode"></div>
     <div class="qrcode-info">
-      用闲鱼 APP 扫描此二维码<br>自动跳转系统浏览器打开
+      用闲鱼 APP 扫描此二维码<br>自动跳转系统浏览器打开目标链接
     </div>
-    <div class="qrcode-url" id="qrcodeUrl">https://xianyu.jinan.me/redirect.html</div>
-    <button class="btn-secondary" style="margin-top:14px" onclick="downloadQR()">下载二维码图片</button>
+    <button class="btn-secondary" style="margin-top:14px" onclick="downloadQR()">📥 下载二维码图片</button>
   </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script>
-  // 二维码内容：固定为跳转页地址（不带参数），目标链接从 API 动态获取
-  var QRCODE_URL = 'https://xianyu.jinan.me/redirect.html';
+  // 跳转页地址（二维码内容 = 跳转页 + ?url=目标链接）
+  var REDIRECT_URL = 'https://xianyu.jinan.me/redirect.html';
 
   // 生成带闲鱼 logo 的二维码
   function generateQR() {
+    var target = document.getElementById('targetUrl').value.trim();
+    if (!target) {
+      alert('请输入目标链接');
+      return;
+    }
+
+    // 二维码内容 = 跳转页 + ?url=目标链接（URL 编码）
+    var qrContent = REDIRECT_URL + '?url=' + encodeURIComponent(target);
+    document.getElementById('qrcodeUrl').textContent = qrContent;
+
     var qrDiv = document.getElementById('qrcode');
     qrDiv.innerHTML = '';
 
-    // 先生成基础二维码
+    // 生成高纠错级别二维码（H 级别，可遮挡 30%）
     var qr = new QRCode(qrDiv, {
-      text: QRCODE_URL,
+      text: qrContent,
       width: 256,
       height: 256,
       colorDark: '#1a1a1a',
@@ -205,7 +240,7 @@
       correctLevel: QRCode.CorrectLevel.H
     });
 
-    // 等二维码渲染后，叠加闲鱼 logo
+    // 渲染后叠加闲鱼 logo
     setTimeout(function () {
       var canvas = qrDiv.querySelector('canvas');
       if (canvas) {
@@ -218,7 +253,7 @@
   function addLogoToCanvas(canvas) {
     var ctx = canvas.getContext('2d');
     var size = canvas.width;
-    var logoSize = size * 0.22; // logo 占二维码的 22%
+    var logoSize = size * 0.22;
     var x = (size - logoSize) / 2;
     var y = (size - logoSize) / 2;
 
@@ -238,7 +273,7 @@
     ctx.closePath();
     ctx.fill();
 
-    // 黄橙色渐变背景
+    // 黄橙渐变背景
     var gradient = ctx.createLinearGradient(x, y, x + logoSize, y + logoSize);
     gradient.addColorStop(0, '#FFD83D');
     gradient.addColorStop(1, '#FF8A00');
@@ -247,7 +282,7 @@
     roundRect(ctx, x + pad, y + pad, logoSize - pad * 2, logoSize - pad * 2, logoSize * 0.18);
     ctx.fill();
 
-    // 鱼形图标（用 emoji 代替，简单清晰）
+    // 鱼形图标
     ctx.font = (logoSize * 0.5) + 'px serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -268,7 +303,7 @@
     ctx.closePath();
   }
 
-  // 获取当前目标链接
+  // 获取当前服务器链接
   function loadCurrentUrl() {
     fetch('api/target.php')
       .then(function (r) { return r.json(); })
@@ -281,9 +316,9 @@
       .catch(function () {});
   }
 
-  // 更新目标链接
-  function updateUrl() {
-    var url = document.getElementById('newUrl').value.trim();
+  // 保存当前链接到服务器
+  function saveToServer() {
+    var url = document.getElementById('targetUrl').value.trim();
     var pwd = document.getElementById('password').value;
     var msgEl = document.getElementById('msg');
 
@@ -304,12 +339,11 @@
     .then(function (r) { return r.json(); })
     .then(function (data) {
       if (data.success) {
-        showMsg('✅ 更新成功！二维码扫码后将跳转到新链接', 'success');
-        document.getElementById('newUrl').value = '';
+        showMsg('✅ 已保存到服务器！固定二维码（redirect.html）扫码后将跳转到该链接', 'success');
         document.getElementById('password').value = '';
         loadCurrentUrl();
       } else {
-        showMsg('❌ ' + (data.message || '更新失败'), 'error');
+        showMsg('❌ ' + (data.message || '保存失败'), 'error');
       }
     })
     .catch(function () {
@@ -326,17 +360,19 @@
   // 下载二维码
   function downloadQR() {
     var canvas = document.querySelector('#qrcode canvas');
-    if (!canvas) return;
+    if (!canvas) {
+      alert('请先生成二维码');
+      return;
+    }
     var link = document.createElement('a');
-    link.download = 'xianyu_qrcode_with_logo.png';
+    link.download = 'xianyu_qrcode_' + Date.now() + '.png';
     link.href = canvas.toDataURL('image/png');
     link.click();
   }
 
-  // 初始化
+  // 初始化：加载服务器链接并自动生成默认二维码
   loadCurrentUrl();
   generateQR();
-  document.getElementById('qrcodeUrl').textContent = QRCODE_URL;
 </script>
 
 </body>
