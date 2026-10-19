@@ -219,7 +219,7 @@
   // 跳转页地址（二维码内容 = 跳转页 + ?url=目标链接）
   var REDIRECT_URL = 'https://xianyu.jinan.me/redirect.html';
 
-  // 生成带闲鱼 logo 的二维码
+  // 生成二维码
   function generateQR() {
     // 1. 检查 qrcodejs 库是否已加载
     if (typeof QRCode === 'undefined') {
@@ -245,7 +245,7 @@
     if (!qrDiv) return;
     qrDiv.innerHTML = '';
 
-    // 5. 创建新的二维码实例
+    // 5. 创建新的二维码实例（无 logo，纯二维码）
     try {
       new QRCode(qrDiv, {
         text: qrContent,
@@ -259,16 +259,6 @@
       console.error('二维码生成失败：', e);
       return;
     }
-
-    // 6. 渲染后叠加闲鱼 logo（延迟确保 canvas 已生成）
-    setTimeout(function () {
-      // 重新获取容器内的 canvas（确保是最新生成的）
-      var div = document.getElementById('qrcode');
-      var canvas = div ? div.querySelector('canvas') : null;
-      if (canvas) {
-        addLogoToCanvas(canvas);
-      }
-    }, 120);
   }
 
   // 实时预览：输入框变化时自动更新二维码（防抖 300ms）
