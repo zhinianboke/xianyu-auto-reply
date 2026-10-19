@@ -19,7 +19,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 $dataFile = __DIR__ . '/../data/target.json';
-$password = 'xianyu2024'; // ⚠️ 请修改为你自己的管理密码
+$adminUser = 'admin';   // 管理账号
+$adminPass = '223366';  // 管理密码
 
 // 确保 data 目录存在
 if (!is_dir(dirname($dataFile))) {
@@ -73,9 +74,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
-    // 密码校验
-    if (empty($input['password']) || $input['password'] !== $password) {
-        echo json_encode(['success' => false, 'message' => '管理密码错误']);
+    // 账号 + 密码校验
+    if (empty($input['username']) || empty($input['password'])
+        || $input['username'] !== $adminUser || $input['password'] !== $adminPass) {
+        echo json_encode(['success' => false, 'message' => '账号或密码错误']);
         http_response_code(403);
         exit;
     }

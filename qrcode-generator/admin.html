@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="favicon.png">
 <title>闲鱼跳转二维码生成器</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -192,6 +193,9 @@
     <div class="current-url" id="currentUrl">加载中...</div>
     <div class="updated-at" id="updatedAt"></div>
 
+    <label>管理账号</label>
+    <input type="text" id="username" placeholder="请输入管理账号">
+
     <label>管理密码</label>
     <input type="password" id="password" placeholder="请输入管理密码">
 
@@ -344,11 +348,16 @@
   // 保存当前链接到服务器
   function saveToServer() {
     var url = document.getElementById('targetUrl').value.trim();
+    var user = document.getElementById('username').value.trim();
     var pwd = document.getElementById('password').value;
     var msgEl = document.getElementById('msg');
 
     if (!url) {
       showMsg('请输入目标链接', 'error');
+      return;
+    }
+    if (!user) {
+      showMsg('请输入管理账号', 'error');
       return;
     }
     if (!pwd) {
@@ -359,7 +368,7 @@
     fetch('api/target.php', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: url, password: pwd })
+      body: JSON.stringify({ url: url, username: user, password: pwd })
     })
     .then(function (r) { return r.json(); })
     .then(function (data) {
