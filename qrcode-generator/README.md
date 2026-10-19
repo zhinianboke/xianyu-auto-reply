@@ -1,34 +1,76 @@
-# 链接生成二维码工具
+# 链接生成二维码工具 · 闲鱼强制跳转浏览器版
 
-一个简单易用的在线二维码生成器，输入链接即可生成二维码图片。
+将任意链接生成二维码，并支持**闲鱼 / 微信 / QQ 扫码后强制跳转系统浏览器**打开目标链接。
 
-## 功能特性
+## 文件说明
 
-- 🔗 输入任意链接或文本生成二维码
-- 🎨 支持自定义前景色 / 背景色
-- 📐 支持自定义二维码尺寸（100-1000px）
-- 💾 一键下载二维码为 PNG 图片
-- 📋 一键复制链接
-- 📱 响应式设计，支持手机浏览器
+| 文件 | 作用 |
+|------|------|
+| `index.html` | 二维码生成器（可视化工具，支持自定义尺寸/颜色/跳转模式） |
+| `redirect.html` | 跳转处理页（检测应用内 webview，尝试唤起系统浏览器） |
+| `xianyu_qrcode_force_browser.png` | 已生成的「强制跳转浏览器」二维码 |
+| `xianyu_qrcode_direct.png` | 已生成的「直链」二维码（备用） |
 
-## 使用方法
+## 快速使用（3 步）
 
-1. 打开 `index.html`
-2. 在文本框输入链接（如 `https://example.com`）
-3. 点击「生成二维码」
-4. 点击「下载 PNG」保存二维码图片
+### 1. 部署跳转页
 
-## 关于闲鱼扫码
+将 `redirect.html` 上传到你的服务器，确保可通过 HTTPS 访问，例如：
 
-生成的二维码为普通 https 链接。用闲鱼扫描后的行为：
+```
+https://xianyu.jinan.me/redirect.html
+```
 
-1. 闲鱼会显示**安全提示页**（告知用户这是外部链接）
-2. 用户需手动点击「在浏览器中打开」
-3. 随后跳转到系统浏览器打开链接
+> 必须是 HTTPS 且公网可访问的地址，否则闲鱼扫码无法加载。
 
-这是闲鱼/淘宝的正常安全风控机制，目的是保护用户免受钓鱼链接侵害。**本工具不提供任何绕过该安全机制的功能。**
+### 2. 生成二维码
 
-## 技术栈
+打开 `index.html`，输入目标链接，确认「闲鱼强制跳转浏览器」开关已开启，跳转页地址填第 1 步的地址，点击「生成二维码」→「下载 PNG」。
 
-- 纯 HTML + CSS + JavaScript
-- [qrcode.js](https://github.com/soldair/node-qrcode) 二维码生成库
+也可直接使用已生成的 `xianyu_qrcode_force_browser.png`（已预填目标链接和 xianyu.jinan.me 跳转页）。
+
+### 3. 用闲鱼扫码
+
+用闲鱼 APP 扫描二维码 → 跳转页加载 → 自动尝试唤起系统浏览器打开目标链接。若被系统拦截，页面会显示「在浏览器中打开」按钮引导操作。
+
+## 工作原理
+
+```
+用户扫码
+  ↓
+闲鱼内置浏览器打开 redirect.html?url=目标链接
+  ↓
+redirect.html 检测 User-Agent：
+  ├─ 闲鱼/微信/QQ webview → 尝试 intent:// 等 scheme 唤起系统浏览器
+  │                          失败则显示「在浏览器中打开」引导按钮
+  └─ 普通浏览器 → 直接 window.location.replace 跳转到目标链接
+```
+
+### 强制浏览器策略
+
+- **Android**：使用 `intent://` scheme（`android.intent.action.VIEW` + `BROWSABLE` category），让系统弹出浏览器选择或直接调用默认浏览器
+- **iOS**：尝试 `window.open` 新窗口；若失败则引导用户手动点击右上角菜单「在浏览器中打开」
+- **兜底**：始终展示「在浏览器中打开」和「复制链接」按钮
+
+## 自定义目标链接
+
+修改 `index.html` 中的 `PRESET_URL` 变量，或直接在页面文本框输入。
+
+如需重新生成 PNG：
+
+```bash
+python3 -c "
+import qrcode
+from urllib.parse import quote
+target = '你的目标链接'
+redirect = 'https://你的域名/redirect.html?url=' + quote(target, safe='')
+qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_H, box_size=10, border=2)
+qr.add_data(redirect)
+qr.make(fit=True)
+qr.make_image().save('my_qrcode.png')
+"
+```
+
+## 关于闲鱼安全机制
+
+闲鱼/淘宝系 APP 对外部链接有安全风控，会拦截部分自动跳转。本工具采用「自动尝试 + 手动引导」双保险策略，最大程度提升跳转成功率，但**无法 100% 绕过所有版本的安全限制**。若自动跳转失败，用户可一键复制链接到浏览器粘贴打开。

@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>正在跳转…</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: linear-gradient(160deg, #f5f7fa 0%, #e4ebf5 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    color: #1a1a2e;
+    min-height: 100vh;
+  }
+  .card {
+    background: #fff;
+    border-radius: 18px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.10);
+    padding: 32px 28px;
+    max-width: 380px;
+    width: 100%;
+    text-align: center;
+  }
+  .icon {
+    width: 64px; height: 64px;
+    margin: 0 auto 18px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    display: flex; align-items: center; justify-content: center;
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  .icon svg { width: 30px; height: 30px; fill: #fff; }
+  @keyframes pulse {
+    0%,100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(102,126,234,0.4); }
+    50% { transform: scale(1.05); box-shadow: 0 0 0 12px rgba(102,126,234,0); }
+  }
+  h2 { font-size: 19px; margin-bottom: 10px; }
+  .desc { color: #666; font-size: 14px; line-height: 1.7; margin-bottom: 20px; word-break: break-all; }
+  .url-box {
+    background: #f5f6fa;
+    border: 1px solid #e8eaf0;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 12px;
+    color: #555;
+    word-break: break-all;
+    margin-bottom: 20px;
+    text-align: left;
+    font-family: ui-monospace, Menlo, monospace;
+  }
+  .btn {
+    display: block;
+    width: 100%;
+    padding: 15px;
+    border: none;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform .1s, box-shadow .2s;
+    margin-bottom: 10px;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn-primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
+    box-shadow: 0 6px 18px rgba(102,126,234,0.35);
+  }
+  .btn-secondary {
+    background: #f0f2f7;
+    color: #444;
+  }
+  .steps {
+    text-align: left;
+    background: #fff8e1;
+    border-left: 3px solid #ffb300;
+    padding: 12px 14px;
+    border-radius: 8px;
+    margin-bottom: 18px;
+    font-size: 13px;
+    color: #6d4c00;
+    line-height: 1.8;
+  }
+  .steps ol { padding-left: 18px; }
+  .badge {
+    display: inline-block;
+    background: #eef1ff;
+    color: #5b63ff;
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    margin-bottom: 14px;
+    font-weight: 600;
+  }
+  .hidden { display: none !important; }
+  .spinner {
+    width: 28px; height: 28px;
+    border: 3px solid #e0e0e0;
+    border-top-color: #667eea;
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+    margin: 0 auto 16px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="badge" id="envBadge">检测运行环境…</div>
+
+  <!-- Loading state -->
+  <div id="loading">
+    <div class="spinner"></div>
+    <h2>正在打开链接</h2>
+    <p class="desc">请稍候，正在尝试跳转至系统浏览器…</p>
+  </div>
+
+  <!-- Manual open state -->
+  <div id="manual" class="hidden">
+    <div class="icon">
+      <svg viewBox="0 0 24 24"><path d="M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7zm-7 4H5v12h12v-2H7V7z"/></svg>
+    </div>
+    <h2>请在浏览器中打开</h2>
+    <p class="desc" id="manualDesc">检测到当前在应用内浏览器中，请点击下方按钮在系统浏览器中打开。</p>
+    <div class="url-box" id="targetUrlBox"></div>
+    <div class="steps" id="stepsBox">
+      <ol>
+        <li>点击右上角「···」或「⋯」菜单</li>
+        <li>选择「在浏览器中打开」</li>
+      </ol>
+    </div>
+    <button class="btn btn-primary" onclick="tryOpenInBrowser()">🔗 在浏览器中打开</button>
+    <button class="btn btn-secondary" onclick="copyUrl()">📋 复制链接</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  // ====== 工具函数 ======
+  function getQuery(name) {
+    var m = window.location.search.match(new RegExp('[?&]' + name + '=([^&]*)'));
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+
+  var TARGET = getQuery('url') || 'https://xianyu.jinan.me/Xian_goods/App.php?ClickID=455&te=62';
+  document.getElementById('targetUrlBox').textContent = TARGET;
+
+  var ua = navigator.userAgent || '';
+  var isAndroid = /Android/i.test(ua);
+  var isIOS = /iPhone|iPad|iPod/i.test(ua);
+  // 闲鱼 / 淘宝系 webview 特征
+  var isXianyu = /Xianyu|IdleFish|Taobao|WindVane|AliApp/i.test(ua);
+  var isWeixin = /MicroMessenger/i.test(ua);
+  var isQQ = /QQ\//i.test(ua);
+  var inAppBrowser = isXianyu || isWeixin || isQQ;
+
+  var envBadge = document.getElementById('envBadge');
+  if (isXianyu) envBadge.textContent = '检测到：闲鱼内浏览器';
+  else if (isWeixin) envBadge.textContent = '检测到：微信内浏览器';
+  else if (isQQ) envBadge.textContent = '检测到：QQ 内浏览器';
+  else if (isAndroid) envBadge.textContent = '检测到：Android 浏览器';
+  else if (isIOS) envBadge.textContent = '检测到：iOS 浏览器';
+  else envBadge.textContent = '检测到：普通浏览器';
+
+  // ====== 强制浏览器打开策略 ======
+
+  // Android: 使用 intent:// scheme 强制系统选择浏览器
+  function buildIntentUrl(url) {
+    try {
+      var u = new URL(url);
+      var host = u.host;
+      var path = u.pathname + u.search + u.hash;
+      // 不带 package，让系统弹出浏览器选择 / 直接用默认浏览器
+      return 'intent://' + host + path + '#Intent;scheme=' + u.protocol.replace(':','') +
+             ';action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;' +
+             'S.browser_fallback_url=' + encodeURIComponent(url) + ';end';
+    } catch (e) {
+      return 'intent://' + url.replace(/^https?:\/\//, '') + '#Intent;scheme=https;action=android.intent.action.VIEW;end';
+    }
+  }
+
+  function openWithIframe(url) {
+    var iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    iframe.src = url;
+    document.body.appendChild(iframe);
+    setTimeout(function () { iframe.remove(); }, 2000);
+  }
+
+  function tryOpenInBrowser() {
+    if (isAndroid) {
+      // 方案 1：intent:// scheme
+      try {
+        window.location.href = buildIntentUrl(TARGET);
+      } catch (e) {}
+      // 方案 2：直跳 https（部分 webview 会转交给系统）
+      setTimeout(function () {
+        window.location.href = TARGET;
+      }, 800);
+    } else if (isIOS) {
+      // iOS 无法直接唤起 Safari，尝试用新窗口打开
+      try {
+        window.open(TARGET, '_blank');
+      } catch (e) {}
+      setTimeout(function () {
+        window.location.href = TARGET;
+      }, 600);
+    } else {
+      window.location.href = TARGET;
+    }
+    showManual(1500);
+  }
+
+  // ====== 展示手动引导 ======
+  var manualTimer = null;
+  function showManual(delay) {
+    if (manualTimer) return;
+    manualTimer = setTimeout(function () {
+      document.getElementById('loading').classList.add('hidden');
+      document.getElementById('manual').classList.remove('hidden');
+      // 根据环境调整提示文案
+      var desc = document.getElementById('manualDesc');
+      var steps = document.getElementById('stepsBox');
+      if (isXianyu) {
+        desc.innerHTML = '检测到当前在<strong>闲鱼</strong>内置浏览器中。请点击下方按钮，或按右上角菜单选择「在浏览器中打开」。';
+        steps.innerHTML = '<ol><li>点击右上角「⋯」更多按钮</li><li>选择「在浏览器中打开」</li><li>即可在系统浏览器查看完整内容</li></ol>';
+      } else if (isWeixin) {
+        desc.innerHTML = '检测到当前在<strong>微信</strong>内置浏览器中。请点击右上角「···」选择「在浏览器中打开」。';
+        steps.innerHTML = '<ol><li>点击右上角「···」</li><li>选择「在浏览器中打开」</li></ol>';
+      } else {
+        desc.innerHTML = '若未自动跳转，请点击下方按钮在浏览器中打开链接。';
+        steps.innerHTML = '<ol><li>点击下方按钮即可打开链接</li></ol>';
+      }
+    }, delay || 0);
+  }
+
+  // ====== 复制链接 ======
+  window.copyUrl = function () {
+    var ta = document.createElement('textarea');
+    ta.value = TARGET;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+      alert('链接已复制，快去浏览器粘贴打开吧！');
+    } catch (e) {
+      alert('复制失败，请长按链接手动复制');
+    }
+    ta.remove();
+  };
+  window.tryOpenInBrowser = tryOpenInBrowser;
+
+  // ====== 自动执行 ======
+  if (inAppBrowser) {
+    // 在应用内浏览器：尝试自动唤起系统浏览器
+    tryOpenInBrowser();
+  } else {
+    // 普通浏览器：直接跳转
+    window.location.replace(TARGET);
+  }
+})();
+</script>
+</body>
+</html>
