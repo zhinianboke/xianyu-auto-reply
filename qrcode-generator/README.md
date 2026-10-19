@@ -48,11 +48,32 @@ redirect.html 检测 User-Agent：
   └─ 普通浏览器 → 直接 window.location.replace 跳转到目标链接
 ```
 
-### 强制浏览器策略
+### 强制浏览器策略（多策略组合，最大化成功率）
 
-- **Android**：使用 `intent://` scheme（`android.intent.action.VIEW` + `BROWSABLE` category），让系统弹出浏览器选择或直接调用默认浏览器
-- **iOS**：尝试 `window.open` 新窗口；若失败则引导用户手动点击右上角菜单「在浏览器中打开」
-- **兜底**：始终展示「在浏览器中打开」和「复制链接」按钮
+页面加载后立即依次尝试以下策略（每种间隔 80ms），只要有一个命中即可唤起系统浏览器：
+
+**Android（9 种策略）：**
+1. `intent://` scheme（标准 Android 方式，`ACTION_VIEW` + `BROWSABLE`）
+2. `googlechrome://navigate?url=` 直接唤起 Chrome
+3. `microsoft-edge://?url=` 唤起 Edge
+4. `<meta http-equiv="refresh">` 刷新跳转
+5. `<iframe>` 加载 intent scheme
+6. `<a target="_system|_blank|_top">` 模拟点击（Android WebView 约定 `_system` 在系统浏览器打开）
+7. `<form target="_blank">` 表单提交
+8. `window.open()` 新窗口
+9. `location.replace()` 直跳（兜底）
+
+**iOS（6 种策略）：**
+1. `x-safari-https://` scheme 唤起 Safari
+2. `<meta refresh>` 刷新跳转
+3. `<a target="_blank">` 模拟点击
+4. `window.open()` 新窗口
+5. `<form target="_blank">` 表单提交
+6. `location.replace()` 直跳（兜底）
+
+**兜底：** 所有策略执行完后（约 1.5 秒），若页面仍在 webview 中，显示「在浏览器中打开」手动引导页。
+
+> ⚠️ **技术限制说明**：闲鱼/淘宝系 APP 的 webview 高度定制，会拦截部分外部 scheme。本工具已穷尽前端可用的所有唤起技巧，最大化成功率，但无法 100% 保证绕过所有版本的安全限制。若自动唤起失败，用户可一键复制链接或按引导手动打开。
 
 ## 自定义目标链接
 

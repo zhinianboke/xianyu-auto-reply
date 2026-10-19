@@ -286,7 +286,7 @@
 <script>
 (function () {
   // ====== 配置 ======
-  var MANUAL_DELAY = 1100;   // 尝试跳转后多久显示手动引导（毫秒）
+  var MANUAL_DELAY = 1500;   // 所有策略尝试完后多久显示手动引导（毫秒）
 
   // ====== 工具函数 ======
   function getQuery(name) {
@@ -305,7 +305,9 @@
   var isQQ = /QQ\//i.test(ua);
   var inAppBrowser = isXianyu || isWeixin || isQQ;
 
-  // ====== 强制浏览器打开策略 ======
+  // ====== 强制浏览器打开：多策略组合 ======
+
+  // Android intent:// scheme
   function buildIntentUrl(url) {
     try {
       var u = new URL(url);
@@ -319,15 +321,102 @@
     }
   }
 
+  // 模拟 <a> 点击，尝试多种 target 属性
+  function clickAnchor(url) {
+    // Android WebView 约定：_system 表示在系统浏览器打开
+    var targets = ['_system', '_blank', '_top'];
+    targets.forEach(function (t, i) {
+      setTimeout(function () {
+        var a = document.createElement('a');
+        a.href = url;
+        a.target = t;
+        a.rel = 'external noopener noreferrer';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        try { a.click(); } catch (e) {}
+        setTimeout(function () { a.remove(); }, 100);
+      }, i * 50);
+    });
+  }
+
+  // 通过 <meta http-equiv="refresh"> 触发跳转（部分 webview 会在外部浏览器处理）
+  function metaRefresh(url) {
+    var meta = document.createElement('meta');
+    meta.httpEquiv = 'refresh';
+    meta.content = '0; url=' + url;
+    document.head.appendChild(meta);
+  }
+
+  // 模拟表单提交到新窗口
+  function submitForm(url) {
+    var form = document.createElement('form');
+    form.method = 'GET';
+    form.action = url;
+    form.target = '_blank';
+    form.style.display = 'none';
+    document.body.appendChild(form);
+    try { form.submit(); } catch (e) {}
+    setTimeout(function () { form.remove(); }, 100);
+  }
+
+  // 用 iframe 加载 scheme（部分 webview 会处理 iframe 的外部 scheme）
+  function loadIframe(url) {
+    var iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.src = url;
+    document.body.appendChild(iframe);
+    setTimeout(function () { iframe.remove(); }, 1500);
+  }
+
+  // 依次执行策略列表，每种间隔极短
+  function runStrategies(strategies) {
+    strategies.forEach(function (fn, i) {
+      setTimeout(fn, i * 80);
+    });
+  }
+
   function tryOpenInBrowser() {
     if (isAndroid) {
-      try { window.location.href = buildIntentUrl(TARGET); } catch (e) {}
-      setTimeout(function () { window.location.href = TARGET; }, 450);
+      runStrategies([
+        // 1. intent:// scheme（最标准，部分 webview 会转交给系统）
+        function () { try { window.location.href = buildIntentUrl(TARGET); } catch (e) {} },
+        // 2. 直接唤起 Chrome
+        function () { try { window.location.href = 'googlechrome://navigate?url=' + encodeURIComponent(TARGET); } catch (e) {} },
+        // 3. 唤起 Edge
+        function () { try { window.location.href = 'microsoft-edge://?url=' + encodeURIComponent(TARGET); } catch (e) {} },
+        // 4. meta refresh
+        function () { metaRefresh(TARGET); },
+        // 5. iframe 加载 intent scheme
+        function () { loadIframe(buildIntentUrl(TARGET)); },
+        // 6. <a> 点击（多种 target）
+        function () { clickAnchor(TARGET); },
+        // 7. 表单提交到新窗口
+        function () { submitForm(TARGET); },
+        // 8. window.open
+        function () { try { window.open(TARGET, '_blank'); } catch (e) {} },
+        // 9. location.replace 直跳（兜底，可能仍在 webview 内）
+        function () { try { window.location.replace(TARGET); } catch (e) {} }
+      ]);
     } else if (isIOS) {
-      try { window.open(TARGET, '_blank'); } catch (e) {}
-      setTimeout(function () { window.location.href = TARGET; }, 400);
+      runStrategies([
+        // 1. 尝试 Safari scheme
+        function () { try { window.location.href = 'x-safari-' + TARGET; } catch (e) {} },
+        // 2. meta refresh
+        function () { metaRefresh(TARGET); },
+        // 3. <a> 点击（多种 target）
+        function () { clickAnchor(TARGET); },
+        // 4. window.open
+        function () { try { window.open(TARGET, '_blank'); } catch (e) {} },
+        // 5. 表单提交
+        function () { submitForm(TARGET); },
+        // 6. location.replace 直跳（兜底）
+        function () { try { window.location.replace(TARGET); } catch (e) {} }
+      ]);
     } else {
-      window.location.href = TARGET;
+      // 普通浏览器：直接跳转
+      window.location.replace(TARGET);
     }
     showManual(MANUAL_DELAY);
   }
@@ -348,8 +437,8 @@
       var desc = document.getElementById('manualDesc');
       var steps = document.getElementById('stepsBox');
       if (isXianyu) {
-        desc.innerHTML = '检测到当前在<strong>闲鱼</strong>内置浏览器中，请在系统浏览器中打开以获得完整体验。';
-        steps.innerHTML = '<ol><li>点击右上角「⋯」更多按钮</li><li>选择「在浏览器中打开」</li><li>即可在系统浏览器查看完整内容</li></ol>';
+        desc.innerHTML = '检测到当前在<strong>闲鱼</strong>内置浏览器中，请点击下方按钮或按右上角菜单选择「在浏览器中打开」。';
+        steps.innerHTML = '<ol><li>点击下方「在浏览器中打开」按钮</li><li>或点击右上角「⋯」更多按钮</li><li>选择「在浏览器中打开」</li></ol>';
       } else if (isWeixin) {
         desc.innerHTML = '检测到当前在<strong>微信</strong>内置浏览器中，请点击右上角「···」选择「在浏览器中打开」。';
         steps.innerHTML = '<ol><li>点击右上角「···」</li><li>选择「在浏览器中打开」</li></ol>';
@@ -378,12 +467,12 @@
   };
   window.tryOpenInBrowser = tryOpenInBrowser;
 
-  // ====== 主流程：展示加载页 → 尽早尝试跳转 ======
-  // 应用内浏览器：立即尝试唤起系统浏览器，加载页短暂展示后若未跳转则显示手动引导
-  // 普通浏览器：短暂展示后直接跳转
+  // ====== 主流程：展示加载页 → 立即多策略尝试跳转 ======
   if (inAppBrowser) {
+    // 应用内浏览器：立即用多策略组合唤起系统浏览器
     tryOpenInBrowser();
   } else {
+    // 普通浏览器：短暂展示后直接跳转
     setTimeout(function () {
       window.location.replace(TARGET);
     }, 320);
