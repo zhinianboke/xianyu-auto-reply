@@ -40,6 +40,8 @@ https://xianyu.jinan.me/redirect.html
   ↓
 闲鱼内置浏览器打开 redirect.html?url=目标链接
   ↓
+【闲鱼加载页】展示约 2.2 秒（仿官方启动页：鱼形 Logo + 「闲鱼」+ 加载动画）
+  ↓
 redirect.html 检测 User-Agent：
   ├─ 闲鱼/微信/QQ webview → 尝试 intent:// 等 scheme 唤起系统浏览器
   │                          失败则显示「在浏览器中打开」引导按钮
@@ -55,6 +57,15 @@ redirect.html 检测 User-Agent：
 ## 自定义目标链接
 
 修改 `index.html` 中的 `PRESET_URL` 变量，或直接在页面文本框输入。
+
+## 自定义加载等待时间
+
+在 `redirect.html` 顶部修改以下参数：
+
+```js
+var LOADING_DELAY = 2200;   // 加载页展示时长（毫秒），默认 2.2 秒
+var MANUAL_DELAY  = 1600;   // 尝试跳转后多久显示手动引导（毫秒）
+```
 
 如需重新生成 PNG：
 

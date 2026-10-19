@@ -3,134 +3,278 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>正在跳转…</title>
+<title>闲鱼</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { height: 100%; }
+  html, body { height: 100%; overflow: hidden; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
-    background: linear-gradient(160deg, #f5f7fa 0%, #e4ebf5 100%);
+    background: #ffffff;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 24px;
-    color: #1a1a2e;
+    color: #333;
     min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
   }
-  .card {
-    background: #fff;
-    border-radius: 18px;
-    box-shadow: 0 12px 40px rgba(0,0,0,0.10);
-    padding: 32px 28px;
-    max-width: 380px;
+
+  /* ============ 闲鱼加载页 ============ */
+  #xianyu-splash {
+    position: fixed;
+    inset: 0;
+    background: #ffffff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    transition: opacity .4s ease;
+  }
+  #xianyu-splash.fade-out { opacity: 0; pointer-events: none; }
+
+  /* 闲鱼 Logo 容器 */
+  .xy-logo-wrap {
+    position: relative;
+    width: 108px;
+    height: 108px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 28px;
+  }
+  /* 外圈光晕呼吸 */
+  .xy-logo-wrap::before {
+    content: "";
+    position: absolute;
+    inset: -18px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,196,0,0.18) 0%, rgba(255,196,0,0) 70%);
+    animation: halo 2.2s ease-in-out infinite;
+  }
+  @keyframes halo {
+    0%, 100% { transform: scale(0.9); opacity: 0.6; }
+    50% { transform: scale(1.15); opacity: 1; }
+  }
+
+  /* 圆角方块背景（闲鱼 App 图标风格） */
+  .xy-icon {
+    width: 100px;
+    height: 100px;
+    border-radius: 24px;
+    background: linear-gradient(145deg, #FFD83D 0%, #FFB000 55%, #FF8A00 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow:
+      0 10px 30px rgba(255, 138, 0, 0.35),
+      inset 0 2px 6px rgba(255,255,255,0.4),
+      inset 0 -4px 8px rgba(0,0,0,0.08);
+    position: relative;
+    overflow: hidden;
+    animation: float 3s ease-in-out infinite;
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-5px); }
+  }
+  /* 内部高光 */
+  .xy-icon::after {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 50%;
+    background: linear-gradient(180deg, rgba(255,255,255,0.28) 0%, rgba(255,255,255,0) 100%);
+    border-radius: 24px 24px 0 0;
+    pointer-events: none;
+  }
+
+  /* 鱼形 SVG */
+  .xy-fish { width: 64px; height: 64px; position: relative; z-index: 1; }
+
+  /* 闲鱼文字 */
+  .xy-brand {
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: 6px;
+    background: linear-gradient(135deg, #FFB000 0%, #FF8A00 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 10px;
+    padding-left: 6px;
+  }
+  .xy-slogan {
+    font-size: 13px;
+    color: #999;
+    letter-spacing: 1px;
+    margin-bottom: 44px;
+  }
+
+  /* 加载条 */
+  .xy-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  .xy-dots {
+    display: flex;
+    gap: 7px;
+  }
+  .xy-dots span {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #FFC400, #FF8A00);
+    animation: dotBounce 1.2s ease-in-out infinite;
+  }
+  .xy-dots span:nth-child(2) { animation-delay: .15s; }
+  .xy-dots span:nth-child(3) { animation-delay: .3s; }
+  @keyframes dotBounce {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+    40% { transform: scale(1); opacity: 1; }
+  }
+  .xy-loading-text {
+    font-size: 13px;
+    color: #bbb;
+    letter-spacing: 1px;
+  }
+
+  /* 进度条 */
+  .xy-progress {
+    width: 160px;
+    height: 3px;
+    background: #f0f0f0;
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 6px;
+  }
+  .xy-progress-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #FFC400, #FF8A00);
+    border-radius: 3px;
+    animation: progress 2s ease-out forwards;
+  }
+  @keyframes progress {
+    0% { width: 0%; }
+    100% { width: 100%; }
+  }
+
+  /* ============ 手动引导页 ============ */
+  #manual-page {
+    display: none;
     width: 100%;
+    max-width: 380px;
+    padding: 24px;
+    animation: fadeUp .4s ease;
+  }
+  #manual-page.show { display: block; }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .m-card {
+    background: #fff;
+    border-radius: 16px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+    padding: 28px 22px;
     text-align: center;
   }
-  .icon {
-    width: 64px; height: 64px;
-    margin: 0 auto 18px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  .m-icon {
+    width: 56px; height: 56px;
+    margin: 0 auto 16px;
+    border-radius: 16px;
+    background: linear-gradient(145deg, #FFD83D, #FF8A00);
     display: flex; align-items: center; justify-content: center;
-    animation: pulse 1.6s ease-in-out infinite;
+    box-shadow: 0 6px 18px rgba(255,138,0,0.3);
   }
-  .icon svg { width: 30px; height: 30px; fill: #fff; }
-  @keyframes pulse {
-    0%,100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(102,126,234,0.4); }
-    50% { transform: scale(1.05); box-shadow: 0 0 0 12px rgba(102,126,234,0); }
-  }
-  h2 { font-size: 19px; margin-bottom: 10px; }
-  .desc { color: #666; font-size: 14px; line-height: 1.7; margin-bottom: 20px; word-break: break-all; }
-  .url-box {
-    background: #f5f6fa;
-    border: 1px solid #e8eaf0;
-    border-radius: 10px;
-    padding: 12px 14px;
-    font-size: 12px;
-    color: #555;
+  .m-icon svg { width: 28px; height: 28px; fill: #fff; }
+  .m-title { font-size: 18px; font-weight: 700; color: #1a1a1a; margin-bottom: 8px; }
+  .m-desc { color: #888; font-size: 13px; line-height: 1.7; margin-bottom: 18px; }
+  .m-url {
+    background: #f7f7f7;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 11px;
+    color: #666;
     word-break: break-all;
-    margin-bottom: 20px;
+    margin-bottom: 16px;
     text-align: left;
     font-family: ui-monospace, Menlo, monospace;
   }
+  .m-steps {
+    text-align: left;
+    background: #fff8e1;
+    border-left: 3px solid #ffc400;
+    padding: 10px 12px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    font-size: 12px;
+    color: #8a6d00;
+    line-height: 1.8;
+  }
+  .m-steps ol { padding-left: 18px; }
   .btn {
     display: block;
     width: 100%;
-    padding: 15px;
+    padding: 14px;
     border: none;
     border-radius: 12px;
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 600;
     cursor: pointer;
-    transition: transform .1s, box-shadow .2s;
+    transition: transform .1s;
     margin-bottom: 10px;
   }
   .btn:active { transform: scale(0.97); }
   .btn-primary {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, #FFD83D 0%, #FF8A00 100%);
     color: #fff;
-    box-shadow: 0 6px 18px rgba(102,126,234,0.35);
+    box-shadow: 0 6px 16px rgba(255,138,0,0.3);
   }
   .btn-secondary {
-    background: #f0f2f7;
-    color: #444;
+    background: #f5f5f5;
+    color: #555;
   }
-  .steps {
-    text-align: left;
-    background: #fff8e1;
-    border-left: 3px solid #ffb300;
-    padding: 12px 14px;
-    border-radius: 8px;
-    margin-bottom: 18px;
-    font-size: 13px;
-    color: #6d4c00;
-    line-height: 1.8;
-  }
-  .steps ol { padding-left: 18px; }
-  .badge {
-    display: inline-block;
-    background: #eef1ff;
-    color: #5b63ff;
-    font-size: 11px;
-    padding: 3px 10px;
-    border-radius: 20px;
-    margin-bottom: 14px;
-    font-weight: 600;
-  }
-  .hidden { display: none !important; }
-  .spinner {
-    width: 28px; height: 28px;
-    border: 3px solid #e0e0e0;
-    border-top-color: #667eea;
-    border-radius: 50%;
-    animation: spin .8s linear infinite;
-    margin: 0 auto 16px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
-<div class="card">
-  <div class="badge" id="envBadge">检测运行环境…</div>
 
-  <!-- Loading state -->
-  <div id="loading">
-    <div class="spinner"></div>
-    <h2>正在打开链接</h2>
-    <p class="desc">请稍候，正在尝试跳转至系统浏览器…</p>
-  </div>
-
-  <!-- Manual open state -->
-  <div id="manual" class="hidden">
-    <div class="icon">
-      <svg viewBox="0 0 24 24"><path d="M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7zm-7 4H5v12h12v-2H7V7z"/></svg>
+<!-- 闲鱼加载页 -->
+<div id="xianyu-splash">
+  <div class="xy-logo-wrap">
+    <div class="xy-icon">
+      <!-- 闲鱼鱼形 Logo -->
+      <svg class="xy-fish" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M52 32C52 32 44 20 30 20C18 20 10 26 10 26L4 22V42L10 38C10 38 18 44 30 44C44 44 52 32 52 32Z" fill="#ffffff"/>
+        <path d="M52 32C52 32 46 24 38 22C40 26 40 30 38 34C46 32 52 32 52 32Z" fill="#ffffff" opacity="0.85"/>
+        <circle cx="22" cy="29" r="2.2" fill="#FF8A00"/>
+        <path d="M10 26L4 22V42L10 38" stroke="#ffffff" stroke-width="1.5" fill="none"/>
+      </svg>
     </div>
-    <h2>请在浏览器中打开</h2>
-    <p class="desc" id="manualDesc">检测到当前在应用内浏览器中，请点击下方按钮在系统浏览器中打开。</p>
-    <div class="url-box" id="targetUrlBox"></div>
-    <div class="steps" id="stepsBox">
+  </div>
+  <div class="xy-brand">闲鱼</div>
+  <div class="xy-slogan">让闲置游起来</div>
+  <div class="xy-loading">
+    <div class="xy-dots"><span></span><span></span><span></span></div>
+    <div class="xy-loading-text">加载中…</div>
+    <div class="xy-progress"><div class="xy-progress-bar"></div></div>
+  </div>
+</div>
+
+<!-- 手动引导页（自动跳转失败时显示） -->
+<div id="manual-page">
+  <div class="m-card">
+    <div class="m-icon">
+      <svg viewBox="0 0 24 24"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+    </div>
+    <div class="m-title">请在浏览器中打开</div>
+    <p class="m-desc" id="manualDesc">为保障您的访问安全，请使用系统浏览器打开此链接。</p>
+    <div class="m-url" id="targetUrlBox"></div>
+    <div class="m-steps" id="stepsBox">
       <ol>
-        <li>点击右上角「···」或「⋯」菜单</li>
+        <li>点击右上角「⋯」更多按钮</li>
         <li>选择「在浏览器中打开」</li>
       </ol>
     </div>
@@ -141,6 +285,10 @@
 
 <script>
 (function () {
+  // ====== 配置 ======
+  var LOADING_DELAY = 2200;   // 加载页展示时长（毫秒）
+  var MANUAL_DELAY  = 1600;   // 尝试跳转后多久显示手动引导
+
   // ====== 工具函数 ======
   function getQuery(name) {
     var m = window.location.search.match(new RegExp('[?&]' + name + '=([^&]*)'));
@@ -153,29 +301,17 @@
   var ua = navigator.userAgent || '';
   var isAndroid = /Android/i.test(ua);
   var isIOS = /iPhone|iPad|iPod/i.test(ua);
-  // 闲鱼 / 淘宝系 webview 特征
   var isXianyu = /Xianyu|IdleFish|Taobao|WindVane|AliApp/i.test(ua);
   var isWeixin = /MicroMessenger/i.test(ua);
   var isQQ = /QQ\//i.test(ua);
   var inAppBrowser = isXianyu || isWeixin || isQQ;
 
-  var envBadge = document.getElementById('envBadge');
-  if (isXianyu) envBadge.textContent = '检测到：闲鱼内浏览器';
-  else if (isWeixin) envBadge.textContent = '检测到：微信内浏览器';
-  else if (isQQ) envBadge.textContent = '检测到：QQ 内浏览器';
-  else if (isAndroid) envBadge.textContent = '检测到：Android 浏览器';
-  else if (isIOS) envBadge.textContent = '检测到：iOS 浏览器';
-  else envBadge.textContent = '检测到：普通浏览器';
-
   // ====== 强制浏览器打开策略 ======
-
-  // Android: 使用 intent:// scheme 强制系统选择浏览器
   function buildIntentUrl(url) {
     try {
       var u = new URL(url);
       var host = u.host;
       var path = u.pathname + u.search + u.hash;
-      // 不带 package，让系统弹出浏览器选择 / 直接用默认浏览器
       return 'intent://' + host + path + '#Intent;scheme=' + u.protocol.replace(':','') +
              ';action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;' +
              'S.browser_fallback_url=' + encodeURIComponent(url) + ';end';
@@ -184,53 +320,39 @@
     }
   }
 
-  function openWithIframe(url) {
-    var iframe = document.createElement('iframe');
-    iframe.style.display = 'none';
-    iframe.src = url;
-    document.body.appendChild(iframe);
-    setTimeout(function () { iframe.remove(); }, 2000);
-  }
-
   function tryOpenInBrowser() {
     if (isAndroid) {
-      // 方案 1：intent:// scheme
-      try {
-        window.location.href = buildIntentUrl(TARGET);
-      } catch (e) {}
-      // 方案 2：直跳 https（部分 webview 会转交给系统）
-      setTimeout(function () {
-        window.location.href = TARGET;
-      }, 800);
+      try { window.location.href = buildIntentUrl(TARGET); } catch (e) {}
+      setTimeout(function () { window.location.href = TARGET; }, 900);
     } else if (isIOS) {
-      // iOS 无法直接唤起 Safari，尝试用新窗口打开
-      try {
-        window.open(TARGET, '_blank');
-      } catch (e) {}
-      setTimeout(function () {
-        window.location.href = TARGET;
-      }, 600);
+      try { window.open(TARGET, '_blank'); } catch (e) {}
+      setTimeout(function () { window.location.href = TARGET; }, 700);
     } else {
       window.location.href = TARGET;
     }
-    showManual(1500);
+    showManual(MANUAL_DELAY);
   }
 
   // ====== 展示手动引导 ======
-  var manualTimer = null;
+  var manualShown = false;
   function showManual(delay) {
-    if (manualTimer) return;
-    manualTimer = setTimeout(function () {
-      document.getElementById('loading').classList.add('hidden');
-      document.getElementById('manual').classList.remove('hidden');
-      // 根据环境调整提示文案
+    if (manualShown) return;
+    manualShown = true;
+    setTimeout(function () {
+      var splash = document.getElementById('xianyu-splash');
+      splash.classList.add('fade-out');
+      setTimeout(function () { splash.style.display = 'none'; }, 400);
+
+      var mp = document.getElementById('manual-page');
+      mp.classList.add('show');
+
       var desc = document.getElementById('manualDesc');
       var steps = document.getElementById('stepsBox');
       if (isXianyu) {
-        desc.innerHTML = '检测到当前在<strong>闲鱼</strong>内置浏览器中。请点击下方按钮，或按右上角菜单选择「在浏览器中打开」。';
+        desc.innerHTML = '检测到当前在<strong>闲鱼</strong>内置浏览器中，请在系统浏览器中打开以获得完整体验。';
         steps.innerHTML = '<ol><li>点击右上角「⋯」更多按钮</li><li>选择「在浏览器中打开」</li><li>即可在系统浏览器查看完整内容</li></ol>';
       } else if (isWeixin) {
-        desc.innerHTML = '检测到当前在<strong>微信</strong>内置浏览器中。请点击右上角「···」选择「在浏览器中打开」。';
+        desc.innerHTML = '检测到当前在<strong>微信</strong>内置浏览器中，请点击右上角「···」选择「在浏览器中打开」。';
         steps.innerHTML = '<ol><li>点击右上角「···」</li><li>选择「在浏览器中打开」</li></ol>';
       } else {
         desc.innerHTML = '若未自动跳转，请点击下方按钮在浏览器中打开链接。';
@@ -257,14 +379,16 @@
   };
   window.tryOpenInBrowser = tryOpenInBrowser;
 
-  // ====== 自动执行 ======
-  if (inAppBrowser) {
-    // 在应用内浏览器：尝试自动唤起系统浏览器
-    tryOpenInBrowser();
-  } else {
-    // 普通浏览器：直接跳转
-    window.location.replace(TARGET);
-  }
+  // ====== 主流程：展示加载页 → 等待 → 尝试跳转 ======
+  setTimeout(function () {
+    if (inAppBrowser) {
+      // 应用内浏览器：尝试唤起系统浏览器
+      tryOpenInBrowser();
+    } else {
+      // 普通浏览器：直接跳转
+      window.location.replace(TARGET);
+    }
+  }, LOADING_DELAY);
 })();
 </script>
 </body>
