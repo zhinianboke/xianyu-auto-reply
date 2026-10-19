@@ -307,6 +307,34 @@
 
   // ====== 强制浏览器打开：多策略组合 ======
 
+  // 检测是否在阿里系 WindVane 容器中（闲鱼/淘宝 webview）
+  var hasWindVane = typeof window.WindVane !== 'undefined' && window.WindVane && typeof window.WindVane.call === 'function';
+
+  // WindVane 官方 API：WVBase.openBrowser（仅 iOS 有效，强制打开 Safari）
+  function wvOpenBrowser(url) {
+    if (!hasWindVane) return false;
+    try {
+      window.WindVane.call('WVBase', 'openBrowser', { url: url },
+        function (e) { /* success: Safari 已打开 */ },
+        function (e) { /* failure: 降级到其他策略 */ }
+      );
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // WindVane WVBase.canIUse：检测当前版本是否支持指定 API
+  function wvCanIUse(api, method, cb) {
+    if (!hasWindVane) { cb(false); return; }
+    try {
+      window.WindVane.call('WVBase', 'canIUse', { api: api, method: method },
+        function (e) { cb(e && e.canUse); },
+        function (e) { cb(false); }
+      );
+    } catch (e) { cb(false); }
+  }
+
   // Android intent:// scheme
   function buildIntentUrl(url) {
     try {
@@ -380,6 +408,8 @@
   function tryOpenInBrowser() {
     if (isAndroid) {
       runStrategies([
+        // 0. WindVane 官方 API（若闲鱼 Android 版本支持 openBrowser）
+        function () { wvOpenBrowser(TARGET); },
         // 1. intent:// scheme（最标准，部分 webview 会转交给系统）
         function () { try { window.location.href = buildIntentUrl(TARGET); } catch (e) {} },
         // 2. 直接唤起 Chrome
@@ -401,6 +431,8 @@
       ]);
     } else if (isIOS) {
       runStrategies([
+        // 0. WindVane 官方 API WVBase.openBrowser（iOS 闲鱼强制打开 Safari，官方支持！）
+        function () { wvOpenBrowser(TARGET); },
         // 1. 尝试 Safari scheme
         function () { try { window.location.href = 'x-safari-' + TARGET; } catch (e) {} },
         // 2. meta refresh
