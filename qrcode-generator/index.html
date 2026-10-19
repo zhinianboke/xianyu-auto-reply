@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>链接生成二维码工具</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .container {
+    background: #fff;
+    border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    padding: 40px;
+    max-width: 900px;
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 40px;
+  }
+  @media (max-width: 768px) {
+    .container { grid-template-columns: 1fr; padding: 24px; }
+  }
+  h1 {
+    font-size: 24px;
+    color: #1a1a2e;
+    margin-bottom: 8px;
+    grid-column: 1 / -1;
+  }
+  .subtitle {
+    color: #666;
+    font-size: 14px;
+    grid-column: 1 / -1;
+    margin-bottom: 20px;
+  }
+  .form-group {
+    margin-bottom: 20px;
+  }
+  label {
+    display: block;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 8px;
+    font-size: 14px;
+  }
+  input[type="text"], input[type="number"] {
+    width: 100%;
+    padding: 12px 16px;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    font-size: 14px;
+    transition: border-color 0.2s;
+    outline: none;
+  }
+  input[type="text"]:focus, input[type="number"]:focus {
+    border-color: #667eea;
+  }
+  textarea {
+    width: 100%;
+    padding: 12px 16px;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    font-size: 14px;
+    transition: border-color 0.2s;
+    outline: none;
+    resize: vertical;
+    min-height: 80px;
+    font-family: inherit;
+  }
+  textarea:focus { border-color: #667eea; }
+  .row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .color-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    align-items: center;
+  }
+  input[type="color"] {
+    width: 100%;
+    height: 44px;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    cursor: pointer;
+    padding: 4px;
+  }
+  button {
+    width: 100%;
+    padding: 14px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.1s, box-shadow 0.2s;
+  }
+  button:hover {
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+  }
+  button:active { transform: scale(0.98); }
+  button.secondary {
+    background: #f5f5f5;
+    color: #333;
+  }
+  .preview-area {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #f8f9fc;
+    border-radius: 12px;
+    padding: 30px;
+    min-height: 400px;
+  }
+  #qrcode-canvas {
+    max-width: 100%;
+    border-radius: 8px;
+    background: #fff;
+    padding: 12px;
+  }
+  .placeholder {
+    color: #aaa;
+    text-align: center;
+    font-size: 14px;
+  }
+  .placeholder svg {
+    width: 80px;
+    height: 80px;
+    opacity: 0.3;
+    margin-bottom: 16px;
+  }
+  .notice {
+    background: #fff8e1;
+    border-left: 4px solid #ffc107;
+    padding: 12px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #795548;
+    margin-top: 16px;
+    line-height: 1.6;
+  }
+  .notice strong { color: #e65100; }
+  .btn-row { display: flex; gap: 10px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🔗 链接生成二维码工具</h1>
+  <p class="subtitle">输入任意链接，生成二维码图片，支持自定义颜色与尺寸</p>
+
+  <div class="form-area">
+    <div class="form-group">
+      <label for="url">链接 / 文本内容</label>
+      <textarea id="url" placeholder="请输入 https:// 开头的链接或任意文本..."></textarea>
+    </div>
+
+    <div class="form-group">
+      <label>尺寸</label>
+      <input type="number" id="size" value="300" min="100" max="1000" step="10">
+    </div>
+
+    <div class="form-group">
+      <div class="color-row">
+        <div>
+          <label>前景色</label>
+          <input type="color" id="fgColor" value="#000000">
+        </div>
+        <div>
+          <label>背景色</label>
+          <input type="color" id="bgColor" value="#ffffff">
+        </div>
+      </div>
+    </div>
+
+    <button onclick="generateQR()">生成二维码</button>
+    <div class="btn-row" style="margin-top:10px;">
+      <button class="secondary" onclick="downloadQR()" style="margin-top:0;">下载 PNG</button>
+      <button class="secondary" onclick="copyLink()" style="margin-top:0;">复制链接</button>
+    </div>
+
+    <div class="notice">
+      <strong>⚠️ 闲鱼扫码说明：</strong><br>
+      生成的二维码为普通链接。用闲鱼扫描后，闲鱼会显示<strong>安全提示页</strong>，需用户手动点击「在浏览器中打开」才会跳转到系统浏览器。这是闲鱼的正常安全机制，无法绕过。
+    </div>
+  </div>
+
+  <div class="preview-area" id="preview">
+    <div class="placeholder" id="placeholder">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 11h8V3H3v8zm2-6h4v4H5V5zM3 21h8v-8H3v8zm2-6h4v4H5v-4zM13 3v8h8V3h-8zm6 6h-4V5h4v4zM13 13h2v2h-2zM17 13h2v2h-2zM13 17h2v2h-2zM17 17h2v2h-2zM21 13h-2v2h2zM21 17h-2v2h2zM13 21h2v-2h-2zM17 21h2v-2h-2zM21 21h-2v-2h2z"/></svg>
+      <p>输入链接后点击「生成二维码」</p>
+    </div>
+    <canvas id="qrcode-canvas" style="display:none;"></canvas>
+  </div>
+</div>
+
+<script>
+  let currentQR = null;
+
+  async function generateQR() {
+    const text = document.getElementById('url').value.trim();
+    if (!text) {
+      alert('请输入链接或文本内容');
+      return;
+    }
+    const size = parseInt(document.getElementById('size').value) || 300;
+    const fgColor = document.getElementById('fgColor').value;
+    const bgColor = document.getElementById('bgColor').value;
+
+    const canvas = document.getElementById('qrcode-canvas');
+    const placeholder = document.getElementById('placeholder');
+
+    try {
+      await QRCode.toCanvas(canvas, text, {
+        width: size,
+        margin: 2,
+        color: { dark: fgColor, light: bgColor }
+      });
+      canvas.style.display = 'block';
+      placeholder.style.display = 'none';
+      currentQR = canvas.toDataURL('image/png');
+    } catch (err) {
+      alert('生成失败：' + err.message);
+    }
+  }
+
+  function downloadQR() {
+    if (!currentQR) {
+      alert('请先生成二维码');
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = currentQR;
+    a.download = 'qrcode_' + Date.now() + '.png';
+    a.click();
+  }
+
+  function copyLink() {
+    const text = document.getElementById('url').value.trim();
+    if (!text) {
+      alert('请输入链接');
+      return;
+    }
+    navigator.clipboard.writeText(text).then(() => {
+      alert('链接已复制到剪贴板');
+    }).catch(() => {
+      alert('复制失败，请手动复制');
+    });
+  }
+
+  // 回车快捷生成
+  document.getElementById('url').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      generateQR();
+    }
+  });
+</script>
+</body>
+</html>
