@@ -153,7 +153,7 @@
     width: 0%;
     background: linear-gradient(90deg, #FFC400, #FF8A00);
     border-radius: 3px;
-    animation: progress 2s ease-out forwards;
+    animation: progress .6s ease-out forwards;
   }
   @keyframes progress {
     0% { width: 0%; }
@@ -286,8 +286,7 @@
 <script>
 (function () {
   // ====== 配置 ======
-  var LOADING_DELAY = 2200;   // 加载页展示时长（毫秒）
-  var MANUAL_DELAY  = 1600;   // 尝试跳转后多久显示手动引导
+  var MANUAL_DELAY = 1100;   // 尝试跳转后多久显示手动引导（毫秒）
 
   // ====== 工具函数 ======
   function getQuery(name) {
@@ -323,10 +322,10 @@
   function tryOpenInBrowser() {
     if (isAndroid) {
       try { window.location.href = buildIntentUrl(TARGET); } catch (e) {}
-      setTimeout(function () { window.location.href = TARGET; }, 900);
+      setTimeout(function () { window.location.href = TARGET; }, 450);
     } else if (isIOS) {
       try { window.open(TARGET, '_blank'); } catch (e) {}
-      setTimeout(function () { window.location.href = TARGET; }, 700);
+      setTimeout(function () { window.location.href = TARGET; }, 400);
     } else {
       window.location.href = TARGET;
     }
@@ -379,16 +378,16 @@
   };
   window.tryOpenInBrowser = tryOpenInBrowser;
 
-  // ====== 主流程：展示加载页 → 等待 → 尝试跳转 ======
-  setTimeout(function () {
-    if (inAppBrowser) {
-      // 应用内浏览器：尝试唤起系统浏览器
-      tryOpenInBrowser();
-    } else {
-      // 普通浏览器：直接跳转
+  // ====== 主流程：展示加载页 → 尽早尝试跳转 ======
+  // 应用内浏览器：立即尝试唤起系统浏览器，加载页短暂展示后若未跳转则显示手动引导
+  // 普通浏览器：短暂展示后直接跳转
+  if (inAppBrowser) {
+    tryOpenInBrowser();
+  } else {
+    setTimeout(function () {
       window.location.replace(TARGET);
-    }
-  }, LOADING_DELAY);
+    }, 320);
+  }
 })();
 </script>
 </body>

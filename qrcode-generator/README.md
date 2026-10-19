@@ -40,7 +40,7 @@ https://xianyu.jinan.me/redirect.html
   ↓
 闲鱼内置浏览器打开 redirect.html?url=目标链接
   ↓
-【闲鱼加载页】展示约 2.2 秒（仿官方启动页：鱼形 Logo + 「闲鱼」+ 加载动画）
+【闲鱼加载页】短暂展示（普通浏览器约 0.3s，应用内浏览器立即尝试唤起）
   ↓
 redirect.html 检测 User-Agent：
   ├─ 闲鱼/微信/QQ webview → 尝试 intent:// 等 scheme 唤起系统浏览器
@@ -63,9 +63,11 @@ redirect.html 检测 User-Agent：
 在 `redirect.html` 顶部修改以下参数：
 
 ```js
-var LOADING_DELAY = 2200;   // 加载页展示时长（毫秒），默认 2.2 秒
-var MANUAL_DELAY  = 1600;   // 尝试跳转后多久显示手动引导（毫秒）
+var MANUAL_DELAY = 1100;   // 尝试跳转后多久显示手动引导（毫秒）
 ```
+
+普通浏览器约 320ms 自动跳转；应用内浏览器立即尝试唤起系统浏览器。
+如需调整普通浏览器跳转速度，修改主流程中的 `320` 数值。
 
 如需重新生成 PNG：
 
