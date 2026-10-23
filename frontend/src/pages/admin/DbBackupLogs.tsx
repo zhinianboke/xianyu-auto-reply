@@ -10,53 +10,33 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Calendar,
-  ChevronLeft,
-  ChevronRight,
   Database,
-  Download,
   Loader2,
   RefreshCw,
+  RotateCcw,
   Trash2,
 } from 'lucide-react'
 
 import {
+  batchDeleteDbBackupLogs,
   deleteDbBackupLog,
   downloadDbBackupFile,
   getDbBackupLogs,
   type DbBackupLog,
-} from '@/api/admin'
+} from '@/api/dbBackupLogs'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { PageLoading } from '@/components/common/Loading'
+import { Pager } from '@/components/common/Pager'
+import { DbBackupLogsTable } from './DbBackupLogsTable'
 import { useAuthStore } from '@/store/authStore'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/request'
+import { getBeijingDateInputValue } from '@/utils/date'
 
-// 备份状态中文映射 + 标签颜色
-const STATUS_LABELS: Record<string, { text: string; cls: string }> = {
-  success: {
-    text: '成功',
-    cls: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
-  },
-  failed: {
-    text: '失败',
-    cls: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
-  },
-}
-
-// 将字节数格式化为易读文本
-const formatFileSize = (size: number | null): string => {
-  if (size === null || size === undefined) return '-'
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(2)} MB`
-  return `${(size / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
-
-// 将耗时（毫秒）格式化为易读文本
-const formatDuration = (ms: number | null): string => {
-  if (ms === null || ms === undefined) return '-'
-  if (ms < 1000) return `${ms} ms`
-  return `${(ms / 1000).toFixed(1)} s`
+interface DbBackupLogFilters {
+  startDate: string
+  endDate: string
+  status: string
 }
 
 // 跑马灯文本：内容超出容器宽度时横向无缝滚动（用于弹窗中展示长文件名）
@@ -92,12 +72,17 @@ export function DbBackupLogs() {
   const [logs, setLogs] = useState<DbBackupLog[]>([])
 
   // 时间筛选 - 默认当天
-  const today = new Date().toISOString().split('T')[0]
+  const today = getBeijingDateInputValue()
   const [startDate, setStartDate] = useState(today)
   const [endDate, setEndDate] = useState(today)
 
   // 状态筛选
   const [selectedStatus, setSelectedStatus] = useState('')
+  const [appliedFilters, setAppliedFilters] = useState<DbBackupLogFilters>({
+    startDate: today,
+    endDate: today,
+    status: '',
+  })
 
   // 下载中的日志ID
   const [downloadingId, setDownloadingId] = useState<number | null>(null)
@@ -108,28 +93,44 @@ export function DbBackupLogs() {
     log: null,
   })
   const [deleting, setDeleting] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  // 确认弹窗持有打开时的 ID 快照，列表刷新不会改变本次确认的删除范围。
+  const [batchDeleteIds, setBatchDeleteIds] = useState<number[] | null>(null)
+  const [batchDeleting, setBatchDeleting] = useState(false)
 
   // 分页
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [total, setTotal] = useState(0)
 
-  const loadLogs = async (nextPage: number = currentPage, nextPageSize: number = pageSize) => {
+  const loadLogs = async (
+    nextPage: number = currentPage,
+    nextPageSize: number = pageSize,
+    filters: DbBackupLogFilters = appliedFilters,
+  ) => {
     if (!_hasHydrated || !isAuthenticated || !token) return
     try {
       setLoading(true)
+      setSelectedIds(new Set())
       const result = await getDbBackupLogs({
         page: nextPage,
         pageSize: nextPageSize,
-        status: selectedStatus || undefined,
-        start_date: startDate || undefined,
-        end_date: endDate || undefined,
+        status: filters.status || undefined,
+        start_date: filters.startDate || undefined,
+        end_date: filters.endDate || undefined,
       })
       if (result.success) {
-        setLogs(result.data || [])
+        const nextLogs = result.data || []
+        const nextTotal = result.total || 0
+        const lastPage = Math.max(1, Math.ceil(nextTotal / nextPageSize))
+        if (nextLogs.length === 0 && nextTotal > 0 && nextPage > lastPage) {
+          await loadLogs(lastPage, nextPageSize, filters)
+          return
+        }
+        setLogs(nextLogs)
         setCurrentPage(nextPage)
         setPageSize(nextPageSize)
-        setTotal(result.total || 0)
+        setTotal(nextTotal)
       } else {
         setLogs([])
         setCurrentPage(nextPage)
@@ -152,7 +153,22 @@ export function DbBackupLogs() {
   }, [_hasHydrated, isAuthenticated, token])
 
   const handleSearch = () => {
-    loadLogs(1, pageSize)
+    if (startDate && endDate && startDate > endDate) {
+      addToast({ type: 'error', message: '开始日期不能晚于结束日期' })
+      return
+    }
+    const filters = { startDate, endDate, status: selectedStatus }
+    setAppliedFilters(filters)
+    loadLogs(1, pageSize, filters)
+  }
+
+  const handleReset = () => {
+    const filters = { startDate: today, endDate: today, status: '' }
+    setStartDate(today)
+    setEndDate(today)
+    setSelectedStatus('')
+    setAppliedFilters(filters)
+    loadLogs(1, pageSize, filters)
   }
 
   const handleDownload = async (log: DbBackupLog) => {
@@ -189,13 +205,15 @@ export function DbBackupLogs() {
     try {
       const result = await deleteDbBackupLog(log.id)
       if (result.success) {
-        addToast({ type: 'success', message: '备份日志已删除' })
-        setDeleteConfirm({ open: false, log: null })
-        // 当前页删完最后一条时回退到上一页
-        const nextPage = logs.length === 1 && currentPage > 1 ? currentPage - 1 : currentPage
-        loadLogs(nextPage, pageSize)
+        addToast({ type: 'success', message: result.message || '备份日志已删除' })
       } else {
         addToast({ type: 'error', message: result.message || '删除失败' })
+      }
+      const recordRemoved = result.success || result.code === 40002
+      if (recordRemoved) {
+        setDeleteConfirm({ open: false, log: null })
+        const nextPage = logs.length === 1 && currentPage > 1 ? currentPage - 1 : currentPage
+        await loadLogs(nextPage, pageSize)
       }
     } catch (error) {
       addToast({ type: 'error', message: getApiErrorMessage(error, '删除失败') })
@@ -204,10 +222,63 @@ export function DbBackupLogs() {
     }
   }
 
+  const handleBatchDelete = async () => {
+    const ids = batchDeleteIds
+    if (!ids?.length) {
+      addToast({ type: 'error', message: '请选择要删除的备份日志' })
+      return
+    }
+    setBatchDeleting(true)
+    try {
+      const result = await batchDeleteDbBackupLogs(ids)
+      if (result.success) {
+        addToast({ type: 'success', message: result.message || `成功删除 ${ids.length} 条备份日志` })
+      } else {
+        addToast({ type: 'error', message: result.message || '批量删除失败' })
+      }
+      const recordsRemoved = result.success || result.code === 40002
+      if (recordsRemoved) {
+        setBatchDeleteIds(null)
+        setSelectedIds(new Set())
+        // 全部删除成功时直接回退；部分成功时由 loadLogs 根据新的总数校正页码。
+        const nextPage = result.success && logs.length === ids.length && currentPage > 1
+          ? currentPage - 1
+          : currentPage
+        await loadLogs(nextPage, pageSize)
+      }
+    } catch (error) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '批量删除失败') })
+    } finally {
+      setBatchDeleting(false)
+    }
+  }
+
+  const toggleSelectAll = () => {
+    // 只切换当前页全选，避免误选其他页的数据。
+    if (logs.length > 0 && logs.every((log) => selectedIds.has(log.id))) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        logs.forEach((log) => next.delete(log.id))
+        return next
+      })
+      return
+    }
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      logs.forEach((log) => next.add(log.id))
+      return next
+    })
+  }
+
   // 分页计算
   const totalPages = Math.ceil(total / pageSize)
-  const startIndex = total === 0 ? 0 : (currentPage - 1) * pageSize + 1
-  const endIndex = Math.min(currentPage * pageSize, total)
+  const hasChangedFilters =
+    startDate !== today ||
+    endDate !== today ||
+    selectedStatus !== '' ||
+    appliedFilters.startDate !== today ||
+    appliedFilters.endDate !== today ||
+    appliedFilters.status !== ''
 
   const handlePageChange = (nextPage: number) => {
     if (nextPage < 1 || nextPage > totalPages) {
@@ -220,19 +291,7 @@ export function DbBackupLogs() {
     loadLogs(1, nextPageSize)
   }
 
-  const renderStatus = (status: string) => {
-    const meta = STATUS_LABELS[status] || {
-      text: status || '-',
-      cls: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300',
-    }
-    return (
-      <span className={`inline-block text-xs px-2 py-1 rounded whitespace-nowrap ${meta.cls}`}>
-        {meta.text}
-      </span>
-    )
-  }
-
-  if (loading && logs.length === 0) {
+  if (loading && logs.length === 0 && !deleteConfirm.open && !batchDeleteIds) {
     return <PageLoading />
   }
 
@@ -245,6 +304,16 @@ export function DbBackupLogs() {
           <p className="page-description">查看数据库自动备份的执行结果，支持下载备份文件</p>
         </div>
         <div className="flex gap-3 flex-wrap">
+          {selectedIds.size > 0 && (
+            <button
+              onClick={() => setBatchDeleteIds(Array.from(selectedIds))}
+              disabled={loading || batchDeleting}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Trash2 className="w-4 h-4" />
+              删除选中（{selectedIds.size}）
+            </button>
+          )}
           <button onClick={() => loadLogs()} disabled={loading} className="btn-ios-secondary">
             {loading ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -290,19 +359,35 @@ export function DbBackupLogs() {
                 <option value="failed">失败</option>
               </select>
             </div>
-            <button onClick={handleSearch} className="btn-ios-primary">
-              <Calendar className="w-4 h-4" />
-              查询
-            </button>
+            <div className="ml-auto flex items-center gap-3">
+              {hasChangedFilters && (
+                <button onClick={handleReset} disabled={loading} className="btn-ios-secondary">
+                  <RotateCcw className="w-4 h-4" />
+                  重置
+                </button>
+              )}
+              <button onClick={handleSearch} disabled={loading} className="btn-ios-primary">
+                <Calendar className="w-4 h-4" />
+                查询
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Logs List */}
       <div
-        className="vben-card flex flex-col"
+        className="vben-card relative flex flex-col overflow-hidden"
         style={{ height: 'calc(100vh - 380px)', minHeight: '400px' }}
       >
+        {loading && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center bg-white/70 backdrop-blur-sm dark:bg-slate-900/70">
+            <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+              <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
+              加载中...
+            </div>
+          </div>
+        )}
         <div className="vben-card-header flex-shrink-0">
           <h2 className="vben-card-title">
             <Database className="w-4 h-4 text-blue-500" />
@@ -310,136 +395,34 @@ export function DbBackupLogs() {
           </h2>
           <span className="badge-primary">{total} 条记录</span>
         </div>
-        <div className="flex-1 overflow-x-auto overflow-y-auto">
-          <table className="table-ios">
-            <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
-              <tr>
-                <th className="min-w-[100px] !text-center">状态</th>
-                <th className="min-w-[280px] !text-center">备份文件名</th>
-                <th className="min-w-[100px] !text-center">文件大小</th>
-                <th className="min-w-[80px] !text-center">表数量</th>
-                <th className="min-w-[100px] !text-center">数据行数</th>
-                <th className="min-w-[90px] !text-center">耗时</th>
-                <th className="min-w-[250px] !text-center">错误详情</th>
-                <th className="min-w-[155px] !text-center">备份时间</th>
-                <th className="min-w-[140px] !text-center">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {logs.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="text-center py-8 text-slate-500 dark:text-slate-400">
-                    <div className="flex flex-col items-center gap-2">
-                      <Database className="w-12 h-12 text-slate-300 dark:text-slate-600" />
-                      <p>暂无数据库备份日志</p>
-                    </div>
-                  </td>
-                </tr>
-              ) : (
-                logs.map((log) => (
-                  <tr key={log.id}>
-                    <td className="whitespace-nowrap !text-center">{renderStatus(log.status)}</td>
-                    <td className="font-medium text-blue-600 dark:text-blue-400 max-w-[300px] !text-center">
-                      <span className="block truncate" title={log.file_name || ''}>
-                        {log.file_name || '-'}
-                      </span>
-                    </td>
-                    <td className="text-slate-600 dark:text-slate-300 whitespace-nowrap !text-center">
-                      {formatFileSize(log.file_size)}
-                    </td>
-                    <td className="text-slate-600 dark:text-slate-300 !text-center">
-                      {log.table_count ?? '-'}
-                    </td>
-                    <td className="text-slate-600 dark:text-slate-300 !text-center">
-                      {log.total_rows ?? '-'}
-                    </td>
-                    <td className="text-slate-500 dark:text-slate-400 whitespace-nowrap !text-center">
-                      {formatDuration(log.duration_ms)}
-                    </td>
-                    <td className="max-w-[260px] text-slate-500 dark:text-slate-400 !text-center">
-                      <span className="block truncate cursor-help" title={log.error_message || ''}>
-                        {log.error_message || '-'}
-                      </span>
-                    </td>
-                    <td className="text-slate-500 dark:text-slate-400 text-sm whitespace-nowrap !text-center">
-                      {new Date(log.created_at).toLocaleString()}
-                    </td>
-                    <td className="whitespace-nowrap !text-center">
-                      <div className="inline-flex items-center gap-1.5">
-                        {log.downloadable ? (
-                          <button
-                            onClick={() => handleDownload(log)}
-                            disabled={downloadingId === log.id}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/20 dark:text-blue-400 dark:hover:bg-blue-900/30 disabled:opacity-50 disabled:cursor-not-allowed"
-                            title="下载备份文件"
-                          >
-                            {downloadingId === log.id ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <Download className="w-4 h-4" />
-                            )}
-                            下载
-                          </button>
-                        ) : (
-                          <span className="text-xs text-slate-400 dark:text-slate-500">不可下载</span>
-                        )}
-                        <button
-                          onClick={() => setDeleteConfirm({ open: true, log })}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30"
-                          title="删除备份日志"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                          删除
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+        <DbBackupLogsTable
+          logs={logs}
+          selectedIds={selectedIds}
+          downloadingId={downloadingId}
+          onToggleAll={toggleSelectAll}
+          onToggleOne={(logId) =>
+            setSelectedIds((prev) => {
+              const next = new Set(prev)
+              if (next.has(logId)) next.delete(logId)
+              else next.add(logId)
+              return next
+            })
+          }
+          onDownload={handleDownload}
+          onDelete={(log) => setDeleteConfirm({ open: true, log })}
+        />
 
         {/* 分页 */}
         {total > 0 && (
-          <div className="flex-shrink-0 vben-card-footer flex flex-col sm:flex-row items-center justify-between gap-4 px-4 py-3 border-t border-slate-200 dark:border-slate-700">
-            <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-              <span>每页</span>
-              <select
-                value={pageSize}
-                onChange={(e) => handlePageSizeChange(Number(e.target.value))}
-                className="px-2 py-1 border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300"
-              >
-                <option value={10}>10</option>
-                <option value={20}>20</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </select>
-              <span>条</span>
-              <span className="ml-2">
-                显示 {startIndex}-{endIndex} 条，共 {total} 条
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => handlePageChange(currentPage - 1)}
-                disabled={currentPage === 1}
-                className="p-2 rounded border border-slate-300 dark:border-slate-600 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-100 dark:hover:bg-slate-700"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <span className="px-3 py-1 text-sm text-slate-600 dark:text-slate-400">
-                第 {currentPage} / {totalPages || 1} 页
-              </span>
-              <button
-                onClick={() => handlePageChange(currentPage + 1)}
-                disabled={currentPage >= totalPages}
-                className="p-2 rounded border border-slate-300 dark:border-slate-600 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-100 dark:hover:bg-slate-700"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
+          <Pager
+            page={currentPage}
+            pageSize={pageSize}
+            total={total}
+            totalPages={totalPages}
+            loading={loading}
+            onPageChange={handlePageChange}
+            onPageSizeChange={handlePageSizeChange}
+          />
         )}
       </div>
 
@@ -462,6 +445,18 @@ export function DbBackupLogs() {
         }
         onConfirm={handleDelete}
         onCancel={() => setDeleteConfirm({ open: false, log: null })}
+      />
+
+      {/* 批量删除确认弹窗 */}
+      <ConfirmModal
+        isOpen={batchDeleteIds !== null}
+        type="danger"
+        title="批量删除备份日志"
+        confirmText="批量删除"
+        loading={batchDeleting}
+        message={`确认删除选中的 ${batchDeleteIds?.length ?? 0} 条备份日志及其关联文件吗？此操作不可恢复。`}
+        onConfirm={handleBatchDelete}
+        onCancel={() => { if (!batchDeleting) setBatchDeleteIds(null) }}
       />
     </div>
   )

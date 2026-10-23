@@ -14,6 +14,7 @@ from typing import Dict, Any, Optional, Callable
 from loguru import logger
 
 from .utils import safe_str
+from common.utils.xianyu_official_accounts import is_xianyu_official_robot_user
 from common.utils.xianyu_utils import decrypt
 from common.utils.xianyu_message_parser import decode_first_content, interpret_content
 
@@ -88,6 +89,25 @@ class MessageHandler:
     def set_card_update_message_handler(self, handler: Callable):
         """设置卡片更新消息处理回调（用于付款状态变更等）"""
         self._on_card_update_message = handler
+
+    def _should_skip_official_robot_message(self, parsed: dict[str, Any]) -> bool:
+        """检查并记录需要禁止进入业务回调的闲鱼官方机器人消息。
+
+        Args:
+            parsed: 解析后的消息数据。
+
+        Returns:
+            需要拦截时返回True，否则返回False。
+        """
+        send_user_id = parsed.get("send_user_id", "")
+        if not is_xianyu_official_robot_user(send_user_id):
+            return False
+
+        logger.info(
+            f"【{self.cookie_id}】已拦截闲鱼官方机器人消息: "
+            f"send_user_id={send_user_id}, chat_id={parsed.get('chat_id', '')}"
+        )
+        return True
     
     def is_card_update_message(self, message: dict) -> bool:
         """判断是否为卡片更新消息
@@ -623,7 +643,7 @@ class MessageHandler:
                 # 过滤不需要打印的消息类型（如商品定价失败通知）
                 biz_type = parsed_data.get('bizType', '') if isinstance(parsed_data, dict) else ''
                 if biz_type not in ('IDLE_SPACE_PRICING',) and not self.is_system_tip_message(parsed_data):
-                    logger.warning(f"【{self.cookie_id}】解密消息: {json.dumps(parsed_data, ensure_ascii=False)[:1000]}")
+                    logger.warning(f"【{self.cookie_id}】解密消息: {json.dumps(parsed_data, ensure_ascii=False)}")
                 return parsed_data
             except Exception:
                 # base64解码失败，尝试使用decrypt解密
@@ -631,7 +651,7 @@ class MessageHandler:
                 # 过滤不需要打印的消息类型
                 biz_type = decrypted.get('bizType', '') if isinstance(decrypted, dict) else ''
                 if biz_type not in ('IDLE_SPACE_PRICING',) and not self.is_system_tip_message(decrypted):
-                    logger.info(f"【{self.cookie_id}】解密消息: {json.dumps(decrypted, ensure_ascii=False)[:1000]}")
+                    logger.info(f"【{self.cookie_id}】解密消息: {json.dumps(decrypted, ensure_ascii=False)}")
                 return decrypted
         except Exception as e:
             logger.debug(f"【{self.cookie_id}】消息解密失败: {safe_str(e)}")
@@ -661,6 +681,11 @@ class MessageHandler:
                 if parsed:
                     # 打印解密后的消息（参照旧框架）
                     self._log_chat_message(parsed)
+
+                    # 官方机器人消息仅保留接收日志，不进入任何业务回调，避免触发
+                    # 关键词、AI、默认回复以及卡片、评价、订单等自动发送流程。
+                    if self._should_skip_official_robot_message(parsed):
+                        return True
                     
                     send_message = parsed.get("send_message", "")
                     
@@ -683,6 +708,8 @@ class MessageHandler:
                 parsed = self.parse_card_update_message(message)
                 if parsed:
                     logger.info(f"【{self.cookie_id}】检测到卡片更新消息: {parsed.get('send_message', '')}")
+                    if self._should_skip_official_robot_message(parsed):
+                        return True
                     if self._on_card_update_message:
                         await self._on_card_update_message(parsed, websocket)
                     else:
@@ -696,6 +723,8 @@ class MessageHandler:
                     # 解析基本信息用于卡片消息处理
                     parsed = self.parse_chat_message(message)
                     if parsed:
+                        if self._should_skip_official_robot_message(parsed):
+                            return True
                         parsed["card_title"] = card_title
                         logger.info(f"【{self.cookie_id}】检测到系统卡片消息: {card_title}")
                         await self._on_card_message(parsed, websocket)

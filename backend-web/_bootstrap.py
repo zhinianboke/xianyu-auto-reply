@@ -28,8 +28,10 @@ from loguru import logger
 from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
+from app.services.db_backup_log_service import DbBackupLogService
 from common.db.error_messages import get_public_database_error_message
 from common.db.redis_client import close_redis_client, initialize_redis_client
+from common.db.session import async_session_maker
 from common.utils.logging_utils import setup_logging
 from common.utils.network_utils import resolve_listen_host
 
@@ -92,6 +94,13 @@ async def lifespan(app: FastAPI):
         await init_database()
     except Exception as e:
         logger.error(f"数据库初始化失败: {e}")
+
+    # 删除备份日志时会暂存文件，启动时检查进程退出前是否留下未完成的暂存文件。
+    try:
+        async with async_session_maker() as session:
+            await DbBackupLogService(session).recover_staged_files()
+    except Exception:
+        logger.exception("恢复数据库备份删除中断时遗留的暂存文件失败")
     
     # 自检 JWT 密钥：弱/默认值时自动生成强随机密钥并持久化（源码启动兜底）
     try:

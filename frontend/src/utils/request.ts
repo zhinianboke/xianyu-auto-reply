@@ -33,6 +33,20 @@ const isUnauthorizedBusinessResponse = (data: unknown): boolean => {
   return response.success === false && response.code === 401
 }
 
+/** 读取 Blob 下载响应中的 JSON 业务错误，供鉴权刷新逻辑识别。 */
+const getBusinessResponseData = async (response: AxiosResponse): Promise<unknown> => {
+  const contentType = String(response.headers['content-type'] || '')
+  if (
+    typeof Blob !== 'undefined' &&
+    response.data instanceof Blob &&
+    contentType.includes('application/json')
+  ) {
+    const text = await response.data.text()
+    return text ? JSON.parse(text) : undefined
+  }
+  return response.data
+}
+
 /** 从统一响应中提取面向用户的认证失败提示。 */
 const createAuthenticationError = (data?: unknown): Error => {
   if (data && typeof data === 'object') {
@@ -148,8 +162,9 @@ request.interceptors.request.use(
 request.interceptors.response.use(
   async (response: AxiosResponse) => {
     // 后端按项目规范将鉴权异常也包装为 HTTP 200，因此需同时检查响应体 code。
-    if (isUnauthorizedBusinessResponse(response.data)) {
-      return retryAfterTokenRefresh(response.config as RetriableRequestConfig, response.data)
+    const businessData = await getBusinessResponseData(response)
+    if (isUnauthorizedBusinessResponse(businessData)) {
+      return retryAfterTokenRefresh(response.config as RetriableRequestConfig, businessData)
     }
     return response
   },

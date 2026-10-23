@@ -23,6 +23,7 @@ from common.models import User, XYAccount
 from common.schemas.common import ApiResponse
 from common.utils.auth_scope import is_admin_user
 from common.utils.image_uploader import ImageUploader
+from common.utils.xianyu_official_accounts import ensure_xianyu_message_recipient
 
 router = APIRouter(prefix="/chat-new")
 
@@ -74,6 +75,13 @@ async def send_image(
     client = manager.clients.get(account_id)
     if not client or not client.is_connected:
         return ApiResponse(success=False, message="账号未连接，请先连接")
+
+    # 在读取文件和上传 CDN 前拒绝官方机器人，避免无效上传。
+    try:
+        ensure_xianyu_message_recipient(toUserId)
+    except ValueError as exc:
+        logger.warning(f"【{account_id}】发送图片消息被拒绝 to_user_id={toUserId}: {exc}")
+        return ApiResponse(success=False, code=40001, message=str(exc))
 
     # 3. 校验图片类型
     if not image.content_type or not image.content_type.startswith(_ALLOWED_CONTENT_PREFIX):

@@ -23,6 +23,10 @@ from common.utils.xianyu_utils import (
 )
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.text_utils import safe_str
+from common.utils.xianyu_official_accounts import (
+    is_xianyu_official_robot_user,
+    message_targets_official_robot,
+)
 from app.services.xianyu.connection_manager import ConnectionManager, ConnectionState
 from app.services.xianyu.connection_errors import (
     is_network_connection_error, is_token_or_session_failure,
@@ -1991,6 +1995,19 @@ class XianyuAsync:
         同时注册 mid 等待队列，返回结果中携带 mid，供上层在写入日志后
         异步等待服务端响应、回写发送状态（识别 CSI_FORBID 安全拦截等失败）。
         """
+        if is_xianyu_official_robot_user(send_user_id):
+            error_message = "禁止向闲鱼官方机器人发送消息"
+            logger.warning(
+                f"【{self.cookie_id}】{error_message}: "
+                f"send_user_id={send_user_id}, chat_id={chat_id}"
+            )
+            return {
+                "success": False,
+                "mode": "text",
+                "content": content,
+                "error_message": error_message,
+            }
+
         try:
             import base64
             from common.utils.xianyu_utils import generate_mid, generate_uuid
@@ -2079,6 +2096,15 @@ class XianyuAsync:
                 "success": False,
                 "mode": "external_contact",
                 "error_message": "远程位置接口未返回有效消息报文",
+            }
+
+        if message_targets_official_robot(message):
+            error_message = "禁止向闲鱼官方机器人发送消息"
+            logger.warning(f"【{self.cookie_id}】{error_message}: mode=external_contact")
+            return {
+                "success": False,
+                "mode": "external_contact",
+                "error_message": error_message,
             }
 
         headers = message.get("headers")
@@ -2620,6 +2646,19 @@ class XianyuAsync:
                 - 具体值: 更新指定商品的默认回复图片
             image_index: 多图片索引（可选，用于更新卡券多图片列表中指定索引的URL）
         """
+        if is_xianyu_official_robot_user(send_user_id):
+            error_message = "禁止向闲鱼官方机器人发送消息"
+            logger.warning(
+                f"【{self.cookie_id}】{error_message}: "
+                f"send_user_id={send_user_id}, chat_id={chat_id}, mode=image"
+            )
+            return {
+                "success": False,
+                "mode": "image",
+                "image_url": image_url,
+                "error_message": error_message,
+            }
+
         try:
             import base64
             import os
