@@ -179,11 +179,14 @@ class PolishTaskService:
                     # 判断是否成功（包括"一天只能擦亮一次"的情况）
                     is_success = result.get("success")
                     error_msg = result.get("message", "")
+                    # 幂等成功（今日已擦亮过）时保留原始返回写入日志，避免掩盖真实调用结果
+                    idempotent_msg = error_msg if result.get("already_polished") else None
                     
                     # 如果返回"一天只能擦亮一次"，也视为成功
                     if not is_success and ("一天只能擦亮一次" in error_msg or "POLISH_DUPLICATE" in error_msg):
                         is_success = True
-                        logger.info(f"【{self.task_name}】账号 {account.account_id} 商品 {item.item_id} 今天已擦亮过，视为成功")
+                        idempotent_msg = error_msg
+                        logger.info(f"【{self.task_name}】账号 {account.account_id} 商品 {item.item_id} 今天已擦亮过，视为成功: {error_msg}")
                     
                     if is_success:
                         # 擦亮成功，更新商品状态
@@ -199,7 +202,7 @@ class PolishTaskService:
                             account_id=account.account_id,
                             item_id=item.item_id,
                             success=True,
-                            error_message=None
+                            error_message=idempotent_msg
                         )
                     else:
                         failed_count += 1
@@ -374,7 +377,7 @@ class PolishTaskService:
             # 发送请求
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    'https://h5api.m.goofish.com/h5/mtop.taobao.idle.item.polish/1.0/',
+                    'https://h5api.m.goofish.com/h5/mtop.taobao.idle.item.polish/2.0/',
                     params=params,
                     data={'data': data_val},
                     headers=headers,
@@ -396,9 +399,9 @@ class PolishTaskService:
                     else:
                         error_msg = result.get('ret', ['未知错误'])[0] if result.get('ret') else '未知错误'
                         
-                        # 如果返回"宝贝已经擦亮过了"，也视为成功
+                        # 如果返回"宝贝已经擦亮过了"，视为幂等成功，保留原始返回便于排查
                         if '宝贝已经擦亮过了' in error_msg or 'IDLEITEM_POLISH_AGAIN' in error_msg:
-                            return {"success": True, "message": "商品已经擦亮过了", "cookie_str": new_cookie_str}
+                            return {"success": True, "message": f"商品已经擦亮过了: {error_msg}", "cookie_str": new_cookie_str, "already_polished": True}
                         
                         # 令牌过期时，用更新后的cookie重试
                         ret_list = result.get('ret', [])
