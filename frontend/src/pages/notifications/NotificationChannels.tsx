@@ -106,12 +106,13 @@ const channelTypes = [
 
 type ChannelType = typeof channelTypes[number]['type']
 
-type NotificationTemplateType = 'chat' | 'delivery' | 'account'
+type NotificationTemplateType = 'chat' | 'delivery' | 'account' | 'listing'
 
 const templateConfigKeys: Record<NotificationTemplateType, string> = {
   chat: 'chat_template',
   delivery: 'delivery_template',
   account: 'account_template',
+  listing: 'listing_template',
 }
 
 const templateVariables: Record<NotificationTemplateType, Array<{ name: string; label: string }>> = {
@@ -153,6 +154,17 @@ const templateVariables: Record<NotificationTemplateType, Array<{ name: string; 
     { name: 'verification_info', label: '验证信息' },
     { name: 'time', label: '通知时间' },
   ],
+  listing: [
+    { name: 'keyword', label: '监控关键字' },
+    { name: 'monitor_type', label: '监控类型' },
+    { name: 'monitor_type_label', label: '监控类型中文' },
+    { name: 'task_id', label: '任务 ID' },
+    { name: 'account_id', label: '采集账号' },
+    { name: 'inserted_count', label: '新增数量' },
+    { name: 'fetched_count', label: '获取数量' },
+    { name: 'items_summary', label: '新增商品摘要' },
+    { name: 'time', label: '通知时间' },
+  ],
 }
 
 const defaultTemplates: Record<NotificationTemplateType, string> = {
@@ -181,12 +193,25 @@ const defaultTemplates: Record<NotificationTemplateType, string> = {
 详情: {{detail}}
 
 请检查账号状态。`,
+  listing: `🆕 商品监控采集通知
+
+监控关键字: {{keyword}}
+监控类型: {{monitor_type_label}}
+任务ID: {{task_id}}
+采集账号: {{account_id}}
+本次获取: {{fetched_count}}
+本次新增: {{inserted_count}}
+时间: {{time}}
+
+新增商品:
+{{items_summary}}`,
 }
 
 const templateDefinitions: Array<{ type: NotificationTemplateType; label: string }> = [
   { type: 'chat', label: '聊天消息模板' },
   { type: 'delivery', label: '自动发货模板' },
   { type: 'account', label: '账号状态模板' },
+  { type: 'listing', label: '商品监控采集模板' },
 ]
 
 const getTemplateValidationError = (template: string, templateType: NotificationTemplateType): string | null => {

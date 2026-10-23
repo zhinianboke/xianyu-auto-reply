@@ -171,12 +171,13 @@ def parse_search_item(result_entry: dict) -> Optional[Dict[str, Any]]:
     if not item_id:
         return None
 
-    title = ex_content.get("title") or (ex_content.get("detailParams") or {}).get("title")
+    detail_params = ex_content.get("detailParams") or {}
+    title = ex_content.get("title") or detail_params.get("title")
     # 价格：优先取 clickParam.args 里的纯数字价格，其次 detailParams.soldPrice，
     # 最后兜底解析 exContent.price 富文本数组（[{text:'¥'},{text:'8500'}]）
     price = click_args.get("price") or click_args.get("displayPrice")
     if not price:
-        price = (ex_content.get("detailParams") or {}).get("soldPrice")
+        price = detail_params.get("soldPrice")
     if not price:
         raw_price = ex_content.get("price")
         if isinstance(raw_price, list):
@@ -189,7 +190,7 @@ def parse_search_item(result_entry: dict) -> Optional[Dict[str, Any]]:
             price = str(raw_price)
     area = ex_content.get("area")
     pic_url = ex_content.get("picUrl")
-    seller_nick = ex_content.get("userNickName") or (ex_content.get("detailParams") or {}).get("userNick")
+    seller_nick = ex_content.get("userNickName") or detail_params.get("userNick")
     seller_id = click_args.get("seller_id")
     seller_avatar = ex_content.get("userAvatarUrl")
     publish_time = click_args.get("publishTime")
@@ -220,9 +221,41 @@ def parse_search_item(result_entry: dict) -> Optional[Dict[str, Any]]:
     # 标签兜底：部分商品想要数也可能在 fishTags 文本中，这里仅以 serviceUtParams 为准
     tags_text = ",".join(tags) if tags else None
 
+    # 搜索列表通常无完整详情正文：尽量从 desc/副标题/标签/fishTags 拼「内容」供关键词匹配
+    content_parts: List[str] = []
+    for key in ("desc", "description", "subTitle", "subtitle", "itemDesc", "summary"):
+        val = ex_content.get(key) or detail_params.get(key)
+        if val is not None and str(val).strip():
+            content_parts.append(str(val).strip())
+    fish_tags = ex_content.get("fishTags") or detail_params.get("fishTags")
+    if isinstance(fish_tags, dict):
+        for group in fish_tags.values():
+            if not isinstance(group, list):
+                continue
+            for tag in group:
+                if not isinstance(tag, dict):
+                    continue
+                tag_text = tag.get("content") or tag.get("tagName") or tag.get("text")
+                if tag_text and str(tag_text).strip():
+                    content_parts.append(str(tag_text).strip())
+    elif isinstance(fish_tags, str) and fish_tags.strip():
+        content_parts.append(fish_tags.strip())
+    if tags_text:
+        content_parts.append(tags_text)
+    # 去重保序
+    seen_content = set()
+    content_uniq: List[str] = []
+    for part in content_parts:
+        if part in seen_content:
+            continue
+        seen_content.add(part)
+        content_uniq.append(part)
+    content_text = "\n".join(content_uniq) if content_uniq else None
+
     return {
         "item_id": item_id,
         "title": str(title) if title is not None else None,
+        "content": content_text,
         "price": str(price) if price is not None else None,
         "area": str(area) if area is not None else None,
         "pic_url": str(pic_url) if pic_url is not None else None,

@@ -36,7 +36,11 @@ class ListingMonitorCreateRequest(BaseModel):
 
     monitor_type: str = Field(..., description="监控类型：listing-上新监控，price_drop-降价监控")
     category_id: int = Field(..., description="所属分类ID（必填）")
-    keyword: str = Field(..., min_length=1, max_length=200, description="商品监控关键字")
+    keyword: str = Field(..., min_length=1, max_length=200, description="商品监控关键字（多词可用空格/逗号分隔）")
+    keyword_match_mode: str = Field(
+        "off",
+        description="多关键词匹配：off-不本地过滤，any-标题或内容含任一词，all-标题或内容含全部词",
+    )
     price_min: Optional[float] = Field(None, ge=0, description="商品价格区间最低值")
     price_max: Optional[float] = Field(None, ge=0, description="商品价格区间最高值")
     publish_days: Optional[int] = Field(None, ge=1, le=365, description="上新天数筛选（publishDays，单位天，留空=不限）")
@@ -49,6 +53,7 @@ class ListingMonitorCreateRequest(BaseModel):
     dm_batch_size: int = Field(5, ge=1, le=100, description="每次定时私信任务最多处理条数")
     order_batch_size: int = Field(5, ge=1, le=100, description="每次定时下单任务最多处理条数")
     direct_order: bool = Field(False, description="采集后是否直接下单（开启则新采集商品立即用下单账号下单后再入库）")
+    notify_on_collect: bool = Field(False, description="采集到新增商品后是否推送通知渠道")
     is_enabled: bool = Field(True, description="是否启用")
     remark: Optional[str] = Field(None, max_length=500, description="备注")
 
@@ -59,6 +64,10 @@ class ListingMonitorUpdateRequest(BaseModel):
     monitor_type: Optional[str] = Field(None, description="监控类型：listing-上新监控，price_drop-降价监控")
     category_id: Optional[int] = Field(None, description="所属分类ID")
     keyword: Optional[str] = Field(None, min_length=1, max_length=200)
+    keyword_match_mode: Optional[str] = Field(
+        None,
+        description="多关键词匹配：off-不本地过滤，any-标题或内容含任一词，all-标题或内容含全部词",
+    )
     price_min: Optional[float] = Field(None, ge=0)
     price_max: Optional[float] = Field(None, ge=0)
     publish_days: Optional[int] = Field(None, ge=1, le=365, description="上新天数筛选（publishDays，单位天，留空=不限）")
@@ -71,6 +80,7 @@ class ListingMonitorUpdateRequest(BaseModel):
     dm_batch_size: Optional[int] = Field(None, ge=1, le=100, description="每次定时私信任务最多处理条数")
     order_batch_size: Optional[int] = Field(None, ge=1, le=100, description="每次定时下单任务最多处理条数")
     direct_order: Optional[bool] = Field(None, description="采集后是否直接下单")
+    notify_on_collect: Optional[bool] = Field(None, description="采集到新增商品后是否推送通知渠道")
     is_enabled: Optional[bool] = Field(None)
     remark: Optional[str] = Field(None, max_length=500)
 
