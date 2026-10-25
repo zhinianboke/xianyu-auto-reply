@@ -1,7 +1,8 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import type { Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+import { frontendHealthPlugin, publicStatusProxy } from './config/public_status'
 
 /**
  * 拦截非法 URI 编码和危险文件路径请求的插件
@@ -58,38 +59,47 @@ function rejectUnsafeDevServerPaths(): Plugin {
 }
 
 // https://vitejs.dev/config/
-export default defineConfig({
-  plugins: [rejectUnsafeDevServerPaths(), react()],
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
-  },
-  server: {
-    port: 9000,
-    host: '0.0.0.0', // 允许外部访问
-    allowedHosts: [
-      'localhost',
-      '127.0.0.1',
-      'xy.zhinianboke.com',
-      'xy-back.zhinianboke.com'
-    ],
-    proxy: {
-      // 所有 API 请求统一代理到后端（含WebSocket升级）
-      '/api': {
-        target: 'http://localhost:8089',
-        changeOrigin: true,
-        ws: true,
-      },
-      // 静态文件代理到后端（包含上传的图片）
-      '/static': {
-        target: 'http://localhost:8089',
-        changeOrigin: true,
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+  const backendTarget = env.VITE_BACKEND_SERVICE_URL || env.BACKEND_WEB_SERVICE_URL || 'http://127.0.0.1:8089'
+  return {
+    plugins: [rejectUnsafeDevServerPaths(), frontendHealthPlugin(), react()],
+    resolve: {
+      alias: {
+        '@': path.resolve(__dirname, './src'),
       },
     },
-  },
-  build: {
-    outDir: 'dist',
-    assetsDir: 'assets',
-  },
+    server: {
+      port: 9000,
+      host: '0.0.0.0', // 允许外部访问
+      allowedHosts: [
+        'localhost',
+        '127.0.0.1',
+        'xy.zhinianboke.com',
+        'xy-back.zhinianboke.com'
+      ],
+      proxy: {
+        '/api/v1/public/': publicStatusProxy(backendTarget),
+        // 所有 API 请求统一代理到后端（含WebSocket升级）
+        '/api': {
+          target: backendTarget,
+          changeOrigin: true,
+          ws: true,
+        },
+        // 静态文件代理到后端（包含上传的图片）
+        '/static': {
+          target: backendTarget,
+          changeOrigin: true,
+        },
+      },
+    },
+    preview: {
+      port: 9000,
+      proxy: { '/api/v1/public/': publicStatusProxy(backendTarget) },
+    },
+    build: {
+      outDir: 'dist',
+      assetsDir: 'assets',
+    },
+  }
 })

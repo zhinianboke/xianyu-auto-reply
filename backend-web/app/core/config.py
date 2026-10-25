@@ -15,6 +15,12 @@ from typing import List
 from pydantic import Field, computed_field
 
 from common.core.config import BaseConfig
+from common.utils.service_restart import detect_runtime
+
+
+def _default_frontend_service_url() -> str:
+    """自动选择 Docker 服务名或本机前端地址，允许环境变量覆盖。"""
+    return "http://frontend:80" if detect_runtime() == "docker" else "http://127.0.0.1:9000"
 
 
 class BackendWebConfig(BaseConfig):
@@ -46,6 +52,9 @@ class BackendWebConfig(BaseConfig):
     cors_origins_raw: str = Field(default="*", alias="CORS_ORIGINS")
     
     # 服务间通信URL
+    frontend_service_url: str = Field(
+        default_factory=_default_frontend_service_url, alias="FRONTEND_SERVICE_URL",
+    )
     websocket_service_url: str = Field(
         default="http://127.0.0.1:8090",
         alias="WEBSOCKET_SERVICE_URL"

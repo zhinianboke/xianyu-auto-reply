@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { RotateCcw, Server, MessageSquare, Timer } from 'lucide-react'
-import { ButtonLoading } from '@/components/common/Loading'
+import { ButtonLoading, Loading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/apiError'
@@ -37,8 +37,8 @@ const CONFIRM_MESSAGE: Record<ServiceKey, string> = {
 
 export function ServiceRestartCard() {
   const { addToast } = useUIStore()
-  // 三服务在线状态：key -> online
-  const [statusMap, setStatusMap] = useState<Record<string, boolean>>({})
+  // 保留服务返回的状态说明，区分 HTTP 在线与账号后台启动进度。
+  const [statusMap, setStatusMap] = useState<Record<string, ServiceStatusItem>>({})
   const [statusLoading, setStatusLoading] = useState(false)
   // 正在重启的服务 key（用于按钮 loading）
   const [restartingKey, setRestartingKey] = useState<ServiceKey | null>(null)
@@ -46,28 +46,37 @@ export function ServiceRestartCard() {
   const [confirmKey, setConfirmKey] = useState<ServiceKey | null>(null)
 
   // 拉取三服务在线状态
-  const loadStatus = useCallback(async () => {
+  const loadStatus = useCallback(() => {
     setStatusLoading(true)
-    try {
-      const res = await getServicesStatus()
+    return getServicesStatus().then((res) => {
       if (res.success && res.data) {
-        const map: Record<string, boolean> = {}
+        const map: Record<string, ServiceStatusItem> = {}
         res.data.services.forEach((s: ServiceStatusItem) => {
-          map[s.key] = s.online
+          map[s.key] = s
         })
         setStatusMap(map)
+      } else {
+        setStatusMap({})
+        addToast({ type: 'error', message: res.message || '服务状态查询失败' })
       }
-    } catch {
-      // 状态查询失败不打扰用户，仅置为未知（不显示在线）
+    }).catch((error) => {
       setStatusMap({})
-    } finally {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '服务状态查询失败') })
+    }).finally(() => {
       setStatusLoading(false)
-    }
-  }, [])
+    })
+  }, [addToast])
 
   useEffect(() => {
     loadStatus()
   }, [loadStatus])
+
+  const initializing = Object.values(statusMap).some((service) => service.initializing)
+  useEffect(() => {
+    if (!initializing || statusLoading) return
+    const timer = setTimeout(loadStatus, 5000)
+    return () => clearTimeout(timer)
+  }, [initializing, statusLoading, loadStatus])
 
   // 后端服务重启后：轮询健康检查直到恢复
   const waitBackendRecover = useCallback(async () => {
@@ -137,13 +146,19 @@ export function ServiceRestartCard() {
           刷新状态
         </button>
       </div>
-      <div className="vben-card-body">
+      <div className="vben-card-body relative" aria-busy={statusLoading}>
+        {statusLoading && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-b-xl bg-white/80 dark:bg-slate-800/80">
+            <Loading size="sm" text="正在查询服务状态…" />
+          </div>
+        )}
         <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
           重启服务会先停止对应进程再重新启动，请在必要时操作。重启期间对应功能会短暂不可用。
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {SERVICE_CARDS.map(({ key, label, icon: Icon }) => {
-            const online = statusMap[key]
+            const service = statusMap[key]
+            const online = service?.online
             const isRestarting = restartingKey === key
             return (
               <div
@@ -165,9 +180,14 @@ export function ServiceRestartCard() {
                     <span
                       className={`w-1.5 h-1.5 rounded-full ${online ? 'bg-green-500' : 'bg-slate-400'}`}
                     />
-                    {online ? '在线' : '离线'}
+                    {online === undefined ? '未知' : online ? '在线' : '离线'}
                   </span>
                 </div>
+                {service?.message && (
+                  <p className="text-xs text-slate-600 dark:text-slate-300 break-words">
+                    {service.message}
+                  </p>
+                )}
                 <button
                   onClick={() => setConfirmKey(key)}
                   disabled={isRestarting}

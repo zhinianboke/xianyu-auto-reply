@@ -67,6 +67,7 @@ from . import (
     external_orders,
     external_publish,
     proxy,
+    public_status,
     refund_cancel,
     agree_deliver,
     agree_pickup,
@@ -92,6 +93,7 @@ api_router = APIRouter()
 
 # 健康检查（放在最前面）
 api_router.include_router(health.router, tags=["健康检查"])  # 已定义prefix="/health"
+api_router.include_router(public_status.router, tags=["公开状态"])
 
 # 注册所有路由
 # 注意：路由文件中已定义prefix的，这里不再重复添加prefix

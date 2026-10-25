@@ -12,27 +12,22 @@ import functools
 import http.server
 import os
 import secrets
-import signal
 import subprocess
 import sys
 import threading
 import time
 import urllib.request
+import urllib.error
 from pathlib import Path
 
+from launcher.frontend_handler import FrontendHandler
+from launcher.browser_setup import ensure_playwright_browser_path
 from launcher.process_utils import kill_process_tree, kill_by_port, check_port
-from launcher.frozen_detect import is_frozen, get_project_root
+from launcher.frozen_detect import is_frozen
 from typing import Optional
 
 
-# 前端代理目标配置
-# 注意：/static/uploads/ 代理到后端（上传文件），其余/static/由前端静态服务器直接提供
-_PROXY_RULES = {
-    "/api/": "http://127.0.0.1:8089",
-    "/static/uploads/": "http://127.0.0.1:8089",
-}
-
-# 本地启动器生成 .env 时统一写入的 Redis 连接池参数
+# 本地启动器生成 .env 时统一写入的 Redis 连接池参数。
 _REDIS_POOL_ENV = (
     "REDIS_POOL_SIZE=800\n"
     "REDIS_SOCKET_TIMEOUT=5\n"
@@ -62,102 +57,6 @@ _DB_POOL_SERVICE_ENV = {
     "websocket": "DB_MAX_OVERFLOW=150\n",
     "scheduler": "DB_MAX_OVERFLOW=30\n",
 }
-
-
-class FrontendHandler(http.server.SimpleHTTPRequestHandler):
-    """
-    前端静态文件服务器请求处理器
-    
-    功能：
-    1. 托管前端dist目录的静态文件
-    2. 对/api/和/static/请求代理到后端服务
-    3. 对SPA路由返回index.html（Vue/React路由兼容）
-    """
-    
-    def __init__(self, *args, dist_dir: str = "", **kwargs):
-        """初始化，设置dist目录"""
-        self._dist_dir = dist_dir
-        super().__init__(*args, directory=dist_dir, **kwargs)
-    
-    def do_GET(self):
-        """处理GET请求，支持代理和SPA路由回退"""
-        # 检查是否需要代理
-        for prefix, target in _PROXY_RULES.items():
-            if self.path.startswith(prefix):
-                self._proxy_request(target)
-                return
-        
-        # 检查静态文件是否存在，不存在则回退到index.html（SPA路由）
-        file_path = Path(self._dist_dir) / self.path.lstrip("/").split("?")[0]
-        if not file_path.exists() and not file_path.suffix:
-            self.path = "/index.html"
-        
-        super().do_GET()
-    
-    def do_POST(self):
-        """处理POST请求，代理到后端"""
-        for prefix, target in _PROXY_RULES.items():
-            if self.path.startswith(prefix):
-                self._proxy_request(target)
-                return
-        self.send_error(404)
-    
-    def do_PUT(self):
-        """处理PUT请求，代理到后端"""
-        for prefix, target in _PROXY_RULES.items():
-            if self.path.startswith(prefix):
-                self._proxy_request(target)
-                return
-        self.send_error(404)
-    
-    def do_DELETE(self):
-        """处理DELETE请求，代理到后端"""
-        for prefix, target in _PROXY_RULES.items():
-            if self.path.startswith(prefix):
-                self._proxy_request(target)
-                return
-        self.send_error(404)
-    
-    def _proxy_request(self, target_base: str):
-        """
-        将请求代理到后端服务
-        
-        Args:
-            target_base: 后端服务基地址，如 http://127.0.0.1:8089
-        """
-        try:
-            target_url = f"{target_base}{self.path}"
-            
-            # 读取请求体
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length) if content_length > 0 else None
-            
-            # 构建代理请求
-            req = urllib.request.Request(target_url, data=body, method=self.command)
-            
-            # 复制请求头（排除Host）
-            for header, value in self.headers.items():
-                if header.lower() not in ("host", "content-length"):
-                    req.add_header(header, value)
-            
-            # 发送请求
-            with urllib.request.urlopen(req, timeout=90) as resp:
-                self.send_response(resp.status)
-                for header, value in resp.getheaders():
-                    if header.lower() not in ("transfer-encoding",):
-                        self.send_header(header, value)
-                self.end_headers()
-                self.wfile.write(resp.read())
-        except Exception as e:
-            self.send_response(502)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            error_msg = f'{{"success":false,"code":502,"message":"代理请求失败: {str(e)}","data":null}}'
-            self.wfile.write(error_msg.encode("utf-8"))
-    
-    def log_message(self, format, *args):
-        """抑制日志输出，避免控制台刷屏"""
-        pass
 
 
 class ServiceManager:
@@ -347,7 +246,6 @@ class ServiceManager:
             env["PYTHONPATH"] = str(self.project_root)
             # 确保使用UTF-8编码
             env["PYTHONIOENCODING"] = "utf-8"
-            from launcher.browser_setup import ensure_playwright_browser_path
             browser_dir = ensure_playwright_browser_path()
             if browser_dir:
                 env["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_dir)
@@ -444,7 +342,7 @@ class ServiceManager:
             """在子线程中运行静态文件服务器"""
             try:
                 handler = functools.partial(FrontendHandler, dist_dir=dist_dir_str)
-                self._frontend_server = http.server.HTTPServer(
+                self._frontend_server = http.server.ThreadingHTTPServer(
                     ("0.0.0.0", port), handler
                 )
                 self._frontend_server.serve_forever()
@@ -467,8 +365,6 @@ class ServiceManager:
         Returns:
             各服务启动状态字典
         """
-        import urllib.request
-        import urllib.error
         
         # 先生成.env配置文件
         self.generate_env_files(config)

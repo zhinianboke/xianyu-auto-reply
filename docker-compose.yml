@@ -106,6 +106,7 @@ services:
       - CORS_ORIGINS=*
       - WEBSOCKET_SERVICE_URL=http://websocket:8090
       - SCHEDULER_SERVICE_URL=http://scheduler:8091
+      - FRONTEND_SERVICE_URL=${FRONTEND_SERVICE_URL:-http://frontend:80}
       - STATIC_DIR=/app/static
       - BACKUP_DIR=/app/backups
       - BACKEND_WEB_PUBLIC_URL=${BACKEND_WEB_PUBLIC_URL:-}

@@ -9,15 +9,18 @@ import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update
 
-from common.models import XYAccount
+from common.db.session import async_session_maker
+from common.models import User, XYAccount
+from common.utils.time_utils import get_beijing_now_naive
 
+from .cookie_manager_lifecycle import CookieManagerLifecycle
 from .utils import safe_str
+from .xianyu_async import XianyuAsync
 
 
-class CookieManager:
+class CookieManager(CookieManagerLifecycle):
     """Cookie任务管理器
     
     负责：
@@ -64,6 +67,11 @@ class CookieManager:
         
         # 管理器锁
         self._lock = asyncio.Lock()
+
+        # 后台启动调度进度（已处理数量不代表实际 WebSocket 连接成功数量）。
+        self.startup_total = 0
+        self.startup_processed = 0
+        self._loading_account_changes: Optional[set[str]] = None
         
         logger.info("CookieManager初始化完成")
     
@@ -97,39 +105,10 @@ class CookieManager:
             self._task_locks[cookie_id] = asyncio.Lock()
         return self._task_locks[cookie_id]
 
-    async def load_from_db(self, db_session: AsyncSession):
-        """从数据库加载所有账号Cookie和状态
-        
-        Args:
-            db_session: 数据库会话
-        """
-        try:
-            logger.info("从数据库加载Cookie配置...")
-            
-            # 加载所有账号
-            result = await db_session.execute(select(XYAccount))
-            accounts = result.scalars().all()
-            
-            for account in accounts:
-                cookie_id = account.account_id
-                if cookie_id in self.cookies:
-                    logger.warning(f"检测到重复账号ID: {cookie_id}，将使用最新加载的记录覆盖内存状态")
-                self.cookies[cookie_id] = account.cookie or ""
-                self.cookie_status[cookie_id] = account.status == "active"
-                self.user_ids[cookie_id] = account.owner_id
-                
-                # 加载自动确认设置
-                self.auto_confirm_settings[cookie_id] = account.auto_confirm if hasattr(account, 'auto_confirm') else True
-
-                # 保留空结构兼容现有账号管理接口，关键词由自动回复服务按需查询
-                self.keywords.setdefault(cookie_id, [])
-            
-            logger.info(
-                f"从数据库加载了 {len(self.cookies)} 个Cookie、"
-                f"{len(self.cookie_status)} 个状态记录"
-            )
-        except Exception as e:
-            logger.error(f"从数据库加载数据失败: {safe_str(e)}")
+    def _mark_account_change(self, cookie_id: str):
+        """记录配置加载期间的账号操作，避免数据库快照覆盖最新内存状态。"""
+        if self._loading_account_changes is not None:
+            self._loading_account_changes.add(cookie_id)
 
     async def _check_user_expired_and_disable(
         self, cookie_id: str, user_id: Optional[int]
@@ -151,11 +130,6 @@ class CookieManager:
         # 无所属用户（历史数据）则不做到期限制，按原逻辑连接
         if user_id is None:
             return False
-
-        from common.db.session import async_session_maker
-        from common.models import User, XYAccount
-        from common.utils.time_utils import get_beijing_now_naive
-        from sqlalchemy import select, update
 
         try:
             async with async_session_maker() as session:
@@ -211,9 +185,6 @@ class CookieManager:
             if await self._check_user_expired_and_disable(cookie_id, user_id):
                 return
 
-            logger.info(f"【{cookie_id}】正在导入XianyuAsync...")
-            from .xianyu_async import XianyuAsync
-            
             logger.info(f"【{cookie_id}】正在创建XianyuAsync实例...")
             xianyu = XianyuAsync(
                 cookies_str=cookie_value,
@@ -243,15 +214,23 @@ class CookieManager:
         cookie_id: str,
         cookie_value: str,
         user_id: Optional[int] = None,
+        *,
+        restart_existing: bool = True,
     ):
-        """异步添加Cookie并启动任务"""
+        """添加账号任务；restart_existing=False 时跳过已运行或已禁用账号。"""
         lock = await self._get_task_lock(cookie_id)
         
         async with lock:
+            if restart_existing:
+                self._mark_account_change(cookie_id)
+            if not restart_existing and not self.cookie_status.get(cookie_id, False):
+                return
             # 检查是否已存在任务
             if cookie_id in self.tasks:
                 existing_task = self.tasks[cookie_id]
                 if not existing_task.done():
+                    if not restart_existing:
+                        return
                     logger.warning(f"【{cookie_id}】任务已存在且正在运行，先停止旧任务...")
                     existing_task.cancel()
                     try:
@@ -282,6 +261,7 @@ class CookieManager:
 
     async def _remove_cookie_async(self, cookie_id: str):
         """异步移除Cookie"""
+        self._mark_account_change(cookie_id)
         lock = await self._get_task_lock(cookie_id)
         
         async with lock:
@@ -334,7 +314,7 @@ class CookieManager:
                 except asyncio.CancelledError:
                     pass
                 except Exception as e:
-                    logger.debug(f"等待任务清理时出错: {cookie_id}, {safe_str(e)}")
+                    logger.exception(f"等待任务清理时出错: {cookie_id}, {safe_str(e)}")
                 logger.info(f"已取消Cookie任务: {cookie_id}")
             
             self.tasks.pop(cookie_id, None)
@@ -372,6 +352,7 @@ class CookieManager:
         user_id: Optional[int] = None,
     ):
         """线程安全新增Cookie并启动任务"""
+        self._mark_account_change(cookie_id)
         if kw_list is not None:
             self.keywords[cookie_id] = kw_list
         else:
@@ -384,6 +365,7 @@ class CookieManager:
 
     def remove_cookie(self, cookie_id: str):
         """线程安全移除Cookie"""
+        self._mark_account_change(cookie_id)
         return self._run_in_loop(self._remove_cookie_async(cookie_id))
 
     def update_cookie(self, cookie_id: str, cookie_value: str, user_id: Optional[int] = None):
@@ -394,6 +376,7 @@ class CookieManager:
             cookie_value: 新的Cookie值
             user_id: 用户ID（可选）
         """
+        self._mark_account_change(cookie_id)
         # 更新内存中的Cookie值
         self.cookies[cookie_id] = cookie_value
         
@@ -408,6 +391,7 @@ class CookieManager:
         """更新Cookie的启用/禁用状态"""
         if cookie_id not in self.cookies:
             raise ValueError(f"Cookie ID {cookie_id} 不存在")
+        self._mark_account_change(cookie_id)
         
         old_status = self.cookie_status.get(cookie_id, True)
         self.cookie_status[cookie_id] = enabled
@@ -478,56 +462,6 @@ class CookieManager:
             "by_state": by_state,               # 各连接状态明细
             "connected_account_ids": connected_ids,
         }
-
-    async def start_all_tasks(self):
-        """启动所有启用的账号任务"""
-        for cookie_id, enabled in self.cookie_status.items():
-            if enabled and cookie_id in self.cookies:
-                cookie_value = self.cookies[cookie_id]
-                user_id = self.user_ids.get(cookie_id)
-                await self._add_cookie_async(cookie_id, cookie_value, user_id)
-                await asyncio.sleep(0.05)
-
-    async def stop_all_tasks(self):
-        """停止所有任务"""
-        for cookie_id in list(self.tasks.keys()):
-            await self._stop_task_async(cookie_id)
-    
-    async def start(self):
-        """启动CookieManager,从数据库加载并启动所有启用的账号"""
-        try:
-            logger.info("CookieManager启动中...")
-            
-            # 捕获当前事件循环，用于后续的跨线程调用
-            if self.loop is None:
-                self.loop = asyncio.get_running_loop()
-                logger.info(f"CookieManager已捕获事件循环: {self.loop}")
-            
-            # 从数据库加载账号配置
-            from common.db.session import async_session_maker
-            async with async_session_maker() as db_session:
-                await self.load_from_db(db_session)
-            
-            # 启动所有启用的账号任务
-            await self.start_all_tasks()
-            
-            logger.info(f"CookieManager启动完成,已启动 {len(self.tasks)} 个账号任务")
-        except Exception as e:
-            logger.error(f"CookieManager启动失败: {safe_str(e)}")
-            raise
-    
-    async def stop(self):
-        """停止CookieManager,停止所有账号任务"""
-        try:
-            logger.info("CookieManager停止中...")
-            
-            # 停止所有任务
-            await self.stop_all_tasks()
-            
-            logger.info("CookieManager已停止")
-        except Exception as e:
-            logger.error(f"CookieManager停止失败: {safe_str(e)}")
-            raise
 
 
 # 全局管理器实例

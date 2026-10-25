@@ -13,6 +13,8 @@ export interface ServiceStatusItem {
   label: string
   port: number
   online: boolean
+  message?: string
+  initializing?: boolean
 }
 
 // 服务状态查询响应数据
