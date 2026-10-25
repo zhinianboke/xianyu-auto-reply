@@ -14,6 +14,7 @@ dependencies = [
     "pydantic-settings>=2.1.0",
     "email-validator>=2.1.0",
     "aiohttp>=3.9.0",
+    "aiohttp-socks>=0.8.0",
     "python-multipart>=0.0.6",
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
