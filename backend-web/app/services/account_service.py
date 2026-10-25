@@ -11,13 +11,18 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.services.account_limit_service import AccountLimitService
 from common.models.xy_account import XYAccount
+from common.models.xy_catalog_item import XYCatalogItem
+from common.models.xy_keyword_rule import XYKeywordRule
+from common.models.default_reply import DefaultReply, DefaultReplyRecord
+from common.models.card_item_relation import CardItemRelation
 from common.models.user import User
 from common.utils.cookie_refresh import clear_cookie_refresh_snapshot
+from loguru import logger
 
 # UTC时区常量
 UTC = timezone.utc
@@ -440,8 +445,53 @@ class AccountService:
         await self.session.commit()
 
     async def delete_account(self, account: XYAccount) -> None:
+        """删除账号及其关联数据（商品、关键词规则、默认回复等）。
+
+        在同一事务内依次清理子表，再删除账号本身；任一失败整体回滚。
+        """
+        account_pk = account.id
+        account_id_str = account.account_id
+
+        # 1. 收集该账号下所有商品的 item_id，用于清理卡券-商品关联
+        item_result = await self.session.execute(
+            select(XYCatalogItem.item_id).where(XYCatalogItem.account_pk == account_pk)
+        )
+        item_ids = [row[0] for row in item_result.all()]
+
+        # 2. 删除卡券-商品关联（按收集到的 item_id）
+        if item_ids:
+            await self.session.execute(
+                delete(CardItemRelation).where(CardItemRelation.item_id.in_(item_ids))
+            )
+
+        # 3. 删除商品目录
+        await self.session.execute(
+            delete(XYCatalogItem).where(XYCatalogItem.account_pk == account_pk)
+        )
+
+        # 4. 删除关键词规则
+        await self.session.execute(
+            delete(XYKeywordRule).where(XYKeywordRule.account_pk == account_pk)
+        )
+
+        # 5. 删除默认回复配置
+        await self.session.execute(
+            delete(DefaultReply).where(DefaultReply.account_id == account_id_str)
+        )
+
+        # 6. 删除默认回复记录
+        await self.session.execute(
+            delete(DefaultReplyRecord).where(DefaultReplyRecord.account_id == account_id_str)
+        )
+
+        # 7. 最后删除账号本身
         await self.session.delete(account)
+
         await self.session.commit()
+        logger.info(
+            f"Account deleted: pk={account_pk}, account_id={account_id_str}, "
+            f"cleaned {len(item_ids)} catalog items"
+        )
 
     async def get_account_by_unb(self, owner_id: int, unb: str) -> XYAccount | None:
         stmt = select(XYAccount).where(
