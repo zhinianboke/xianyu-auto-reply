@@ -408,6 +408,8 @@ npm run dev
 
 接口返回前端、后端、消息服务、定时任务服务的存活状态。三个后端服务与系统设置共用同一套健康检查；前端独立检查 `/frontend-health`，不依赖后端。`online_accounts` 沿用仪表盘口径，统计真实建立 WebSocket 连接的闲鱼账号数，查询时直接读取消息服务，未使用仪表盘的 10 秒缓存。
 
+`total_users` 为系统总用户数，`total_accounts` 为全局闲鱼账号总数，与管理员仪表盘的「总用户数」「总账号数」共用统计 SQL，包含已停用用户及未在线账号。公开接口直接查询数据库，不使用管理员仪表盘的 3 秒缓存；两个总数在同一条 SQL 中读取，不返回用户或账号明细。
+
 ```json
 {
   "success": true,
@@ -423,12 +425,18 @@ npm run dev
     "online_accounts": 0,
     "online_accounts_available": true,
     "online_accounts_message": "查询成功",
+    "total_users": 0,
+    "total_accounts": 0,
+    "totals_available": true,
+    "totals_message": "查询成功",
     "checked_at": "2026-10-25T20:00:00+08:00"
   }
 }
 ```
 
 以上 JSON 仅说明响应格式，运行时全部返回实际探测结果；无法获取在线数量时返回 `online_accounts: null`、`online_accounts_available: false` 和中文原因，不用 0 冒充查询结果。接口只公开汇总数量，不返回账号 ID、服务内部地址或内部令牌。单个服务探测最多等待 5 秒，多个探测并行执行，响应禁止缓存。
+
+数据库总数查询失败或超时时返回 `total_users: null`、`total_accounts: null`、`totals_available: false`、`totals_message: "用户和账号总数暂不可用，请稍后重试"`，仍返回实际服务状态和可获取的在线数量。数据库查询含一次连接失败重试，总等待最多 5 秒，并与服务探测并行执行。部分数量不可用时，顶层仍为 `success: true`、`code: 200`，`message` 明确指出「在线账号数量」「用户和账号总数」中不可用的部分，调用方需同时检查对应的可用标志。
 
 限流使用全局 Redis 健康连接池和原子滑动窗口：同一客户端 IP 在任意连续 30 秒内最多访问 15 次，各后端进程共享额度。IP 通过公共方法读取 `X-Forwarded-For` 首个地址，写入 Redis 前哈希；前端代理覆盖客户端传入的 IP 头。前端前面另有反向代理时，应在 Nginx 为该受信任代理配置 `set_real_ip_from`、`real_ip_header` 和 `real_ip_recursive`，确保 `$remote_addr` 是客户端真实 IP。
 

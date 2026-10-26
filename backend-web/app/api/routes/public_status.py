@@ -63,7 +63,7 @@ async def _check_access(request: Request, response: Response) -> ApiResponse | N
 @router.get("/status/", include_in_schema=False)
 @router.get("/status")
 async def public_status(request: Request, response: Response) -> ApiResponse:
-    """校验 IP 和限流额度后公开查询四个服务与在线账号数，返回统一响应。"""
+    """校验 IP 和限流额度后查询四服务、在线账号数及全局总数。"""
     rejected = await _check_access(request, response)
     if rejected is not None:
         return rejected
@@ -74,9 +74,14 @@ async def public_status(request: Request, response: Response) -> ApiResponse:
         log.exception("[公开状态] 状态查询失败")
         return ApiResponse(success=False, code=50302, message="服务状态查询暂不可用，请稍后重试", data=None)
     log.info("[公开状态] 查询完成：data={}", data)
+    unavailable = []
+    if not data["online_accounts_available"]:
+        unavailable.append("在线账号数量")
+    if not data["totals_available"]:
+        unavailable.append("用户和账号总数")
     return ApiResponse(
         success=True, code=200,
-        message="查询成功" if data["online_accounts_available"] else "状态查询完成，在线账号数量暂不可用",
+        message="查询成功" if not unavailable else f"状态查询完成，{'、'.join(unavailable)}暂不可用",
         data=data,
     )
 
