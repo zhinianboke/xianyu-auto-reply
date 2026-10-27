@@ -356,7 +356,7 @@ class RedFlowerTask:
                 "appKey": "34839810",
                 "t": t,
                 "sign": sign,
-                "v": "4.0",
+                "v": "1.0",
                 "type": "originaljson",
                 "accountSite": "xianyu",
                 "dataType": "json",
