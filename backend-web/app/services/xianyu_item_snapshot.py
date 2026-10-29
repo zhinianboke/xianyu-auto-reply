@@ -254,21 +254,23 @@ def snapshot_video_items(snapshot: dict[str, Any] | None) -> list[dict[str, Any]
 
 
 def snapshot_video_index(snapshot: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
-    """按 mediaCloudFileId 建立平台视频索引，供编辑时复用未改动的视频。
+    """按 mediaCloudFileId/videoId 建立索引，供编辑时复用未改动的视频。
 
-    编辑弹窗回填平台视频时携带 file_id（= mediaCloudFileId）。提交时后端重新拉取快照，
+    编辑弹窗用 mediaCloudFileId 或 videoId 回填 file_id。提交时后端重新拉取快照，
     凭 file_id 命中此索引即可原样回传平台视频，既不丢视频也不对已在平台的视频重复上传。
 
     Args:
         snapshot: editdetail 原始详情，发布场景为 None。
     Returns:
-        dict: {mediaCloudFileId: 规范化后的视频条目}，无快照时为空字典。
+        dict: {视频标识: 规范化后的视频条目}，无快照时为空字典。
     """
     index: dict[str, dict[str, Any]] = {}
     for entry in snapshot_video_items(snapshot):
-        file_id = _text(entry.get("mediaCloudFileId"))
-        if file_id:
-            index[file_id] = entry
+        # editdetail 可能把上传时的 mediaCloudFileId 换成 videoId。
+        for field in ("mediaCloudFileId", "videoId"):
+            file_id = _text(entry.get(field))
+            if file_id:
+                index[file_id] = entry
     return index
 
 

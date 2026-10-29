@@ -256,7 +256,13 @@ async def _put_part(url: str, content: bytes, part_number: int) -> str:
     last_error = ""
     for attempt in range(1, MAX_PART_RETRIES + 1):
         try:
-            async with aiohttp.ClientSession(timeout=VIDEO_TIMEOUT, cookie_jar=aiohttp.DummyCookieJar()) as session:
+            # 分片地址的签名未包含 Content-Type；aiohttp 自动添加的
+            # application/octet-stream 会使 OSS 签名校验失败。
+            async with aiohttp.ClientSession(
+                timeout=VIDEO_TIMEOUT,
+                cookie_jar=aiohttp.DummyCookieJar(),
+                skip_auto_headers={"Content-Type"},
+            ) as session:
                 async with session.put(url, data=content, headers=headers) as response:
                     response_text = await response.text()
                     logger.info(
