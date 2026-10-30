@@ -31,6 +31,13 @@ class ListingMonitorTask(TimestampMixin, Base):
     category_id: Mapped[int | None] = mapped_column(BigInteger, comment="所属分类ID（NULL=未分类）")
     monitor_type: Mapped[str] = mapped_column(String(20), nullable=False, default="listing", server_default="listing", comment="监控类型：listing-上新监控，price_drop-降价监控")
     keyword: Mapped[str] = mapped_column(String(200), nullable=False, comment="商品监控关键字")
+    keyword_match_mode: Mapped[str] = mapped_column(
+        String(10),
+        nullable=False,
+        default="off",
+        server_default="off",
+        comment="多关键词匹配：off-不本地过滤，any-标题或内容含任一词，all-标题或内容含全部词",
+    )
     price_min: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), comment="商品价格区间最低值")
     price_max: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), comment="商品价格区间最高值")
     publish_days: Mapped[int | None] = mapped_column(Integer, comment="上新天数筛选（searchFilter 的 publishDays，单位天，NULL/0=不限）")
@@ -43,6 +50,7 @@ class ListingMonitorTask(TimestampMixin, Base):
     dm_batch_size: Mapped[int] = mapped_column(Integer, nullable=False, default=5, server_default="5", comment="每次定时私信任务最多处理条数")
     order_batch_size: Mapped[int] = mapped_column(Integer, nullable=False, default=5, server_default="5", comment="每次定时下单任务最多处理条数")
     direct_order: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0", comment="采集后是否直接下单（开启则新采集商品立即用下单账号下单，下单后再入库，避免与定时下单并发）")
+    notify_on_collect: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0", comment="采集到新增商品后是否推送通知渠道")
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1", comment="是否启用监控任务")
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0", comment="是否已删除（软删除）")
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="最近一次执行时间")

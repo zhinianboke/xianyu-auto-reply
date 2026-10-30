@@ -26,6 +26,13 @@ from common.models.listing_monitor_task import ListingMonitorTask
 from common.models.xy_account import XYAccount
 from common.services.account_cooldown import DEFAULT_COOLDOWN_SECONDS, account_cooldown_manager
 from common.services.listing_monitor_dedup import has_owner_ordered_item
+from common.services.listing_monitor_keyword import (
+    KEYWORD_MATCH_OFF,
+    item_matches_keywords,
+    normalize_keyword_match_mode,
+    resolve_search_keyword,
+)
+from common.services.listing_monitor_notify import notify_listing_monitor_collect
 from common.services.collect_account_loader import merge_task_and_fallback_account_ids
 from common.services.monitor_remote_risk_client import solve_remote_risk
 from common.services.monitor_remote_risk_config import (
@@ -405,6 +412,8 @@ class ListingMonitorTaskService:
         remote_risk_failed = 0
         # 是否有账号因达到远程调用上限而未调用远程（用于日志说明）
         remote_risk_limited = False
+        match_mode = normalize_keyword_match_mode(getattr(task, "keyword_match_mode", None))
+        keyword_filtered_count = 0
 
         if not accounts:
             status = "failed"
@@ -418,9 +427,11 @@ class ListingMonitorTaskService:
             price_max = float(task.price_max) if task.price_max is not None else None
             # 任务配置了代理API地址时，取一个HTTP代理供本次采集使用（失败则直连）
             task_proxy = await fetch_proxy_from_api(task.proxy_url, account_id=str(task.id)) if task.proxy_url else None
+            # 多关键词匹配：开启时用首词搜索，入库前再按 any/all 过滤标题
+            search_keyword = resolve_search_keyword(task.keyword, match_mode)
             # 除页码外的搜索参数固定，先组装好供正常调用与过风控后的重试复用
             search_kwargs = {
-                "keyword": task.keyword,
+                "keyword": search_keyword,
                 "sort_field": sort_field,
                 "sort_value": sort_value,
                 "rows_per_page": _ROWS_PER_PAGE,
@@ -504,8 +515,17 @@ class ListingMonitorTaskService:
                 pages_collected += 1
                 for entry in page_result.get("items", []):
                     parsed = parse_search_item(entry)
-                    if parsed:
-                        all_items.append(parsed)
+                    if not parsed:
+                        continue
+                    if not item_matches_keywords(
+                        parsed.get("title"),
+                        parsed.get("content"),
+                        task.keyword,
+                        match_mode,
+                    ):
+                        keyword_filtered_count += 1
+                        continue
+                    all_items.append(parsed)
 
                 # 没有下一页则提前结束
                 if not page_result.get("has_next_page"):
@@ -516,10 +536,12 @@ class ListingMonitorTaskService:
                 status = "partial" if pages_collected > 0 else "failed"
 
         fetched_count = len(all_items)
-        inserted_count, updated_count = await self._upsert_items(task, all_items)
+        inserted_count, updated_count, inserted_items = await self._upsert_items(task, all_items)
 
         if status == "success" and not message:
             message = f"采集{pages_collected}页，获取{fetched_count}，新增{inserted_count}，更新{updated_count}"
+            if match_mode != KEYWORD_MATCH_OFF and keyword_filtered_count:
+                message = f"{message}，关键词未匹配过滤{keyword_filtered_count}"
 
         # 本次用过远程过风控则在日志说明中体现，便于在监控日志页直接看到效果
         if remote_risk_passed or remote_risk_failed or remote_risk_limited:
@@ -541,15 +563,30 @@ class ListingMonitorTaskService:
         )
         await self._update_last_run(task.id)
 
+        # 仅「新增」商品推送通知；开关关闭或本次无新增则跳过
+        if bool(getattr(task, "notify_on_collect", False)) and inserted_items:
+            try:
+                await notify_listing_monitor_collect(
+                    owner_id=task.owner_id,
+                    task_id=task.id,
+                    keyword=task.keyword or "",
+                    monitor_type=task.monitor_type or "listing",
+                    account_id=used_account_id,
+                    fetched_count=fetched_count,
+                    inserted_items=inserted_items,
+                )
+            except Exception as notify_exc:  # noqa: BLE001
+                logger.error(f"【{self.task_name}】任务 {task.id} 采集通知发送异常: {notify_exc}")
+
         logger.info(
             f"【{self.task_name}】任务 {task.id}({task.keyword}/{task.monitor_type}) 完成："
             f"账号={used_account_id}，页数={pages_collected}，获取={fetched_count}，新增={inserted_count}，更新={updated_count}，状态={status}"
         )
 
-    async def _upsert_items(self, task: ListingMonitorTask, items: List[dict]) -> tuple[int, int]:
-        """将采集商品 upsert 到采集商品表，返回 (新增数, 更新数)。"""
+    async def _upsert_items(self, task: ListingMonitorTask, items: List[dict]) -> tuple[int, int, List[dict]]:
+        """将采集商品 upsert 到采集商品表，返回 (新增数, 更新数, 新增商品摘要列表)。"""
         if not items:
-            return 0, 0
+            return 0, 0, []
 
         # 按 item_id 去重（同一次采集多页可能重复），保留最后一次出现的数据
         dedup: Dict[str, dict] = {}
@@ -559,6 +596,7 @@ class ListingMonitorTaskService:
         now = get_beijing_now_naive()
         inserted = 0
         updated = 0
+        inserted_items: List[dict] = []
 
         # 采集后直接下单：预加载下单账号（order_account_ids），新商品入库前先下单
         direct_order = bool(task.direct_order)
@@ -667,9 +705,19 @@ class ListingMonitorTaskService:
                                 new_item.order_attempts = 1
                     session.add(new_item)
                     inserted += 1
+                    inserted_items.append(
+                        {
+                            "item_id": item_id,
+                            "title": fields["title"],
+                            "price": fields["price"],
+                            "area": fields["area"],
+                            "target_url": fields["target_url"],
+                            "seller_nick": fields["seller_nick"],
+                        }
+                    )
 
             await session.commit()
-        return inserted, updated
+        return inserted, updated, inserted_items
 
     async def _direct_order_item(
         self,
