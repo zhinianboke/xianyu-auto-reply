@@ -52,11 +52,20 @@ def build_remote_direct_event_description(
     *,
     remote_outcome: str,
     scene: str = "",
+    configuration_source: str = "系统设置",
 ) -> str:
-    """构造按系统设置直接调用远程 Token 接口的风控事件描述。"""
+    """构造远程调用说明，记录配置来源，避免个人配置被误记为系统配置。
+
+    Args:
+        remote_outcome: 远程接口调用结果说明。
+        scene: 调用场景中文前缀。
+        configuration_source: 本次已选定的配置来源。
+    Returns:
+        包含配置来源及结果的风控事件描述。
+    """
     scene_text = str(scene or "").strip()
     outcome = str(remote_outcome or "").strip() or "远程接口结果未知"
-    return f"{scene_text}按系统设置直接调用远程Token接口；{outcome}"
+    return f"{scene_text}按{configuration_source}直接调用远程Token接口；{outcome}"
 
 
 def build_remote_token_log_result(

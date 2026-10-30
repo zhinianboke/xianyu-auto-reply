@@ -75,7 +75,7 @@ class SendCodeRequest(BaseModel):
 class SliderSolveRequest(BaseModel):
     """过滑块请求（模式B，外部使用）"""
     secret_key: str                      # 用户个人设置中的秘钥（用于身份校验，查到用户名）
-    account_id: str = ""                 # 外部账号标识（仅用于日志/浏览器实例隔离，本系统不查库）
+    account_id: str = ""                 # 原始账号标识；带Cookie重取Token时关联所属用户配置
     url: str                             # punish 验证链接（punish?x5secdata=...）
     browser_timeout: int = 40            # 单次浏览器超时（秒），范围 20~120
     cookies: str = ""                    # 可选：账号 Cookie（调用方开启"传递Cookie"开关时传入），
@@ -637,7 +637,8 @@ async def slider_solve(
 ) -> ApiResponse:
     """过滑块（供外部系统调用）。
 
-    模式B：仅凭传入的 punish 链接求解，本系统不查账号库、不回填 cookies。
+    模式B：凭 punish 链接求解，不回填账号 Cookie；携带 Cookie 重取 Token 时，
+    已登记账号按所属用户选择配置，未登记的外部标识沿用系统配置。
     - 鉴权：必须传入有效的用户秘钥（个人设置中的秘钥），校验存在即放行，并据此记录调用用户。
     - 成功：data = { engine, cookies: { x5sec, ... } }
     - 失败：success=false
@@ -699,7 +700,7 @@ async def slider_solve(
         return ApiResponse(success=False, message=rejection_message or "远程过滑块调用已拒绝")
 
     result_data = await websocket_client.solve_captcha(
-        account_id=safe_account_id,
+        account_id=raw_account_id,
         url=url,
         browser_timeout=timeout,
         call_type="remote",

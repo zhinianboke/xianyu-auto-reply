@@ -16,9 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api import deps
 from app.services.card_dock_service import CARD_SECRET_KEY_SETTING, CardDockService
 from app.services.card_secret_key_service import CardSecretKeyService
+from app.services.token_remote_test_service import test_token_remote_settings
+from app.services.user_token_setting_service import UserTokenSettingService
 from common.models.user import User
 from common.models.user_setting import UserSetting
 from common.schemas.common import ApiResponse
+from common.schemas.system_setting import RemoteTokenTestRequest
 from common.utils.image_utils import image_manager
 from common.services.remote_location_message_api import (
     RemoteLocationMessageTestResult,
@@ -49,6 +52,34 @@ class LocationChatApiTestRequest(BaseModel):
 
     url: str
     secret_key: str
+
+
+@router.get("/external-api/token", response_model=ApiResponse)
+async def get_personal_token_settings(
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """读取认证用户的 Token 远程配置，返回统一业务响应。"""
+    return await UserTokenSettingService(session, current_user.id).get_settings()
+
+
+@router.put("/external-api/token", response_model=ApiResponse)
+async def save_personal_token_settings(
+    payload: RemoteTokenTestRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """校验并保存认证用户的 Token 远程配置，返回保存结果。"""
+    return await UserTokenSettingService(session, current_user.id).save_settings(payload)
+
+
+@router.post("/external-api/token/test", response_model=ApiResponse)
+async def test_personal_token_settings(
+    payload: RemoteTokenTestRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> ApiResponse:
+    """参照系统设置测试认证用户填写的 URL 和秘钥，不写入配置。"""
+    return await test_token_remote_settings(payload, current_user, scene="个人设置")
 
 
 @router.post("/external-api/location-chat/test", response_model=ApiResponse)

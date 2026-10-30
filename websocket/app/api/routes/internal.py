@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from common.services.account_cookie_service import merge_account_cookie_fields
 from common.services.captcha.concurrency import run_browser_task
+from common.services.captcha.token_account_context import resolve_external_captcha_token_account_id
 from common.services.captcha.slider_mode import (
     SLIDER_MODE_REAL_MOUSE,
     refresh_slider_mode_from_database,
@@ -112,7 +113,7 @@ class LogRetentionRequest(BaseModel):
 
 class SolveCaptchaRequest(BaseModel):
     """过滑块请求；可选携带续期上下文用于成功后持久化。"""
-    account_id: str = ""          # 外部标识，仅用于日志与浏览器实例隔离
+    account_id: str = ""          # 原始账号标识，关联所属用户Token配置；浏览器目录另行清洗
     account_row_id: int | None = None # xy_accounts.id，传入后成功时精准写回 Cookie
     url: str                      # punish 验证链接（punish?x5secdata=...）
     browser_timeout: int = 40     # 单次浏览器超时（秒）
@@ -389,7 +390,7 @@ async def solve_captcha(request: SolveCaptchaRequest):
     if not url:
         return {"success": False, "code": 400, "message": "punish 链接不能为空", "data": None}
 
-    # 清洗 account_id（外部传入，仅用于日志与浏览器实例目录隔离，防止路径注入）
+    # 原始标识用于数据库和Token配置；仅浏览器目录使用清洗后的标识，防止路径注入。
     raw_id = (request.account_id or "external").strip()
     safe_id = re.sub(r"[^A-Za-z0-9_-]", "", raw_id)[:64] or "external"
     timeout = max(20, min(int(request.browser_timeout or 40), 120))
@@ -550,13 +551,13 @@ async def solve_captcha(request: SolveCaptchaRequest):
                 token_request_cookies = merged_cookies_str
                 last_token_response: object = None
                 # Token接口方式实时查库，与 WebSocket 主流程保持一致
-                token_api_mode = await load_token_api_mode(safe_id)
+                token_api_mode = await load_token_api_mode(raw_id)
                 for token_attempt in range(2):
                     token_result = await request_im_token_with_fallback(
                         token_request_cookies,
                         device_id,
                         api_mode=token_api_mode,
-                        log_tag=safe_id,
+                        log_tag=raw_id,
                     )
                     if token_result.device_id:
                         device_id = token_result.device_id
@@ -664,6 +665,10 @@ async def solve_captcha(request: SolveCaptchaRequest):
             from app.services.captcha.slider_stealth import CAPTCHA_NOT_REQUIRED
             from common.utils.xianyu_utils import trans_cookies
 
+            # 外部标识不要求预先登记；实际账号仍交给公共客户端按所属用户选配置。
+            token_account_id = raw_id
+            if not request.persist_token_cache and not request.account_row_id:
+                token_account_id = await resolve_external_captcha_token_account_id(raw_id, call_user)
             try:
                 _cookies_dict = trans_cookies(existing_cookies_str)
             except Exception:
@@ -673,7 +678,7 @@ async def solve_captcha(request: SolveCaptchaRequest):
             def _remote_url_provider():
                 """凭传入的 Cookie 重新请求 token 接口，拿到新鲜验证链接（远程端链接过期兜底）。"""
                 res = request_fresh_captcha_url(
-                    safe_id,
+                    token_account_id,
                     _cookies_dict,
                     refetch_cookies_state[0],
                     device_id,

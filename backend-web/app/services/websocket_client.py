@@ -292,7 +292,7 @@ class WebSocketServiceClient:
         故此处使用独立的 aiohttp 会话并放宽超时，避免 backend 端提前超时。
 
         Args:
-            account_id: 外部账号标识（仅用于日志/浏览器实例隔离）
+            account_id: 原始账号标识，重取 Token 时关联所属用户配置；浏览器目录由服务端清洗
             url: punish 验证链接
             browser_timeout: 单次浏览器超时（秒）
             call_type: 调用类型（local/remote），用于风控日志
