@@ -132,7 +132,7 @@ def _check_token_api_domain(url: str) -> Optional[ApiResponse]:
         if domain in lowered:
             return ApiResponse(
                 success=False,
-                message=f"该URL（{domain}）不是在此处填写，需要在「系统设置-Token获取方式」中填写",
+                message=f"该URL（{domain}）请到「个人设置 → 远程URL配置 → Token获取方式」中填写",
             )
     return None
 
