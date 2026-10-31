@@ -2,9 +2,10 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ChevronDown, ChevronUp, ExternalLink, Loader2, RefreshCw } from 'lucide-react'
-import type { PublicAdsResponse } from '@/api/advertisements'
+import type { AdvertisementPlacement, PublicAdsResponse } from '@/api/advertisements'
 
 interface PublicAdvertisementsProps {
+  placement: AdvertisementPlacement
   adsData: PublicAdsResponse
   adsLoading: boolean
   adsError: string
@@ -33,12 +34,14 @@ function AdsLoading() {
 }
 
 /** 展示实际公开广告，并支持轮播选择、文字展开及失败后重试。 */
-export function PublicAdvertisements({ adsData, adsLoading, adsError, loadAds }: PublicAdvertisementsProps) {
+export function PublicAdvertisements({ placement, adsData, adsLoading, adsError, loadAds }: PublicAdvertisementsProps) {
   const [carouselIndex, setCarouselIndex] = useState(0)
   const [expandedTextAds, setExpandedTextAds] = useState<Set<number>>(new Set())
   const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null)
   const currentAd = adsData.carousel[carouselIndex] || adsData.carousel[0]
   const currentImageUrl = getAdUrl(currentAd?.image_url || null)
+  const carouselHeightClass = placement === 'home' ? 'h-80 sm:h-[30rem]' : 'h-48 sm:h-56'
+  const textAdsHeightClass = placement === 'home' ? 'h-80 sm:h-[30rem]' : 'max-h-48 sm:max-h-56'
 
   useEffect(() => {
     setCarouselIndex(0)
@@ -78,7 +81,7 @@ export function PublicAdvertisements({ adsData, adsLoading, adsError, loadAds }:
         <section className="vben-card min-w-0" aria-label="推荐广告">
           <div className="vben-card-header"><h2 className="vben-card-title">推荐广告</h2></div>
           <div className="vben-card-body !p-0">
-            <div className="relative h-48 overflow-hidden rounded-b-lg bg-slate-100 dark:bg-slate-800 sm:h-56">
+            <div className={`relative ${carouselHeightClass} overflow-hidden rounded-b-lg bg-slate-100 dark:bg-slate-800`}>
               {adsLoading && <AdsLoading />}
               {currentAd ? (
                 <AnimatePresence mode="wait">
@@ -125,7 +128,7 @@ export function PublicAdvertisements({ adsData, adsLoading, adsError, loadAds }:
           <div className="vben-card-header"><h2 className="vben-card-title">文字广告</h2></div>
           <div className="vben-card-body relative">
             {adsLoading && <AdsLoading />}
-            <div className="max-h-48 space-y-2 overflow-y-auto sm:max-h-56">
+            <div className={`${textAdsHeightClass} space-y-2 overflow-y-auto`}>
               {adsData.text.length > 0 ? adsData.text.map((ad) => (
                 <div key={ad.id} className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
                   <div className="flex items-center justify-between bg-slate-50 p-3 dark:bg-slate-800">

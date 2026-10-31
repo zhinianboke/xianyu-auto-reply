@@ -56,16 +56,21 @@ export function Settings() {
   const { isAuthenticated, token, _hasHydrated, user } = useAuthStore()
   const { isExeMode, setHiddenMenuKeys, setIsExeMode } = useMenuVisibilityStore()
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
+  const [activeTab, setActiveTab] = useState<'basic' | 'contact' | 'appearance' | 'payment' | 'user' | 'runtime'>('basic')
+  const [basicSaving, setBasicSaving] = useState(false)
+  const [smtpSaving, setSmtpSaving] = useState(false)
+  const [alipaySaving, setAlipaySaving] = useState(false)
+  const [withdrawSaving, setWithdrawSaving] = useState(false)
+  const [adPriceSaving, setAdPriceSaving] = useState(false)
   const [loginBrandingSaving, setLoginBrandingSaving] = useState(false)
   const [authFooterAdSaving, setAuthFooterAdSaving] = useState(false)
   const [disclaimerSaving, setDisclaimerSaving] = useState(false)
   const [hiddenMenuSaving, setHiddenMenuSaving] = useState(false)
   const [themeAppearanceSaving, setThemeAppearanceSaving] = useState(false)
   const [themeFontSaving, setThemeFontSaving] = useState(false)
-  // 代理设置独立保存状态：与页面右上角"保存设置"按钮的 saving 分离，互不影响
+  // 代理设置独立保存状态
   const [proxySaving, setProxySaving] = useState(false)
-  // 分销设置独立保存状态：与页面右上角"保存设置"按钮的 saving 分离，互不影响
+  // 分销设置独立保存状态
   const [distributionSaving, setDistributionSaving] = useState(false)
   // 用户到期/续期设置独立保存状态
   const [userExpirySaving, setUserExpirySaving] = useState(false)
@@ -154,22 +159,93 @@ export function Settings() {
     loadSettings()
   }, [_hasHydrated, isAuthenticated, token, user?.is_admin])
 
-  const handleSave = async () => {
-    if (!settings) return
+  const persistSettings = async (payload: Partial<SystemSettings>, successMessage: string, failureMessage: string) => {
     try {
-      setSaving(true)
-      const result = await updateSystemSettings(settings)
+      const result = await updateSystemSettings(payload)
       if (result.success) {
-        applyThemeSettings(settings)
-        setHiddenMenuKeys(getHiddenMenuKeysFromSettings(settings))
-        addToast({ type: 'success', message: '设置保存成功' })
+        addToast({ type: 'success', message: successMessage })
+        return true
       } else {
-        addToast({ type: 'error', message: result.message || '保存失败' })
+        addToast({ type: 'error', message: result.message || failureMessage })
       }
     } catch (error) {
-      addToast({ type: 'error', message: getApiErrorMessage(error, '保存设置失败') })
+      addToast({ type: 'error', message: getApiErrorMessage(error, failureMessage) })
+    }
+    return false
+  }
+
+  const handleBasicSave = async () => {
+    if (!settings) return
+    const retentionDays = Number(settings['log.retention_days'] || 7)
+    if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 365) {
+      addToast({ type: 'error', message: '日志保留天数必须为1到365之间的整数' })
+      return
+    }
+    try {
+      setBasicSaving(true)
+      await persistSettings({
+        registration_enabled: Boolean(settings.registration_enabled),
+        show_default_login_info: Boolean(settings.show_default_login_info),
+        login_captcha_enabled: Boolean(settings.login_captcha_enabled ?? true),
+        'log.retention_days': String(retentionDays),
+        'account.face_verify_timeout_disable': Boolean(settings['account.face_verify_timeout_disable'] ?? true),
+      }, '基础设置保存成功', '基础设置保存失败')
     } finally {
-      setSaving(false)
+      setBasicSaving(false)
+    }
+  }
+
+  const handleSmtpSave = async () => {
+    if (!settings) return
+    try {
+      setSmtpSaving(true)
+      await persistSettings({
+        smtp_server: String(settings.smtp_server || ''),
+        smtp_port: Number(settings.smtp_port) || 587,
+        smtp_user: String(settings.smtp_user || ''),
+        smtp_password: String(settings.smtp_password || ''),
+        smtp_from: String(settings.smtp_from || ''),
+      }, 'SMTP邮件配置保存成功', 'SMTP邮件配置保存失败')
+    } finally {
+      setSmtpSaving(false)
+    }
+  }
+
+  const handleAlipaySave = async () => {
+    if (!settings) return
+    try {
+      setAlipaySaving(true)
+      await persistSettings({
+        'alipay.app_id': String(settings['alipay.app_id'] || ''),
+        'alipay.gateway_url': String(settings['alipay.gateway_url'] || ''),
+        'alipay.private_key': String(settings['alipay.private_key'] || ''),
+        'alipay.alipay_public_key': String(settings['alipay.alipay_public_key'] || ''),
+        'alipay.notify_url': String(settings['alipay.notify_url'] || ''),
+      }, '支付宝配置保存成功', '支付宝配置保存失败')
+    } finally {
+      setAlipaySaving(false)
+    }
+  }
+
+  const handleWithdrawSave = async () => {
+    if (!settings) return
+    try {
+      setWithdrawSaving(true)
+      await persistSettings({
+        'withdraw.notify_email': String(settings['withdraw.notify_email'] || ''),
+        'withdraw.min_amount': String(settings['withdraw.min_amount'] || ''),
+      }, '提现配置保存成功', '提现配置保存失败')
+    } finally {
+      setWithdrawSaving(false)
+    }
+  }
+
+  const handleAdPriceSave = async (payload: Partial<SystemSettings>) => {
+    try {
+      setAdPriceSaving(true)
+      await persistSettings(payload, '广告费用保存成功', '广告费用保存失败')
+    } finally {
+      setAdPriceSaving(false)
     }
   }
 
@@ -317,7 +393,7 @@ export function Settings() {
   }
 
   // 代理设置独立保存：只 PUT proxy.api_url / proxy.enabled 两个键
-  // 不使用页面右上角"保存设置"按钮，避免影响其他未改动的设置
+  // 仅提交代理相关设置，避免影响其他未改动的设置
   const handleProxySave = async () => {
     if (!settings) {
       return
@@ -348,7 +424,7 @@ export function Settings() {
   }
 
   // 分销设置独立保存：只 PUT distribution.* 相关键
-  // 不使用页面右上角"保存设置"按钮，避免影响其他未改动的设置
+  // 仅提交分销相关设置，避免影响其他未改动的设置
   const handleDistributionSave = async () => {
     if (!settings) {
       return
@@ -370,7 +446,7 @@ export function Settings() {
   }
 
   // 用户到期/续期设置独立保存：只 PUT user.renew_month_price / user.register_default_days
-  // 不使用页面右上角"保存设置"按钮，避免影响其他未改动的设置
+  // 仅提交用户到期相关设置，避免影响其他未改动的设置
   const handleUserExpirySave = async () => {
     if (!settings) {
       return
@@ -429,35 +505,22 @@ export function Settings() {
     }
   }, [testEmail, addToast])
 
-  const handleHiddenMenusChange = async (keys: string[]) => {
-    if (!settings || hiddenMenuSaving) {
-      return
-    }
-
-    const previousKeys = getHiddenMenuKeysFromSettings(settings)
+  const handleHiddenMenusChange = (keys: string[]) => {
+    if (!settings) return
     const hiddenMenuPayload = buildHiddenMenuSettingsPayload(keys)
-    const nextSettings = {
-      ...settings,
-      ...hiddenMenuPayload,
-    }
+    setSettings({ ...settings, ...hiddenMenuPayload })
+  }
 
-    setSettings(nextSettings)
-    setHiddenMenuKeys(keys)
-
+  const handleHiddenMenusSave = async () => {
+    if (!settings || hiddenMenuSaving) return
+    const keys = getHiddenMenuKeysFromSettings(settings)
+    const hiddenMenuPayload = buildHiddenMenuSettingsPayload(keys)
     try {
       setHiddenMenuSaving(true)
-      const result = await updateSystemSettings(hiddenMenuPayload)
-      if (!result.success) {
-        throw new Error(result.message || '隐藏菜单设置保存失败')
+      const saved = await persistSettings(hiddenMenuPayload, '隐藏菜单设置保存成功', '隐藏菜单设置保存失败')
+      if (saved) {
+        setHiddenMenuKeys(keys)
       }
-    } catch (error) {
-      const rollbackPayload = buildHiddenMenuSettingsPayload(previousKeys)
-      setSettings((current) => current ? { ...current, ...rollbackPayload } : current)
-      setHiddenMenuKeys(previousKeys)
-      addToast({
-        type: 'error',
-        message: getApiErrorMessage(error, '隐藏菜单设置保存失败'),
-      })
     } finally {
       setHiddenMenuSaving(false)
     }
@@ -589,20 +652,37 @@ export function Settings() {
             <RefreshCw className="w-4 h-4" />
             刷新
           </button>
-          <button onClick={handleSave} disabled={saving} className="btn-ios-primary">
-            {saving ? <ButtonLoading /> : <Save className="w-4 h-4" />}
-            保存设置
-          </button>
         </div>
       </div>
 
-      {/* 服务管理：消息服务 / 后端服务 / 定时任务服务 重启（仅管理员可见，置于最上方） */}
-      {user?.is_admin && <ServiceRestartCard />}
+      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1" role="tablist" aria-label="系统设置功能模块">
+        {([
+          ['basic', '基础与认证'],
+          ['contact', '邮件与联系'],
+          ['appearance', '界面与文案'],
+          ['payment', '支付与费用'],
+          ['user', '用户与网络'],
+          ['runtime', '运行维护'],
+        ] as const).map(([tab, label]) => (
+          <button
+            key={tab}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab}
+            onClick={() => setActiveTab(tab)}
+            className={activeTab === tab
+              ? 'shrink-0 rounded-md border border-blue-600 bg-blue-600 px-3 py-2 text-sm font-medium text-white'
+              : 'shrink-0 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:border-blue-300 hover:text-blue-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-blue-300'}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
-      {/* 基础设置 + SMTP邮件配置（仅管理员可见） */}
       {user?.is_admin && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className={activeTab === 'basic' ? 'space-y-4' : 'hidden'}>
           {/* 基础设置 */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="vben-card">
             <div className="vben-card-header">
               <h2 className="vben-card-title">
@@ -656,7 +736,7 @@ export function Settings() {
               <div className="flex items-center justify-between py-3 border-t border-slate-100 dark:border-slate-700">
                 <div>
                   <p className="font-medium text-slate-900 dark:text-slate-100">日志保留天数</p>
-                  <p className="text-sm text-slate-500 dark:text-slate-400">所有模块日志保留天数，修改后实时生效（1~365天）</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">所有模块日志保留天数，保存后生效（1~365天）</p>
                 </div>
                 <input
                   type="number"
@@ -722,8 +802,28 @@ export function Settings() {
                     : current
                 ))}
               />
+              <div className="flex justify-end border-t border-slate-100 pt-4 dark:border-slate-700">
+                <button onClick={handleBasicSave} disabled={basicSaving} className="btn-ios-primary">
+                  {basicSaving ? <ButtonLoading /> : <Save className="w-4 h-4" />}
+                  保存基础设置
+                </button>
+              </div>
             </div>
           </div>
+        </div>
+        <MenuVisibilitySettings
+          hiddenMenuKeys={getHiddenMenuKeysFromSettings(settings)}
+          onChange={handleHiddenMenusChange}
+          onSave={handleHiddenMenusSave}
+          excludedMenuKeys={getExeForcedHiddenMenuKeys(isExeMode)}
+          saving={hiddenMenuSaving}
+        />
+        </div>
+      )}
+
+      {user?.is_admin && (
+        <div className={activeTab === 'contact' ? 'space-y-4' : 'hidden'}>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* SMTP邮件配置 */}
           <div className="vben-card">
             <div className="vben-card-header">
@@ -826,6 +926,12 @@ export function Settings() {
               <button onClick={() => setShowTestEmailModal(true)} className="btn-ios-secondary">
                 发送测试邮件
               </button>
+              <div className="flex justify-end border-t border-slate-100 pt-4 dark:border-slate-700">
+                <button onClick={handleSmtpSave} disabled={smtpSaving} className="btn-ios-primary">
+                  {smtpSaving ? <ButtonLoading /> : <Save className="w-4 h-4" />}
+                  保存邮件配置
+                </button>
+              </div>
             </div>
           </div>
 
@@ -989,63 +1095,50 @@ export function Settings() {
             </div>
           </div>
         </div>
-      )}
-
-      {user?.is_admin && (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          <ThemeAppearanceSettingsCard
-            settings={themeAppearanceSettings}
-            saving={themeAppearanceSaving}
-            onChange={handleThemeAppearanceChange}
-            onSave={handleThemeAppearanceSave}
-          />
-          <ThemeFontSettingsCard
-            settings={themeFontSettings}
-            saving={themeFontSaving}
-            onChange={handleThemeFontChange}
-            onSave={handleThemeFontSave}
-          />
         </div>
       )}
 
       {user?.is_admin && (
-        <LoginBrandingSettingsCard
-          settings={loginBrandingSettings}
-          saving={loginBrandingSaving}
-          onChange={handleLoginBrandingChange}
-          onSave={handleLoginBrandingSave}
-        />
-      )}
-
-      {user?.is_admin && (
-        <AuthFooterAdSettingsCard
-          settings={authFooterAdSettings}
-          saving={authFooterAdSaving}
-          onChange={handleAuthFooterAdChange}
-          onSave={handleAuthFooterAdSave}
-        />
-      )}
-
-      {user?.is_admin && (
-        <DisclaimerSettingsCard
-          settings={disclaimerSettings}
-          saving={disclaimerSaving}
-          onChange={handleDisclaimerChange}
-          onSave={handleDisclaimerSave}
-        />
-      )}
-
-      {user?.is_admin && (
-        <MenuVisibilitySettings
-          hiddenMenuKeys={getHiddenMenuKeysFromSettings(settings)}
-          onChange={handleHiddenMenusChange}
-          excludedMenuKeys={getExeForcedHiddenMenuKeys(isExeMode)}
-          saving={hiddenMenuSaving}
-        />
+        <div className={activeTab === 'appearance' ? 'space-y-4' : 'hidden'}>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <ThemeAppearanceSettingsCard
+              settings={themeAppearanceSettings}
+              saving={themeAppearanceSaving}
+              onChange={handleThemeAppearanceChange}
+              onSave={handleThemeAppearanceSave}
+            />
+            <ThemeFontSettingsCard
+              settings={themeFontSettings}
+              saving={themeFontSaving}
+              onChange={handleThemeFontChange}
+              onSave={handleThemeFontSave}
+            />
+          </div>
+          <LoginBrandingSettingsCard
+            settings={loginBrandingSettings}
+            saving={loginBrandingSaving}
+            onChange={handleLoginBrandingChange}
+            onSave={handleLoginBrandingSave}
+          />
+          <AuthFooterAdSettingsCard
+            settings={authFooterAdSettings}
+            saving={authFooterAdSaving}
+            onChange={handleAuthFooterAdChange}
+            onSave={handleAuthFooterAdSave}
+          />
+          <DisclaimerSettingsCard
+            settings={disclaimerSettings}
+            saving={disclaimerSaving}
+            onChange={handleDisclaimerChange}
+            onSave={handleDisclaimerSave}
+          />
+        </div>
       )}
 
       {/* 第三行：支付宝配置（仅管理员可见） */}
       {user?.is_admin && (
+        <div className={activeTab === 'payment' ? 'space-y-4' : 'hidden'}>
+        <>
         <div className="grid grid-cols-1 gap-4">
           <div className="vben-card">
             <div className="vben-card-header">
@@ -1130,14 +1223,22 @@ export function Settings() {
                   <p className="text-xs text-slate-400 mt-1">支付成功后支付宝回调的地址，需要外网可访问</p>
                 </div>
               </div>
+              <div className="flex justify-end border-t border-slate-100 pt-4 dark:border-slate-700">
+                <button onClick={handleAlipaySave} disabled={alipaySaving} className="btn-ios-primary">
+                  {alipaySaving ? <ButtonLoading /> : <Save className="w-4 h-4" />}
+                  保存支付宝配置
+                </button>
+              </div>
             </div>
           </div>
+        </div>
+        </>
         </div>
       )}
 
       {/* 提现配置（仅管理员可见） */}
       {user?.is_admin && (
-        <div className="grid grid-cols-1 gap-4">
+        <div className={activeTab === 'payment' ? 'grid grid-cols-1 gap-4' : 'hidden'}>
           <div className="vben-card">
             <div className="vben-card-header">
               <h2 className="vben-card-title">
@@ -1171,6 +1272,12 @@ export function Settings() {
                 />
                 <p className="text-xs text-slate-400 mt-1">用户每次提现金额不得低于此値，不填则不限制。</p>
               </div>
+              <div className="flex justify-end border-t border-slate-100 pt-4 dark:border-slate-700">
+                <button onClick={handleWithdrawSave} disabled={withdrawSaving} className="btn-ios-primary">
+                  {withdrawSaving ? <ButtonLoading /> : <Save className="w-4 h-4" />}
+                  保存提现配置
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1178,7 +1285,7 @@ export function Settings() {
 
       {/* 用户到期/续期设置（仅管理员可见） */}
       {user?.is_admin && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className={activeTab === 'user' ? 'grid grid-cols-1 lg:grid-cols-2 gap-4' : 'hidden'}>
           <div className="vben-card">
             <div className="vben-card-header">
               <h2 className="vben-card-title">
@@ -1237,14 +1344,19 @@ export function Settings() {
 
       {/* 广告费用管理（仅管理员可见） */}
       {user?.is_admin && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <AdPriceSettingsCard settings={settings} onChange={(key, value) => setSettings(s => s ? { ...s, [key]: value } : null)} />
+        <div className={activeTab === 'payment' ? 'grid grid-cols-1 lg:grid-cols-2 gap-4' : 'hidden'}>
+          <AdPriceSettingsCard
+            settings={settings}
+            saving={adPriceSaving}
+            onChange={(key, value) => setSettings(s => s ? { ...s, [key]: value } : null)}
+            onSave={handleAdPriceSave}
+          />
         </div>
       )}
 
       {/* 第四行：分销设置（仅管理员可见） */}
       {user?.is_admin && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className={activeTab === 'payment' ? 'grid grid-cols-1 lg:grid-cols-2 gap-4' : 'hidden'}>
           <div className="vben-card">
             <div className="vben-card-header">
               <h2 className="vben-card-title">
@@ -1304,7 +1416,7 @@ export function Settings() {
 
       {/* 代理设置（仅管理员可见） */}
       {user?.is_admin && (
-        <div className="grid grid-cols-1 gap-4">
+        <div className={activeTab === 'user' ? 'grid grid-cols-1 gap-4' : 'hidden'}>
           <div className="vben-card">
             <div className="vben-card-header">
               <h2 className="vben-card-title">
@@ -1354,6 +1466,8 @@ export function Settings() {
           </div>
         </div>
       )}
+
+      {user?.is_admin && activeTab === 'runtime' && <ServiceRestartCard />}
 
       {/* 测试邮件弹窗 */}
       {showTestEmailModal && (

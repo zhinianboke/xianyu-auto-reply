@@ -229,7 +229,7 @@ export function Dashboard() {
         )}
       </div>
 
-      <PublicAdvertisements {...advertisements} />
+      <PublicAdvertisements placement="dashboard" {...advertisements} />
 
       {/* Admin Stats - 管理员专属 */}
       {user?.is_admin && (

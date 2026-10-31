@@ -1,13 +1,16 @@
 /** 广告费用管理卡片，费用类别与中文名称从广告类型数据字典读取。 */
-import { Loader2, Megaphone, RefreshCw } from 'lucide-react'
+import { Loader2, Megaphone, RefreshCw, Save } from 'lucide-react'
+import { ButtonLoading } from '@/components/common/Loading'
 import { useAdvertisementTypes } from '@/pages/advertisements/useAdvertisementTypes'
 import type { SystemSettings } from '@/types'
 
 interface AdPriceSettingsCardProps {
   settings: SystemSettings | null
+  saving: boolean
   onChange: (key: string, value: string) => void
+  onSave: (payload: Partial<SystemSettings>) => void
 }
-export function AdPriceSettingsCard({ settings, onChange }: AdPriceSettingsCardProps) {
+export function AdPriceSettingsCard({ settings, saving, onChange, onSave }: AdPriceSettingsCardProps) {
   const { adTypeOptions, typesLoading, typesError, reloadTypes } = useAdvertisementTypes()
   return (
     <div className="vben-card relative" aria-busy={typesLoading}>
@@ -28,6 +31,20 @@ export function AdPriceSettingsCard({ settings, onChange }: AdPriceSettingsCardP
               }} placeholder={`请输入${title}每月价格`} className="input-ios" />
           </div>
         })}
+        <div className="flex justify-end border-t border-slate-100 pt-4 dark:border-slate-700">
+          <button
+            type="button"
+            onClick={() => onSave(Object.fromEntries(adTypeOptions.map((option) => [
+              option.price_key,
+              String(settings?.[option.price_key] || ''),
+            ])) as Partial<SystemSettings>)}
+            disabled={saving || typesLoading || Boolean(typesError)}
+            className="btn-ios-primary"
+          >
+            {saving ? <ButtonLoading /> : <Save className="h-4 w-4" />}
+            保存广告费用
+          </button>
+        </div>
       </div>
       {typesLoading && <div className="absolute inset-0 flex items-center justify-center gap-2 rounded-lg bg-white/80 text-sm text-slate-600 backdrop-blur-sm dark:bg-slate-900/80 dark:text-slate-300" role="status">
         <Loader2 className="h-5 w-5 animate-spin text-[rgb(var(--color-primary))]" />加载中...
