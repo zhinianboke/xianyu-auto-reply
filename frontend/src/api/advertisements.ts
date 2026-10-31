@@ -10,6 +10,14 @@ import type { ApiResponse } from '@/types'
 
 const PREFIX = '/api/v1/advertisements'
 
+export type AdvertisementType = 'carousel' | 'text' | 'home_carousel' | 'home_text'
+export type AdvertisementPlacement = 'dashboard' | 'home'
+export interface AdvertisementTypeOption {
+  value: AdvertisementType
+  label: string
+  price_key: string
+}
+
 export interface Advertisement {
   id: number
   user_id: number
@@ -18,10 +26,13 @@ export interface Advertisement {
   link: string | null
   expire_date: string | null
   image_url: string | null
-  ad_type: 'carousel' | 'text'
+  ad_type: AdvertisementType
+  ad_type_label?: string
   months: number | null
   total_amount: string | null
   status: 'unpaid' | 'pending' | 'approved'
+  /** 已生成支付订单或已复核的申请不可编辑。 */
+  can_edit?: boolean
   created_at: string | null
   updated_at: string | null
   /** 广告来源：local-本站，remote-官方远程 */
@@ -40,12 +51,15 @@ export interface PublicAdsResponse {
   text: Advertisement[]
 }
 
-// ==================== 公开接口（仪表盘展示） ====================
+// ==================== 公开接口（首页与仪表盘展示） ====================
 
 /** 获取已复核的广告（公开接口） */
-export const getPublicAds = async (): Promise<ApiResponse & { data?: PublicAdsResponse }> => {
-  return get(`${PREFIX}/public`)
+export const getPublicAds = async (placement: AdvertisementPlacement = 'dashboard'): Promise<ApiResponse & { data?: PublicAdsResponse }> => {
+  return get(`${PREFIX}/public`, { params: { placement } })
 }
+
+/** 从后端数据字典读取类型中文名称和费用设置键。 */
+export const getAdvertisementTypes = (): Promise<ApiResponse<AdvertisementTypeOption[]>> => get(`${PREFIX}/types`)
 
 // ==================== 广告管理（管理员） ====================
 
@@ -167,6 +181,6 @@ export const createAdPayment = async (adId: number): Promise<ApiResponse & { dat
 }
 
 /** 轮询广告付款状态 */
-export const checkAdPaymentStatus = async (adId: number, orderNo: string): Promise<ApiResponse & { data?: { status: string } }> => {
+export const checkAdPaymentStatus = async (adId: number, orderNo: string): Promise<ApiResponse & { data?: { status: string; paid?: boolean } }> => {
   return post(`${PREFIX}/${adId}/pay/notify?order_no=${encodeURIComponent(orderNo)}`)
 }

@@ -110,9 +110,11 @@ export const updateSystemSettings = async (data: Partial<SystemSettings>): Promi
     } else {
       stringValue = value as string
     }
-      return put(`${SYSTEM_SETTINGS_PREFIX}/${key}`, { value: stringValue })
+      return put<ApiResponse>(`${SYSTEM_SETTINGS_PREFIX}/${key}`, { value: stringValue })
     })
-  await Promise.all(promises)
+  const results = await Promise.all(promises)
+  const failed = results.find((result) => !result.success)
+  if (failed) return failed
   return { success: true, message: '设置已保存' }
 }
 

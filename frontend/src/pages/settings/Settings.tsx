@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Navigate } from 'react-router-dom'
-import { Settings as SettingsIcon, Save, Mail, RefreshCw, Eye, EyeOff, Copy, Upload, MessageCircle, Users, Percent, CreditCard, Megaphone, Heart, Globe, CalendarClock } from 'lucide-react'
+import { Settings as SettingsIcon, Save, Mail, RefreshCw, Eye, EyeOff, Copy, Upload, MessageCircle, Users, Percent, CreditCard, Heart, Globe, CalendarClock } from 'lucide-react'
 import {
   buildHiddenMenuSettingsPayload,
   getHiddenMenuKeysFromSettings,
@@ -37,6 +37,7 @@ import { ServiceRestartCard } from './ServiceRestartCard'
 import { PasswordLoginModeSetting } from './PasswordLoginModeSetting'
 import { SliderModeSetting } from './SliderModeSetting'
 import { TokenApiModeSetting } from './TokenApiModeSetting'
+import { AdPriceSettingsCard } from './AdPriceSettingsCard'
 import { useMenuVisibilityStore } from '@/store/menuVisibilityStore'
 import type {
   AuthFooterAdSettings,
@@ -1237,47 +1238,7 @@ export function Settings() {
       {/* 广告费用管理（仅管理员可见） */}
       {user?.is_admin && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="vben-card">
-            <div className="vben-card-header">
-              <h2 className="vben-card-title">
-                <Megaphone className="w-4 h-4" />
-                广告费用管理
-              </h2>
-            </div>
-            <div className="vben-card-body space-y-4">
-              <p className="text-sm text-slate-500 dark:text-slate-400">按广告类型设置每月费用，用户申请广告时会根据此价格计算总费用</p>
-              <div className="input-group">
-                <label className="input-label">轮播图广告（元/月）</label>
-                <input
-                  type="text"
-                  value={(settings?.['ad_price.carousel'] as string) || ''}
-                  onChange={(e) => {
-                    const val = e.target.value
-                    if (val === '' || /^\d*\.?\d{0,2}$/.test(val)) {
-                      setSettings(s => s ? { ...s, 'ad_price.carousel': val } : null)
-                    }
-                  }}
-                  placeholder="请输入轮播图广告每月价格"
-                  className="input-ios"
-                />
-              </div>
-              <div className="input-group">
-                <label className="input-label">文字广告（元/月）</label>
-                <input
-                  type="text"
-                  value={(settings?.['ad_price.text'] as string) || ''}
-                  onChange={(e) => {
-                    const val = e.target.value
-                    if (val === '' || /^\d*\.?\d{0,2}$/.test(val)) {
-                      setSettings(s => s ? { ...s, 'ad_price.text': val } : null)
-                    }
-                  }}
-                  placeholder="请输入文字广告每月价格"
-                  className="input-ios"
-                />
-              </div>
-            </div>
-          </div>
+          <AdPriceSettingsCard settings={settings} onChange={(key, value) => setSettings(s => s ? { ...s, [key]: value } : null)} />
         </div>
       )}
 

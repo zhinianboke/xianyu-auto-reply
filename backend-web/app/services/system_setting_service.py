@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.system_setting import SystemSetting
+from common.services.advertisement_types import AD_PRICE_DEFAULTS, parse_ad_price
 from common.services.remote_token_api import (
     TOKEN_REMOTE_SECRET_KEY_SETTING_KEY,
     TOKEN_REMOTE_URL_SETTING_KEY,
@@ -53,6 +54,7 @@ DEFAULT_LOGIN_SYSTEM_DESCRIPTION = "自动回复、智能客服、订单管理�
 DEFAULT_AUTH_FOOTER_AD_HTML = "© 2026 划算云服务器 ·<a href=\"http://www.hsykj.com\" target=\"_BLANK\">www.hsykj.com</a>"
 
 DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
+    **AD_PRICE_DEFAULTS,
     "disclaimer.title": ("免责声明", "系统免责声明标题"),
     "disclaimer.content": (DEFAULT_DISCLAIMER_CONTENT, "系统免责声明正文"),
     "disclaimer.checkbox_text": ("我已阅读并同意以上免责声明", "免责声明勾选提示文案"),
@@ -128,6 +130,8 @@ NO_ESCAPE_KEYS = {
     "alipay.notify_url",
     "ad_price.carousel",
     "ad_price.text",
+    "ad_price.home_carousel",
+    "ad_price.home_text",
     "withdraw.notify_email",
     "withdraw.min_amount",
     "log.retention_days",
@@ -221,6 +225,8 @@ class SystemSettingService:
     async def set_setting(self, key: str, value: str, description: str | None = None) -> None:
         if key in SENSITIVE_KEYS:
             raise ValueError("敏感设置不能通过通用接口修改")
+        if key in AD_PRICE_DEFAULTS:
+            parse_ad_price(value)
         stmt = select(SystemSetting).where(SystemSetting.key == key)
         result = await self.session.execute(stmt)
         record = result.scalars().first()
@@ -254,6 +260,9 @@ class SystemSettingService:
         sensitive_keys = set(settings).intersection(SENSITIVE_KEYS)
         if sensitive_keys:
             raise ValueError("敏感设置不能通过通用接口修改")
+        for key, (value, _) in settings.items():
+            if key in AD_PRICE_DEFAULTS:
+                parse_ad_price(value)
 
         stmt = select(SystemSetting).where(SystemSetting.key.in_(tuple(settings.keys())))
         result = await self.session.execute(stmt)

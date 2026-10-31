@@ -36,6 +36,8 @@ class RechargeOrder(Base):
     )
     trade_no: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, comment='支付宝交易号')
     qr_code: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, comment='支付二维码内容')
+    ad_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment='广告付款关联广告ID')
+    ad_settled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment='广告付款结算时间')
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment='支付时间')
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), comment='创建时间'

@@ -4,7 +4,7 @@
 功能：
 1. 定义广告表结构（xy_advertisements）
 2. 支持广告申请和管理
-3. 广告类型：轮播图、文字广告
+3. 广告类型：仪表盘轮播图、仪表盘文字广告、首页轮播图、首页文字广告
 4. 审核状态：待复核、已复核
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import date
 from enum import Enum
 
-from sqlalchemy import BigInteger, Integer, String, Text, Date, Enum as SQLEnum
+from sqlalchemy import BigInteger, Boolean, Integer, String, Text, Date, Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base, TimestampMixin
@@ -20,8 +20,10 @@ from common.db.base_class import Base, TimestampMixin
 
 class AdType(str, Enum):
     """广告类型"""
-    CAROUSEL = "carousel"  # 轮播图
-    TEXT = "text"  # 文字广告
+    CAROUSEL = "carousel"  # 仪表盘轮播图，保留历史类型值
+    TEXT = "text"  # 仪表盘文字广告，保留历史类型值
+    HOME_CAROUSEL = "home_carousel"  # 首页轮播图
+    HOME_TEXT = "home_text"  # 首页文字广告
 
 
 class AdStatus(str, Enum):
@@ -49,6 +51,7 @@ class Advertisement(TimestampMixin, Base):
     )
     months: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="购买月数")
     total_amount: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="广告总费用")
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", comment="是否删除：0-正常，1-已删除")
     status: Mapped[AdStatus] = mapped_column(
         SQLEnum(AdStatus, values_callable=lambda x: [e.value for e in x]),
         default=AdStatus.UNPAID,

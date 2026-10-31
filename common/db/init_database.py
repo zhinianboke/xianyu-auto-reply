@@ -28,6 +28,7 @@ from common.db.default_publish_addresses import (
     build_default_publish_addresses,
 )
 from common.db.auto_relist_schema import ensure_auto_relist_schema
+from common.db.advertisement_schema import ensure_advertisement_schema
 from common.db.session import async_engine, async_session_maker
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.security import generate_secret_key, get_password_hash
@@ -967,9 +968,10 @@ class DatabaseInitializer:
                 link VARCHAR(500) COMMENT '广告链接',
                 expire_date DATE COMMENT '到期日期',
                 image_url VARCHAR(500) COMMENT '图片URL',
-                ad_type ENUM('carousel', 'text') DEFAULT 'text' COMMENT '广告类型',
+                ad_type ENUM('carousel', 'text', 'home_carousel', 'home_text') DEFAULT 'text' COMMENT '广告类型：仪表盘轮播图、仪表盘文字广告、首页轮播图、首页文字广告',
                 months INT COMMENT '购买月数',
                 total_amount VARCHAR(32) COMMENT '广告总金额',
+                is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否删除：0-正常，1-已删除',
                 status ENUM('unpaid', 'pending', 'approved') DEFAULT 'unpaid' COMMENT '审核状态',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -1340,6 +1342,8 @@ class DatabaseInitializer:
                 status VARCHAR(32) NOT NULL DEFAULT 'pending' COMMENT '订单状态：pending-待支付，paid-已支付，expired-已过期，failed-失败',
                 trade_no VARCHAR(128) DEFAULT NULL COMMENT '支付宝交易号',
                 qr_code VARCHAR(512) DEFAULT NULL COMMENT '支付二维码内容',
+                ad_id BIGINT DEFAULT NULL COMMENT '广告付款关联广告ID',
+                ad_settled_at DATETIME DEFAULT NULL COMMENT '广告付款结算时间',
                 paid_at DATETIME DEFAULT NULL COMMENT '支付时间',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -2250,6 +2254,10 @@ class DatabaseInitializer:
 
                     # 1.1 初始化所有枚举数据字典
                     await self.init_data_dictionaries()
+
+                    # 首页广告类型与支付关联独立迁移，只追加字段及初始化项。
+                    async with ddl_connection() as conn:
+                        await ensure_advertisement_schema(conn)
 
                     # 自动续售表和发布日志关联字段独立幂等迁移，避免依赖旧版本 DDL 顺序。
                     async with ddl_connection() as conn:

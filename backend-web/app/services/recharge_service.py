@@ -23,7 +23,8 @@ from common.models.system_setting import SystemSetting
 from common.models.user import User
 from common.models.user_setting import UserSetting
 from app.services.alipay_service import AlipayService
-
+from app.services.advertisement_payment_service import AdvertisementPaymentService
+from app.services.advertisement_orders import lock_order_advertisement
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 logger = logging.getLogger(__name__)
 
@@ -140,17 +141,16 @@ class RechargeService:
             logger.error(f"支付宝通知验签失败: {out_trade_no}")
             return False
 
-        # 查询充值订单
-        stmt = select(RechargeOrder).where(RechargeOrder.order_no == out_trade_no)
+        # 广告先锁广告再锁订单，保持与申请修改和二维码创建相同的锁顺序。
+        await lock_order_advertisement(self.session, out_trade_no)
+        stmt = select(RechargeOrder).where(RechargeOrder.order_no == out_trade_no).with_for_update().execution_options(populate_existing=True)
         result = await self.session.execute(stmt)
         order = result.scalar_one_or_none()
-
         if not order:
             logger.error(f"充值订单不存在: {out_trade_no}")
             return False
 
-        # 已处理过则直接返回成功
-        if order.status == 'paid':
+        if order.status == 'paid' and order.order_type != 'ad':
             logger.info(f"充值订单已处理过: {out_trade_no}")
             return True
 
@@ -160,35 +160,22 @@ class RechargeService:
             return True
 
         # 按订单类型分流处理：
-        # - ad（广告付款）：仅标记订单已支付，绝不给用户加余额、不写充值流水。
-        #   广告的实际结算（审核通过、管理员收入、用户支出流水）由广告付款轮询接口
-        #   ad_payment_notify 依据订单 paid 状态完成。
+        # - ad（广告付款）：明确关联的广告在回调内结算，重试和浏览器轮询均不重复入账。
+        #   历史未关联订单保留原轮询结算路径，不猜测广告归属。
         # - recharge（余额充值）：加余额 + 写充值流水（原逻辑）。
         if order.order_type == 'ad':
-            await self._mark_order_paid(order, trade_no)
-            logger.info(f"广告付款订单已确认支付（不加余额）: {out_trade_no}")
-            return True
+            try:
+                await AdvertisementPaymentService(self.session).notify(order, notify_data)
+                logger.info(f"广告付款回调处理完成（不加申请用户余额）: {out_trade_no}")
+                return True
+            except Exception as exc:
+                await self.session.rollback()
+                logger.exception("广告付款回调结算失败: order_no=%s exception=%s", out_trade_no, exc)
+                return False
 
         # 充值成功，更新余额和插入流水（加锁）
         await self._process_recharge_success(order, trade_no)
         return True
-
-    async def _mark_order_paid(
-        self, order: RechargeOrder, trade_no: str
-    ) -> None:
-        """仅将订单标记为已支付（不触碰余额、不写流水）
-
-        用于广告付款等"复用充值订单表但不属于余额充值"的场景：支付宝到账后
-        只需把订单状态置为 paid，具体业务结算由各自的业务接口完成。
-
-        Args:
-            order: 订单
-            trade_no: 支付宝交易号
-        """
-        order.status = 'paid'
-        order.trade_no = trade_no
-        order.paid_at = get_beijing_now_naive()
-        await self.session.commit()
 
     async def _process_recharge_success(
         self, order: RechargeOrder, trade_no: str

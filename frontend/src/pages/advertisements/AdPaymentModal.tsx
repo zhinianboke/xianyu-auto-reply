@@ -12,6 +12,7 @@ import { QRCodeSVG } from 'qrcode.react'
 import { createAdPayment, checkAdPaymentStatus } from '@/api/advertisements'
 import type { Advertisement } from '@/api/advertisements'
 import { useUIStore } from '@/store/uiStore'
+import { getApiErrorMessage } from '@/utils/apiError'
 
 interface AdPaymentModalProps {
   visible: boolean
@@ -29,8 +30,12 @@ export function AdPaymentModal({ visible, ad, onClose, onSuccess }: AdPaymentMod
   const [loading, setLoading] = useState(false)
   const [qrCode, setQrCode] = useState('')
   const [orderNo, setOrderNo] = useState('')
+  const [paymentAmount, setPaymentAmount] = useState('')
+  const [advertisementApproved, setAdvertisementApproved] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const sessionRef = useRef(0)
 
   /** 清理轮询定时器 */
   const clearPoll = useCallback(() => {
@@ -38,14 +43,21 @@ export function AdPaymentModal({ visible, ad, onClose, onSuccess }: AdPaymentMod
       clearInterval(pollRef.current)
       pollRef.current = null
     }
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
+    }
   }, [])
 
   /** 重置状态 */
   const reset = useCallback(() => {
+    sessionRef.current += 1
     setStep('confirm')
     setLoading(false)
     setQrCode('')
     setOrderNo('')
+    setPaymentAmount('')
+    setAdvertisementApproved(false)
     setErrorMsg('')
     clearPoll()
   }, [clearPoll])
@@ -57,53 +69,74 @@ export function AdPaymentModal({ visible, ad, onClose, onSuccess }: AdPaymentMod
     onClose()
   }, [clearPoll, reset, onClose])
 
-  /** 组件卸载时清理 */
+  /** 切换广告、关闭或卸载后忽略迟到的订单及轮询结果。 */
   useEffect(() => {
-    return () => clearPoll()
-  }, [clearPoll])
+    reset()
+    return () => { sessionRef.current += 1; clearPoll() }
+  }, [visible, ad?.id, reset, clearPoll])
 
   /** 提交付款 */
   const handleSubmit = async () => {
-    if (!ad || loading) return
+    if (!visible || !ad || loading) return
 
+    const session = sessionRef.current
     setLoading(true)
     try {
       const result = await createAdPayment(ad.id)
-      if (result.success && result.data) {
+      if (session !== sessionRef.current) return
+      if (result.success && result.data?.qr_code && result.data.order_no) {
         setQrCode(result.data.qr_code)
         setOrderNo(result.data.order_no)
+        setPaymentAmount(result.data.amount)
         setStep('qrcode')
         startPolling(ad.id, result.data.order_no)
       } else {
         setErrorMsg(result.message || '创建付款订单失败')
         setStep('error')
       }
-    } catch {
-      setErrorMsg('网络错误，请稍后重试')
+    } catch (error: unknown) {
+      if (session !== sessionRef.current) return
+      setErrorMsg(getApiErrorMessage(error, '创建付款订单失败'))
       setStep('error')
     } finally {
-      setLoading(false)
+      if (session === sessionRef.current) setLoading(false)
     }
   }
 
   /** 开始轮询支付状态 */
   const startPolling = (adId: number, no: string) => {
     clearPoll()
+    const session = sessionRef.current
+    let inFlight = false
     pollRef.current = setInterval(async () => {
+      if (inFlight || session !== sessionRef.current) return
+      inFlight = true
       try {
         const res = await checkAdPaymentStatus(adId, no)
-        if (res.success && res.data?.status === 'approved') {
+        if (session !== sessionRef.current) return
+        if (res.success && res.data?.paid === true) {
           clearPoll()
+          setAdvertisementApproved(res.data.status === 'approved')
           setStep('success')
           addToast({ message: '付款成功', type: 'success' })
           // 延迟关闭，让用户看到成功状态
-          setTimeout(() => {
+          closeTimerRef.current = setTimeout(() => {
+            if (session !== sessionRef.current) return
             onSuccess()
             handleClose()
           }, 1500)
+        } else if (!res.success) {
+          clearPoll()
+          setErrorMsg(res.message || '广告付款状态查询失败')
+          setStep('error')
         }
-      } catch {
-        // 轮询失败不做处理，继续重试
+      } catch (error: unknown) {
+        if (session !== sessionRef.current) return
+        clearPoll()
+        setErrorMsg(getApiErrorMessage(error, '广告付款状态查询失败'))
+        setStep('error')
+      } finally {
+        inFlight = false
       }
     }, 3000)
   }
@@ -136,7 +169,7 @@ export function AdPaymentModal({ visible, ad, onClose, onSuccess }: AdPaymentMod
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-slate-500">广告类型</span>
-                <span className="font-medium text-slate-900 dark:text-slate-100">{ad.ad_type === 'carousel' ? '轮播图' : '文字广告'}</span>
+                <span className="font-medium text-slate-900 dark:text-slate-100">{ad.ad_type_label || ad.ad_type}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-slate-500">购买月数</span>
@@ -180,7 +213,7 @@ export function AdPaymentModal({ visible, ad, onClose, onSuccess }: AdPaymentMod
               </div>
             </div>
             <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">
-              ¥{ad.total_amount || '0'}
+              ¥{paymentAmount}
             </div>
             <p className="text-xs text-slate-400">
               订单号: {orderNo}
@@ -200,7 +233,7 @@ export function AdPaymentModal({ visible, ad, onClose, onSuccess }: AdPaymentMod
               付款成功
             </p>
             <p className="text-sm text-slate-500">
-              广告已自动审核通过
+              {advertisementApproved ? '广告已自动复核通过' : '付款已确认，请在列表查看广告复核状态'}
             </p>
           </div>
         )}

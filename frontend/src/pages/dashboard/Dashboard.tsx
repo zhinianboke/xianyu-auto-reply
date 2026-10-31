@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { Activity, Calendar, MessageSquare, RefreshCw, Shield, ShoppingCart, Users, Package, Clock, DollarSign, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
+import { motion } from 'framer-motion'
+import { Activity, Calendar, MessageSquare, RefreshCw, Shield, ShoppingCart, Users, Package, Clock, DollarSign } from 'lucide-react'
 import { getAccountStats } from '@/api/accounts'
 import { type AdminStats, type TodayStats, getAdminStats, getTodayStats } from '@/api/admin'
-import { getPublicAds, type Advertisement } from '@/api/advertisements'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { OrderAmountChart } from '@/components/common/OrderAmountChart'
+import { PublicAdvertisements } from '@/components/common/PublicAdvertisements'
+import { usePublicAdvertisements } from '@/components/common/usePublicAdvertisements'
 
 interface DashboardStats {
   totalAccounts: number
@@ -20,26 +21,11 @@ interface DashboardStats {
   remainingAccountCount: number | null
 }
 
-interface AdsData {
-  carousel: Advertisement[]
-  text: Advertisement[]
-}
-
-function shuffle<T>(items: T[]): T[] {
-  const shuffled = [...items]
-  for (let index = shuffled.length - 1; index > 0; index -= 1) {
-    const randomIndex = Math.floor(Math.random() * (index + 1))
-    ;[shuffled[index], shuffled[randomIndex]] = [shuffled[randomIndex], shuffled[index]]
-  }
-  return shuffled
-}
-
 export function Dashboard() {
   const { addToast } = useUIStore()
   const { isAuthenticated, token, _hasHydrated, user } = useAuthStore()
   const [statsLoading, setStatsLoading] = useState(true)
   const [adminStatsLoading, setAdminStatsLoading] = useState(true)
-  const [adsLoading, setAdsLoading] = useState(true)
   const [stats, setStats] = useState<DashboardStats>({
     totalAccounts: 0,
     totalKeywords: 0,
@@ -53,9 +39,8 @@ export function Dashboard() {
   })
   const [adminStats, setAdminStats] = useState<AdminStats | null>(null)
   const [todayStats, setTodayStats] = useState<TodayStats | null>(null)
-  const [adsData, setAdsData] = useState<AdsData>({ carousel: [], text: [] })
-  const [carouselIndex, setCarouselIndex] = useState(0)
-  const [expandedTextAds, setExpandedTextAds] = useState<Set<number>>(new Set())
+  const advertisements = usePublicAdvertisements()
+  const { loadAds } = advertisements
 
   /** 加载基础统计数据 */
   const loadStats = async () => {
@@ -108,25 +93,6 @@ export function Dashboard() {
     }
   }
 
-  /** 加载广告数据 */
-  const loadAds = async () => {
-    try {
-      setAdsLoading(true)
-      const adsResult = await getPublicAds()
-      if (adsResult.success && adsResult.data) {
-        setAdsData({
-          carousel: shuffle(adsResult.data.carousel),
-          text: shuffle(adsResult.data.text),
-        })
-        setCarouselIndex(0)
-      }
-    } catch {
-      // ignore
-    } finally {
-      setAdsLoading(false)
-    }
-  }
-
   /** 加载所有数据（异步独立加载） */
   const loadDashboard = () => {
     if (!_hasHydrated || !isAuthenticated || !token) return
@@ -141,28 +107,6 @@ export function Dashboard() {
     if (!_hasHydrated || !isAuthenticated || !token) return
     loadDashboard()
   }, [_hasHydrated, isAuthenticated, token])
-
-  // 轮播广告自动切换
-  useEffect(() => {
-    if (adsData.carousel.length <= 1) return
-    const timer = setInterval(() => {
-      setCarouselIndex((prev) => (prev + 1) % adsData.carousel.length)
-    }, 4000)
-    return () => clearInterval(timer)
-  }, [adsData.carousel.length])
-
-  /** 切换文字广告展开/折叠 */
-  const toggleTextAd = (id: number) => {
-    setExpandedTextAds((prev) => {
-      const newSet = new Set(prev)
-      if (newSet.has(id)) {
-        newSet.delete(id)
-      } else {
-        newSet.add(id)
-      }
-      return newSet
-    })
-  }
 
   const statCards = [
     {
@@ -285,157 +229,7 @@ export function Dashboard() {
         )}
       </div>
 
-      {/* 广告模块 */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2, duration: 0.3 }}
-        className="grid grid-cols-1 lg:grid-cols-2 gap-4"
-      >
-        {/* 左侧：轮播广告 */}
-        <div className="vben-card">
-          <div className="vben-card-header">
-            <h2 className="vben-card-title">推荐广告</h2>
-          </div>
-          <div className="vben-card-body p-0">
-            <div className="relative h-48 sm:h-56 overflow-hidden rounded-b-lg bg-slate-100 dark:bg-slate-800">
-              {adsLoading ? (
-                <div className="w-full h-full flex items-center justify-center">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
-                </div>
-              ) : adsData.carousel.length > 0 ? (
-                <AnimatePresence mode="wait">
-                  <motion.a
-                    key={carouselIndex}
-                    href={adsData.carousel[carouselIndex]?.link || '#'}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="absolute inset-0 block cursor-pointer bg-slate-100 dark:bg-slate-800"
-                    initial={{ y: '100%', opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
-                    exit={{ y: '-100%', opacity: 0 }}
-                    transition={{ duration: 0.5, ease: 'easeInOut' }}
-                  >
-                    {adsData.carousel[carouselIndex]?.image_url ? (
-                      <img
-                        src={adsData.carousel[carouselIndex].image_url!}
-                        alt={adsData.carousel[carouselIndex].title}
-                        className="w-full h-full object-contain"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-blue-500 to-purple-600">
-                        <span className="text-white text-xl font-bold">
-                          {adsData.carousel[carouselIndex]?.title}
-                        </span>
-                      </div>
-                    )}
-                    {/* 底部标题和正文 */}
-                    <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-3">
-                      <h3 className="text-white font-medium text-sm truncate flex items-center gap-1.5">
-                        {adsData.carousel[carouselIndex]?.source === 'remote' && (
-                          <span className="flex-shrink-0 px-1.5 py-0.5 text-[10px] leading-none rounded bg-blue-500/90 text-white">官方</span>
-                        )}
-                        <span className="truncate">{adsData.carousel[carouselIndex]?.title}</span>
-                      </h3>
-                      {adsData.carousel[carouselIndex]?.content && (
-                        <p className="text-white/80 text-xs mt-1 line-clamp-2">
-                          {adsData.carousel[carouselIndex].content}
-                        </p>
-                      )}
-                    </div>
-                  </motion.a>
-                </AnimatePresence>
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-slate-400">
-                  <span>暂无轮播广告</span>
-                </div>
-              )}
-              {/* 轮播指示器 */}
-              {adsData.carousel.length > 1 && (
-                <div className="absolute bottom-12 left-0 right-0 flex justify-center gap-1.5">
-                  {adsData.carousel.map((_, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => setCarouselIndex(idx)}
-                      className={`w-2 h-2 rounded-full transition-colors ${
-                        idx === carouselIndex ? 'bg-white' : 'bg-white/40'
-                      }`}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* 右侧：文字广告 */}
-        <div className="vben-card">
-          <div className="vben-card-header">
-            <h2 className="vben-card-title">文字广告</h2>
-          </div>
-          <div className="vben-card-body">
-            <div className="space-y-2 max-h-48 sm:max-h-56 overflow-y-auto">
-              {adsLoading ? (
-                <div className="h-32 flex items-center justify-center">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
-                </div>
-              ) : adsData.text.length > 0 ? (
-                adsData.text.map((ad) => (
-                  <div
-                    key={ad.id}
-                    className="border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden"
-                  >
-                    <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800">
-                      <a
-                        href={ad.link || '#'}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex-1 text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline truncate flex items-center gap-1"
-                      >
-                        {ad.source === 'remote' && (
-                          <span className="flex-shrink-0 px-1.5 py-0.5 text-[10px] leading-none rounded bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300">官方</span>
-                        )}
-                        {ad.title}
-                        <ExternalLink className="w-3 h-3 flex-shrink-0" />
-                      </a>
-                      <button
-                        onClick={() => toggleTextAd(ad.id)}
-                        className="ml-2 p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded transition-colors"
-                      >
-                        {expandedTextAds.has(ad.id) ? (
-                          <ChevronUp className="w-4 h-4 text-slate-500" />
-                        ) : (
-                          <ChevronDown className="w-4 h-4 text-slate-500" />
-                        )}
-                      </button>
-                    </div>
-                    <AnimatePresence>
-                      {expandedTextAds.has(ad.id) && ad.content && (
-                        <motion.div
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: 'auto', opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          transition={{ duration: 0.2 }}
-                          className="overflow-hidden"
-                        >
-                          {/* whitespace-pre-wrap：保留广告管理里录入的换行（与弹窗公告一致）；break-words：长链接不撑破容器 */}
-                          <p className="p-3 text-sm text-slate-600 dark:text-slate-400 border-t border-slate-200 dark:border-slate-700 whitespace-pre-wrap break-words">
-                            {ad.content}
-                          </p>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                ))
-              ) : (
-                <div className="h-32 flex items-center justify-center text-slate-400 border border-dashed border-slate-300 dark:border-slate-600 rounded-lg">
-                  <span>广告位招租</span>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </motion.div>
+      <PublicAdvertisements {...advertisements} />
 
       {/* Admin Stats - 管理员专属 */}
       {user?.is_admin && (

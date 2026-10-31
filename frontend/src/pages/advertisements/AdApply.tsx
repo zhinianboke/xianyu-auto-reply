@@ -6,19 +6,15 @@
  * 2. 修改、删除自己的广告
  * 3. 支持图片上传和预览
  */
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { motion } from 'framer-motion'
 import {
   Megaphone,
   RefreshCw,
   Plus,
-  Edit2,
-  Trash2,
   X,
-  Loader2,
   CheckCircle,
   Clock,
-  Upload,
   CreditCard,
   DollarSign,
 } from 'lucide-react'
@@ -32,18 +28,17 @@ import {
 import type { Advertisement } from '@/api/advertisements'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
-import { PageLoading } from '@/components/common/Loading'
-import { Select } from '@/components/common/Select'
+import { Loading, PageLoading } from '@/components/common/Loading'
+import { Pager } from '@/components/common/Pager'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
+import { AdvertisementFormModal } from './AdvertisementFormModal'
+import { useAdvertisementTypes } from './useAdvertisementTypes'
+import { getApiErrorMessage } from '@/utils/apiError'
 import { AdPaymentModal } from './AdPaymentModal'
-
-const AD_TYPE_OPTIONS = [
-  { value: 'carousel', label: '轮播图' },
-  { value: 'text', label: '文字广告' },
-]
 
 export default function AdApply() {
   const { addToast } = useUIStore()
+  const { adTypeOptions, typesLoading, typesError, reloadTypes } = useAdvertisementTypes()
   const { token, isAuthenticated, _hasHydrated } = useAuthStore()
 
   const [loading, setLoading] = useState(true)
@@ -62,8 +57,6 @@ export default function AdApply() {
   const [formAdType, setFormAdType] = useState('text')
   const [formMonths, setFormMonths] = useState('')
   const [saving, setSaving] = useState(false)
-  const [uploading, setUploading] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // 广告价格
   const [adPrices, setAdPrices] = useState<Record<string, string>>({})
@@ -84,19 +77,21 @@ export default function AdApply() {
 
   // 计算预估金额和到期日
   const estimatedAmount = useMemo(() => {
-    const months = parseInt(formMonths)
-    if (!months || months <= 0) return null
-    const unitPrice = parseFloat(adPrices[formAdType] || '0')
-    if (!unitPrice) return null
+    const months = Number(formMonths)
+    if (!Number.isInteger(months) || months < 1 || months > 120) return null
+    const unitPrice = Number(adPrices[formAdType])
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) return null
     return (unitPrice * months).toFixed(2)
   }, [formMonths, formAdType, adPrices])
 
   const estimatedExpireDate = useMemo(() => {
-    const months = parseInt(formMonths)
-    if (!months || months <= 0) return null
-    const d = new Date()
-    d.setMonth(d.getMonth() + months)
-    return d.toISOString().split('T')[0]
+    const months = Number(formMonths)
+    if (!Number.isInteger(months) || months < 1 || months > 120) return null
+    const today = new Date(Date.now() + 8 * 60 * 60 * 1000)
+    const target = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + months, 1))
+    const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate()
+    target.setUTCDate(Math.min(today.getUTCDate(), lastDay))
+    return target.toISOString().slice(0, 10)
   }, [formMonths])
 
   const loadAds = async () => {
@@ -110,12 +105,15 @@ export default function AdApply() {
       if (adsResult.success && adsResult.data) {
         setAds(adsResult.data.items)
         setTotal(adsResult.data.total)
-      }
+      } else addToast({ type: 'error', message: adsResult.message || '加载广告列表失败' })
       if (pricesResult.success && pricesResult.data) {
         setAdPrices(pricesResult.data)
+      } else {
+        setAdPrices({})
+        addToast({ type: 'error', message: pricesResult.message || '加载广告费用失败' })
       }
-    } catch {
-      addToast({ type: 'error', message: '加载广告列表失败' })
+    } catch (error: unknown) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '加载广告列表失败') })
     } finally {
       setLoading(false)
     }
@@ -152,9 +150,13 @@ export default function AdApply() {
       addToast({ type: 'warning', message: '请输入标题' })
       return
     }
-    const months = parseInt(formMonths)
-    if (!months || months <= 0) {
-      addToast({ type: 'warning', message: '请输入有效的月数（大于0的整数）' })
+    const months = Number(formMonths)
+    if (!Number.isInteger(months) || months < 1 || months > 120) {
+      addToast({ type: 'warning', message: '请输入1至120之间的整数月数' })
+      return
+    }
+    if (typesLoading || typesError || !adTypeOptions.some((option) => option.value === formAdType)) {
+      addToast({ type: 'warning', message: typesError || '请等待广告类型加载完成' })
       return
     }
     setSaving(true)
@@ -177,8 +179,8 @@ export default function AdApply() {
       } else {
         addToast({ type: 'error', message: result.message || '操作失败' })
       }
-    } catch {
-      addToast({ type: 'error', message: '操作失败' })
+    } catch (error: unknown) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '操作失败') })
     } finally {
       setSaving(false)
     }
@@ -195,40 +197,10 @@ export default function AdApply() {
       } else {
         addToast({ type: 'error', message: result.message || '删除失败' })
       }
-    } catch {
-      addToast({ type: 'error', message: '删除失败' })
+    } catch (error: unknown) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '删除失败') })
     } finally {
       setDeleting(false)
-    }
-  }
-
-  const handleUploadImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    if (!file.type.startsWith('image/')) {
-      addToast({ type: 'warning', message: '请选择图片文件' })
-      return
-    }
-    setUploading(true)
-    try {
-      const formData = new FormData()
-      formData.append('image', file)
-      const response = await fetch('/api/v1/upload/upload-image', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
-      })
-      const result = await response.json()
-      if (result.success && result.data?.image_url) {
-        setFormImageUrl(result.data.image_url)
-      } else {
-        addToast({ type: 'error', message: result.message || '上传失败' })
-      }
-    } catch {
-      addToast({ type: 'error', message: '上传失败' })
-    } finally {
-      setUploading(false)
-      e.target.value = ''
     }
   }
 
@@ -256,6 +228,9 @@ export default function AdApply() {
         </div>
       </div>
 
+      {typesError && <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-red-600 dark:text-red-400">
+        {typesError}<button onClick={() => void reloadTypes()} className="btn-ios-secondary">重新加载类型</button>
+      </div>}
       {/* 表格 */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="vben-card">
         <div className="vben-card-header">
@@ -265,8 +240,9 @@ export default function AdApply() {
           </h2>
           <span className="badge-primary">{total} 条</span>
         </div>
-        <div className="overflow-x-auto">
-          <div className="max-h-[500px] overflow-y-auto">
+        <div className="relative">
+        {loading && <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm"><Loading text="加载中..." /></div>}
+        <div className="table-scroll">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 dark:bg-slate-800 sticky top-0">
                 <tr>
@@ -295,7 +271,7 @@ export default function AdApply() {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        {ad.ad_type === 'carousel' ? '轮播图' : '文字广告'}
+                        {ad.ad_type_label || adTypeOptions.find((option) => option.value === ad.ad_type)?.label || ad.ad_type}
                       </td>
                       <td className="px-4 py-3">
                         {ad.image_url ? (
@@ -345,13 +321,13 @@ export default function AdApply() {
                               付款
                             </button>
                           )}
-                          {ad.status !== 'approved' && (
+                          {(ad.can_edit ?? ad.status !== 'approved') && (
                             <button
                               onClick={() => openEditModal(ad)}
                               className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded"
                               title="编辑"
                             >
-                              <Edit2 className="w-4 h-4" />
+                              编辑
                             </button>
                           )}
                           <button
@@ -359,7 +335,7 @@ export default function AdApply() {
                             className="p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
                             title="删除"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            删除
                           </button>
                         </div>
                       </td>
@@ -368,139 +344,37 @@ export default function AdApply() {
                 )}
               </tbody>
             </table>
-          </div>
         </div>
-        {/* 分页 */}
-        <div className="p-4 border-t border-slate-100 dark:border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-sm text-slate-500">
-            <span>共 {total} 条</span>
-            <span>每页</span>
-            <select
-              value={pageSize}
-              onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1) }}
-              className="px-2 py-1 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm"
-            >
-              <option value={10}>10</option>
-              <option value={20}>20</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-            </select>
-            <span>条</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="btn-ios-secondary btn-sm">
-              上一页
-            </button>
-            <span className="px-3 py-1.5 text-sm text-slate-500">
-              {page} / {Math.max(1, Math.ceil(total / pageSize))}
-            </span>
-            <button onClick={() => setPage((p) => p + 1)} disabled={page >= Math.ceil(total / pageSize) || total === 0} className="btn-ios-secondary btn-sm">
-              下一页
-            </button>
-          </div>
         </div>
+        <Pager page={page} pageSize={pageSize} total={total} loading={loading}
+          onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1) }} />
       </motion.div>
 
       {/* 新建/编辑弹窗 */}
       {isModalOpen && (
-        <div className="modal-overlay">
-          <div className="modal-content max-w-lg">
-            <div className="modal-header">
-              <h2 className="text-lg font-semibold">{editAd ? '编辑广告' : '新建广告申请'}</h2>
-              <button onClick={() => setIsModalOpen(false)} className="p-1 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg">
-                <X className="w-4 h-4 text-gray-500" />
-              </button>
-            </div>
-            <div className="modal-body space-y-4">
-              <div className="input-group">
-                <label className="input-label">标题 *</label>
-                <input type="text" value={formTitle} onChange={(e) => setFormTitle(e.target.value)} className="input-ios" maxLength={200} placeholder="广告标题" />
-              </div>
-              <div className="input-group">
-                <label className="input-label">正文</label>
-                <textarea value={formContent} onChange={(e) => setFormContent(e.target.value)} className="input-ios min-h-[80px] resize-none" placeholder="广告正文内容" />
-              </div>
-              <div className="input-group">
-                <label className="input-label">广告类型</label>
-                <Select value={formAdType} onChange={setFormAdType} options={AD_TYPE_OPTIONS} />
-              </div>
-              <div className="input-group">
-                <label className="input-label">链接</label>
-                <input type="text" value={formLink} onChange={(e) => setFormLink(e.target.value)} className="input-ios" placeholder="https://" />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="input-group">
-                  <label className="input-label">购买月数 *</label>
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={formMonths}
-                    onChange={(e) => {
-                      const val = e.target.value
-                      if (val === '' || /^[1-9]\d*$/.test(val)) {
-                        setFormMonths(val)
-                      }
-                    }}
-                    className="input-ios"
-                    placeholder="输入月数"
-                  />
-                </div>
-                <div className="input-group">
-                  <label className="input-label">到期日期</label>
-                  <input
-                    type="text"
-                    value={estimatedExpireDate || ''}
-                    disabled
-                    className="input-ios bg-gray-50 dark:bg-gray-800 cursor-not-allowed text-slate-500"
-                    placeholder="自动计算"
-                  />
-                </div>
-              </div>
-              {estimatedAmount && (
-                <div className="p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
-                  <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
-                    <DollarSign className="w-4 h-4" />
-                    <span className="text-sm">预计费用：</span>
-                    <span className="text-lg font-bold">¥{estimatedAmount}</span>
-                    <span className="text-xs text-amber-600 dark:text-amber-500">
-                      （{adPrices[formAdType] || '0'}元/月 × {formMonths}月）
-                    </span>
-                  </div>
-                </div>
-              )}
-              <div className="input-group">
-                <label className="input-label">图片</label>
-                <div className="flex items-center gap-3">
-                  {formImageUrl ? (
-                    <div className="relative">
-                      <img src={formImageUrl} alt="" className="w-20 h-20 object-cover rounded-lg border" />
-                      <button onClick={() => setFormImageUrl('')} className="absolute -top-2 -right-2 p-0.5 bg-red-500 text-white rounded-full">
-                        <X className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={uploading}
-                      className="w-20 h-20 rounded-lg border-2 border-dashed border-slate-300 dark:border-slate-600 flex items-center justify-center text-slate-400 hover:border-blue-400 hover:text-blue-400"
-                    >
-                      {uploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Upload className="w-5 h-5" />}
-                    </button>
-                  )}
-                </div>
-                <input ref={fileInputRef} type="file" accept="image/*" onChange={handleUploadImage} className="hidden" />
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button onClick={() => setIsModalOpen(false)} className="btn-ios-secondary" disabled={saving}>取消</button>
-              <button onClick={handleSave} className="btn-ios-primary" disabled={saving}>
-                {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-                {editAd ? '保存' : '提交'}
-              </button>
-            </div>
+        <AdvertisementFormModal title={editAd ? '编辑广告' : '新建广告申请'} token={token}
+          fields={{
+            title: { value: formTitle, onChange: setFormTitle }, content: { value: formContent, onChange: setFormContent },
+            link: { value: formLink, onChange: setFormLink }, image: { value: formImageUrl, onChange: setFormImageUrl },
+            type: { value: formAdType, onChange: setFormAdType },
+          }} typeOptions={adTypeOptions} typesLoading={typesLoading} typesError={typesError} saving={saving} onSave={handleSave}
+          submitText={editAd ? '保存' : '提交'} onClose={() => setIsModalOpen(false)}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="input-group"><label className="input-label">购买月数 *</label>
+              <input type="number" min="1" max="120" step="1" value={formMonths} onChange={(e) => {
+                const value = e.target.value
+                if (value === '' || /^[1-9]\d*$/.test(value)) setFormMonths(value)
+              }} className="input-ios" placeholder="输入月数" /></div>
+            <div className="input-group"><label className="input-label">到期日期</label>
+              <input value={estimatedExpireDate || ''} disabled className="input-ios" placeholder="自动计算" /></div>
           </div>
-        </div>
+          {estimatedAmount ? <div className="p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
+            <div className="flex flex-wrap items-center gap-2 text-amber-700 dark:text-amber-400">
+              <DollarSign className="w-4 h-4" /><span className="text-sm">预计费用：</span><span className="text-lg font-bold">¥{estimatedAmount}</span>
+              <span className="text-xs">（{adPrices[formAdType]}元/月 × {formMonths}月）</span>
+            </div>
+          </div> : !Number(adPrices[formAdType]) && <p className="text-sm text-amber-700 dark:text-amber-400">该类型尚未配置有效价格，请联系管理员</p>}
+        </AdvertisementFormModal>
       )}
 
       {/* 图片预览 */}

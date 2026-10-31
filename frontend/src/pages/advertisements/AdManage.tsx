@@ -7,18 +7,14 @@
  * 3. 修改、删除广告
  * 4. 支持图片预览
  */
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import {
   Megaphone,
   RefreshCw,
-  Edit2,
-  Trash2,
   X,
-  Loader2,
   CheckCircle,
   Clock,
-  Upload,
   DollarSign,
 } from 'lucide-react'
 import {
@@ -31,14 +27,13 @@ import {
 import type { Advertisement } from '@/api/advertisements'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
-import { PageLoading } from '@/components/common/Loading'
+import { Loading, PageLoading } from '@/components/common/Loading'
+import { Pager } from '@/components/common/Pager'
 import { Select } from '@/components/common/Select'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
-
-const AD_TYPE_OPTIONS = [
-  { value: 'carousel', label: '轮播图' },
-  { value: 'text', label: '文字广告' },
-]
+import { AdvertisementFormModal } from './AdvertisementFormModal'
+import { useAdvertisementTypes } from './useAdvertisementTypes'
+import { getApiErrorMessage } from '@/utils/apiError'
 
 const STATUS_OPTIONS = [
   { value: 'unpaid', label: '待付款' },
@@ -48,6 +43,7 @@ const STATUS_OPTIONS = [
 
 export default function AdManage() {
   const { addToast } = useUIStore()
+  const { adTypeOptions, typesLoading, typesError, reloadTypes } = useAdvertisementTypes()
   const { token, isAuthenticated, _hasHydrated } = useAuthStore()
 
   const [loading, setLoading] = useState(true)
@@ -57,6 +53,7 @@ export default function AdManage() {
   const [pageSize, setPageSize] = useState(20)
   const [filterStatus, setFilterStatus] = useState('')
   const [filterType, setFilterType] = useState('')
+  const [activeFilters, setActiveFilters] = useState({ status: '', type: '' })
 
   // 编辑弹窗
   const [editAd, setEditAd] = useState<Advertisement | null>(null)
@@ -68,8 +65,6 @@ export default function AdManage() {
   const [formAdType, setFormAdType] = useState('text')
   const [formStatus, setFormStatus] = useState('pending')
   const [saving, setSaving] = useState(false)
-  const [uploading, setUploading] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // 图片预览
   const [previewImage, setPreviewImage] = useState<string | null>(null)
@@ -81,25 +76,23 @@ export default function AdManage() {
   })
   const [deleting, setDeleting] = useState(false)
 
-  // 加载广告列表；可传入筛选覆盖值，避免 setState 异步导致的读取到旧筛选值
-  const loadAds = async (overrides?: { status?: string; type?: string }) => {
+  // 翻页、刷新及编辑后按已查询条件加载，筛选草稿仅点击查询时生效。
+  const loadAds = async () => {
     if (!_hasHydrated || !isAuthenticated || !token) return
-    const statusValue = overrides?.status !== undefined ? overrides.status : filterStatus
-    const typeValue = overrides?.type !== undefined ? overrides.type : filterType
     try {
       setLoading(true)
       const result = await getAllAds({
         page,
         page_size: pageSize,
-        status: statusValue || undefined,
-        ad_type: typeValue || undefined,
+        status: activeFilters.status || undefined,
+        ad_type: activeFilters.type || undefined,
       })
       if (result.success && result.data) {
         setAds(result.data.items)
         setTotal(result.data.total)
-      }
-    } catch {
-      addToast({ type: 'error', message: '加载广告列表失败' })
+      } else addToast({ type: 'error', message: result.message || '加载广告列表失败' })
+    } catch (error: unknown) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '加载广告列表失败') })
     } finally {
       setLoading(false)
     }
@@ -107,26 +100,20 @@ export default function AdManage() {
 
   useEffect(() => {
     loadAds()
-  }, [_hasHydrated, isAuthenticated, token, page, pageSize])
+  }, [_hasHydrated, isAuthenticated, token, page, pageSize, activeFilters])
 
   // 点击「查询」：使用当前筛选草稿回到第 1 页并加载
   const handleSearch = () => {
-    if (page !== 1) {
-      setPage(1) // 翻页依赖变化会触发 loadAds
-    } else {
-      loadAds()
-    }
+    setPage(1)
+    setActiveFilters({ status: filterStatus, type: filterType })
   }
 
   // 点击「重置」：清空筛选并重新加载
   const handleReset = () => {
     setFilterStatus('')
     setFilterType('')
-    if (page !== 1) {
-      setPage(1) // 翻页依赖变化会触发 loadAds，此时状态已清空
-    } else {
-      loadAds({ status: '', type: '' }) // 用覆盖值立即加载，避免 setState 异步
-    }
+    setPage(1)
+    setActiveFilters({ status: '', type: '' })
   }
 
   const openEditModal = (ad: Advertisement) => {
@@ -144,6 +131,10 @@ export default function AdManage() {
     if (!editAd) return
     if (!formTitle.trim()) {
       addToast({ type: 'warning', message: '请输入标题' })
+      return
+    }
+    if (typesLoading || typesError || !adTypeOptions.some((option) => option.value === formAdType)) {
+      addToast({ type: 'warning', message: typesError || '请等待广告类型加载完成' })
       return
     }
     setSaving(true)
@@ -164,8 +155,8 @@ export default function AdManage() {
       } else {
         addToast({ type: 'error', message: result.message || '保存失败' })
       }
-    } catch {
-      addToast({ type: 'error', message: '保存失败' })
+    } catch (error: unknown) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '保存失败') })
     } finally {
       setSaving(false)
     }
@@ -180,8 +171,8 @@ export default function AdManage() {
       } else {
         addToast({ type: 'error', message: result.message || '操作失败' })
       }
-    } catch {
-      addToast({ type: 'error', message: '操作失败' })
+    } catch (error: unknown) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '操作失败') })
     }
   }
 
@@ -194,8 +185,8 @@ export default function AdManage() {
       } else {
         addToast({ type: 'error', message: result.message || '操作失败' })
       }
-    } catch {
-      addToast({ type: 'error', message: '操作失败' })
+    } catch (error: unknown) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '操作失败') })
     }
   }
 
@@ -210,40 +201,10 @@ export default function AdManage() {
       } else {
         addToast({ type: 'error', message: result.message || '删除失败' })
       }
-    } catch {
-      addToast({ type: 'error', message: '删除失败' })
+    } catch (error: unknown) {
+      addToast({ type: 'error', message: getApiErrorMessage(error, '删除失败') })
     } finally {
       setDeleting(false)
-    }
-  }
-
-  const handleUploadImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    if (!file.type.startsWith('image/')) {
-      addToast({ type: 'warning', message: '请选择图片文件' })
-      return
-    }
-    setUploading(true)
-    try {
-      const formData = new FormData()
-      formData.append('image', file)
-      const response = await fetch('/api/v1/upload/upload-image', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
-      })
-      const result = await response.json()
-      if (result.success && result.data?.image_url) {
-        setFormImageUrl(result.data.image_url)
-      } else {
-        addToast({ type: 'error', message: result.message || '上传失败' })
-      }
-    } catch {
-      addToast({ type: 'error', message: '上传失败' })
-    } finally {
-      setUploading(false)
-      e.target.value = ''
     }
   }
 
@@ -281,8 +242,9 @@ export default function AdManage() {
           <Select
             value={filterType}
             onChange={setFilterType}
-            options={[{ value: '', label: '全部类型' }, ...AD_TYPE_OPTIONS]}
-            className="w-32"
+            options={[{ value: '', label: '全部类型' }, ...adTypeOptions]}
+            disabled={typesLoading || Boolean(typesError)}
+            className="w-48"
           />
         </div>
         <div className="flex items-end gap-2 ml-auto">
@@ -297,6 +259,9 @@ export default function AdManage() {
         </div>
       </div>
 
+      {typesError && <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-red-600 dark:text-red-400">
+        {typesError}<button onClick={() => void reloadTypes()} className="btn-ios-secondary">重新加载类型</button>
+      </div>}
       {/* 表格 */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="vben-card">
         <div className="vben-card-header">
@@ -306,8 +271,9 @@ export default function AdManage() {
           </h2>
           <span className="badge-primary">{total} 条</span>
         </div>
-        <div className="overflow-x-auto">
-          <div className="max-h-[500px] overflow-y-auto">
+        <div className="relative">
+        {loading && <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm"><Loading text="加载中..." /></div>}
+        <div className="table-scroll">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 dark:bg-slate-800 sticky top-0">
                 <tr>
@@ -336,7 +302,7 @@ export default function AdManage() {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        {ad.ad_type === 'carousel' ? '轮播图' : '文字广告'}
+                        {ad.ad_type_label || adTypeOptions.find((option) => option.value === ad.ad_type)?.label || ad.ad_type}
                       </td>
                       <td className="px-4 py-3">
                         {ad.image_url ? (
@@ -382,7 +348,7 @@ export default function AdManage() {
                               className="p-1.5 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded"
                               title="复核"
                             >
-                              <CheckCircle className="w-4 h-4" />
+                              复核
                             </button>
                           ) : (
                             <button
@@ -390,7 +356,7 @@ export default function AdManage() {
                               className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded"
                               title="取消复核"
                             >
-                              <Clock className="w-4 h-4" />
+                              取消复核
                             </button>
                           )}
                           <button
@@ -398,14 +364,14 @@ export default function AdManage() {
                             className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded"
                             title="编辑"
                           >
-                            <Edit2 className="w-4 h-4" />
+                            编辑
                           </button>
                           <button
                             onClick={() => setDeleteConfirm({ open: true, ad })}
                             className="p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
                             title="删除"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            删除
                           </button>
                         </div>
                       </td>
@@ -414,108 +380,26 @@ export default function AdManage() {
                 )}
               </tbody>
             </table>
-          </div>
         </div>
-        {/* 分页 */}
-        <div className="p-4 border-t border-slate-100 dark:border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-sm text-slate-500">
-            <span>共 {total} 条</span>
-            <span>每页</span>
-            <select
-              value={pageSize}
-              onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1) }}
-              className="px-2 py-1 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm"
-            >
-              <option value={10}>10</option>
-              <option value={20}>20</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-            </select>
-            <span>条</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="btn-ios-secondary btn-sm">
-              上一页
-            </button>
-            <span className="px-3 py-1.5 text-sm text-slate-500">
-              {page} / {Math.max(1, Math.ceil(total / pageSize))}
-            </span>
-            <button onClick={() => setPage((p) => p + 1)} disabled={page >= Math.ceil(total / pageSize) || total === 0} className="btn-ios-secondary btn-sm">
-              下一页
-            </button>
-          </div>
         </div>
+        <Pager page={page} pageSize={pageSize} total={total} loading={loading}
+          onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1) }} />
       </motion.div>
 
       {/* 编辑弹窗 */}
       {editAd && (
-        <div className="modal-overlay">
-          <div className="modal-content max-w-lg">
-            <div className="modal-header">
-              <h2 className="text-lg font-semibold">编辑广告</h2>
-              <button onClick={() => setEditAd(null)} className="p-1 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg">
-                <X className="w-4 h-4 text-gray-500" />
-              </button>
-            </div>
-            <div className="modal-body space-y-4">
-              <div className="input-group">
-                <label className="input-label">标题 *</label>
-                <input type="text" value={formTitle} onChange={(e) => setFormTitle(e.target.value)} className="input-ios" maxLength={200} />
-              </div>
-              <div className="input-group">
-                <label className="input-label">正文</label>
-                <textarea value={formContent} onChange={(e) => setFormContent(e.target.value)} className="input-ios min-h-[80px] resize-none" />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="input-group">
-                  <label className="input-label">广告类型</label>
-                  <Select value={formAdType} onChange={setFormAdType} options={AD_TYPE_OPTIONS} />
-                </div>
-                <div className="input-group">
-                  <label className="input-label">审核状态</label>
-                  <Select value={formStatus} onChange={setFormStatus} options={STATUS_OPTIONS} />
-                </div>
-              </div>
-              <div className="input-group">
-                <label className="input-label">链接</label>
-                <input type="text" value={formLink} onChange={(e) => setFormLink(e.target.value)} className="input-ios" placeholder="https://" />
-              </div>
-              <div className="input-group">
-                <label className="input-label">到期日期</label>
-                <input type="date" value={formExpireDate} onChange={(e) => setFormExpireDate(e.target.value)} className="input-ios" />
-              </div>
-              <div className="input-group">
-                <label className="input-label">图片</label>
-                <div className="flex items-center gap-3">
-                  {formImageUrl ? (
-                    <div className="relative">
-                      <img src={formImageUrl} alt="" className="w-20 h-20 object-cover rounded-lg border" />
-                      <button onClick={() => setFormImageUrl('')} className="absolute -top-2 -right-2 p-0.5 bg-red-500 text-white rounded-full">
-                        <X className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={uploading}
-                      className="w-20 h-20 rounded-lg border-2 border-dashed border-slate-300 dark:border-slate-600 flex items-center justify-center text-slate-400 hover:border-blue-400 hover:text-blue-400"
-                    >
-                      {uploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Upload className="w-5 h-5" />}
-                    </button>
-                  )}
-                </div>
-                <input ref={fileInputRef} type="file" accept="image/*" onChange={handleUploadImage} className="hidden" />
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button onClick={() => setEditAd(null)} className="btn-ios-secondary" disabled={saving}>取消</button>
-              <button onClick={handleSave} className="btn-ios-primary" disabled={saving}>
-                {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-                保存
-              </button>
-            </div>
-          </div>
-        </div>
+        <AdvertisementFormModal title="编辑广告" token={token}
+          fields={{
+            title: { value: formTitle, onChange: setFormTitle }, content: { value: formContent, onChange: setFormContent },
+            link: { value: formLink, onChange: setFormLink }, image: { value: formImageUrl, onChange: setFormImageUrl },
+            type: { value: formAdType, onChange: setFormAdType },
+          }} typeOptions={adTypeOptions} typesLoading={typesLoading} typesError={typesError} saving={saving} onSave={handleSave}
+          onClose={() => setEditAd(null)}>
+          <div className="input-group"><label className="input-label">审核状态</label>
+            <Select value={formStatus} onChange={setFormStatus} options={STATUS_OPTIONS} /></div>
+          <div className="input-group"><label className="input-label">到期日期</label>
+            <input type="date" value={formExpireDate} onChange={(e) => setFormExpireDate(e.target.value)} className="input-ios" /></div>
+        </AdvertisementFormModal>
       )}
 
       {/* 图片预览 */}

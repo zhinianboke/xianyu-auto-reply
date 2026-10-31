@@ -114,6 +114,7 @@ def _normalize_remote_ad(ad: dict[str, Any], seq: int, base_url: str) -> dict[st
 
 async def fetch_remote_public_ads(
     local_dedup_keys: set[tuple[str | None, str | None]] | None = None,
+    placement: str = "dashboard",
 ) -> dict[str, list[dict[str, Any]]]:
     """
     拉取远程官方服务器的公开广告并规范化
@@ -121,6 +122,7 @@ async def fetch_remote_public_ads(
     Args:
         local_dedup_keys: 本地广告去重键集合（标题, 链接），命中的远程广告将被跳过，
             避免官方服务器自身部署时重复展示自己的广告
+        placement: 首页 home 或仪表盘 dashboard，仅接收该位置对应类型；默认兼容旧仪表盘请求。
 
     Returns:
         {"carousel": [...], "text": [...]}，失败或未启用时返回空分组
@@ -132,7 +134,7 @@ async def fetch_remote_public_ads(
 
     base_url = (settings.remote_official_base_url or "").strip().rstrip("/")
 
-    data = await _fetch_remote_json(_REMOTE_ADS_PATH)
+    data = await _fetch_remote_json(f"{_REMOTE_ADS_PATH}?placement={placement}")
     if not data or not data.get("success") or not data.get("data"):
         return empty
 
@@ -146,12 +148,18 @@ async def fetch_remote_public_ads(
     seq = 0
 
     for ad in raw_carousel:
+        expected_type = "home_carousel" if placement == "home" else "carousel"
+        if ad.get("ad_type") not in ({expected_type} if placement == "home" else {expected_type, None}):
+            continue
         if (ad.get("title"), ad.get("link")) in dedup:
             continue
         seq += 1
         carousel.append(_normalize_remote_ad(ad, seq, base_url))
 
     for ad in raw_text:
+        expected_type = "home_text" if placement == "home" else "text"
+        if ad.get("ad_type") not in ({expected_type} if placement == "home" else {expected_type, None}):
+            continue
         if (ad.get("title"), ad.get("link")) in dedup:
             continue
         seq += 1

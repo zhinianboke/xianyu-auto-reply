@@ -39,6 +39,7 @@ from common.services.token_api_mode import (
     TOKEN_API_MODE_SETTING_KEY,
     TOKEN_API_MODES,
 )
+from common.services.advertisement_types import AD_PRICE_DEFAULTS, parse_ad_price
 from common.utils.logging_utils import update_log_retention
 from common.utils.browser_utils import is_frozen
 from common.utils.http_utils import get_client_ip
@@ -304,6 +305,11 @@ async def update_system_setting(
         return ApiResponse(success=False, message="该设置需要使用专用接口修改")
 
     setting_value = payload.value
+    if key in AD_PRICE_DEFAULTS:
+        try:
+            parse_ad_price(setting_value)
+        except ValueError as exc:
+            return ApiResponse(success=False, code=40001, message=str(exc))
     if key == PASSWORD_LOGIN_MODE_KEY:
         setting_value = str(payload.value or "").strip().lower()
         if setting_value == "auto":
