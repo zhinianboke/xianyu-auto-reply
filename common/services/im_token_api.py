@@ -18,15 +18,9 @@ from typing import Any
 import aiohttp
 from loguru import logger
 
-from common.services.token_api_mode import (
-    DEFAULT_TOKEN_API_MODE,
-    TOKEN_API_MODE_REMOTE,
-    TOKEN_API_MODE_WEB,
-    get_token_api_name,
-    normalize_token_api_mode,
-)
 from common.services.remote_token_api import (
     RemoteTokenResult,
+    RemoteTokenSettings,
     load_remote_token_settings,
     request_remote_xianyu_token_from_settings,
 )
@@ -36,9 +30,15 @@ from common.services.remote_token_risk_log_service import (
     build_remote_direct_event_description,
     record_remote_token_risk_log,
 )
+from common.services.token_api_mode import (
+    DEFAULT_TOKEN_API_MODE,
+    TOKEN_API_MODE_REMOTE,
+    TOKEN_API_MODE_WEB,
+    get_token_api_name,
+    normalize_token_api_mode,
+)
 from common.utils.cookie_refresh import is_session_expired_error
 from common.utils.xianyu_utils import generate_sign, trans_cookies
-
 
 IM_TOKEN_API_BASE_URL = "https://h5api.m.goofish.com/h5"
 # 远程接口取 Token 超时时的最大尝试次数（首次 + 重试 2 次）；全部超时后才交由上层处理滑块
@@ -200,30 +200,29 @@ async def request_im_token(
     }
 
     started_at = time.time()
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            build_im_token_api_url(normalized_mode),
-            params=params,
-            data={"data": data_value},
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=timeout_seconds),
-        ) as response:
-            # 风控响应的 content-type 可能不是 json，统一放开校验避免解析异常
-            response_json = await response.json(content_type=None)
-            response_cookies: dict[str, str] = {}
-            for cookie_header in response.headers.getall("set-cookie", []):
-                if "=" not in cookie_header:
-                    continue
-                name, value = cookie_header.split(";", 1)[0].split("=", 1)
-                response_cookies[name.strip()] = value.strip()
-            return ImTokenApiResult(
-                response_json=response_json,
-                response_cookies=response_cookies,
-                status_code=response.status,
-                duration_seconds=time.time() - started_at,
-                api_mode=normalized_mode,
-                device_id=device_id,
-            )
+    async with aiohttp.ClientSession() as session, session.post(
+        build_im_token_api_url(normalized_mode),
+        params=params,
+        data={"data": data_value},
+        headers=headers,
+        timeout=aiohttp.ClientTimeout(total=timeout_seconds),
+    ) as response:
+        # 风控响应的 content-type 可能不是 json，统一放开校验避免解析异常
+        response_json = await response.json(content_type=None)
+        response_cookies: dict[str, str] = {}
+        for cookie_header in response.headers.getall("set-cookie", []):
+            if "=" not in cookie_header:
+                continue
+            name, value = cookie_header.split(";", 1)[0].split("=", 1)
+            response_cookies[name.strip()] = value.strip()
+        return ImTokenApiResult(
+            response_json=response_json,
+            response_cookies=response_cookies,
+            status_code=response.status,
+            duration_seconds=time.time() - started_at,
+            api_mode=normalized_mode,
+            device_id=device_id,
+        )
 
 
 def _remote_result_to_im_token_result(
@@ -302,6 +301,7 @@ async def _request_remote_token_from_settings(
     cookies: str,
     timeout_seconds: int,
     log_tag: str,
+    remote_settings: RemoteTokenSettings | None = None,
 ) -> ImTokenApiResult:
     """调用远程 Token 接口并记录完整的风控日志。
 
@@ -321,17 +321,18 @@ async def _request_remote_token_from_settings(
         Exception: 远程请求连续超时，或发生非超时异常时向调用方抛出。
     """
     prefix = f"【{log_tag}】" if log_tag else ""
-    try:
-        remote_settings = await load_remote_token_settings(log_tag)
-    except Exception as exc:
-        logger.opt(exception=exc).error("{}远程Token配置读取失败", prefix)
-        await record_remote_token_risk_log(
-            account_identifier=log_tag,
-            success=False,
-            message=f"远程Token配置读取失败：{type(exc).__name__}: {exc}",
-            event_description="远程Token配置读取失败，已停止本次请求",
-        )
-        raise
+    if remote_settings is None:
+        try:
+            remote_settings = await load_remote_token_settings(log_tag)
+        except Exception as exc:
+            logger.opt(exception=exc).error("{}远程Token配置读取失败", prefix)
+            await record_remote_token_risk_log(
+                account_identifier=log_tag,
+                success=False,
+                message=f"远程Token配置读取失败：{type(exc).__name__}: {exc}",
+                event_description="远程Token配置读取失败，已停止本次请求",
+            )
+            raise
 
     def _event_description(remote_outcome: str) -> str:
         return build_remote_direct_event_description(
@@ -352,7 +353,7 @@ async def _request_remote_token_from_settings(
                 settings=remote_settings,
             )
             break
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             # 仅「超时」才重试；其余异常走下面的分支，不重试
             message = f"{type(exc).__name__}: {exc}"
             if attempt < REMOTE_TOKEN_TIMEOUT_MAX_ATTEMPTS:
@@ -443,12 +444,21 @@ async def request_im_token_with_fallback(
         asyncio.TimeoutError: 请求超时。
     """
     configured_mode = normalize_token_api_mode(api_mode)
+    selected_remote_settings = None
+    account_id = str(log_tag or "").strip()
+    if account_id:
+        # 公共请求层再次确认账号所属用户配置，防止新增调用点遗漏模式选择。
+        # 个人配置任一项存在即固定走个人远程接口，读取异常直接抛出。
+        selected_remote_settings = await load_remote_token_settings(account_id)
+        if selected_remote_settings.source == "个人设置":
+            configured_mode = TOKEN_API_MODE_REMOTE
     if configured_mode == TOKEN_API_MODE_REMOTE:
         return await _request_remote_token_from_settings(
             device_id,
             cookies=cookies_str,
             timeout_seconds=timeout_seconds,
             log_tag=log_tag,
+            remote_settings=selected_remote_settings,
         )
 
     return await request_im_token(

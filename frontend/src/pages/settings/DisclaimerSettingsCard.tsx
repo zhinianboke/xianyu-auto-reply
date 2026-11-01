@@ -56,7 +56,7 @@ export function DisclaimerSettingsCard({ settings, saving, onChange, onSave }: D
         </p>
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {TEXT_INPUT_FIELDS.map((field) => (
               <div key={field.key} className="input-group">
                 <label className="input-label">{field.label}</label>
@@ -70,7 +70,7 @@ export function DisclaimerSettingsCard({ settings, saving, onChange, onSave }: D
               </div>
             ))}
 
-            <div className="input-group">
+            <div className="input-group sm:col-span-2">
               <label className="input-label">正文内容</label>
               <textarea
                 value={settings['disclaimer.content']}

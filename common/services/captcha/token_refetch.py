@@ -15,7 +15,6 @@
 """
 
 import time
-from typing import Dict
 
 import requests
 from loguru import logger
@@ -58,11 +57,11 @@ _REMOTE_TOKEN_EVENT_SCENE = "重取滑块验证链接时"
 def _post_token_api(
     cookie_id: str,
     api_mode: str,
-    cookies: Dict[str, str],
+    cookies: dict[str, str],
     cookies_str: str,
     device_id: str,
     request_timeout_seconds: float,
-) -> tuple[object, Dict[str, str]]:
+) -> tuple[object, dict[str, str]]:
     """同步请求一次 token 接口。
 
     Args:
@@ -150,11 +149,11 @@ def _post_token_api(
 def _request_token_api_with_expiry_retry(
     cookie_id: str,
     api_mode: str,
-    cookies: Dict[str, str],
+    cookies: dict[str, str],
     cookies_str: str,
     device_id: str,
     deadline: float,
-) -> tuple[object, Dict[str, str], Dict[str, str], str]:
+) -> tuple[object, dict[str, str], dict[str, str], str]:
     """请求指定 Token 接口，并在 mtop 令牌过期时自动重试一次。
 
     Args:
@@ -170,7 +169,7 @@ def _request_token_api_with_expiry_retry(
     """
     current_cookies = dict(cookies)
     current_cookies_str = cookies_str
-    response_cookie_updates: Dict[str, str] = {}
+    response_cookie_updates: dict[str, str] = {}
     response_json: object = None
 
     for attempt in range(2):
@@ -230,7 +229,7 @@ def _request_token_api_with_expiry_retry(
 
 def _request_remote_token(
     cookie_id: str,
-    result: Dict[str, object],
+    result: dict[str, object],
     *,
     cookies_str: str,
     timeout_seconds: float,
@@ -350,10 +349,10 @@ def _request_remote_token(
 
 def request_fresh_captcha_url(
     cookie_id: str,
-    cookies: Dict[str, str],
+    cookies: dict[str, str],
     cookies_str: str,
     device_id: str,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """凭账号 Cookie 重新请求 token 接口，提取新鲜的滑块验证链接。
 
     命中 mtop 令牌过期时，用接口下发的新 _m_h5_tk 合并后自动重试一次，
@@ -375,7 +374,7 @@ def request_fresh_captcha_url(
           - fresh_url (str|None): 新鲜的验证链接（需要继续过滑块时）
           - error_message (str|None): 远程配置或调用失败的具体原因
     """
-    result: Dict[str, object] = {
+    result: dict[str, object] = {
         "token_ok": False,
         "new_token": None,
         "device_id": None,
@@ -434,6 +433,12 @@ def request_fresh_captcha_url(
         logger.info(f"【{cookie_id}】重新请求未返回验证链接（可能已不需要验证）")
 
         return result
-    except Exception as e:
-        logger.warning(f"【{cookie_id}】重新获取滑块验证链接失败: {e}")
+    except Exception as e:  # noqa: BLE001 - 同步滑块线程必须返回结构化错误，不能让异常逃逸。
+        result["error_message"] = f"重新获取滑块验证链接失败：{type(e).__name__}: {e}"
+        logger.opt(exception=e).error(
+            "【{}】重新获取滑块验证链接失败：exception_type={} exception={}",
+            cookie_id,
+            type(e).__name__,
+            e,
+        )
         return result

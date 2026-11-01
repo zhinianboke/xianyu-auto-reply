@@ -8,11 +8,9 @@
  */
 import { post, put } from '@/utils/request'
 import type { ApiResponse, PasswordLoginMode } from '@/types'
+import { updateSystemSettingsBatch } from './systemSettingsBatch'
 
 const PASSWORD_LOGIN_MODE_URL = '/api/v1/system-settings/password_login.mode'
-const PASSWORD_LOGIN_REMOTE_URL = '/api/v1/system-settings/password_login.remote_url'
-const PASSWORD_LOGIN_REMOTE_SECRET_KEY_URL =
-  '/api/v1/system-settings/password_login.remote_secret_key'
 const PASSWORD_LOGIN_REMOTE_TEST_URL =
   '/api/v1/system-settings/test-password-login-remote'
 const PASSWORD_LOGIN_MODES: PasswordLoginMode[] = ['protocol', 'browser']
@@ -35,32 +33,23 @@ export const updatePasswordLoginMode = (
 }
 
 /**
- * 保存协议登录远程接口设置：先写远程URL与秘钥，再切换登录方式。
+ * 批量保存协议登录远程URL、秘钥和登录方式。
  *
  * @param mode 登录方式（通常为 protocol）
  * @param remoteUrl 远程接口URL
  * @param remoteSecretKey 远程接口秘钥
- * @returns 统一响应；任一步骤失败即返回失败结果
+ * @returns 统一响应；后端校验通过后在同一事务中全部保存
  */
 export const updateRemotePasswordLoginSettings = async (
   mode: PasswordLoginMode,
   remoteUrl: string,
   remoteSecretKey: string,
 ): Promise<ApiResponse> => {
-  const operations: Array<() => Promise<ApiResponse>> = [
-    () => put<ApiResponse>(PASSWORD_LOGIN_REMOTE_URL, { value: remoteUrl }),
-    () => put<ApiResponse>(PASSWORD_LOGIN_REMOTE_SECRET_KEY_URL, { value: remoteSecretKey }),
-    () => put<ApiResponse>(PASSWORD_LOGIN_MODE_URL, { value: mode }),
-  ]
-
-  for (const operation of operations) {
-    const result = await operation()
-    if (!result?.success) {
-      return result || { success: false, message: '协议登录远程接口设置保存失败' }
-    }
-  }
-
-  return { success: true, message: '协议登录远程接口设置已保存' }
+  return updateSystemSettingsBatch({
+    'password_login.remote_url': remoteUrl,
+    'password_login.remote_secret_key': remoteSecretKey,
+    'password_login.mode': mode,
+  })
 }
 
 /**

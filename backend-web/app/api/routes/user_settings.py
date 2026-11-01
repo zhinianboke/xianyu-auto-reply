@@ -6,9 +6,9 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,13 +22,17 @@ from common.models.user import User
 from common.models.user_setting import UserSetting
 from common.schemas.common import ApiResponse
 from common.schemas.system_setting import RemoteTokenTestRequest
-from common.utils.image_utils import image_manager
 from common.services.remote_location_message_api import (
     RemoteLocationMessageTestResult,
     test_remote_location_message_interface,
 )
-
+from common.services.remote_token_api import (
+    TOKEN_REMOTE_SECRET_KEY_SETTING_KEY,
+    TOKEN_REMOTE_URL_SETTING_KEY,
+)
+from common.utils.image_utils import image_manager
 from common.utils.time_utils import safe_isoformat
+
 router = APIRouter(tags=["用户设置"])
 
 # 位置聊天远程接口配置键，与前端保持一致。
@@ -39,12 +43,16 @@ LOCATION_CHAT_REMOTE_SECRET_KEY = "location_chat.remote_secret_key"
 LOCATION_API_TEST_INTERVAL_SECONDS = 5.0
 _location_api_test_active_users: set[int] = set()
 _location_api_test_last_started: dict[int, float] = {}
+TOKEN_REMOTE_SETTING_KEYS = {
+    TOKEN_REMOTE_URL_SETTING_KEY,
+    TOKEN_REMOTE_SECRET_KEY_SETTING_KEY,
+}
 
 
 class UserSettingUpdate(BaseModel):
     """用户设置更新请求"""
     value: str
-    description: Optional[str] = None
+    description: str | None = None
 
 
 class LocationChatApiTestRequest(BaseModel):
@@ -129,12 +137,12 @@ async def test_location_chat_external_api(
 async def get_user_settings(
     current_user: User = Depends(deps.get_current_active_user),
     session: AsyncSession = Depends(deps.get_db_session),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """获取当前用户的所有设置"""
     stmt = select(UserSetting).where(UserSetting.user_id == current_user.id)
     result = await session.execute(stmt)
     settings = result.scalars().all()
-    
+
     return {
         setting.key: {
             "value": setting.value,
@@ -150,7 +158,7 @@ async def get_user_setting(
     key: str,
     current_user: User = Depends(deps.get_current_active_user),
     session: AsyncSession = Depends(deps.get_db_session),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """获取用户特定设置，不存在时返回空值而非404"""
     stmt = select(UserSetting).where(
         UserSetting.user_id == current_user.id,
@@ -158,7 +166,7 @@ async def get_user_setting(
     )
     result = await session.execute(stmt)
     setting = result.scalar_one_or_none()
-    
+
     if not setting:
         return {
             "success": True,
@@ -166,7 +174,7 @@ async def get_user_setting(
             "value": "",
             "description": "",
         }
-    
+
     return {
         "success": True,
         "key": setting.key,
@@ -183,13 +191,19 @@ async def update_user_setting(
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> ApiResponse:
     """更新用户设置"""
+    if key in TOKEN_REMOTE_SETTING_KEYS:
+        return ApiResponse(
+            success=False,
+            code=40001,
+            message="Token远程配置需要通过个人设置中的专用保存功能修改",
+        )
     stmt = select(UserSetting).where(
         UserSetting.user_id == current_user.id,
         UserSetting.key == key,
     )
     result = await session.execute(stmt)
     setting = result.scalar_one_or_none()
-    
+
     if setting:
         # 更新现有设置
         setting.value = payload.value
@@ -204,7 +218,7 @@ async def update_user_setting(
             description=payload.description,
         )
         session.add(setting)
-    
+
     await session.commit()
 
     # 对接卡密秘钥更新后立即失效缓存，避免最长 5 分钟内仍使用旧秘钥（含首次配置由空串变为有效值的场景）
@@ -221,11 +235,17 @@ async def delete_user_setting(
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> ApiResponse:
     """删除用户设置"""
+    if key in TOKEN_REMOTE_SETTING_KEYS:
+        return ApiResponse(
+            success=False,
+            code=40001,
+            message="请在个人设置中同时清空远程URL和秘钥后保存",
+        )
     stmt = delete(UserSetting).where(
         UserSetting.user_id == current_user.id,
         UserSetting.key == key,
     )
-    result = await session.execute(stmt)
+    await session.execute(stmt)
     await session.commit()
 
     # 对接卡密秘钥删除后同步失效缓存

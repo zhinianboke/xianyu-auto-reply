@@ -3,7 +3,8 @@ Token 获取接口方式（网页 / 远程接口）公共模块。
 
 功能：
 1. 定义 Token 获取接口方式及其 mtop 接口名
-2. 提供系统设置 ``token.api_mode`` 的实时读取（异步 / 同步两种入口）
+2. 按账号所属用户优先选择个人远程配置，否则读取系统方式
+3. 提供异步 / 同步两种实时读取入口
 
 说明：
     设置项每次使用时实时查库，确保运行中的 WebSocket / 定时任务无需重启即可生效，
@@ -17,7 +18,10 @@ from sqlalchemy import select
 from common.db.compat import db_manager
 from common.db.session import async_session_maker
 from common.models.system_setting import SystemSetting
-
+from common.services.remote_token_api import (
+    load_remote_token_settings,
+    load_remote_token_settings_sync,
+)
 
 # 系统设置键名
 TOKEN_API_MODE_SETTING_KEY = "token.api_mode"
@@ -83,10 +87,12 @@ def get_token_api_mode_label(mode: object) -> str:
 
 
 async def load_token_api_mode(log_tag: str = "") -> str:
-    """实时读取系统设置中的 Token 获取方式（异步）。
+    """按账号所属用户优先选择 Token 获取方式（异步）。
 
-    每次调用都查库，保证系统设置修改后无需重启服务即可生效。
-    读取失败时回落到默认的网页接口，不阻断取 Token 流程。
+    账号所属用户只要填写了远程 URL 或秘钥中的任一项，就强制使用个人远程
+    配置；配置不完整或远程请求失败均不得回退系统设置。个人完全未配置时，
+    才读取系统设置中的 ``token.api_mode``。账号上下文读取失败时直接抛出，
+    禁止误回退；无账号上下文的系统设置读取失败时使用默认网页接口。
 
     Args:
         log_tag: 日志前缀标识（如账号 ID），仅用于日志定位
@@ -94,6 +100,11 @@ async def load_token_api_mode(log_tag: str = "") -> str:
         合法的接口方式
     """
     try:
+        account_id = str(log_tag or "").strip()
+        if account_id:
+            remote_settings = await load_remote_token_settings(account_id)
+            if remote_settings.source == "个人设置":
+                return TOKEN_API_MODE_REMOTE
         async with async_session_maker() as session:
             value = (
                 await session.execute(
@@ -105,18 +116,24 @@ async def load_token_api_mode(log_tag: str = "") -> str:
         return normalize_token_api_mode(value)
     except Exception as e:
         prefix = f"【{log_tag}】" if log_tag else ""
+        if str(log_tag or "").strip():
+            logger.opt(exception=e).error(
+                f"{prefix}按账号所属用户读取Token获取方式失败，已停止本次Token请求: {e}"
+            )
+            raise
         logger.warning(
-            f"{prefix}读取Token获取方式设置失败，本次使用默认的"
+            f"{prefix}读取系统Token获取方式设置失败，本次使用默认的"
             f"{TOKEN_API_MODE_LABELS[DEFAULT_TOKEN_API_MODE]}: {e}"
         )
         return DEFAULT_TOKEN_API_MODE
 
 
 def load_token_api_mode_sync(log_tag: str = "") -> str:
-    """实时读取系统设置中的 Token 获取方式（同步）。
+    """按账号所属用户优先选择 Token 获取方式（同步）。
 
     供同步上下文（如滑块线程中的 ``request_fresh_captcha_url``）使用。
-    读取失败时回落到默认的网页接口。
+    个人配置的优先级和禁止回退规则与异步入口完全一致；账号上下文读取失败
+    时直接抛出，无账号上下文的系统设置读取失败时使用默认网页接口。
 
     Args:
         log_tag: 日志前缀标识（如账号 ID），仅用于日志定位
@@ -124,14 +141,24 @@ def load_token_api_mode_sync(log_tag: str = "") -> str:
         合法的接口方式
     """
     try:
+        account_id = str(log_tag or "").strip()
+        if account_id:
+            remote_settings = load_remote_token_settings_sync(account_id)
+            if remote_settings.source == "个人设置":
+                return TOKEN_API_MODE_REMOTE
         value = db_manager.get_system_setting(
             TOKEN_API_MODE_SETTING_KEY, DEFAULT_TOKEN_API_MODE
         )
         return normalize_token_api_mode(value)
     except Exception as e:
         prefix = f"【{log_tag}】" if log_tag else ""
+        if str(log_tag or "").strip():
+            logger.opt(exception=e).error(
+                f"{prefix}按账号所属用户读取Token获取方式失败，已停止本次Token请求: {e}"
+            )
+            raise
         logger.warning(
-            f"{prefix}读取Token获取方式设置失败，本次使用默认的"
+            f"{prefix}读取系统Token获取方式设置失败，本次使用默认的"
             f"{TOKEN_API_MODE_LABELS[DEFAULT_TOKEN_API_MODE]}: {e}"
         )
         return DEFAULT_TOKEN_API_MODE

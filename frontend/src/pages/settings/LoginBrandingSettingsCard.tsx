@@ -28,8 +28,8 @@ export function LoginBrandingSettingsCard({ settings, saving, onChange, onSave }
         </p>
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          <div className="space-y-4">
-            <div className="input-group">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="input-group sm:col-span-2">
               <label className="input-label">系统名称</label>
               <input
                 type="text"

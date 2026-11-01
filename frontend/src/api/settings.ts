@@ -13,6 +13,12 @@ import {
   normalizeThemeAppearanceSettings,
   normalizeThemeFontSettings,
 } from '@/utils/theme'
+import {
+  updateSystemSettings,
+  updateSystemSettingsBatch,
+} from './systemSettingsBatch'
+
+export { updateSystemSettings, updateSystemSettingsBatch } from './systemSettingsBatch'
 
 // API前缀
 const SYSTEM_SETTINGS_PREFIX = '/api/v1/system-settings'
@@ -21,14 +27,6 @@ const AI_SETTINGS_PREFIX = '/api/v1/ai-reply-settings'
 const ADMIN_PREFIX = '/api/v1/admin'
 const USERS_PREFIX = '/api/v1/users'
 const MENU_HIDDEN_SETTING_KEY = 'navigation.hidden_menu_keys'
-const READONLY_SYSTEM_SETTING_KEYS = ['runtime.is_exe_mode']
-const INDEPENDENT_SYSTEM_SETTING_KEYS = [
-  'password_login.mode',
-  'captcha.slider_mode',
-  'token.api_mode',
-  'token.remote_url',
-  'token.remote_secret_key',
-]
 const DEFAULT_DISCLAIMER_SETTINGS: DisclaimerSettings = {
   'disclaimer.title': '免责声明',
   'disclaimer.content': '数据存储说明\n1. 本系统在运行过程中，为保障服务正常运行，会存储用户账号密码、登录 Cookie、商品信息、卡券信息等业务数据。\n2. 上述数据仅用于系统功能运行、自动化处理和业务管理，不作为其他用途。\n3. 请您自行确认服务器环境、账号权限和数据保管措施的安全性。\n\n用户须知\n1. 用户应确保使用本系统的行为符合相关平台规则和法律法规。\n2. 因用户自身违规操作、账号共享、密码泄露、服务器安全问题导致的损失，由用户自行承担。\n3. 建议用户定期备份重要数据，因系统故障、第三方平台变更、不可抗力等导致的异常或损失，本系统不承担责任。\n4. 本系统依赖第三方平台接口和网络环境，无法保证服务始终连续、稳定、无中断。\n\n隐私与风险提示\n1. 请勿在未充分评估风险的情况下接入生产环境或敏感账号。\n2. 使用本系统即表示您已充分理解并接受相关风险，并愿意自行承担相应责任。',
@@ -90,32 +88,6 @@ export const getSystemSettings = async (): Promise<{ success: boolean; data?: Sy
 export const getPublicSystemSettings = async (): Promise<{ success: boolean; data?: SystemSettings }> => {
   const data = await get<Record<string, unknown>>(PUBLIC_SYSTEM_SETTINGS_PREFIX)
   return { success: true, data: convertSystemSettings(data) }
-}
-
-// 更新系统设置
-export const updateSystemSettings = async (data: Partial<SystemSettings>): Promise<ApiResponse> => {
-  // 逐个更新设置项，确保 value 是字符串
-  const promises = Object.entries(data)
-    .filter(([key]) => (
-      !READONLY_SYSTEM_SETTING_KEYS.includes(key)
-      && !INDEPENDENT_SYSTEM_SETTING_KEYS.includes(key)
-    ))
-    .map(([key, value]) => {
-    // 将布尔值和数字转换为字符串
-    let stringValue: string
-    if (typeof value === 'boolean') {
-      stringValue = value ? 'true' : 'false'
-    } else if (typeof value === 'number') {
-      stringValue = String(value)
-    } else {
-      stringValue = value as string
-    }
-      return put<ApiResponse>(`${SYSTEM_SETTINGS_PREFIX}/${key}`, { value: stringValue })
-    })
-  const results = await Promise.all(promises)
-  const failed = results.find((result) => !result.success)
-  if (failed) return failed
-  return { success: true, message: '设置已保存' }
 }
 
 export const getDefaultDisclaimerSettings = (): DisclaimerSettings => ({ ...DEFAULT_DISCLAIMER_SETTINGS })
@@ -315,38 +287,10 @@ export const normalizeProxySettings = (settings?: Partial<SystemSettings> | null
   }
 }
 
-// 独立保存代理设置：只提交 proxy.api_url 和 proxy.enabled，不触碰其他设置
-// 不复用 updateSystemSettings 的原因：
-// 1) 后端对代理做了跨键校验（开启代理时 URL 必须非空；代理启用中不允许清空 URL），
-//    Promise.all 并发 PUT 会让后端读到对方未落库的旧值导致误拒
-// 2) updateSystemSettings 不检查 PUT 返回的 success 字段，后端校验错误消息无法回传前端
+// 独立保存代理设置：批量提交 URL 与开关，由后端按完整目标状态校验并在同一事务中保存。
 export const updateProxySettings = async (settings?: Partial<SystemSettings> | null): Promise<ApiResponse> => {
   const normalized = normalizeProxySettings(settings)
-  const putUrl = (): Promise<ApiResponse> =>
-    put<ApiResponse>(`${SYSTEM_SETTINGS_PREFIX}/proxy.api_url`, { value: normalized['proxy.api_url'] })
-  const putEnabled = (): Promise<ApiResponse> =>
-    put<ApiResponse>(
-      `${SYSTEM_SETTINGS_PREFIX}/proxy.enabled`,
-      { value: normalized['proxy.enabled'] ? 'true' : 'false' },
-    )
-
-  // 按目标状态编排 PUT 顺序，确保后端跨键校验总能通过：
-  // - 目标启用：先写 URL（前置条件）再开启开关
-  // - 目标禁用：先关闭开关再清空/保留 URL
-  const operations = normalized['proxy.enabled'] ? [putUrl, putEnabled] : [putEnabled, putUrl]
-
-  for (const op of operations) {
-    try {
-      const result = await op()
-      if (!result?.success) {
-        return result || { success: false, message: '代理设置保存失败' }
-      }
-    } catch (error) {
-      return { success: false, message: (error as Error)?.message || '代理设置保存失败' }
-    }
-  }
-
-  return { success: true, message: '代理设置已保存' }
+  return updateSystemSettingsBatch(normalized as Partial<SystemSettings>)
 }
 
 // ========== 分销设置（独立保存） ==========
@@ -362,18 +306,7 @@ export const updateDistributionSettings = async (settings?: Partial<SystemSettin
     'distribution.fee_rate': typeof feeRate === 'string' ? feeRate : '',
   }
 
-  for (const [key, value] of Object.entries(payload)) {
-    try {
-      const result = await put<ApiResponse>(`${SYSTEM_SETTINGS_PREFIX}/${key}`, { value })
-      if (!result?.success) {
-        return result || { success: false, message: '分销设置保存失败' }
-      }
-    } catch (error) {
-      return { success: false, message: (error as Error)?.message || '分销设置保存失败' }
-    }
-  }
-
-  return { success: true, message: '分销设置已保存' }
+  return updateSystemSettingsBatch(payload as Partial<SystemSettings>)
 }
 
 // 修改密码
@@ -541,6 +474,6 @@ export const uploadQrcode = async (type: QrcodeType, file: File): Promise<ApiRes
 }
 
 // 获取群二维码路径
-export const getQrcodeUrl = async (type: QrcodeType): Promise<{ success: boolean; data?: { image_url: string } }> => {
+export const getQrcodeUrl = async (type: QrcodeType): Promise<{ success: boolean; message?: string; data?: { image_url: string } }> => {
   return get(`/api/v1/qrcode/${type}`)
 }

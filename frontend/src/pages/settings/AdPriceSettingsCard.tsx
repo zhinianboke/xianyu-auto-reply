@@ -13,13 +13,14 @@ interface AdPriceSettingsCardProps {
 export function AdPriceSettingsCard({ settings, saving, onChange, onSave }: AdPriceSettingsCardProps) {
   const { adTypeOptions, typesLoading, typesError, reloadTypes } = useAdvertisementTypes()
   return (
-    <div className="vben-card relative" aria-busy={typesLoading}>
+    <div className="vben-card relative xl:col-span-2" aria-busy={typesLoading}>
       <div className="vben-card-header"><h2 className="vben-card-title"><Megaphone className="h-4 w-4" />广告费用管理</h2></div>
       <div className="vben-card-body space-y-4">
         <p className="text-sm text-slate-500 dark:text-slate-400">按广告类型设置每月费用，用户申请广告时会根据此价格计算总费用</p>
         {typesError && <div className="flex flex-wrap items-center gap-3 text-sm text-red-600 dark:text-red-400" role="alert">
           {typesError}<button type="button" onClick={() => void reloadTypes()} className="btn-ios-secondary"><RefreshCw className="h-4 w-4" />重新加载</button>
         </div>}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {adTypeOptions.map((option) => {
           const title = option.label.endsWith('广告') ? option.label : `${option.label}广告`
           return <div key={option.value} className="input-group">
@@ -31,6 +32,7 @@ export function AdPriceSettingsCard({ settings, saving, onChange, onSave }: AdPr
               }} placeholder={`请输入${title}每月价格`} className="input-ios" />
           </div>
         })}
+        </div>
         <div className="flex justify-end border-t border-slate-100 pt-4 dark:border-slate-700">
           <button
             type="button"

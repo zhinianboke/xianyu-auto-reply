@@ -22,6 +22,10 @@ import aiohttp
 from loguru import logger
 from sqlalchemy import exists, or_, select
 
+from app.core.config import get_settings
+from app.services.scheduler.token_captcha_renewal import (
+    solve_token_captcha_and_merge_cookies,
+)
 from common.db.session import async_session_maker
 from common.models.risk_control_log import XYRiskControlLog
 from common.models.scheduled_token_renewal_log import ScheduledTokenRenewalLog
@@ -40,20 +44,16 @@ from common.services.token_api_mode import (
     get_token_api_mode_label,
     load_token_api_mode,
 )
-from common.services.token_request_lock import (
-    TokenRequestLockError,
-    token_request_lock,
-)
 from common.services.token_renewal_cache_service import (
     get_reusable_token_cache,
     get_token_renewal_cutoff,
     write_renewed_token_cache,
 )
+from common.services.token_request_lock import (
+    TokenRequestLockError,
+    token_request_lock,
+)
 from common.utils.time_utils import get_beijing_now_naive
-
-from app.core.config import get_settings
-from app.services.scheduler.token_captcha_renewal import solve_token_captcha_and_merge_cookies
-
 
 TOKEN_RENEWAL_MAX_CONCURRENCY = 5
 
@@ -163,7 +163,7 @@ class TokenRenewalTask:
                     ]
                 )
                 await session.commit()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - 单账号模式读取失败需转为任务失败结果，不能中断批次。
                 await session.rollback()
                 logger.error(
                     f"【{self.task_name}】批次日志写入失败: batch_id={batch_id}, "
@@ -325,8 +325,18 @@ class TokenRenewalTask:
             token_expired_retries = 0
             captcha_retries = 0
             failure_message: str | None = None
-            # Token接口方式每次实时查库，系统设置修改后无需重启即可生效
-            api_mode = await load_token_api_mode(candidate.account_id)
+            # 每次按账号所属用户优先选择个人远程配置，个人配置异常不得回退系统级。
+            try:
+                api_mode = await load_token_api_mode(candidate.account_id)
+            except Exception as exc:
+                message = f"Token获取方式读取失败：{type(exc).__name__}: {exc}"
+                logger.opt(exception=exc).error(
+                    "【{}】【{}】{}",
+                    self.task_name,
+                    candidate.account_id,
+                    message,
+                )
+                return self._failed_result(candidate, message)
             logger.info(
                 f"【{self.task_name}】【{candidate.account_id}】Token续期使用"
                 f"{get_token_api_mode_label(api_mode)}"
@@ -339,7 +349,7 @@ class TokenRenewalTask:
                         api_mode=api_mode,
                         log_tag=candidate.account_id,
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.error(f"【{self.task_name}】【{candidate.account_id}】请求超时")
                     return self._failed_result(candidate, "Token接口请求超时")
                 except aiohttp.ClientError as exc:

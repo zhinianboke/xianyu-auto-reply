@@ -14,58 +14,28 @@ from fastapi import APIRouter, Depends, Request
 from loguru import logger
 
 from app.api import deps
-from app.core.config import get_settings
-from app.core.http_client import get_http_client
+from app.services.email_service import send_test_email
+from app.services.log_retention_service import refresh_log_retention_runtime
+from app.services.system_setting_service import SENSITIVE_KEYS, SystemSettingService
+from app.services.system_settings_email_service import validate_test_email_recipient
+from app.services.system_settings_update_service import validate_system_settings_update
+from app.services.token_remote_test_service import test_token_remote_settings
 from common.models.user import User, UserRole
 from common.schemas.common import ApiResponse
 from common.schemas.system_setting import (
     RemotePasswordLoginTestRequest,
     RemoteTokenTestRequest,
+    SystemSettingsBatchUpdate,
     SystemSettingUpdate,
-)
-from app.services.system_setting_service import SENSITIVE_KEYS, SystemSettingService
-from app.services.token_remote_test_service import test_token_remote_settings
-from common.services.remote_token_api import (
-    TOKEN_REMOTE_SECRET_KEY_SETTING_KEY,
-    TOKEN_REMOTE_URL_SETTING_KEY,
-    validate_remote_token_settings,
 )
 from common.services.remote_password_login_api import (
     test_remote_password_login_interface,
     validate_remote_password_login_settings,
 )
-from common.services.token_api_mode import (
-    TOKEN_API_MODE_REMOTE,
-    TOKEN_API_MODE_SETTING_KEY,
-    TOKEN_API_MODES,
-)
-from common.services.advertisement_types import AD_PRICE_DEFAULTS, parse_ad_price
-from common.utils.logging_utils import update_log_retention
 from common.utils.browser_utils import is_frozen
 from common.utils.http_utils import get_client_ip
 
 router = APIRouter(tags=["system_settings"])
-
-# 日志保留天数的设置键，与前端保持一致
-LOG_RETENTION_KEY = "log.retention_days"
-PASSWORD_LOGIN_MODE_KEY = "password_login.mode"
-PASSWORD_LOGIN_MODES = {"protocol", "browser"}
-# 协议登录远程接口配置键：选择协议登录时需填写远程URL与秘钥
-PASSWORD_LOGIN_PROTOCOL_MODE = "protocol"
-PASSWORD_LOGIN_REMOTE_URL_KEY = "password_login.remote_url"
-PASSWORD_LOGIN_REMOTE_SECRET_KEY_KEY = "password_login.remote_secret_key"
-PASSWORD_LOGIN_REMOTE_SETTING_KEYS = {
-    PASSWORD_LOGIN_MODE_KEY,
-    PASSWORD_LOGIN_REMOTE_URL_KEY,
-    PASSWORD_LOGIN_REMOTE_SECRET_KEY_KEY,
-}
-CAPTCHA_SLIDER_MODE_KEY = "captcha.slider_mode"
-CAPTCHA_SLIDER_MODES = {"browser", "real_mouse"}
-TOKEN_REMOTE_SETTING_KEYS = {
-    TOKEN_API_MODE_SETTING_KEY,
-    TOKEN_REMOTE_URL_SETTING_KEY,
-    TOKEN_REMOTE_SECRET_KEY_SETTING_KEY,
-}
 
 NON_ADMIN_ALLOWED_KEYS = {
     "disclaimer.title",
@@ -90,177 +60,67 @@ NON_ADMIN_ALLOWED_KEYS = {
 }
 
 
-def _parse_log_retention_days(raw_value: str) -> tuple[int | None, str | None]:
-    """解析日志保留天数输入，范围 1~365，返回 (天数, 错误提示)。"""
-    value = str(raw_value or "").strip()
-    if not value.isdigit():
-        return None, "日志保留天数必须为1到365之间的整数"
-
-    retention_days = int(value)
-    if not (1 <= retention_days <= 365):
-        return None, "日志保留天数必须为1到365之间的整数"
-    return retention_days, None
-
-
-# 布尔值字符串统一解析：代理开关等场景使用
-_TRUE_VALUES = {"true", "1", "yes", "on"}
-
-
-def _is_truthy(raw_value: str | None) -> bool:
-    """把字符串形式的布尔值（'true'/'false'/'1'/'0' 等）统一解析为 bool。"""
-    return str(raw_value or "").strip().lower() in _TRUE_VALUES
-
-
-async def _validate_proxy_setting(
-    key: str,
-    new_value: str,
+async def _save_system_settings(
+    updates: dict[str, tuple[str, str | None]],
     service: SystemSettingService,
-) -> str | None:
-    """
-    代理设置跨键校验：防止绕过前端直接 PUT 产生非法状态。
-
-    - PUT proxy.enabled=true：要求数据库中 proxy.api_url 已非空
-    - PUT proxy.api_url=''：要求当前 proxy.enabled 为 false，避免"开着代理但 URL 被清空"
-
-    返回 None 表示校验通过，返回字符串表示错误信息。
-    """
-    if key not in ("proxy.enabled", "proxy.api_url"):
-        return None
-
-    # 读当前已保存的代理设置（仅用于读取另一个键的当前值）
-    current_settings = await service.list_settings()
-
-    if key == "proxy.enabled" and _is_truthy(new_value):
-        current_api_url = str(current_settings.get("proxy.api_url") or "").strip()
-        if not current_api_url:
-            return "开启代理前请先填写代理 API 的 URL"
-
-    if key == "proxy.api_url" and not str(new_value or "").strip():
-        if _is_truthy(current_settings.get("proxy.enabled")):
-            return "代理已启用，请先关闭代理再清空代理 API 的 URL"
-
-    return None
-
-
-async def _validate_remote_token_setting(
-    key: str,
-    new_value: str,
-    service: SystemSettingService,
-) -> str | None:
-    """Token远程接口跨键校验，防止绕过前端保存非法配置。"""
-    if key not in TOKEN_REMOTE_SETTING_KEYS:
-        return None
-
-    current_settings = await service.list_settings()
-    target_mode = str(current_settings.get(TOKEN_API_MODE_SETTING_KEY) or "").strip().lower()
-    target_url = str(current_settings.get(TOKEN_REMOTE_URL_SETTING_KEY) or "").strip()
-    target_secret_key = str(
-        current_settings.get(TOKEN_REMOTE_SECRET_KEY_SETTING_KEY) or ""
-    ).strip()
-
-    if key == TOKEN_API_MODE_SETTING_KEY:
-        target_mode = str(new_value or "").strip().lower()
-    elif key == TOKEN_REMOTE_URL_SETTING_KEY:
-        target_url = str(new_value or "").strip()
-    elif key == TOKEN_REMOTE_SECRET_KEY_SETTING_KEY:
-        target_secret_key = str(new_value or "").strip()
-
-    if target_mode != TOKEN_API_MODE_REMOTE:
-        return None
-
-    return validate_remote_token_settings(target_url, target_secret_key)
-
-
-async def _validate_password_login_remote_setting(
-    key: str,
-    new_value: str,
-    service: SystemSettingService,
-) -> str | None:
-    """协议登录远程接口跨键校验，防止绕过前端保存非法配置。
-
-    选择协议登录（password_login.mode=protocol）时，远程URL与秘钥必须已填写且格式合法。
-    """
-    if key not in PASSWORD_LOGIN_REMOTE_SETTING_KEYS:
-        return None
-
-    current_settings = await service.list_settings()
-    target_mode = str(current_settings.get(PASSWORD_LOGIN_MODE_KEY) or "").strip().lower()
-    target_url = str(current_settings.get(PASSWORD_LOGIN_REMOTE_URL_KEY) or "").strip()
-    target_secret_key = str(
-        current_settings.get(PASSWORD_LOGIN_REMOTE_SECRET_KEY_KEY) or ""
-    ).strip()
-
-    if key == PASSWORD_LOGIN_MODE_KEY:
-        target_mode = str(new_value or "").strip().lower()
-    elif key == PASSWORD_LOGIN_REMOTE_URL_KEY:
-        target_url = str(new_value or "").strip()
-    elif key == PASSWORD_LOGIN_REMOTE_SECRET_KEY_KEY:
-        target_secret_key = str(new_value or "").strip()
-
-    if target_mode != PASSWORD_LOGIN_PROTOCOL_MODE:
-        return None
-
-    return validate_remote_password_login_settings(target_url, target_secret_key)
-
-
-async def _notify_log_retention_service(
-    service_name: str,
-    service_url: str,
-    retention_days: int,
-) -> dict:
-    """通过内部 HTTP 接口通知目标服务刷新日志保留天数。"""
-    if not service_url:
-        return {
-            "success": False,
-            "message": f"{service_name}服务地址未配置，将由自动同步任务补齐",
-        }
-
+) -> ApiResponse:
+    """校验并在同一事务中保存系统设置，必要时刷新日志保留策略。"""
     try:
-        response = await get_http_client().post(
-            f"{service_url.rstrip('/')}/internal/logs/retention",
-            json={"retention_days": retention_days},
+        values = {key: value for key, (value, _) in updates.items()}
+        validated, error_message = await validate_system_settings_update(values, service)
+        if error_message or validated is None:
+            return ApiResponse(
+                success=False,
+                code=40001,
+                message=error_message or "系统设置校验失败",
+            )
+
+        normalized_updates = {
+            key: (value, updates[key][1]) for key, value in validated.values.items()
+        }
+        await service.set_settings(normalized_updates)
+    except Exception as exc:  # noqa: BLE001 - 保存异常必须回滚并转换为统一业务响应。
+        await service.rollback()
+        logger.opt(exception=exc).error(
+            "系统设置保存接口异常：keys={} exception_type={} exception={}",
+            sorted(updates),
+            type(exc).__name__,
+            exc,
         )
-        success = bool(response.get("success"))
-        default_msg = f"{service_name}服务刷新成功" if success else f"{service_name}服务刷新失败"
-        return {
-            "success": success,
-            "message": str(response.get("message") or default_msg),
-        }
-    except Exception as e:
-        logger.error(f"通知{service_name}服务刷新日志保留天数失败: {e}")
-        return {
-            "success": False,
-            "message": f"{service_name}服务刷新失败: {str(e)}，将由自动同步任务补齐",
-        }
+        return ApiResponse(
+            success=False,
+            code=40001,
+            message="系统设置保存失败，请稍后重试",
+        )
 
+    if validated.retention_days is None:
+        return ApiResponse(success=True, message="系统设置已更新")
 
-async def _refresh_log_retention_runtime(retention_days: int) -> dict:
-    """刷新当前服务并广播通知其它服务刷新日志保留天数。"""
-    settings = get_settings()
-    local_updated = update_log_retention(retention_days)
-
-    results = {
-        "backend_web": {
-            "success": True,
-            "message": "backend-web服务已刷新" if local_updated else "backend-web服务无需变更",
+    refresh_results = await refresh_log_retention_runtime(validated.retention_days)
+    failed_services = [
+        service_name
+        for service_name, result in refresh_results.items()
+        if not bool(result.get("success"))
+    ]
+    message = (
+        "系统设置已更新，日志保留天数已生效，部分服务将由自动同步任务补齐"
+        if failed_services
+        else "系统设置已更新，日志保留天数已实时生效"
+    )
+    return ApiResponse(
+        success=True,
+        message=message,
+        data={
+            "retention_days": validated.retention_days,
+            "refresh_results": refresh_results,
+            "pending_sync_services": failed_services,
         },
-        "websocket": await _notify_log_retention_service(
-            "WebSocket", settings.websocket_service_url, retention_days,
-        ),
-        "scheduler": await _notify_log_retention_service(
-            "Scheduler", settings.scheduler_service_url, retention_days,
-        ),
-        "promotion_backend": {
-            "success": True,
-            "message": "返佣服务将通过自动同步任务应用最新日志保留天数",
-        },
-    }
-    return results
+    )
 
 
 @router.get("/public")
 async def get_public_settings(
-    service: SystemSettingService = Depends(deps.get_system_setting_service),
+    service: SystemSettingService = Depends(deps.get_system_setting_service),  # noqa: B008
 ) -> dict[str, str]:
     """获取公开的系统设置（无需登录）"""
     all_settings = await service.list_settings()
@@ -284,8 +144,8 @@ async def get_public_settings(
 
 @router.get("")
 async def get_system_settings(
-    current_user: User = Depends(deps.get_current_active_user),
-    service: SystemSettingService = Depends(deps.get_system_setting_service),
+    current_user: User = Depends(deps.get_current_active_user),  # noqa: B008
+    service: SystemSettingService = Depends(deps.get_system_setting_service),  # noqa: B008
 ) -> dict[str, str]:
     settings = await service.list_settings()
     settings["runtime.is_exe_mode"] = "true" if is_frozen() else "false"
@@ -294,97 +154,32 @@ async def get_system_settings(
     return {key: value for key, value in settings.items() if key in NON_ADMIN_ALLOWED_KEYS}
 
 
+@router.put("/batch", response_model=ApiResponse)
+async def update_system_settings_batch(
+    payload: SystemSettingsBatchUpdate,
+    current_user: User = Depends(deps.get_current_admin_user),  # noqa: B008
+    service: SystemSettingService = Depends(deps.get_system_setting_service),  # noqa: B008
+) -> ApiResponse:
+    """在同一事务中批量保存一个设置模块的全部字段。"""
+    updates = {
+        key: (setting.value, setting.description)
+        for key, setting in payload.settings.items()
+    }
+    return await _save_system_settings(updates, service)
+
+
 @router.put("/{key}", response_model=ApiResponse)
 async def update_system_setting(
     key: str,
     payload: SystemSettingUpdate,
-    current_user: User = Depends(deps.get_current_admin_user),
-    service: SystemSettingService = Depends(deps.get_system_setting_service),
+    current_user: User = Depends(deps.get_current_admin_user),  # noqa: B008
+    service: SystemSettingService = Depends(deps.get_system_setting_service),  # noqa: B008
 ) -> ApiResponse:
     if key in SENSITIVE_KEYS:
-        return ApiResponse(success=False, message="该设置需要使用专用接口修改")
-
-    setting_value = payload.value
-    if key in AD_PRICE_DEFAULTS:
-        try:
-            parse_ad_price(setting_value)
-        except ValueError as exc:
-            return ApiResponse(success=False, code=40001, message=str(exc))
-    if key == PASSWORD_LOGIN_MODE_KEY:
-        setting_value = str(payload.value or "").strip().lower()
-        if setting_value == "auto":
-            setting_value = "browser"
-        if setting_value not in PASSWORD_LOGIN_MODES:
-            return ApiResponse(
-                success=False,
-                message="账号密码登录方式无效，请选择协议登录或浏览器登录",
-            )
-    if key == CAPTCHA_SLIDER_MODE_KEY:
-        setting_value = str(payload.value or "").strip().lower()
-        if setting_value not in CAPTCHA_SLIDER_MODES:
-            return ApiResponse(
-                success=False,
-                message="滑块滑动方式无效，请选择浏览器自动滑动或真实鼠标滑动",
-            )
-    if key == TOKEN_API_MODE_SETTING_KEY:
-        setting_value = str(payload.value or "").strip().lower()
-        if setting_value not in TOKEN_API_MODES:
-            return ApiResponse(
-                success=False,
-                message="Token获取方式无效，请选择网页接口或远程接口",
-            )
-
-    retention_days: int | None = None
-    if key == LOG_RETENTION_KEY:
-        retention_days, error_message = _parse_log_retention_days(setting_value)
-        if error_message:
-            return ApiResponse(success=False, message=error_message)
-
-    # 代理设置跨键校验（开启代理必须已配置 URL；代理启用中不允许清空 URL）
-    proxy_error = await _validate_proxy_setting(key, setting_value, service)
-    if proxy_error:
-        return ApiResponse(success=False, message=proxy_error)
-
-    remote_token_error = await _validate_remote_token_setting(key, setting_value, service)
-    if remote_token_error:
-        return ApiResponse(success=False, message=remote_token_error)
-
-    password_login_remote_error = await _validate_password_login_remote_setting(
-        key, setting_value, service
-    )
-    if password_login_remote_error:
-        return ApiResponse(success=False, message=password_login_remote_error)
-
-    await service.set_setting(key, setting_value, payload.description)
-
-    if retention_days is None:
-        return ApiResponse(success=True, message="系统设置已更新")
-
-    refresh_results = await _refresh_log_retention_runtime(retention_days)
-    failed_services = [
-        service_name
-        for service_name, result in refresh_results.items()
-        if not bool(result.get("success"))
-    ]
-    if failed_services:
-        return ApiResponse(
-            success=True,
-            message="系统设置已更新，日志保留天数已生效，部分服务将由自动同步任务补齐",
-            data={
-                "retention_days": retention_days,
-                "refresh_results": refresh_results,
-                "pending_sync_services": failed_services,
-            },
-        )
-
-    return ApiResponse(
-        success=True,
-        message="系统设置已更新，日志保留天数已实时生效",
-        data={
-            "retention_days": retention_days,
-            "refresh_results": refresh_results,
-            "pending_sync_services": [],
-        },
+        return ApiResponse(success=False, code=40001, message="该设置需要使用专用接口修改")
+    return await _save_system_settings(
+        {key: (payload.value, payload.description)},
+        service,
     )
 
 
@@ -392,24 +187,31 @@ async def update_system_setting(
 async def test_email_send(
     email: str,
     http_request: Request,
-    current_user: User = Depends(deps.get_current_admin_user),
+    current_user: User = Depends(deps.get_current_admin_user),  # noqa: B008
 ) -> ApiResponse:
     """发送测试邮件"""
-    from app.services.email_service import send_test_email
+    client_ip = get_client_ip(http_request)
+    normalized_email, error_message = await validate_test_email_recipient(
+        email,
+        owner_id=current_user.id,
+        client_ip=client_ip,
+    )
+    if error_message:
+        return ApiResponse(success=False, code=40001, message=error_message)
 
     # 发送结果（成功/失败/配置缺失）由 email_service 统一写入邮件发送日志
     success, message = await send_test_email(
-        email,
+        normalized_email or "",
         owner_id=current_user.id,
-        client_ip=get_client_ip(http_request),
+        client_ip=client_ip,
     )
-    return ApiResponse(success=success, message=message)
+    return ApiResponse(success=success, code=200 if success else 40001, message=message)
 
 
 @router.post("/test-token-remote", response_model=ApiResponse)
 async def test_token_remote_interface(
     payload: RemoteTokenTestRequest,
-    current_user: User = Depends(deps.get_current_admin_user),
+    current_user: User = Depends(deps.get_current_admin_user),  # noqa: B008
 ) -> ApiResponse:
     """测试远程 Token 接口连通性与返回格式。"""
     return await test_token_remote_settings(payload, current_user, scene="系统设置")
@@ -418,7 +220,7 @@ async def test_token_remote_interface(
 @router.post("/test-password-login-remote", response_model=ApiResponse)
 async def test_password_login_remote_interface(
     payload: RemotePasswordLoginTestRequest,
-    current_user: User = Depends(deps.get_current_admin_user),
+    current_user: User = Depends(deps.get_current_admin_user),  # noqa: B008
 ) -> ApiResponse:
     """测试协议登录远程接口（阿里滑块获取 x5sec）连通性与秘钥有效性。"""
     error_message = validate_remote_password_login_settings(
@@ -426,7 +228,7 @@ async def test_password_login_remote_interface(
         payload.remote_secret_key,
     )
     if error_message:
-        return ApiResponse(success=False, message=error_message)
+        return ApiResponse(success=False, code=40001, message=error_message)
 
     try:
         result = await test_remote_password_login_interface(
@@ -434,11 +236,15 @@ async def test_password_login_remote_interface(
             payload.remote_secret_key,
             timeout_seconds=15,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - 远程测试入口必须将所有上游异常转换为可见业务错误。
         logger.error(f"测试协议登录远程接口异常: {type(exc).__name__}: {exc}")
         return ApiResponse(
             success=False,
             message=f"远程接口测试失败：{type(exc).__name__}: {exc}",
         )
 
-    return ApiResponse(success=result.success, message=result.message)
+    return ApiResponse(
+        success=result.success,
+        code=200 if result.success else 40001,
+        message=result.message,
+    )

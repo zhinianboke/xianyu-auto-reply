@@ -50,17 +50,28 @@ export function TokenRemoteSettingsCard() {
     return () => { loadSequence.current += 1 }
   }, [loadSettings])
 
-  /** 验证必填字段；URL 格式及配置内容由后端再次校验。 */
-  const validate = () => {
+  /** 保存允许两项同时留空以恢复系统配置，只填写一项时拒绝提交。 */
+  const validateSave = () => {
+    const hasUrl = Boolean(remoteUrl.trim())
+    const hasSecretKey = Boolean(secretKey.trim())
+    if (hasUrl !== hasSecretKey) {
+      addToast({ type: 'warning', message: '远程URL和秘钥需要同时填写，或同时清空' })
+      return false
+    }
+    return true
+  }
+
+  /** 测试必须使用完整的 URL 和秘钥。 */
+  const validateTest = () => {
     if (!remoteUrl.trim() || !secretKey.trim()) {
-      addToast({ type: 'warning', message: '请输入远程URL和秘钥' })
+      addToast({ type: 'warning', message: '测试前请输入远程URL和秘钥' })
       return false
     }
     return true
   }
 
   const handleSave = () => {
-    if (operationPending.current || busy || !loaded || !validate()) return
+    if (operationPending.current || busy || !loaded || !validateSave()) return
     operationPending.current = true
     setSaving(true)
     void savePersonalTokenSettings({
@@ -79,7 +90,7 @@ export function TokenRemoteSettingsCard() {
   }
 
   const handleTest = () => {
-    if (operationPending.current || busy || !loaded || !validate()) return
+    if (operationPending.current || busy || !loaded || !validateTest()) return
     operationPending.current = true
     setTesting(true)
     void testPersonalTokenSettings({
@@ -106,6 +117,9 @@ export function TokenRemoteSettingsCard() {
             https://api.xianyushop.shop
           </a>{' '}获取，使用接口列表中的“闲鱼获取Token”接口
         </p>
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          个人配置保存后优先于系统配置；远程URL和秘钥同时清空并保存，可恢复使用系统级配置。
+        </p>
         {!loading && !loaded && (
           <div className="flex flex-wrap items-center gap-3 text-sm text-red-600 dark:text-red-400">
             <span>配置读取失败，请重新加载后操作</span>
@@ -114,12 +128,12 @@ export function TokenRemoteSettingsCard() {
         )}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <div className="input-group">
-            <label className="input-label" htmlFor="personal-token-remote-url">远程URL <span className="text-red-500">*</span></label>
-            <input id="personal-token-remote-url" type="url" value={remoteUrl} onChange={(event) => setRemoteUrl(event.target.value)} disabled={busy || !loaded} required placeholder="https://api.xianyushop.shop/api/external/invoke" className="input-ios" />
+            <label className="input-label" htmlFor="personal-token-remote-url">远程URL</label>
+            <input id="personal-token-remote-url" type="url" value={remoteUrl} onChange={(event) => setRemoteUrl(event.target.value)} disabled={busy || !loaded} placeholder="https://api.xianyushop.shop/api/external/invoke" className="input-ios" />
           </div>
           <div className="input-group">
-            <label className="input-label">秘钥 <span className="text-red-500">*</span></label>
-            <PasswordInput value={secretKey} onChange={setSecretKey} disabled={busy || !loaded} required placeholder="请输入远程接口秘钥" showLabel="显示秘钥" hideLabel="隐藏秘钥" />
+            <label className="input-label">秘钥</label>
+            <PasswordInput value={secretKey} onChange={setSecretKey} disabled={busy || !loaded} placeholder="请输入远程接口秘钥" showLabel="显示秘钥" hideLabel="隐藏秘钥" />
           </div>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
