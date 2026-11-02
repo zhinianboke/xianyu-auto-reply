@@ -97,17 +97,22 @@ class ProductSpecificationRequest(BaseModel):
 
 
 class PublishSkuRowRequest(BaseModel):
-    """规格组合对应的价格和库存。"""
+    """规格组合对应的固定价格、随机价格区间和库存。"""
 
     specs: Dict[str, str] = Field(default_factory=dict, max_length=4)
     price: float = Field(..., gt=0)
+    price_min: Optional[float] = Field(None, gt=0)
+    price_max: Optional[float] = Field(None, gt=0)
     stock: int = Field(0, ge=0, le=999999)
 
 class MaterialCreateRequest(BaseModel):
     """创建素材请求"""
     title: str = Field(..., min_length=1, max_length=200, description="商品标题")
     description: str = Field(..., min_length=1, max_length=1500, description="商品描述")
-    price: float = Field(..., gt=0, description="售价")
+    price: Optional[float] = Field(None, gt=0, description="固定价格或兼容价格")
+    price_mode: str = Field("fixed", pattern="^(fixed|random)$", description="价格模式")
+    price_min: Optional[float] = Field(None, gt=0, description="随机价格最小值")
+    price_max: Optional[float] = Field(None, gt=0, description="随机价格最大值")
     original_price: Optional[float] = Field(None, description="原价（划线价）")
     category: Optional[str] = Field(None, max_length=100, description="商品分类")
     platform_category_id: Optional[str] = Field(None, max_length=64, description="平台末级分类ID（catId）")
@@ -147,6 +152,9 @@ class MaterialUpdateRequest(BaseModel):
     title: Optional[str] = Field(None, max_length=200)
     description: Optional[str] = Field(None, max_length=1500)
     price: Optional[float] = Field(None, gt=0)
+    price_mode: Optional[str] = Field(None, pattern="^(fixed|random)$")
+    price_min: Optional[float] = Field(None, gt=0)
+    price_max: Optional[float] = Field(None, gt=0)
     original_price: Optional[float] = None
     category: Optional[str] = Field(None, max_length=100)
     platform_category_id: Optional[str] = Field(None, max_length=64)
@@ -408,6 +416,19 @@ async def list_materials(
         item["auto_relist_owner_id"] = rule.get("owner_id") if rule else item.get("user_id")
         item["auto_relist_can_configure"] = can_configure
     return ApiResponse(success=True, message="查询成功", data=data)
+
+
+@router.get("/materials/price-modes", response_model=ApiResponse)
+async def list_material_price_modes(
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """从数据字典查询素材价格模式。"""
+    del current_user
+    options = await ProductMaterialService(session).list_price_modes()
+    if not options:
+        return ApiResponse(success=False, message="素材价格模式字典未初始化，请联系管理员", data=None)
+    return ApiResponse(success=True, message="查询成功", data=options)
 
 
 class BatchDeleteRequest(BaseModel):

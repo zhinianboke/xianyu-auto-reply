@@ -13,6 +13,7 @@ import { Layers, CheckCircle, XCircle, Clock, Play, Loader2 } from 'lucide-react
 import { useUIStore } from '@/store/uiStore'
 import { publishBatch, getBatchStatus, getMaterials, type ProductMaterial, type BatchAccountStatus } from '@/api/productPublish'
 import { getAccountDetails } from '@/api/accounts'
+import { formatMaterialPrice } from './materialPrice'
 
 interface BatchProgress {
   batch_id: string
@@ -297,7 +298,7 @@ export function BatchPublish() {
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium truncate text-slate-800 dark:text-slate-100">{m.title}</p>
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                          <span className="text-xs text-amber-600">{m.price}</span>
+                          <span className="text-xs text-amber-600">{formatMaterialPrice(m)}</span>
                           {isMultiSpec ? (
                             <span className="badge-info flex-shrink-0">多规格 · {specificationCount}类 / {skuCount}组合</span>
                           ) : (

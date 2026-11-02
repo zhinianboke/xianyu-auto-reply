@@ -28,6 +28,12 @@ class ProductMaterial(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False, comment="商品标题")
     description: Mapped[str] = mapped_column(Text, nullable=False, comment="商品描述")
     price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, comment="价格")
+    price_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="fixed", server_default="fixed",
+        comment="价格模式：fixed-固定价格，random-随机价格",
+    )
+    price_min: Mapped[float | None] = mapped_column(Numeric(12, 2), comment="随机价格最小值")
+    price_max: Mapped[float | None] = mapped_column(Numeric(12, 2), comment="随机价格最大值")
     original_price: Mapped[float | None] = mapped_column(Numeric(12, 2), comment="原价")
     category: Mapped[str | None] = mapped_column(String(100), comment="商品分类")
     platform_category_id: Mapped[str | None] = mapped_column(String(64), comment="平台末级分类ID（catId）")

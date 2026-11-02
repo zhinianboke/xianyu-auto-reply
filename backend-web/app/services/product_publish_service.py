@@ -7,18 +7,27 @@
 """
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
+from math import isfinite
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from common.models.product_material import ProductMaterial
 from app.services.xianyu_item_snapshot import as_bool
+from app.services.xianyu_direct_payload import DirectPublishError, build_sku_payload
+from common.models.data_dictionary import XYDataDictionary
+from common.models.product_material import ProductMaterial
+from common.services.product_material_price import (
+    MATERIAL_PRICE_MODE_DICTIONARY,
+    MaterialPriceError,
+    ensure_unique_random_prices_available,
+    normalize_material_price_fields,
+)
+from common.utils.time_utils import safe_isoformat
 
 
 # ==================== 素材库服务 ====================
-
-from common.utils.time_utils import safe_isoformat
 
 
 class MaterialValidationError(ValueError):
@@ -31,15 +40,23 @@ class MaterialSpecificationError(MaterialValidationError):
 
 def _normalize_specifications(value: Any) -> list[dict]:
     """规范化规格 JSON，确保规格值名称和图片字段完整保存。"""
-    if not isinstance(value, list):
+    if value is None:
         return []
+    if not isinstance(value, list):
+        raise MaterialSpecificationError("商品规格格式不正确")
+    if len(value) > 2:
+        raise MaterialSpecificationError("商品规格类型最多只能有2个")
     normalized: list[dict] = []
-    for specification in value[:2]:
+    seen_names: set[str] = set()
+    for index, specification in enumerate(value, 1):
         if not isinstance(specification, dict):
-            continue
+            raise MaterialSpecificationError(f"第 {index} 个规格格式不正确")
         name = str(specification.get("name") or "").strip()
         if not name:
-            continue
+            raise MaterialSpecificationError(f"第 {index} 个规格名称不能为空")
+        if name in seen_names:
+            raise MaterialSpecificationError(f"规格名称重复：{name}")
+        seen_names.add(name)
         values: list[dict] = []
         seen_values: set[str] = set()
         for item in specification.get("values") or []:
@@ -52,6 +69,8 @@ def _normalize_specifications(value: Any) -> list[dict]:
                 raise MaterialSpecificationError(f"规格“{name}”存在重复规格值：{value_name}")
             seen_values.add(value_name)
             values.append({"name": value_name, "image": item.get("image") or None})
+        if not values:
+            raise MaterialSpecificationError(f"规格“{name}”至少需要一个规格值")
         normalized.append({
             "name": name,
             "support_image": bool(specification.get("support_image")),
@@ -60,39 +79,160 @@ def _normalize_specifications(value: Any) -> list[dict]:
     return normalized
 
 
-def _normalize_sku_rows(value: Any) -> list[dict]:
-    """规范化 SKU JSON，保留每个规格组合的价格和库存。"""
-    if not isinstance(value, list):
+def _normalize_sku_rows(
+    value: Any,
+    fallback_price: float | None = None,
+    fallback_price_max: float | None = None,
+    random_mode: bool = False,
+) -> list[dict]:
+    """规范化 SKU JSON；随机模式校验并保存每个规格自己的价格区间。"""
+    if value is None:
         return []
+    if not isinstance(value, list):
+        raise MaterialSpecificationError("商品规格组合格式不正确")
+    if len(value) > 200:
+        raise MaterialSpecificationError("商品规格组合最多只能有200组")
     normalized: list[dict] = []
-    for row in value[:200]:
+    for index, row in enumerate(value, 1):
         if not isinstance(row, dict):
-            continue
+            raise MaterialSpecificationError(f"第 {index} 个 SKU 格式不正确")
         specs = row.get("specs") if isinstance(row.get("specs"), dict) else {}
         try:
             price = float(row.get("price"))
-            stock = int(row.get("stock"))
         except (TypeError, ValueError):
-            continue
-        if price <= 0 or stock < 0:
-            continue
-        normalized.append({
+            price = float(fallback_price or 0)
+        if not isfinite(price) or price <= 0:
+            if fallback_price is None:
+                raise MaterialSpecificationError(f"第 {index} 个 SKU 价格必须大于0")
+            price = float(fallback_price)
+        try:
+            stock_value = Decimal(str(row.get("stock")))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise MaterialSpecificationError(f"第 {index} 个 SKU 库存格式不正确") from exc
+        if not stock_value.is_finite() or stock_value != stock_value.to_integral_value():
+            raise MaterialSpecificationError(f"第 {index} 个 SKU 库存必须是整数")
+        stock = int(stock_value)
+        if stock < 0 or stock > 999999:
+            raise MaterialSpecificationError(f"第 {index} 个 SKU 库存必须在0到999999之间")
+        normalized_row = {
             "specs": {str(key): str(item) for key, item in specs.items()},
             "price": price,
             "stock": stock,
-        })
+        }
+        if random_mode:
+            try:
+                price_min = Decimal(str(row.get("price_min") if row.get("price_min") is not None else fallback_price)).quantize(Decimal("0.01"))
+                price_max = Decimal(str(row.get("price_max") if row.get("price_max") is not None else fallback_price_max)).quantize(Decimal("0.01"))
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                raise MaterialSpecificationError(f"第 {index} 个 SKU 随机价格区间格式不正确") from exc
+            if not price_min.is_finite() or price_min <= 0:
+                raise MaterialSpecificationError(f"第 {index} 个 SKU 随机价格最小值必须大于0")
+            if not price_max.is_finite() or price_max <= 0:
+                raise MaterialSpecificationError(f"第 {index} 个 SKU 随机价格最大值必须大于0")
+            if price_min > price_max:
+                raise MaterialSpecificationError(f"第 {index} 个 SKU 随机价格最小值不能大于最大值")
+            normalized_row["price"] = float(price_min)
+            normalized_row["price_min"] = float(price_min)
+            normalized_row["price_max"] = float(price_max)
+        normalized.append(normalized_row)
     return normalized
 
 
-def _normalize_material_json(data: dict) -> dict:
+def _validate_specification_matrix(specifications: list[dict], sku_rows: list[dict]) -> None:
+    """复用发布载荷校验，禁止保存缺失、重复或不完整的规格组合。"""
+    try:
+        build_sku_payload({"specifications": specifications, "sku_rows": sku_rows})
+    except DirectPublishError as exc:
+        raise MaterialSpecificationError(str(exc)) from exc
+
+
+def _normalize_material_json(
+    data: dict,
+    fallback_price: float | None = None,
+    fallback_price_max: float | None = None,
+    random_mode: bool = False,
+) -> dict:
     """统一处理素材中嵌套 JSON，避免 Pydantic/ORM 转换时丢字段。"""
     normalized = dict(data)
     normalized["specifications"] = _normalize_specifications(data.get("specifications"))
-    normalized["sku_rows"] = _normalize_sku_rows(data.get("sku_rows"))
+    normalized["sku_rows"] = _normalize_sku_rows(
+        data.get("sku_rows"),
+        fallback_price=fallback_price,
+        fallback_price_max=fallback_price_max,
+        random_mode=random_mode,
+    )
     normalized["platform_category_path"] = data.get("platform_category_path") or []
     normalized["platform_attributes"] = data.get("platform_attributes") or []
     normalized["videos"] = data.get("videos") or []
     normalized["images"] = data.get("images") or []
+    return normalized
+
+
+def _normalize_material_data(data: dict, current: ProductMaterial | None = None) -> dict:
+    """统一规范化素材嵌套字段与价格配置。"""
+    normalized = dict(data)
+    try:
+        normalized = normalize_material_price_fields(normalized, current=current)
+    except MaterialPriceError as exc:
+        raise MaterialValidationError(str(exc)) from exc
+
+    random_mode = normalized["price_mode"] == "random"
+    fallback_price = normalized.get("price_min") if random_mode else None
+    fallback_price_max = normalized.get("price_max") if random_mode else None
+    if current is None:
+        normalized = _normalize_material_json(
+            normalized,
+            fallback_price=fallback_price,
+            fallback_price_max=fallback_price_max,
+            random_mode=random_mode,
+        )
+        specifications = normalized["specifications"]
+        sku_rows = normalized["sku_rows"]
+    else:
+        specifications = (
+            _normalize_specifications(normalized.get("specifications"))
+            if "specifications" in normalized
+            else _normalize_specifications(current.specifications)
+        )
+        sku_rows = (
+            _normalize_sku_rows(
+                normalized.get("sku_rows"),
+                fallback_price=fallback_price,
+                fallback_price_max=fallback_price_max,
+                random_mode=random_mode,
+            )
+            if "sku_rows" in normalized
+            else _normalize_sku_rows(
+                current.sku_rows,
+                fallback_price=fallback_price,
+                fallback_price_max=fallback_price_max,
+                random_mode=random_mode,
+            )
+        )
+        if "specifications" in normalized:
+            normalized["specifications"] = specifications
+        if "sku_rows" in normalized:
+            normalized["sku_rows"] = sku_rows
+    if random_mode and sku_rows:
+        try:
+            ensure_unique_random_prices_available([
+                (row["price_min"], row["price_max"])
+                for row in sku_rows
+            ])
+        except MaterialPriceError as exc:
+            raise MaterialSpecificationError(str(exc)) from exc
+        normalized["price_min"] = min(row["price_min"] for row in sku_rows)
+        normalized["price_max"] = max(row["price_max"] for row in sku_rows)
+        normalized["price"] = normalized["price_min"]
+    publish_sku_rows = [
+        {
+            "specs": row["specs"],
+            "price": row["price_min"] if random_mode else row["price"],
+            "stock": row["stock"],
+        }
+        for row in sku_rows
+    ]
+    _validate_specification_matrix(specifications, publish_sku_rows)
     return normalized
 
 
@@ -108,13 +248,16 @@ class ProductMaterialService:
         data: dict,
     ) -> ProductMaterial:
         """创建商品素材，平台分类字段按请求原样保存。"""
-        data = _normalize_material_json(data)
+        data = _normalize_material_data(data)
         shipping_method = str(data.get("shipping_method") or "free")
         material = ProductMaterial(
             user_id=user_id,
             title=data["title"],
             description=data["description"],
             price=float(data["price"]),
+            price_mode=data["price_mode"],
+            price_min=float(data["price_min"]) if data.get("price_min") is not None else None,
+            price_max=float(data["price_max"]) if data.get("price_max") is not None else None,
             original_price=float(data["original_price"]) if data.get("original_price") else None,
             category=data.get("category"),
             platform_category_id=data.get("platform_category_id"),
@@ -148,6 +291,19 @@ class ProductMaterialService:
         await self.session.commit()
         await self.session.refresh(material)
         return material
+
+    async def list_price_modes(self) -> List[Dict[str, str]]:
+        """从数据字典读取素材价格模式选项。"""
+        stmt = (
+            select(XYDataDictionary.dict_value, XYDataDictionary.dict_label)
+            .where(
+                XYDataDictionary.dict_type == MATERIAL_PRICE_MODE_DICTIONARY,
+                XYDataDictionary.enabled.is_(True),
+            )
+            .order_by(XYDataDictionary.sort_order.asc(), XYDataDictionary.id.asc())
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return [{"value": row.dict_value, "label": row.dict_label} for row in rows]
 
     async def list_materials(
         self, user_id: int = None, page: int = 1, page_size: int = 20,
@@ -239,13 +395,10 @@ class ProductMaterialService:
         if not material:
             return None
 
-        if "specifications" in data:
-            data["specifications"] = _normalize_specifications(data.get("specifications"))
-        if "sku_rows" in data:
-            data["sku_rows"] = _normalize_sku_rows(data.get("sku_rows"))
+        data = _normalize_material_data(data, current=material)
 
         updatable = [
-            "title", "description", "price", "original_price", "category",
+            "title", "description", "price", "price_mode", "price_min", "price_max", "original_price", "category",
             "platform_category_id", "platform_category_name",
             "platform_channel_category_id", "platform_channel_category_name",
             "platform_leaf_id", "platform_tb_category_id", "platform_category_path", "platform_attributes",
@@ -255,8 +408,10 @@ class ProductMaterialService:
         for field in updatable:
             if field in data:
                 value = data[field]
-                if field in ("price", "original_price", "postage"):
-                    value = float(value) if value else (None if field == "original_price" else 0)
+                if field in ("price", "postage"):
+                    value = float(value) if value is not None else 0
+                elif field in ("price_min", "price_max", "original_price"):
+                    value = float(value) if value is not None else None
                 elif field == "support_pickup":
                     # 兼容表单/历史调用传入的布尔字符串，避免 bool("false") 被当作 True。
                     value = as_bool(value)
@@ -309,6 +464,9 @@ def _material_to_dict(m: ProductMaterial) -> dict:
         "title": m.title,
         "description": m.description,
         "price": float(m.price) if m.price is not None else 0,
+        "price_mode": m.price_mode or "fixed",
+        "price_min": float(m.price_min) if m.price_min is not None else None,
+        "price_max": float(m.price_max) if m.price_max is not None else None,
         "original_price": float(m.original_price) if m.original_price is not None else None,
         "category": m.category,
         "platform_category_id": m.platform_category_id,

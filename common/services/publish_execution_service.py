@@ -105,14 +105,28 @@ async def execute_single_publish(
     static_root: str | Path | None = None,
     publish_request_id: str | None = None,
     source_event_id: int | None = None,
+    enable_idempotency: bool = False,
 ) -> Dict[str, Any]:
-    """执行单品发布并返回统一结果。"""
+    """执行单品发布并返回统一结果。
+
+    Args:
+        session: 数据库会话。
+        user_id: 操作用户ID。
+        account_id: 闲鱼账号ID。
+        item_data: 商品发布载荷。
+        static_root: 静态文件根目录。
+        publish_request_id: 发布幂等请求号。
+        source_event_id: 自动续售事件ID。
+        enable_idempotency: 非自动续售后台任务是否启用相同的幂等和未知结果保护。
+    Returns:
+        统一发布结果字典。
+    """
     log_svc = PublishLogService(session)
     address_svc = PublishAddressService(session)
 
-    # 只有自动续售发布才启用幂等与未知结果对账保护。
+    # 自动续售和显式启用幂等的后台发布任务使用未知结果对账保护。
     # 手工单品发布必须优先执行，不得被自动续售历史状态拦截。
-    is_auto_relist_publish = source_event_id is not None
+    is_auto_relist_publish = source_event_id is not None or enable_idempotency
     existing_log = None
     if is_auto_relist_publish and publish_request_id:
         existing_log = await log_svc.get_by_request_id(publish_request_id)
@@ -194,6 +208,13 @@ async def execute_single_publish(
     if existing_log and existing_log.status == "failed":
         # 明确失败未产生平台副作用，可安全复用同一幂等日志重试。
         existing_log.status = "publishing"
+        existing_log.title = item_data.get("title", "")
+        existing_log.description = item_data.get("description", "")
+        existing_log.price = str(item_data.get("price", ""))
+        existing_log.material_id = item_data.get("id")
+        existing_log.resolved_address_id = resolved_address.resolved_address_id
+        existing_log.resolved_address_text = resolved_address.resolved_address_text
+        existing_log.address_source = resolved_address.address_source
         existing_log.error_message = None
         existing_log.item_id = None
         existing_log.item_url = None
@@ -348,7 +369,7 @@ async def execute_single_publish(
             publish_success = bool(result.get("success"))
             result_item_id = str(result.get("item_id") or "").strip()
 
-            # 自动续售必须拿到平台商品 ID 才能继续本地迁移和切换监听商品。
+            # 幂等后台发布必须拿到平台商品 ID 才能确认本次平台副作用。
             # 平台返回成功但缺少 ID（或返回失败却带有 ID）都无法证明副作用状态，
             # 统一保留为未知结果，禁止后续再次调用发布接口。
             ambiguous_result = is_auto_relist_publish and bool(publish_request_id) and (
@@ -386,7 +407,7 @@ async def execute_single_publish(
     except Exception as db_err:
         logger.error(f"更新发布日志失败: {db_err}")
         if is_auto_relist_publish and publish_request_id:
-            # 外部平台结果已返回，但本地日志状态无法确认，自动续售不得把它当作
+            # 外部平台结果已返回，但本地日志状态无法确认，幂等后台任务不得把它当作
             # 可安全重试的明确失败，否则可能重复上架。
             return {
                 "success": False,

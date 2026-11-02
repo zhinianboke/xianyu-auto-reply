@@ -23,6 +23,8 @@ export interface SkuRow {
   key: string
   specs: Record<string, string>
   price: string
+  price_min: string
+  price_max: string
   stock: string
 }
 

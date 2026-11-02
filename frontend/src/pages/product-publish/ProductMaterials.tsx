@@ -21,6 +21,7 @@ import { MaterialFormModal } from './MaterialFormModal'
 import { AiListingModal } from './ai-listing/AiListingModal'
 import { AutoRelistModal } from './AutoRelistModal'
 import { useAiListingTask } from './ai-listing/useAiListingTask'
+import { formatMaterialPrice } from './materialPrice'
 
 const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新', '7成新以下']
 
@@ -341,7 +342,7 @@ export function ProductMaterials() {
                     <span className="truncate block font-medium text-slate-800 dark:text-slate-100" title={m.title}>{m.title}</span>
                   </td>
                   <td>
-                    <span className="text-amber-600 font-medium">{m.price}</span>
+                    <span className="text-amber-600 font-medium whitespace-nowrap">{formatMaterialPrice(m)}</span>
                     {m.original_price && (
                       <span className="text-xs text-slate-400 line-through ml-1">{m.original_price}</span>
                     )}

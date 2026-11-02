@@ -109,6 +109,8 @@ export interface PublishSpecification {
 export interface PublishSkuRow {
   specs: Record<string, string>
   price: number
+  price_min?: number | null
+  price_max?: number | null
   stock: number
 }
 
@@ -119,6 +121,9 @@ export interface ProductMaterial {
   title: string
   description: string
   price: number
+  price_mode: 'fixed' | 'random'
+  price_min?: number | null
+  price_max?: number | null
   original_price?: number | null
   category?: string | null
   platform_category_id?: string | null
@@ -215,6 +220,9 @@ export interface MaterialCreateParams {
   title: string
   description: string
   price: number
+  price_mode?: 'fixed' | 'random'
+  price_min?: number | null
+  price_max?: number | null
   original_price?: number | null
   category?: string | null
   platform_category_id?: string | null
@@ -253,6 +261,11 @@ export interface MaterialListResponse {
     page_size: number
     total_pages: number
   }
+}
+
+export interface MaterialPriceModeOption {
+  value: 'fixed' | 'random'
+  label: string
 }
 
 export interface PublishLog {
@@ -390,6 +403,10 @@ export const getMaterials = (
 /** 获取单条素材详情 */
 export const getMaterial = (id: number): Promise<ApiResponse<ProductMaterial>> =>
   get(`${PREFIX}/materials/${id}`)
+
+/** 从数据字典查询素材价格模式。 */
+export const getMaterialPriceModes = (): Promise<ApiResponse<MaterialPriceModeOption[]>> =>
+  get(`${PREFIX}/materials/price-modes`)
 
 /** 更新素材 */
 export const updateMaterial = (

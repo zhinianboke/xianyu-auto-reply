@@ -14,6 +14,7 @@ interface ProductSpecificationsEditorProps {
   skuRows: SkuRow[]
   onChange: (specifications: ProductSpecification[], skuRows: SkuRow[]) => void
   onUploadImage: (file: File) => Promise<string | null>
+  priceMode?: 'fixed' | 'random'
 }
 
 const createId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
@@ -28,6 +29,7 @@ export function ProductSpecificationsEditor({
   skuRows,
   onChange,
   onUploadImage,
+  priceMode = 'fixed',
 }: ProductSpecificationsEditorProps) {
   const { addToast } = useUIStore()
   const [customTypeIndex, setCustomTypeIndex] = useState<number | null>(null)
@@ -73,6 +75,8 @@ export function ProductSpecificationsEditor({
       key,
       specs,
       price: previous.get(key)?.price || '',
+      price_min: previous.get(key)?.price_min || '',
+      price_max: previous.get(key)?.price_max || '',
       stock: previous.get(key)?.stock ?? '',
     }))
     if (JSON.stringify(nextRows) !== JSON.stringify(skuRows)) onChange(specifications, nextRows)
@@ -148,7 +152,11 @@ export function ProductSpecificationsEditor({
     updateValue(spec, value.id, { name })
   }
 
-  const updateSku = (key: string, field: 'price' | 'stock', value: string) => {
+  const updateSku = (
+    key: string,
+    field: 'price' | 'price_min' | 'price_max' | 'stock',
+    value: string,
+  ) => {
     onChange(specifications, skuRows.map((row) => (row.key === key ? { ...row, [field]: value } : row)))
   }
 
@@ -322,12 +330,14 @@ export function ProductSpecificationsEditor({
       )}
 
       {generatedRows.length > 0 && (
-        <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
-          <table className="table-ios min-w-[620px]">
+        <div className="table-scroll rounded-lg border border-slate-200 dark:border-slate-700">
+          <table className={`table-ios ${priceMode === 'random' ? 'min-w-[820px]' : 'min-w-[620px]'}`}>
             <thead>
               <tr>
                 {specifications.filter((spec) => spec.name && spec.values.length).map((spec) => <th key={spec.id}>{spec.name}</th>)}
-                <th>价格（元）</th>
+                {priceMode === 'random' ? (
+                  <><th>最小价格（元）</th><th>最大价格（元）</th></>
+                ) : <th>价格（元）</th>}
                 <th>库存</th>
               </tr>
             </thead>
@@ -335,7 +345,10 @@ export function ProductSpecificationsEditor({
               {skuRows.map((row) => (
                 <tr key={row.key}>
                   {specifications.filter((spec) => spec.name && spec.values.length).map((spec) => <td key={spec.id}>{row.specs[spec.name] || '-'}</td>)}
-                  <td><input type="number" min="0" step="0.01" className="input-ios min-w-28" placeholder="0.00" value={row.price} onChange={(event) => updateSku(row.key, 'price', event.target.value)} /></td>
+                  {priceMode === 'random' ? <>
+                    <td><input type="number" min="0.01" step="0.01" className="input-ios min-w-28" placeholder="0.00" value={row.price_min} onChange={(event) => updateSku(row.key, 'price_min', event.target.value)} /></td>
+                    <td><input type="number" min="0.01" step="0.01" className="input-ios min-w-28" placeholder="0.00" value={row.price_max} onChange={(event) => updateSku(row.key, 'price_max', event.target.value)} /></td>
+                  </> : <td><input type="number" min="0.01" step="0.01" className="input-ios min-w-28" placeholder="0.00" value={row.price} onChange={(event) => updateSku(row.key, 'price', event.target.value)} /></td>}
                   <td><input type="number" min="0" step="1" className="input-ios min-w-24" placeholder="0" value={row.stock} onChange={(event) => updateSku(row.key, 'stock', event.target.value)} /></td>
                 </tr>
               ))}

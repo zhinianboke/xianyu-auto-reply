@@ -54,6 +54,7 @@ from . import (
     password_login,
     product_publish,
     product_publish_capability,
+    scheduled_publish_rules,
     publish_addresses,
     personal_addresses,
     listing_monitor_category,
@@ -118,6 +119,7 @@ api_router.include_router(orders.router, prefix="/orders", tags=["订单管理"]
 api_router.include_router(product_publish.router, tags=["商品发布"])  # 已定义prefix="/product-publish"
 api_router.include_router(ai_listing.router, tags=["AI铺货"])  # 已定义prefix="/ai-listing"
 api_router.include_router(product_publish_capability.router, tags=["商品发布账号能力"])
+api_router.include_router(scheduled_publish_rules.router, tags=["商品定时发布"])
 api_router.include_router(publish_addresses.router, tags=["商品发布随机地址池"])  # 已定义prefix="/product-publish/addresses"
 api_router.include_router(personal_addresses.router, tags=["个人发布地址库"])  # 已定义prefix="/product-publish/personal-addresses"
 api_router.include_router(listing_monitor_category.router, tags=["商品监控分类"])  # 已定义prefix="/product-monitor/categories"

@@ -71,6 +71,9 @@ from common.models.ai_listing_task import AiListingTask, AiListingTaskItem
 from common.models.auto_relist_rule import AutoRelistRule
 from common.models.auto_relist_event import AutoRelistEvent
 from common.models.relist_association_migration import RelistAssociationMigration
+from common.models.scheduled_publish_rule import ScheduledPublishRule
+from common.models.scheduled_publish_record import ScheduledPublishRecord
+from common.models.scheduled_publish_trigger import ScheduledPublishTrigger
 
 __all__ = [
     "User",
@@ -148,4 +151,7 @@ __all__ = [
     "AutoRelistRule",
     "AutoRelistEvent",
     "RelistAssociationMigration",
+    "ScheduledPublishRule",
+    "ScheduledPublishRecord",
+    "ScheduledPublishTrigger",
 ]

@@ -29,6 +29,7 @@ from common.db.default_publish_addresses import (
 )
 from common.db.auto_relist_schema import ensure_auto_relist_schema
 from common.db.advertisement_schema import ensure_advertisement_schema
+from common.db.scheduled_publish_rule_schema import ensure_scheduled_publish_rule_schema
 from common.db.session import async_engine, async_session_maker
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.security import generate_secret_key, get_password_hash
@@ -489,6 +490,13 @@ class DatabaseInitializer:
             5,
             True,
             "检测已成交并完成发货的商品，确认旧商品下架后使用原素材自动续售",
+        ),
+        (
+            "scheduled_publish",
+            "商品定时发布任务",
+            60,
+            True,
+            "每分钟扫描启用的定时发布规则，并按账号随机发布未成功发布过的素材",
         ),
     )
     
@@ -1461,6 +1469,9 @@ class DatabaseInitializer:
                 title VARCHAR(200) NOT NULL COMMENT '商品标题',
                 description TEXT NOT NULL COMMENT '商品描述',
                 price DECIMAL(12,2) NOT NULL COMMENT '价格',
+                price_mode VARCHAR(20) NOT NULL DEFAULT 'fixed' COMMENT '价格模式：fixed-固定价格，random-随机价格',
+                price_min DECIMAL(12,2) DEFAULT NULL COMMENT '随机价格最小值',
+                price_max DECIMAL(12,2) DEFAULT NULL COMMENT '随机价格最大值',
                 original_price DECIMAL(12,2) DEFAULT NULL COMMENT '原价（划线价）',
                 category VARCHAR(100) DEFAULT NULL COMMENT '商品分类',
                 platform_category_id VARCHAR(64) DEFAULT NULL COMMENT '平台末级分类ID（catId）',
@@ -2028,6 +2039,9 @@ class DatabaseInitializer:
             ("renew_expire_at", "DATETIME DEFAULT NULL COMMENT '续期Token过期时间'", "expire_at"),
         ],
         "xy_product_materials": [
+            ("price_mode", "VARCHAR(20) NOT NULL DEFAULT 'fixed' COMMENT '价格模式：fixed-固定价格，random-随机价格'", "price"),
+            ("price_min", "DECIMAL(12,2) DEFAULT NULL COMMENT '随机价格最小值'", "price_mode"),
+            ("price_max", "DECIMAL(12,2) DEFAULT NULL COMMENT '随机价格最大值'", "price_min"),
             ("platform_category_id", "VARCHAR(64) DEFAULT NULL COMMENT '平台末级分类ID（catId）'", "category"),
             ("platform_category_name", "VARCHAR(100) DEFAULT NULL COMMENT '平台末级分类名称（catName）'", "platform_category_id"),
             ("platform_channel_category_id", "VARCHAR(64) DEFAULT NULL COMMENT '平台频道分类ID（channelCatId）'", "platform_category_name"),
@@ -2263,6 +2277,10 @@ class DatabaseInitializer:
                     async with ddl_connection() as conn:
                         await ensure_auto_relist_schema(conn, get_beijing_now_naive())
 
+                    # 商品定时发布规则、发布记录和触发记录表单独做幂等自检。
+                    async with ddl_connection() as conn:
+                        await ensure_scheduled_publish_rule_schema(conn)
+
                     # 2. 创建默认管理员用户
                     await self.create_default_admin()
 
@@ -2337,6 +2355,12 @@ class DatabaseInitializer:
             # 邮件发送结果
             ("email_send_result", "success", "成功", 10),
             ("email_send_result", "failure", "失败", 20),
+            # 商品素材价格模式
+            ("product_material_price_mode", "fixed", "固定价格", 10),
+            ("product_material_price_mode", "random", "随机价格", 20),
+            # 商品定时发布结果
+            ("scheduled_publish_result", "success", "成功", 10),
+            ("scheduled_publish_result", "failure", "失败", 20),
         )
         async with ddl_connection() as conn:
             for dict_type, dict_value, dict_label, sort_order in items:
