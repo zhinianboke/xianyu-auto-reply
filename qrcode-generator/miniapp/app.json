@@ -1,0 +1,10 @@
+{
+  "pages": [
+    "pages/open-browser/index"
+  ],
+  "window": {
+    "defaultTitle": "闲鱼",
+    "titleBarColor": "#ffffff",
+    "pullRefresh": false
+  }
+}

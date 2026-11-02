@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>闲鱼发货管理后台</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f0f2f5;
+    min-height: 100vh;
+  }
+  .header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
+    padding: 20px 40px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .header h1 { font-size: 22px; }
+  .header .sub { font-size: 13px; opacity: 0.85; margin-top: 4px; }
+  .container { padding: 24px 40px; max-width: 1400px; margin: 0 auto; }
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #e0e0e0;
+  }
+  .tab {
+    padding: 12px 24px;
+    cursor: pointer;
+    border: none;
+    background: none;
+    font-size: 15px;
+    color: #666;
+    border-bottom: 3px solid transparent;
+    margin-bottom: -2px;
+    transition: all 0.2s;
+  }
+  .tab.active { color: #667eea; border-bottom-color: #667eea; font-weight: 600; }
+  .tab:hover { color: #667eea; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* 卡片 */
+  .card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    margin-bottom: 16px;
+  }
+  .card-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: #333;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn-primary { background: #667eea; color: #fff; }
+  .btn-primary:hover { background: #5568d3; }
+  .btn-secondary { background: #f5f5f5; color: #333; }
+  .btn-secondary:hover { background: #e8e8e8; }
+  .btn-danger { background: #ff4d4f; color: #fff; }
+  .btn-danger:hover { background: #d9363e; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+
+  /* 表单 */
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .form-group { margin-bottom: 16px; }
+  .form-group.full { grid-column: 1 / -1; }
+  label {
+    display: block;
+    font-size: 13px;
+    color: #555;
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+  input[type="text"], input[type="url"], textarea, select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+    font-family: inherit;
+  }
+  input:focus, textarea:focus { border-color: #667eea; }
+  textarea { resize: vertical; min-height: 60px; }
+
+  /* 表格 */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  th {
+    text-align: left;
+    padding: 12px;
+    background: #fafafa;
+    color: #666;
+    font-weight: 600;
+    border-bottom: 1px solid #eee;
+  }
+  td {
+    padding: 12px;
+    border-bottom: 1px solid #f0f0f0;
+    color: #333;
+  }
+  tr:hover { background: #fafafa; }
+  .actions { display: flex; gap: 8px; }
+
+  /* 商品卡片 */
+  .goods-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+  }
+  .goods-card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    border: 1px solid #eee;
+  }
+  .goods-card h3 {
+    font-size: 16px;
+    margin-bottom: 8px;
+    color: #1a1a2e;
+  }
+  .goods-card .meta {
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 12px;
+    line-height: 1.6;
+  }
+  .goods-card .meta span { color: #333; }
+  .goods-card .qr-wrap {
+    display: flex;
+    justify-content: center;
+    margin: 12px 0;
+    padding: 12px;
+    background: #f8f9fc;
+    border-radius: 8px;
+  }
+  .goods-card .actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  /* 弹窗 */
+  .modal-mask {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
+  }
+  .modal-mask.show { display: flex; }
+  .modal {
+    background: #fff;
+    border-radius: 12px;
+    padding: 24px;
+    width: 90%;
+    max-width: 600px;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+  .modal h2 { font-size: 18px; margin-bottom: 20px; color: #1a1a2e; }
+  .modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 20px;
+  }
+
+  /* 配置区 */
+  .config-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+  }
+  .config-row .form-group { flex: 1; margin-bottom: 0; }
+
+  .empty {
+    text-align: center;
+    padding: 40px;
+    color: #999;
+  }
+  .empty-icon { font-size: 48px; margin-bottom: 12px; }
+
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .tag-green { background: #f6ffed; color: #52c41a; }
+  .tag-orange { background: #fff7e6; color: #fa8c16; }
+
+  .notice {
+    background: #fffbe6;
+    border: 1px solid #ffe58f;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13px;
+    color: #876800;
+    margin-bottom: 16px;
+    line-height: 1.6;
+  }
+  .notice strong { color: #d48806; }
+</style>
+</head>
+<body>
+
+<!-- client-side auth (not secure) -->
+<style>
+  #authMask { position:fixed; inset:0; background:#fff; z-index:9999; display:flex; align-items:center; justify-content:center }
+  #authBox { width:320px; padding:20px; border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,0.06); background:#fff; text-align:center; font-family:inherit}
+  #authBox input{width:100%;padding:8px;margin:8px 0;border:1px solid #ddd;border-radius:6px}
+  #authBox button{padding:8px 12px;border-radius:6px;background:#667eea;color:#fff;border:none;cursor:pointer}
+</style>
+<div id="authMask" aria-hidden="false">
+  <div id="authBox">
+    <div style="font-weight:600;margin-bottom:8px">管理后台登录</div>
+    <input id="authUser" placeholder="用户名" value="" />
+    <input id="authPass" placeholder="密码" type="password" />
+    <div style="text-align:right;margin-top:8px">
+      <button id="authBtn">登录</button>
+    </div>
+    <div style="font-size:12px;color:#999;margin-top:8px">提示：此保护仅为基本前端校验，不能替代服务器端鉴权。</div>
+  </div>
+</div>
+<script>
+  (function(){
+    var USER = 'admin168';
+    var PASS = '223366';
+    var mask = document.getElementById('authMask');
+    var btn = document.getElementById('authBtn');
+    function ok(){ mask.style.display='none'; mask.setAttribute('aria-hidden','true'); }
+    btn.addEventListener('click', function(){
+      var u = document.getElementById('authUser').value || '';
+      var p = document.getElementById('authPass').value || '';
+      if(u===USER && p===PASS){ ok(); }
+      else { alert('用户名或密码错误'); }
+    });
+    document.getElementById('authPass').addEventListener('keydown', function(e){ if(e.key==='Enter') btn.click(); });
+  })();
+</script>
+
+<div class="header">
+  <div>
+    <h1>📦 闲鱼发货管理后台</h1>
+    <div class="sub">商品管理 · 二维码生成 · 发货记录</div>
+  </div>
+  <button class="btn btn-secondary" onclick="exportData()">📤 导出数据</button>
+</div>
+
+<div class="container">
+
+  <div class="notice">
+    <strong>⚠️ 使用说明：</strong><br>
+    1. 先在「系统设置」中配置发货页面的访问地址（部署后填写）<br>
+    2. 添加商品并填上网盘链接和提取码<br>
+    3. 生成二维码，发给买家。买家用闲鱼扫码 → 点「在浏览器中打开」→ 查看发货内容
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('goods')">商品管理</button>
+    <button class="tab" onclick="switchTab('orders')">发货记录</button>
+    <button class="tab" onclick="switchTab('settings')">系统设置</button>
+  </div>
+
+  <!-- 商品管理 -->
+  <div class="panel active" id="panel-goods">
+    <div class="card">
+      <div class="card-title">
+        <span>商品列表</span>
+        <button class="btn btn-primary" onclick="openGoodsModal()">+ 添加商品</button>
+      </div>
+      <div id="goodsList" class="goods-grid"></div>
+    </div>
+  </div>
+
+  <!-- 发货记录 -->
+  <div class="panel" id="panel-orders">
+    <div class="card">
+      <div class="card-title">
+        <span>发货记录</span>
+        <button class="btn btn-primary" onclick="openOrderModal()">+ 记录发货</button>
+      </div>
+      <div id="orderList"></div>
+    </div>
+  </div>
+
+  <!-- 系统设置 -->
+  <div class="panel" id="panel-settings">
+    <div class="card">
+      <div class="card-title"><span>系统设置</span></div>
+      <div class="form-group">
+        <label>发货页面基础地址（部署 delivery.html 后的访问地址）</label>
+        <div class="config-row">
+          <input type="url" id="baseUrl" placeholder="例如：https://18488292860-coder.github.io/xianyu-auto-reply/qrcode-generator/">
+          <button class="btn btn-primary" onclick="saveBaseUrl()">保存</button>
+        </div>
+        <div style="font-size:12px;color:#999;margin-top:8px;">
+          二维码内容 = 基础地址 + delivery.html?goods=商品ID<br>
+          例如部署到 GitHub Pages 后，地址类似上面的示例
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span>数据管理</span></div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-secondary" onclick="exportData()">📤 导出全部数据（JSON）</button>
+        <button class="btn btn-secondary" onclick="document.getElementById('importFile').click()">📥 导入数据</button>
+        <input type="file" id="importFile" accept=".json" style="display:none" onchange="importData(event)">
+        <button class="btn btn-danger" onclick="clearAllData()">🗑️ 清空全部数据</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- 商品弹窗 -->
+<div class="modal-mask" id="goodsModal">
+  <div class="modal">
+    <h2 id="goodsModalTitle">添加商品</h2>
+    <input type="hidden" id="goodsId">
+    <div class="form-group">
+      <label>商品名称 *</label>
+      <input type="text" id="goodsName" placeholder="例如：XX教程">
+    </div>
+    <div class="form-group">
+      <label>网盘链接 *</label>
+      <input type="url" id="goodsLink" placeholder="https://pan.baidu.com/s/xxxxx">
+    </div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>提取码</label>
+        <input type="text" id="goodsCode" placeholder="例如：abcd">
+      </div>
+      <div class="form-group">
+        <label>商品分类</label>
+        <input type="text" id="goodsCategory" placeholder="例如：教程/素材">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>商品描述</label>
+      <textarea id="goodsDesc" placeholder="给买家看的发货说明..."></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeGoodsModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveGoods()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ��维码弹窗 -->
+<div class="modal-mask" id="qrModal">
+  <div class="modal" style="max-width:420px;text-align:center;">
+    <h2 id="qrGoodsName">商品二维码</h2>
+    <div id="qrDisplay" style="padding:20px;background:#f8f9fc;border-radius:8px;margin:16px 0;

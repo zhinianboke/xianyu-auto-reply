@@ -1,0 +1,131 @@
+/* 闲鱼小程序 - 跳转外部浏览器页面样式 */
+.container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  padding: 40rpx;
+}
+
+.state-box {
+  width: 100%;
+  text-align: center;
+}
+
+.icon-loading, .icon-success, .icon-manual {
+  width: 160rpx;
+  height: 160rpx;
+  margin: 0 auto 30rpx;
+  border-radius: 36rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(145deg, #FFD83D 0%, #FF8A00 100%);
+  box-shadow: 0 10rpx 30rpx rgba(255, 138, 0, 0.35);
+}
+
+.fish-icon {
+  font-size: 80rpx;
+}
+
+.icon-success {
+  font-size: 80rpx;
+  color: #fff;
+}
+
+.icon-manual {
+  font-size: 80rpx;
+}
+
+.title {
+  font-size: 40rpx;
+  font-weight: bold;
+  color: #1a1a1a;
+  margin-bottom: 12rpx;
+}
+
+.subtitle {
+  font-size: 26rpx;
+  color: #999;
+  margin-bottom: 30rpx;
+}
+
+.loading-dots {
+  display: flex;
+  justify-content: center;
+  gap: 14rpx;
+  margin-top: 20rpx;
+}
+
+.dot {
+  width: 16rpx;
+  height: 16rpx;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #FFC400, #FF8A00);
+  animation: bounce 1.2s ease-in-out infinite;
+}
+
+.dot:nth-child(2) { animation-delay: 0.15s; }
+.dot:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes bounce {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
+.url-box {
+  background: #f7f7f7;
+  border: 1rpx solid #eee;
+  border-radius: 12rpx;
+  padding: 20rpx;
+  font-size: 22rpx;
+  color: #666;
+  word-break: break-all;
+  margin-bottom: 30rpx;
+  text-align: left;
+}
+
+.steps {
+  background: #fff8e1;
+  border-left: 6rpx solid #ffc400;
+  border-radius: 8rpx;
+  padding: 20rpx;
+  margin-bottom: 30rpx;
+  text-align: left;
+}
+
+.step-title {
+  font-size: 24rpx;
+  color: #8a6d00;
+  font-weight: bold;
+  margin-bottom: 10rpx;
+}
+
+.step-item {
+  font-size: 24rpx;
+  color: #8a6d00;
+  line-height: 1.8;
+}
+
+.btn-primary {
+  width: 100%;
+  height: 88rpx;
+  line-height: 88rpx;
+  background: linear-gradient(135deg, #FFD83D 0%, #FF8A00 100%);
+  color: #fff;
+  border-radius: 16rpx;
+  font-size: 30rpx;
+  font-weight: bold;
+  margin-bottom: 20rpx;
+}
+
+.btn-secondary {
+  width: 100%;
+  height: 88rpx;
+  line-height: 88rpx;
+  background: #f5f5f5;
+  color: #555;
+  border-radius: 16rpx;
+  font-size: 30rpx;
+}
