@@ -67,6 +67,7 @@ const AgreePickupPage = React.lazy(() => import('@/pages/agree-pickup/AgreePicku
 const ProductMaterials = React.lazy(() => import('@/pages/product-publish/ProductMaterials').then(m => ({ default: m.ProductMaterials })))
 const ProductPublish = React.lazy(() => import('@/pages/product-publish/ProductPublish').then(m => ({ default: m.ProductPublish })))
 const BatchPublish = React.lazy(() => import('@/pages/product-publish/BatchPublish').then(m => ({ default: m.BatchPublish })))
+const ScheduledPublishRules = React.lazy(() => import('@/pages/product-publish/ScheduledPublishRules').then(m => ({ default: m.ScheduledPublishRules })))
 const PublishAddresses = React.lazy(() => import('@/pages/product-publish/PublishAddresses').then(m => ({ default: m.PublishAddresses })))
 const PublishLogs = React.lazy(() => import('@/pages/product-publish/PublishLogs').then(m => ({ default: m.PublishLogs })))
 const ListingMonitor = React.lazy(() => import('@/pages/product-monitor/ListingMonitor').then(m => ({ default: m.ListingMonitor })))
@@ -375,6 +376,7 @@ function App() {
             <Route path="product-publish/materials" element={<ProductMaterials />} />
             <Route path="product-publish/single" element={<ProductPublish />} />
             <Route path="product-publish/batch" element={<BatchPublish />} />
+            <Route path="product-publish/scheduled" element={<ScheduledPublishRules />} />
             <Route path="product-publish/addresses" element={<PublishAddresses />} />
             <Route path="product-publish/logs" element={<PublishLogs />} />
             {/* 商品监控 */}

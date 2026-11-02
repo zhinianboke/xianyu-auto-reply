@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { ChevronLeft, ChevronRight, Eye, Image, Loader2, Upload, X } from 'lucide-react'
 import { getMaterial, getMaterials, type ProductMaterial } from '@/api/productPublish'
 import { useUIStore } from '@/store/uiStore'
+import { formatMaterialPrice, formatSkuRandomPrice } from './materialPrice'
 
 interface MaterialPickerModalProps {
   onSelect: (material: ProductMaterial) => void
@@ -65,7 +66,7 @@ function MaterialDetailModal({ material, onClose }: { material: ProductMaterial;
             <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">基础信息</h3>
             <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
               <div><dt className="text-slate-400">商品标题</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{material.title}</dd></div>
-              <div><dt className="text-slate-400">售价</dt><dd className="mt-1 font-medium text-amber-600">¥{material.price}</dd></div>
+              <div><dt className="text-slate-400">售价</dt><dd className="mt-1 font-medium text-amber-600">{formatMaterialPrice(material)}</dd></div>
               <div><dt className="text-slate-400">原价</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{material.original_price ? `¥${material.original_price}` : '-'}</dd></div>
               <div><dt className="text-slate-400">成色</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{textValue(material.condition)}</dd></div>
               <div><dt className="text-slate-400">库存</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{material.quantity}</dd></div>
@@ -128,7 +129,7 @@ function MaterialDetailModal({ material, onClose }: { material: ProductMaterial;
                     {(material.sku_rows || []).map((row, index) => (
                       <tr key={`${Object.values(row.specs).join('-')}-${index}`}>
                         {specificationNames.map((name) => <td key={name}>{row.specs[name] || '-'}</td>)}
-                        <td>¥{row.price}</td><td>{row.stock}</td>
+                        <td>{material.price_mode === 'random' ? formatSkuRandomPrice(row, material) : `¥${row.price}`}</td><td>{row.stock}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -204,7 +205,7 @@ export function MaterialPickerModal({ onSelect, onClose }: MaterialPickerModalPr
         <div className="modal-body min-h-0 flex-1 p-0">
           <div className="table-scroll h-full">
             <table className="table-ios table-fixed min-w-[860px]">
-              <thead><tr><th className="w-[240px]">素材</th><th className="w-[96px]">价格</th><th className="w-[160px]">分类</th><th className="w-[120px]">规格</th><th className="w-[140px]">媒体</th><th className="w-32">操作</th></tr></thead>
+              <thead><tr><th className="w-[240px]">素材</th><th className="w-[180px]">价格</th><th className="w-[160px]">分类</th><th className="w-[120px]">规格</th><th className="w-[140px]">媒体</th><th className="w-32">操作</th></tr></thead>
               <tbody>
                 {loading ? (
                   <tr><td colSpan={6} className="py-16 text-center"><Loader2 className="mx-auto h-7 w-7 animate-spin text-blue-500" /></td></tr>
@@ -213,7 +214,7 @@ export function MaterialPickerModal({ onSelect, onClose }: MaterialPickerModalPr
                 ) : materials.map((material) => (
                   <tr key={material.id}>
                     <td className="w-[240px] max-w-[240px] overflow-hidden"><div className="flex w-full min-w-0 items-center gap-3">{material.images?.[0] ? <img src={material.images[0]} alt="" className="h-12 w-12 flex-shrink-0 rounded-lg object-cover" /> : <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs text-slate-400 dark:bg-slate-700">无图</div>}<div className="min-w-0 flex-1 overflow-hidden"><p className="block truncate font-medium text-slate-800 dark:text-slate-100" title={material.title}>{material.title}</p><p className="mt-1 block truncate text-xs text-slate-400" title={material.description}>{material.description}</p></div></div></td>
-                    <td className="whitespace-nowrap font-medium text-amber-600">¥{material.price}</td>
+                    <td className="whitespace-nowrap font-medium text-amber-600">{formatMaterialPrice(material)}</td>
                     <td className="max-w-40"><span className="block truncate" title={material.platform_category_name || material.category || ''}>{material.platform_category_name || material.category || '-'}</span></td>
                     <td>{(material.specifications || []).length ? `${material.specifications.length} 类 / ${(material.sku_rows || []).length} 组合` : '单规格'}</td>
                     <td className="whitespace-nowrap">{(material.images || []).length} 图 / {(material.videos || []).length} 视频</td>

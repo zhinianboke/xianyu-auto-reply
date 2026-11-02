@@ -3,8 +3,8 @@
  * 将截图中的基础信息、规格、价格、发货和所在地交互集中管理。
  */
 import { useState } from 'react'
-import { ChevronRight, Loader2, MapPin, Trash2 } from 'lucide-react'
-import type { PublishAccountCapability } from '@/api/productPublish'
+import { ChevronRight, Loader2, MapPin, RefreshCw, Trash2 } from 'lucide-react'
+import type { MaterialPriceModeOption, PublishAccountCapability } from '@/api/productPublish'
 import ProductSpecificationsEditor from './ProductSpecificationsEditor'
 import AddressPickerModal from './AddressPickerModal'
 import PlatformCategoryRecommender from './PlatformCategoryRecommender'
@@ -34,9 +34,21 @@ interface ProductPublishFormProps {
   unlockCategoryOnTextChange?: boolean
   accountCapability?: PublishAccountCapability | null
   capabilityLoading?: boolean
+  materialPriceConfig?: {
+    mode: 'fixed' | 'random'
+    min: string
+    max: string
+    options: MaterialPriceModeOption[]
+    loading: boolean
+    error: string
+    onModeChange: (mode: 'fixed' | 'random') => void
+    onMinChange: (value: string) => void
+    onMaxChange: (value: string) => void
+    onRetry: () => void
+  }
 }
 
-export function ProductPublishForm({ form, setForm, accounts, onUploadSpecImage, showAccount = true, categoryLocked = false, onCategoryEdit, unlockCategoryOnTextChange = true, accountCapability = null, capabilityLoading = false }: ProductPublishFormProps) {
+export function ProductPublishForm({ form, setForm, accounts, onUploadSpecImage, showAccount = true, categoryLocked = false, onCategoryEdit, unlockCategoryOnTextChange = true, accountCapability = null, capabilityLoading = false, materialPriceConfig }: ProductPublishFormProps) {
   const [showAddressPicker, setShowAddressPicker] = useState(false)
   // 未传账号能力时保持公共表单原有功能；只有明确检测为普通卖家才收起鱼小铺字段。
   const isFishShop = accountCapability?.is_fish_shop !== false
@@ -102,16 +114,61 @@ export function ProductPublishForm({ form, setForm, accounts, onUploadSpecImage,
             />
           </section>
 
+          {materialPriceConfig && (
+            <section className="space-y-3">
+              <h3 className="text-base font-semibold text-slate-800 dark:text-slate-100">价格模式</h3>
+              {materialPriceConfig.error ? (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+                  <p>{materialPriceConfig.error}</p>
+                  <button type="button" className="btn-ios-secondary mt-2" onClick={materialPriceConfig.onRetry}>
+                    <RefreshCw className="h-4 w-4" />重新加载
+                  </button>
+                </div>
+              ) : (
+                <div className="input-group">
+                  <label className="input-label">价格模式 <span className="text-red-500">*</span></label>
+                  <select
+                    className="input-ios"
+                    value={materialPriceConfig.mode}
+                    disabled={materialPriceConfig.loading || materialPriceConfig.options.length === 0}
+                    onChange={(event) => materialPriceConfig.onModeChange(event.target.value as 'fixed' | 'random')}
+                  >
+                    {materialPriceConfig.loading && <option value="">加载中...</option>}
+                    {materialPriceConfig.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </div>
+              )}
+              {materialPriceConfig.mode === 'random' && !materialPriceConfig.error && form.specifications.length === 0 && (
+                <>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div className="input-group"><label className="input-label">最小价格 <span className="text-red-500">*</span></label><div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">¥</span><input type="number" className="input-ios pl-8" min="0.01" step="0.01" placeholder="0.00" value={materialPriceConfig.min} onChange={(event) => materialPriceConfig.onMinChange(event.target.value)} /></div></div>
+                    <div className="input-group"><label className="input-label">最大价格 <span className="text-red-500">*</span></label><div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">¥</span><input type="number" className="input-ios pl-8" min="0.01" step="0.01" placeholder="0.00" value={materialPriceConfig.max} onChange={(event) => materialPriceConfig.onMaxChange(event.target.value)} /></div></div>
+                  </div>
+                  <p className="text-xs text-slate-400">发布时会在该区间内随机生成一个价格并保留两位小数；原价和库存保持不变。</p>
+                </>
+              )}
+              {materialPriceConfig.mode === 'random' && !materialPriceConfig.error && form.specifications.length > 0 && (
+                <p className="text-xs text-slate-400">请在下方每个规格组合中分别设置最小价格和最大价格；发布时各规格按自己的区间独立随机。</p>
+              )}
+            </section>
+          )}
+
           {isFishShop && <section className="space-y-3">
             <div className="flex items-center justify-between"><h3 className="text-base font-semibold text-slate-800 dark:text-slate-100">商品规格</h3><span className="text-xs text-slate-400">最多添加2个规格类型</span></div>
-            <ProductSpecificationsEditor specifications={form.specifications} skuRows={form.sku_rows} onChange={updateSpecs} onUploadImage={onUploadSpecImage} />
+            <ProductSpecificationsEditor
+              specifications={form.specifications}
+              skuRows={form.sku_rows}
+              onChange={updateSpecs}
+              onUploadImage={onUploadSpecImage}
+              priceMode={materialPriceConfig?.mode || 'fixed'}
+            />
           </section>}
 
           {(!isFishShop || form.specifications.length === 0) && (
             <section className="space-y-3">
               <h3 className="text-base font-semibold text-slate-800 dark:text-slate-100">价格</h3>
               <div className={`grid grid-cols-1 gap-3 ${isFishShop ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
-                <div className="input-group"><label className="input-label">价格 <span className="text-red-500">*</span></label><div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">¥</span><input type="number" className="input-ios pl-8" min="0" step="0.01" placeholder="0.00" value={form.price} onChange={(event) => update({ price: event.target.value })} /></div></div>
+                {materialPriceConfig?.mode !== 'random' && <div className="input-group"><label className="input-label">价格 <span className="text-red-500">*</span></label><div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">¥</span><input type="number" className="input-ios pl-8" min="0" step="0.01" placeholder="0.00" value={form.price} onChange={(event) => update({ price: event.target.value })} /></div></div>}
                 <div className="input-group"><label className="input-label">原价</label><div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">¥</span><input type="number" className="input-ios pl-8" min="0" step="0.01" placeholder="0.00" value={form.original_price} onChange={(event) => update({ original_price: event.target.value })} /></div></div>
                 {isFishShop && <div className="input-group"><label className="input-label">库存</label><input type="number" className="input-ios" min="1" step="1" value={form.quantity} onChange={(event) => update({ quantity: Math.max(1, Number(event.target.value) || 1) })} /></div>}
               </div>

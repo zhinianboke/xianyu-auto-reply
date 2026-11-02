@@ -41,6 +41,7 @@ from app.services.scheduler.dm_send_task import dm_send_task_service
 from app.services.scheduler.auto_order_task import auto_order_task_service
 from app.services.scheduler.image_cleanup_task import image_cleanup_task_service
 from app.services.scheduler.auto_relist_task import auto_relist_task_service
+from app.services.scheduler.scheduled_publish_task import scheduled_publish_task_service
 from app.services.scheduled_task_service import (
     ScheduledTaskService,
     TASK_CODE_REDELIVERY,
@@ -67,6 +68,7 @@ from app.services.scheduled_task_service import (
     TASK_CODE_AUTO_ORDER,
     TASK_CODE_IMAGE_CLEANUP,
     TASK_CODE_AUTO_RELIST,
+    TASK_CODE_SCHEDULED_PUBLISH,
 )
 from common.db.session import async_session_maker
 
@@ -102,6 +104,7 @@ class SchedulerService:
         self._auto_order_task_handle: Optional[asyncio.Task] = None
         self._image_cleanup_task_handle: Optional[asyncio.Task] = None
         self._auto_relist_task_handle: Optional[asyncio.Task] = None
+        self._scheduled_publish_task_handle: Optional[asyncio.Task] = None
         self._redelivery_task = RedeliveryTask()
         self._rate_task = RateTask()
         self._polish_task = polish_task_service
@@ -126,6 +129,7 @@ class SchedulerService:
         self._auto_order_task = auto_order_task_service
         self._image_cleanup_task = image_cleanup_task_service
         self._auto_relist_task = auto_relist_task_service
+        self._scheduled_publish_task = scheduled_publish_task_service
     
     @classmethod
     def get_instance(cls) -> "SchedulerService":
@@ -160,6 +164,7 @@ class SchedulerService:
             await self.reload_task_config(task_code)
         await self.reload_task_config(TASK_CODE_IMAGE_CLEANUP)
         await self.reload_task_config(TASK_CODE_AUTO_RELIST)
+        await self.reload_task_config(TASK_CODE_SCHEDULED_PUBLISH)
     
     def start(self) -> None:
         """启动定时任务"""
@@ -193,6 +198,7 @@ class SchedulerService:
         self._auto_order_task_handle = asyncio.create_task(self._run_auto_order_loop())
         self._image_cleanup_task_handle = asyncio.create_task(self._run_image_cleanup_loop())
         self._auto_relist_task_handle = asyncio.create_task(self._run_auto_relist_loop())
+        self._scheduled_publish_task_handle = asyncio.create_task(self._run_scheduled_publish_loop())
         logger.info("[定时任务调度] 已启动")
     
     def stop(self) -> None:
@@ -274,6 +280,9 @@ class SchedulerService:
         if self._auto_relist_task_handle:
             self._auto_relist_task_handle.cancel()
             self._auto_relist_task_handle = None
+        if self._scheduled_publish_task_handle:
+            self._scheduled_publish_task_handle.cancel()
+            self._scheduled_publish_task_handle = None
         logger.info("[定时任务调度] 已停止")
     
     def get_task_status(self) -> dict:
@@ -302,6 +311,7 @@ class SchedulerService:
         auto_order_config = ScheduledTaskService.get_cached_config(TASK_CODE_AUTO_ORDER)
         image_cleanup_config = ScheduledTaskService.get_cached_config(TASK_CODE_IMAGE_CLEANUP)
         auto_relist_config = ScheduledTaskService.get_cached_config(TASK_CODE_AUTO_RELIST)
+        scheduled_publish_config = ScheduledTaskService.get_cached_config(TASK_CODE_SCHEDULED_PUBLISH)
         
         return {
             "running": self._running,
@@ -474,6 +484,13 @@ class SchedulerService:
                         and not self._auto_relist_task_handle.done()
                     ),
                 },
+                TASK_CODE_SCHEDULED_PUBLISH: {
+                    "config": scheduled_publish_config or {"interval_seconds": 60, "enabled": True},
+                    "task_running": (
+                        self._scheduled_publish_task_handle is not None
+                        and not self._scheduled_publish_task_handle.done()
+                    ),
+                },
             }
         }
     
@@ -559,6 +576,9 @@ class SchedulerService:
                 await self._auto_relist_task.execute()
             finally:
                 logger.info("[定时任务调度] [自动续售] 手动触发商品自动续售任务结束")
+        elif task_code == TASK_CODE_SCHEDULED_PUBLISH:
+            logger.info("[定时任务调度] 手动触发商品定时发布任务")
+            await self._scheduled_publish_task.execute()
         else:
             logger.warning(f"[定时任务调度] 未知的任务代码: {task_code}")
     
@@ -1343,6 +1363,32 @@ class SchedulerService:
             except asyncio.CancelledError:
                 break
         logger.info("[定时任务调度] [自动续售] 商品自动续售任务循环结束")
+
+    async def _run_scheduled_publish_loop(self) -> None:
+        """商品定时发布任务执行循环。"""
+        logger.info("[定时任务调度] 商品定时发布任务循环开始")
+        await self.reload_task_config(TASK_CODE_SCHEDULED_PUBLISH)
+        while self._running:
+            config = ScheduledTaskService.get_cached_config(TASK_CODE_SCHEDULED_PUBLISH) or {
+                "interval_seconds": 60,
+                "enabled": True,
+            }
+            if config.get("enabled", True):
+                try:
+                    await self._scheduled_publish_task.execute()
+                except asyncio.CancelledError:
+                    logger.info("[定时任务调度] 商品定时发布任务被取消")
+                    break
+                except Exception as exc:
+                    logger.opt(exception=exc).error(
+                        "[定时任务调度] 商品定时发布任务执行异常: {}",
+                        exc,
+                    )
+            try:
+                await asyncio.sleep(max(60, int(config.get("interval_seconds", 60))))
+            except asyncio.CancelledError:
+                break
+        logger.info("[定时任务调度] 商品定时发布任务循环结束")
 
 
 # 全局实例获取函数

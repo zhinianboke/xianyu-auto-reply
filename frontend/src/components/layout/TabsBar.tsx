@@ -83,6 +83,7 @@ const routeTitles: Record<string, string> = {
   '/product-publish/materials': '素材库',
   '/product-publish/single': '单品发布',
   '/product-publish/batch': '批量发布',
+  '/product-publish/scheduled': '定时发布',
   '/product-publish/addresses': '地址库',
   '/product-publish/logs': '发布日志',
   '/product-monitor/overview': '监控总览',

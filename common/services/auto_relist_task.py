@@ -22,6 +22,7 @@ from common.models.xy_account import XYAccount
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.xy_order import XYOrder
 from common.services.item_service import ItemService
+from common.services.product_material_price import resolve_material_publish_price
 from common.services.publish_execution_service import execute_single_publish
 from common.services.auto_relist_lifecycle import AutoRelistLifecycleMixin
 from common.services.auto_relist_utils import (
@@ -384,11 +385,14 @@ class AutoRelistTask(AutoRelistLifecycleMixin, AutoRelistDiscoveryMixin):
                 return
             await session.commit()
             await session.refresh(event)
+            publish_data = resolve_material_publish_price(
+                material_to_publish_data(material)
+            )
             result = await execute_single_publish(
                 session=session,
                 user_id=event.user_id,
                 account_id=event.account_id,
-                item_data=material_to_publish_data(material),
+                item_data=publish_data,
                 static_root=Path(self.static_dir),
                 publish_request_id=event.publish_request_id,
                 source_event_id=event.id,

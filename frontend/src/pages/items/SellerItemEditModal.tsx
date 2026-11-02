@@ -85,6 +85,8 @@ const createInternalSkuRows = (
     key: buildSkuKey(specifications, row.specs || {}),
     specs: row.specs || {},
     price: String(row.price ?? ''),
+    price_min: row.price_min == null ? '' : String(row.price_min),
+    price_max: row.price_max == null ? '' : String(row.price_max),
     stock: row.stock == null ? '' : String(row.stock),
   }))
 

@@ -22,6 +22,11 @@ from app.services.publish_batch_status_service import PublishBatchStatusService
 from app.services.item_service import ItemService
 from common.models.publish_log import PublishLog
 from common.models.xy_account import XYAccount
+from common.services.product_material_price import (
+    MaterialPriceError,
+    format_publish_price,
+    resolve_material_publish_price,
+)
 from common.services.publish_execution_service import (
     SYNC_AFTER_PUBLISH_DELAY_SECONDS,
     execute_single_publish,
@@ -360,13 +365,33 @@ class PublishExecutorService:
                     log_ids.append(log.id)
                     continue
 
-                publish_material = resolved_address.apply_to_item_data(material)
+                try:
+                    priced_material = resolve_material_publish_price(material)
+                    publish_price = format_publish_price(priced_material.get("price"))
+                except MaterialPriceError as price_error:
+                    failed_count += 1
+                    log = await log_svc.create_log(
+                        user_id=user_id,
+                        account_id=account_id,
+                        title=material.get("title", ""),
+                        description=material.get("description", ""),
+                        price=str(material.get("price", "")),
+                        material_id=material.get("id"),
+                        batch_id=batch_id,
+                        status="failed",
+                        error_message=str(price_error),
+                        **resolved_address.to_log_fields(),
+                    )
+                    log_ids.append(log.id)
+                    continue
+
+                publish_material = resolved_address.apply_to_item_data(priced_material)
                 log = await log_svc.create_log(
                     user_id=user_id,
                     account_id=account_id,
                     title=material.get("title", ""),
                     description=material.get("description", ""),
-                    price=str(material.get("price", "")),
+                    price=publish_price,
                     material_id=material.get("id"),
                     batch_id=batch_id,
                     status="publishing",
