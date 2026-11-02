@@ -185,11 +185,25 @@ class ScheduledPublishTask:
             trigger.owner_id = rule.owner_id
 
             if material is None:
+                record = ScheduledPublishRecord(
+                    owner_id=rule.owner_id,
+                    rule_id=rule.id,
+                    account_id=account_id,
+                    material_id=None,
+                    publish_result=PUBLISH_RESULT_FAILURE,
+                    failure_reason="无可用素材库",
+                    publish_date=now.date(),
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(record)
                 await session.commit()
+                await session.refresh(record)
                 logger.warning(
-                    "[商品定时发布] 无可发布素材，已推进下次触发时间: rule_id={}, account_id={}, next_trigger_at={}",
+                    "[商品定时发布] 无可发布素材，已记录失败并推进下次触发时间: rule_id={}, account_id={}, record_id={}, next_trigger_at={}",
                     rule.id,
                     account_id,
+                    record.id,
                     next_trigger_at,
                 )
                 return
@@ -394,7 +408,9 @@ class ScheduledPublishTask:
                 ScheduledPublishRecord.publish_result == PUBLISH_RESULT_SUCCESS,
             )
         )
-        published_ids = {int(item) for item in success_result.scalars().all()}
+        published_ids = {
+            int(item) for item in success_result.scalars().all() if item is not None
+        }
         candidate_ids = [
             item
             for item in self._stored_material_ids(rule.material_ids)

@@ -73,7 +73,8 @@ class ScheduledPublishRecordService:
             owner_id, {row.account_id for row in rows}
         )
         material_titles = await self._load_material_titles(
-            owner_id, {int(row.material_id) for row in rows}
+            owner_id,
+            {int(row.material_id) for row in rows if row.material_id is not None},
         )
         result_labels = await self._load_result_labels()
         logger.info(
@@ -92,8 +93,10 @@ class ScheduledPublishRecordService:
                     "account_id": row.account_id,
                     "account_name": account_names.get(row.account_id, row.account_id),
                     "material_id": row.material_id,
-                    "material_title": material_titles.get(
-                        int(row.material_id), f"素材#{row.material_id}"
+                    "material_title": (
+                        material_titles.get(int(row.material_id), f"素材#{row.material_id}")
+                        if row.material_id is not None
+                        else "无可用素材库"
                     ),
                     "publish_result": row.publish_result,
                     "publish_result_text": result_labels.get(

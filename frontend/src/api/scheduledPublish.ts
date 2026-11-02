@@ -64,7 +64,7 @@ export interface ScheduledPublishRecord {
   rule_id: number
   account_id: string
   account_name: string
-  material_id: number
+  material_id: number | null
   material_title: string
   publish_result: string
   publish_result_text: string

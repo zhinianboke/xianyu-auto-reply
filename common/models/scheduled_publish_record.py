@@ -36,7 +36,11 @@ class ScheduledPublishRecord(TimestampMixin, Base):
     owner_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, comment="所属用户ID")
     rule_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="定时发布规则ID")
     account_id: Mapped[str] = mapped_column(String(80), nullable=False, comment="闲鱼账号ID")
-    material_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="商品素材ID")
+    material_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        comment="商品素材ID，无可用素材时为空",
+    )
     publish_result: Mapped[str] = mapped_column(
         String(20),
         nullable=False,

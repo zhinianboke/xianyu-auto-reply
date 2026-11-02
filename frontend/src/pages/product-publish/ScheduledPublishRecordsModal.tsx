@@ -197,7 +197,10 @@ export function ScheduledPublishRecordsModal({
                   ) : publishRecords.map((record) => (
                     <tr key={record.id}>
                       <td><p className="font-medium">{record.account_name}</p><p className="text-xs text-slate-400">{record.account_id}</p></td>
-                      <td><p className="max-w-72 truncate">{record.material_title}</p><p className="text-xs text-slate-400">ID：{record.material_id}</p></td>
+                      <td>
+                        <p className="max-w-72 truncate">{record.material_title}</p>
+                        {record.material_id !== null && <p className="text-xs text-slate-400">ID：{record.material_id}</p>}
+                      </td>
                       <td><span className={record.publish_result === 'success' ? 'badge-success' : 'badge-danger'}>{record.publish_result_text}</span></td>
                       <td className="max-w-96 break-words text-slate-500 dark:text-slate-400">{record.failure_reason || '-'}</td>
                       <td className="whitespace-nowrap">{record.publish_date || '-'}</td>

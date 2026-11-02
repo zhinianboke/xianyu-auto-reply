@@ -38,7 +38,7 @@ TABLE_DDLS = {
             owner_id BIGINT NOT NULL COMMENT '所属用户ID',
             rule_id BIGINT NOT NULL COMMENT '定时发布规则ID',
             account_id VARCHAR(80) NOT NULL COMMENT '闲鱼账号ID',
-            material_id BIGINT NOT NULL COMMENT '商品素材ID',
+            material_id BIGINT NULL COMMENT '商品素材ID，无可用素材时为空',
             publish_result VARCHAR(20) NOT NULL COMMENT '发布结果：success-成功，failure-失败',
             failure_reason TEXT NULL COMMENT '失败原因',
             publish_date DATE NOT NULL COMMENT '发布日期（北京时间）',
@@ -88,7 +88,7 @@ COLUMNS = {
         "owner_id": "BIGINT NOT NULL DEFAULT 0 COMMENT '所属用户ID'",
         "rule_id": "BIGINT NOT NULL DEFAULT 0 COMMENT '定时发布规则ID'",
         "account_id": "VARCHAR(80) NOT NULL DEFAULT '' COMMENT '闲鱼账号ID'",
-        "material_id": "BIGINT NOT NULL DEFAULT 0 COMMENT '商品素材ID'",
+        "material_id": "BIGINT NULL COMMENT '商品素材ID，无可用素材时为空'",
         "publish_result": "VARCHAR(20) NOT NULL DEFAULT 'failure' COMMENT '发布结果：success-成功，failure-失败'",
         "failure_reason": "TEXT NULL COMMENT '失败原因'",
         "publish_date": "DATE NULL COMMENT '发布日期（北京时间）'",
@@ -139,6 +139,19 @@ async def _column_exists(conn, table_name: str, column_name: str) -> bool:
     return bool(result.scalar())
 
 
+async def _column_is_nullable(conn, table_name: str, column_name: str) -> bool:
+    """判断指定字段是否允许为空。"""
+    result = await conn.execute(
+        text(
+            "SELECT IS_NULLABLE FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table_name "
+            "AND COLUMN_NAME = :column_name"
+        ),
+        {"table_name": table_name, "column_name": column_name},
+    )
+    return str(result.scalar() or "").upper() == "YES"
+
+
 async def _index_exists(conn, table_name: str, index_name: str) -> bool:
     """判断指定索引是否存在。"""
     result = await conn.execute(
@@ -168,6 +181,20 @@ async def ensure_scheduled_publish_rule_schema(conn) -> None:
                     text(f"ALTER TABLE `{table_name}` ADD COLUMN `{column_name}` {definition}")
                 )
                 logger.info("定时发布表补齐字段: table={}, column={}", table_name, column_name)
+
+        if table_name == "xy_scheduled_publish_records" and not await _column_is_nullable(
+            conn,
+            table_name,
+            "material_id",
+        ):
+            await conn.execute(
+                text(
+                    "ALTER TABLE `xy_scheduled_publish_records` "
+                    "MODIFY COLUMN `material_id` BIGINT NULL "
+                    "COMMENT '商品素材ID，无可用素材时为空'"
+                )
+            )
+            logger.info("定时发布记录表素材字段已调整为允许为空")
 
         for index_name, definition in INDEXES[table_name].items():
             if not await _index_exists(conn, table_name, index_name):
