@@ -2,31 +2,36 @@
 支付相关 API 路由
 
 功能：
-1. 创建充值订单（当面付二维码）
-2. 支付宝异步通知回调（无需认证）
-3. 查询充值订单状态
+1. 创建充值订单并返回二维码或支付链接
+2. 支付宝和码支付异步通知回调（无需认证）
+3. 查询支付选项和充值订单状态
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.services.recharge_service import RechargeService
+from app.services.payment_config_service import PaymentConfigService
 from app.services.settlement_service import SettlementService
+from common.db.session import async_session_maker
 from common.models.user import User
 from common.schemas.common import ApiResponse
 
 router = APIRouter(prefix="/payment", tags=["支付管理"])
+logger = logging.getLogger(__name__)
 
 
 class RechargeRequest(BaseModel):
     """充值请求"""
     amount: str = Field(..., description="充值金额，例如：10.00")
+    pay_type: str | None = Field(default=None, description="码支付子方式：alipay/wxpay/qqpay")
 
 
 class WithdrawRequest(BaseModel):
@@ -40,10 +45,34 @@ async def create_recharge(
     current_user: User = Depends(deps.get_current_active_user),
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> Dict[str, Any]:
-    """创建充值订单，返回支付宝当面付二维码"""
+    """按当前支付渠道创建充值订单，返回二维码或支付链接。"""
     service = RechargeService(session)
-    result = await service.create_recharge_order(current_user.id, payload.amount)
+    result = await service.create_recharge_order(current_user.id, payload.amount, payload.pay_type)
     return result
+
+
+@router.get("/options", response_model=ApiResponse)
+async def get_payment_options(
+    current_user: User = Depends(deps.get_current_active_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """返回当前启用的支付渠道和码支付子方式中文选项。"""
+    try:
+        return ApiResponse(success=True, data=await PaymentConfigService(session).get_options())
+    except ValueError as exc:
+        return ApiResponse(success=False, code=40001, message=str(exc))
+
+
+@router.get("/config-options", response_model=ApiResponse)
+async def get_payment_config_options(
+    current_user: User = Depends(deps.get_current_admin_user),
+    session: AsyncSession = Depends(deps.get_db_session),
+) -> ApiResponse:
+    """返回管理员支付设置页所需的数据字典选项。"""
+    try:
+        return ApiResponse(success=True, data=await PaymentConfigService(session).get_config_options())
+    except ValueError as exc:
+        return ApiResponse(success=False, code=40001, message=str(exc))
 
 
 @router.post("/alipay/notify")
@@ -54,20 +83,67 @@ async def alipay_notify(
 
     支付宝通知需要返回纯文本 "success" 或 "failure"
     """
-    from common.db.session import async_session_maker
+    notify_data: dict[str, Any] = {}
+    try:
+        form_data = await request.form()
+        notify_data = {key: value for key, value in form_data.items()}
+        # 使用独立会话处理回调（回调无用户上下文）。
+        async with async_session_maker() as session:
+            try:
+                ok = await RechargeService(session).handle_alipay_notify(notify_data)
+            except Exception as exc:
+                await session.rollback()
+                logger.exception("支付宝通知处理异常: values=%s exception=%s", notify_data, exc)
+                ok = False
+    except Exception as exc:
+        logger.exception("支付宝通知解析或会话创建异常: values=%s exception=%s", notify_data, exc)
+        ok = False
+    return PlainTextResponse("success" if ok else "failure")
 
-    # 获取表单数据
-    form_data = await request.form()
-    notify_data = {k: v for k, v in form_data.items()}
 
-    # 使用独立会话处理回调（回调无用户上下文）
-    async with async_session_maker() as session:
-        service = RechargeService(session)
-        ok = await service.handle_alipay_notify(notify_data)
+async def _collect_zzcode_params(request: Request) -> dict[str, str]:
+    """合并码支付 GET 查询参数和 POST 表单参数。"""
+    values = {key: str(value) for key, value in request.query_params.items()}
+    if request.method == "POST":
+        form = await request.form()
+        values.update({key: str(value) for key, value in form.items()})
+    return values
 
-    if ok:
-        return PlainTextResponse("success")
-    return PlainTextResponse("failure")
+
+@router.get("/zzcode/notify", response_class=PlainTextResponse, operation_id="zzcode_notify_get")
+@router.post("/zzcode/notify", response_class=PlainTextResponse, operation_id="zzcode_notify_post")
+async def zzcode_notify(request: Request) -> PlainTextResponse:
+    """接收码支付异步通知，处理成功时按协议回显纯文本 success。"""
+    values: dict[str, str] = {}
+    try:
+        values = await _collect_zzcode_params(request)
+        async with async_session_maker() as session:
+            try:
+                ok = await RechargeService(session).handle_zzcode_notify(values)
+            except Exception as exc:
+                await session.rollback()
+                logger.exception("码支付通知处理异常: values=%s exception=%s", values, exc)
+                ok = False
+    except Exception as exc:
+        logger.exception("码支付通知解析或会话创建异常: values=%s exception=%s", values, exc)
+        ok = False
+    return PlainTextResponse("success" if ok else "fail")
+
+
+@router.get("/zzcode/return", response_class=HTMLResponse, operation_id="zzcode_return_get")
+@router.post("/zzcode/return", response_class=HTMLResponse, operation_id="zzcode_return_post")
+async def zzcode_return() -> HTMLResponse:
+    """码支付完成后的页面落地页；实际入账只依赖异步通知。"""
+    html = (
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1"><title>支付完成</title></head>'
+        '<body style="font-family:system-ui,-apple-system,sans-serif;display:flex;align-items:center;'
+        'justify-content:center;height:100vh;margin:0;background:#f8fafc;color:#1e293b">'
+        '<div style="text-align:center;padding:2rem 2.5rem;background:#fff;border:1px solid #e2e8f0;'
+        'border-radius:12px;box-shadow:0 8px 30px rgba(15,23,42,.08)"><h2>支付已完成</h2>'
+        '<p style="color:#64748b">请返回原页面查看支付结果，本页可以关闭。</p></div></body></html>'
+    )
+    return HTMLResponse(html)
 
 
 @router.get("/recharge/{order_no}")
@@ -80,8 +156,8 @@ async def get_recharge_status(
     service = RechargeService(session)
     result = await service.get_order_status(order_no, current_user.id)
     if not result:
-        return {"success": False, "code": 0, "message": "订单不存在", "data": None}
-    return {"success": True, "code": 0, "message": None, "data": result}
+        return {"success": False, "code": 40001, "message": "充值订单不存在", "data": None}
+    return {"success": True, "code": 200, "message": "查询成功", "data": result}
 
 
 @router.post("/withdraw", response_model=ApiResponse)

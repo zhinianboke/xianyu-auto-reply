@@ -23,6 +23,11 @@ function getAdUrl(value: string | null): string | undefined {
   }
 }
 
+/** 使用来源与数据库 ID 组合标识广告，避免本地和远程广告 ID 相同时互相影响。 */
+function getAdIdentity(ad: PublicAdsResponse['text'][number]): string {
+  return `${ad.source || 'local'}-${ad.id}`
+}
+
 /** 在卡片内容区提供遮罩与加载提示。 */
 function AdsLoading() {
   return (
@@ -36,7 +41,7 @@ function AdsLoading() {
 /** 展示实际公开广告，并支持轮播选择、文字展开及失败后重试。 */
 export function PublicAdvertisements({ placement, adsData, adsLoading, adsError, loadAds }: PublicAdvertisementsProps) {
   const [carouselIndex, setCarouselIndex] = useState(0)
-  const [expandedTextAds, setExpandedTextAds] = useState<Set<number>>(new Set())
+  const [expandedTextAds, setExpandedTextAds] = useState<Set<string>>(new Set())
   const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null)
   const currentAd = adsData.carousel[carouselIndex] || adsData.carousel[0]
   const currentImageUrl = getAdUrl(currentAd?.image_url || null)
@@ -58,11 +63,11 @@ export function PublicAdvertisements({ placement, adsData, adsLoading, adsError,
   }, [adsData.carousel.length, adsLoading])
 
   /** 切换指定文字广告的展开状态，不影响其他广告。 */
-  const toggleTextAd = (id: number) => {
+  const toggleTextAd = (identity: string) => {
     setExpandedTextAds((previous) => {
       const next = new Set(previous)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      if (next.has(identity)) next.delete(identity)
+      else next.add(identity)
       return next
     })
   }
@@ -117,7 +122,7 @@ export function PublicAdvertisements({ placement, adsData, adsLoading, adsError,
               {adsData.carousel.length > 1 && (
                 <div className="absolute inset-x-0 top-3 z-10 flex justify-center gap-1.5">
                   {adsData.carousel.map((ad, index) => (
-                    <button key={ad.id} type="button" onClick={() => setCarouselIndex(index)} disabled={adsLoading} aria-label={`查看第${index + 1}条推荐广告`} aria-pressed={index === carouselIndex} className={`h-2.5 w-2.5 rounded-full ring-1 ring-black/20 transition-colors ${index === carouselIndex ? 'bg-white' : 'bg-white/40'}`} />
+                    <button key={getAdIdentity(ad)} type="button" onClick={() => setCarouselIndex(index)} disabled={adsLoading} aria-label={`查看第${index + 1}条推荐广告`} aria-pressed={index === carouselIndex} className={`h-2.5 w-2.5 rounded-full ring-1 ring-black/20 transition-colors ${index === carouselIndex ? 'bg-white' : 'bg-white/40'}`} />
                   ))}
                 </div>
               )}
@@ -129,8 +134,11 @@ export function PublicAdvertisements({ placement, adsData, adsLoading, adsError,
           <div className="vben-card-body relative">
             {adsLoading && <AdsLoading />}
             <div className={`${textAdsHeightClass} space-y-2 overflow-y-auto`}>
-              {adsData.text.length > 0 ? adsData.text.map((ad) => (
-                <div key={ad.id} className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
+              {adsData.text.length > 0 ? adsData.text.map((ad) => {
+                const identity = getAdIdentity(ad)
+                const expanded = expandedTextAds.has(identity)
+                return (
+                <div key={identity} className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
                   <div className="flex items-center justify-between bg-slate-50 p-3 dark:bg-slate-800">
                     <a href={getAdUrl(ad.link)} target="_blank" rel="noopener noreferrer" className="flex min-w-0 flex-1 items-center gap-1 text-sm font-medium text-[rgb(var(--color-primary))] hover:underline">
                       {ad.source === 'remote' && <span className="shrink-0 rounded bg-[rgb(var(--color-primary-light))] px-1.5 py-0.5 text-[10px] leading-none">官方</span>}
@@ -138,20 +146,21 @@ export function PublicAdvertisements({ placement, adsData, adsLoading, adsError,
                       {getAdUrl(ad.link) && <ExternalLink className="h-3 w-3 shrink-0" />}
                     </a>
                     {ad.content && (
-                      <button type="button" onClick={() => toggleTextAd(ad.id)} aria-label={`${expandedTextAds.has(ad.id) ? '收起' : '展开'}文字广告：${ad.title}`} aria-expanded={expandedTextAds.has(ad.id)} className="ml-2 rounded p-1 text-slate-500 transition-colors hover:bg-slate-200 dark:text-slate-400 dark:hover:bg-slate-700">
-                        {expandedTextAds.has(ad.id) ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                      <button type="button" onClick={() => toggleTextAd(identity)} aria-label={`${expanded ? '收起' : '展开'}文字广告：${ad.title}`} aria-expanded={expanded} className="ml-2 rounded p-1 text-slate-500 transition-colors hover:bg-slate-200 dark:text-slate-400 dark:hover:bg-slate-700">
+                        {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                       </button>
                     )}
                   </div>
                   <AnimatePresence>
-                    {expandedTextAds.has(ad.id) && ad.content && (
+                    {expanded && ad.content && (
                       <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden">
                         <p className="whitespace-pre-wrap break-words border-t border-slate-200 p-3 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-400">{ad.content}</p>
                       </motion.div>
                     )}
                   </AnimatePresence>
                 </div>
-              )) : (
+                )
+              }) : (
                 <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-slate-300 text-sm text-slate-500 dark:border-slate-600 dark:text-slate-400">
                   {!adsLoading && (adsError ? '文字广告加载失败' : '广告位招租')}
                 </div>

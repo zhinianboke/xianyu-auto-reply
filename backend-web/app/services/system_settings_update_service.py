@@ -10,8 +10,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from app.services.system_setting_service import SENSITIVE_KEYS, SystemSettingService
+from app.services.payment_config_service import (
+    CHANNEL_ZZCODE,
+    VALID_CHANNELS,
+    normalize_pay_types,
+)
 from common.services.advertisement_types import AD_PRICE_DEFAULTS, parse_ad_price
 from common.services.remote_password_login_api import (
     validate_remote_password_login_settings,
@@ -42,6 +48,15 @@ CAPTCHA_SLIDER_MODE_KEY = "captcha.slider_mode"
 CAPTCHA_SLIDER_MODES = {"browser", "real_mouse"}
 PROXY_URL_KEY = "proxy.api_url"
 PROXY_ENABLED_KEY = "proxy.enabled"
+PAYMENT_CHANNEL_KEY = "payment.channel"
+ZZCODE_SETTING_KEYS = {
+    "zzcode.pid", "zzcode.key", "zzcode.gateway", "zzcode.notify_url",
+    "zzcode.return_url", "zzcode.pay_types",
+}
+ALIPAY_SETTING_KEYS = {
+    "alipay.app_id", "alipay.private_key", "alipay.alipay_public_key",
+    "alipay.gateway_url", "alipay.notify_url",
+}
 
 _TRUE_VALUES = {"true", "1", "yes", "on"}
 _TRIMMED_SETTING_KEYS = {
@@ -59,6 +74,8 @@ _TRIMMED_SETTING_KEYS = {
     TOKEN_REMOTE_URL_SETTING_KEY,
     TOKEN_REMOTE_SECRET_KEY_SETTING_KEY,
     PROXY_URL_KEY,
+    PAYMENT_CHANNEL_KEY,
+    *ZZCODE_SETTING_KEYS,
 }
 
 
@@ -115,6 +132,29 @@ def _normalize_setting_value(key: str, raw_value: str) -> tuple[str, str | None]
         if value not in TOKEN_API_MODES:
             return value, "Token获取方式无效，请选择网页接口或远程接口"
 
+    if key == PAYMENT_CHANNEL_KEY:
+        value = value.strip().lower()
+        if value not in VALID_CHANNELS:
+            return value, "支付渠道无效，请选择支付宝当面付或码支付"
+
+    if key == "zzcode.pay_types":
+        pay_types = normalize_pay_types(value)
+        if not pay_types:
+            return value, "请至少开启一种码支付支付方式"
+        value = ",".join(pay_types)
+
+    url_setting_labels = {
+        "alipay.gateway_url": "支付宝网关地址",
+        "alipay.notify_url": "支付宝异步通知地址",
+        "zzcode.gateway": "码支付请求网关地址",
+        "zzcode.notify_url": "码支付异步通知地址",
+        "zzcode.return_url": "码支付页面跳转地址",
+    }
+    if key in url_setting_labels and value:
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return value, f"{url_setting_labels[key]}必须是有效的 HTTP(S) 地址"
+
     if key == LOG_RETENTION_KEY:
         _, error_message = parse_log_retention_days(value)
         if error_message:
@@ -134,6 +174,34 @@ def _validate_target_state(target: Mapping[str, str], changed_keys: set[str]) ->
         proxy_url = str(target.get(PROXY_URL_KEY) or "").strip()
         if _is_truthy(target.get(PROXY_ENABLED_KEY)) and not proxy_url:
             return "开启代理前请先填写代理 API 的 URL"
+
+    payment_keys = {PAYMENT_CHANNEL_KEY, *ALIPAY_SETTING_KEYS, *ZZCODE_SETTING_KEYS}
+    if changed_keys.intersection(payment_keys):
+        channel = str(target.get(PAYMENT_CHANNEL_KEY) or "").strip().lower()
+        if channel == CHANNEL_ZZCODE:
+            labels = {
+                "zzcode.pid": "商户ID",
+                "zzcode.key": "商户密钥",
+                "zzcode.gateway": "请求网关地址",
+                "zzcode.notify_url": "异步通知地址",
+                "zzcode.return_url": "页面跳转地址",
+            }
+            missing = [label for key, label in labels.items() if not str(target.get(key) or "").strip()]
+            if missing:
+                return f"码支付配置不完整，请填写：{'、'.join(missing)}"
+            if not normalize_pay_types(target.get("zzcode.pay_types")):
+                return "请至少开启一种码支付支付方式"
+        else:
+            labels = {
+                "alipay.app_id": "应用ID",
+                "alipay.private_key": "应用私钥",
+                "alipay.alipay_public_key": "支付宝公钥",
+                "alipay.gateway_url": "网关地址",
+                "alipay.notify_url": "异步通知地址",
+            }
+            missing = [label for key, label in labels.items() if not str(target.get(key) or "").strip()]
+            if missing:
+                return f"支付宝配置不完整，请填写：{'、'.join(missing)}"
 
     token_keys = {
         TOKEN_API_MODE_SETTING_KEY,
@@ -199,7 +267,6 @@ async def validate_system_settings_update(
     target_error = _validate_target_state(target_settings, set(normalized))
     if target_error:
         return None, target_error
-
     retention_days = None
     if LOG_RETENTION_KEY in normalized:
         retention_days, _ = parse_log_retention_days(normalized[LOG_RETENTION_KEY])

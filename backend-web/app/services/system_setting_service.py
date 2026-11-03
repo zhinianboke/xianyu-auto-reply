@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.system_setting import SystemSetting
 from common.services.advertisement_types import AD_PRICE_DEFAULTS, parse_ad_price
+from app.services.payment_config_service import PAYMENT_SETTING_DEFAULTS
 from common.services.remote_token_api import (
     TOKEN_REMOTE_SECRET_KEY_SETTING_KEY,
     TOKEN_REMOTE_URL_SETTING_KEY,
@@ -54,6 +55,7 @@ DEFAULT_AUTH_FOOTER_AD_HTML = "© 2026 划算云服务器 ·<a href=\"http://www
 
 DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
     **AD_PRICE_DEFAULTS,
+    **PAYMENT_SETTING_DEFAULTS,
     "disclaimer.title": ("免责声明", "系统免责声明标题"),
     "disclaimer.content": (DEFAULT_DISCLAIMER_CONTENT, "系统免责声明正文"),
     "disclaimer.checkbox_text": ("我已阅读并同意以上免责声明", "免责声明勾选提示文案"),
@@ -127,6 +129,13 @@ NO_ESCAPE_KEYS = {
     "alipay.alipay_public_key",
     "alipay.gateway_url",
     "alipay.notify_url",
+    "payment.channel",
+    "zzcode.pid",
+    "zzcode.key",
+    "zzcode.gateway",
+    "zzcode.notify_url",
+    "zzcode.return_url",
+    "zzcode.pay_types",
     "ad_price.carousel",
     "ad_price.text",
     "ad_price.home_carousel",

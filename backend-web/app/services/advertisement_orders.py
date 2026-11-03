@@ -29,6 +29,26 @@ async def payment_locked_ids(session: AsyncSession, ad_ids: list[int], *, lock: 
     return set(rows.scalars())
 
 
+async def unsettled_payment_ids(session: AsyncSession, ad_ids: list[int], *, lock: bool = False) -> set[int]:
+    """查询仍可能收到付款回调的广告订单，防止广告先删除后收款却无法生效。"""
+    if not ad_ids:
+        return set()
+    statement = select(RechargeOrder).where(
+        RechargeOrder.order_type == "ad",
+        RechargeOrder.ad_id.in_(ad_ids),
+        RechargeOrder.status.in_(("pending", "failed", "paid")),
+    )
+    rows = await session.execute(statement.with_for_update() if lock else statement)
+    return {
+        order.ad_id
+        for order in rows.scalars().all()
+        if (
+            (order.status == "paid" and order.ad_settled_at is None)
+            or order.status in {"pending", "failed"}
+        )
+    }
+
+
 async def find_payment_order(session: AsyncSession, ad_id: int, user_id: int, status: str) -> RechargeOrder | None:
     """读取广告最近一笔指定状态订单；所有支付与修改入口统一先锁广告，再锁订单。"""
     return (await session.execute(select(RechargeOrder).where(

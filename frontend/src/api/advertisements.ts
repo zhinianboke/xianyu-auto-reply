@@ -176,11 +176,22 @@ export const deleteMyAd = async (id: number): Promise<ApiResponse> => {
 }
 
 /** 创建广告付款订单 */
-export const createAdPayment = async (adId: number): Promise<ApiResponse & { data?: { order_no: string; amount: string; qr_code: string; ad_id: number } }> => {
-  return post(`${PREFIX}/${adId}/pay`)
+export const createAdPayment = async (adId: number, payType?: string): Promise<ApiResponse & { data?: {
+  order_no: string
+  amount: string
+  ad_id: number
+  paid?: boolean
+  channel: 'alipay' | 'zzcode'
+  pay_type?: string | null
+  pay_target_kind?: 'qrcode' | 'payurl' | 'urlscheme' | null
+  qr_code?: string | null
+  pay_url?: string | null
+} }> => {
+  const query = payType ? `?pay_type=${encodeURIComponent(payType)}` : ''
+  return post(`${PREFIX}/${adId}/pay${query}`)
 }
 
 /** 轮询广告付款状态 */
-export const checkAdPaymentStatus = async (adId: number, orderNo: string): Promise<ApiResponse & { data?: { status: string; paid?: boolean } }> => {
+export const checkAdPaymentStatus = async (adId: number, orderNo: string): Promise<ApiResponse & { data?: { status: string; paid?: boolean; amount?: string } }> => {
   return post(`${PREFIX}/${adId}/pay/notify?order_no=${encodeURIComponent(orderNo)}`)
 }

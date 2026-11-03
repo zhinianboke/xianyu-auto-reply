@@ -262,6 +262,8 @@ export type ThemeSettings = ThemeAppearanceSettings & ThemeFontSettings
 export type PasswordLoginMode = 'protocol' | 'browser'
 export type SliderMode = 'browser' | 'real_mouse'
 export type TokenApiMode = 'web' | 'remote'
+export type PaymentChannel = 'alipay' | 'zzcode'
+export type ZzcodePayType = 'alipay' | 'wxpay' | 'qqpay'
 
 export interface SystemSettings {
   ai_model?: string
@@ -302,6 +304,14 @@ export interface SystemSettings {
   'alipay.alipay_public_key'?: string
   'alipay.gateway_url'?: string
   'alipay.notify_url'?: string
+  // 支付渠道与码支付配置
+  'payment.channel'?: PaymentChannel
+  'zzcode.pid'?: string
+  'zzcode.key'?: string
+  'zzcode.gateway'?: string
+  'zzcode.notify_url'?: string
+  'zzcode.return_url'?: string
+  'zzcode.pay_types'?: string
   // 提现配置
   'withdraw.notify_email'?: string
   'withdraw.min_amount'?: string

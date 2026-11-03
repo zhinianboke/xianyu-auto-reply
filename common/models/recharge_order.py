@@ -1,14 +1,14 @@
 """
 充值订单模型
 
-存储用户余额充值订单记录，包含订单号、金额、支付状态、支付宝交易号等信息
+存储余额充值和广告付款订单，包含支付渠道、支付目标、状态及上游交易号等信息
 """
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, DateTime, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base
@@ -30,12 +30,33 @@ class RechargeOrder(Base):
         String(20), nullable=False, default='recharge', server_default='recharge',
         comment='订单类型：recharge-余额充值，ad-广告申请付款'
     )
+    channel: Mapped[str] = mapped_column(
+        String(16), nullable=False, default='alipay', server_default='alipay',
+        comment='支付渠道：alipay-支付宝当面付，zzcode-码支付'
+    )
+    pay_type: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True, comment='码支付子方式：alipay/wxpay/qqpay'
+    )
+    zzcode_amount_confirmed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0",
+        comment='码支付金额是否已由下单响应或已验签回调确认'
+    )
+    callback_merchant_id: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True, comment='创建订单时使用的回调验签商户ID'
+    )
+    callback_verify_key: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, comment='创建订单时使用的回调验签密钥或公钥'
+    )
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default='pending', server_default='pending',
         comment='订单状态：pending-待支付，paid-已支付，expired-已过期，failed-失败'
     )
-    trade_no: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, comment='支付宝交易号')
+    trade_no: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, comment='上游支付交易号')
     qr_code: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, comment='支付二维码内容')
+    pay_target_kind: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True, comment='支付目标类型：qrcode/payurl/urlscheme'
+    )
+    pay_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True, comment='支付跳转或协议链接')
     ad_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment='广告付款关联广告ID')
     ad_settled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment='广告付款结算时间')
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment='支付时间')

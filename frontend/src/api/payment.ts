@@ -2,10 +2,12 @@
  * 支付相关API
  * 
  * 功能：
- * 1. 创建充值订单（当面付二维码）
- * 2. 查询充值订单状态
+ * 1. 查询支付渠道和子方式
+ * 2. 创建充值订单并返回二维码或支付链接
+ * 3. 查询充值订单状态
  */
 import { post, get } from '@/utils/request'
+import type { ApiResponse, PaymentChannel, ZzcodePayType } from '@/types'
 
 const PAYMENT_PREFIX = '/api/v1/payment'
 
@@ -14,7 +16,28 @@ export interface RechargeData {
   order_id: number
   order_no: string
   amount: string
-  qr_code: string
+  status: 'pending' | 'paid' | 'expired' | 'failed'
+  channel: PaymentChannel
+  pay_type?: ZzcodePayType | null
+  pay_target_kind?: 'qrcode' | 'payurl' | 'urlscheme' | null
+  qr_code?: string | null
+  pay_url?: string | null
+}
+
+export interface PaymentOption {
+  value: ZzcodePayType
+  label: string
+}
+
+export interface PaymentOptions {
+  channel: PaymentChannel
+  channel_label: string
+  pay_types: PaymentOption[]
+}
+
+export interface PaymentConfigOptions {
+  channels: Array<{ value: PaymentChannel; label: string }>
+  pay_types: PaymentOption[]
 }
 
 /** 充值订单状态 */
@@ -29,13 +52,19 @@ export interface RechargeStatus {
 }
 
 /** 创建充值订单 */
-export const createRecharge = async (amount: string): Promise<{
+export const createRecharge = async (amount: string, payType?: ZzcodePayType): Promise<{
   success: boolean
   message?: string
   data?: RechargeData
 }> => {
-  return post(`${PAYMENT_PREFIX}/recharge`, { amount })
+  return post(`${PAYMENT_PREFIX}/recharge`, { amount, pay_type: payType || null })
 }
+
+/** 查询当前用户可用的支付渠道和子方式。 */
+export const getPaymentOptions = (): Promise<ApiResponse<PaymentOptions>> => get(`${PAYMENT_PREFIX}/options`)
+
+/** 查询管理员支付配置页使用的数据字典选项。 */
+export const getPaymentConfigOptions = (): Promise<ApiResponse<PaymentConfigOptions>> => get(`${PAYMENT_PREFIX}/config-options`)
 
 /** 查询充值订单状态 */
 export const getRechargeStatus = async (orderNo: string): Promise<{

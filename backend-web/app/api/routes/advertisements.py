@@ -104,10 +104,11 @@ async def delete_my_ad(ad_id: int, current_user: User = Depends(get_current_user
 
 
 @router.post("/{ad_id}/pay", response_model=ApiResponse)
-async def create_ad_payment(ad_id: int, current_user: User = Depends(get_current_active_user),
+async def create_ad_payment(ad_id: int, pay_type: str | None = None,
+    current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db_session)) -> ApiResponse:
-    """生成当前用户广告付款二维码并关联支付订单。"""
-    return await AdvertisementPaymentService(db).create(ad_id, current_user.id)
+    """按当前支付渠道生成当前用户广告付款目标并关联订单。"""
+    return await AdvertisementPaymentService(db).create(ad_id, current_user.id, pay_type)
 
 
 @router.post("/{ad_id}/pay/notify", response_model=ApiResponse)

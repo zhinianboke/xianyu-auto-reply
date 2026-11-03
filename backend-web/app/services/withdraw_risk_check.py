@@ -144,23 +144,39 @@ async def _check_recharge_flows(session: AsyncSession, user_id: int) -> RiskItem
         issues: List[str] = []
         ok_count = 0
         for f in recharge_flows:
-            m = _RECHARGE_DESC_RE.search(f.description or '')
-            if not m:
-                issues.append(f"流水ID {f.id}（¥{f.amount}）：描述中未找到订单号")
-                continue
-            order_no = m.group(1)
-            order = (await session.execute(
-                select(RechargeOrder).where(
-                    RechargeOrder.order_no == order_no,
-                    RechargeOrder.user_id == user_id,
-                )
-            )).scalar_one_or_none()
+            # 新流水优先使用明确关联的支付订单ID；历史流水再兼容从描述提取订单号。
+            if f.order_id:
+                order = (await session.execute(
+                    select(RechargeOrder).where(
+                        RechargeOrder.id == f.order_id,
+                        RechargeOrder.user_id == user_id,
+                        RechargeOrder.order_type == 'recharge',
+                    )
+                )).scalar_one_or_none()
+                order_no = order.order_no if order else str(f.order_id)
+            else:
+                m = _RECHARGE_DESC_RE.search(f.description or '')
+                if not m:
+                    issues.append(f"流水ID {f.id}（¥{f.amount}）：描述中未找到订单号")
+                    continue
+                order_no = m.group(1)
+                order = (await session.execute(
+                    select(RechargeOrder).where(
+                        RechargeOrder.order_no == order_no,
+                        RechargeOrder.user_id == user_id,
+                        RechargeOrder.order_type == 'recharge',
+                    )
+                )).scalar_one_or_none()
 
             if not order:
                 issues.append(f"流水ID {f.id}（¥{f.amount}）：充值订单 {order_no} 不存在")
             elif order.status != 'paid':
                 issues.append(
                     f"流水ID {f.id}（¥{f.amount}）：充值订单 {order_no} 状态为 {order.status}，非 paid"
+                )
+            elif _to_dec(f.amount) != _to_dec(order.amount):
+                issues.append(
+                    f"流水ID {f.id}（¥{f.amount}）：充值订单 {order_no} 金额为 ¥{order.amount}，金额不一致"
                 )
             else:
                 ok_count += 1

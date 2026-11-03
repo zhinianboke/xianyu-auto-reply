@@ -9,7 +9,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.advertisement_db import retry_ad_read
-from app.services.advertisement_orders import payment_locked_ids
+from app.services.advertisement_orders import payment_locked_ids, unsettled_payment_ids
 from app.services.remote_content_service import fetch_remote_public_ads, is_remote_fetch_request
 from common.models.advertisement import Advertisement, AdStatus, AdType
 from common.models.data_dictionary import XYDataDictionary
@@ -142,15 +142,23 @@ class AdvertisementService:
         ad = await self._get_ad(ad_id)
         if not ad:
             return ApiResponse(success=False, code=40001, message="广告不存在")
+        if approved and ad.status != AdStatus.PENDING:
+            message = "待付款广告不能复核，请先完成付款" if ad.status == AdStatus.UNPAID else "该广告当前不是待复核状态"
+            return ApiResponse(success=False, code=40001, message=message)
+        if not approved and ad.status != AdStatus.APPROVED:
+            message = "待付款广告不能取消复核，请先完成付款" if ad.status == AdStatus.UNPAID else "该广告当前不是已复核状态"
+            return ApiResponse(success=False, code=40001, message=message)
         ad.status = AdStatus.APPROVED if approved else AdStatus.PENDING
         await self.session.commit()
         return ApiResponse(success=True, message="复核成功" if approved else "已取消复核")
 
     async def delete(self, ad_id: int, user_id: int | None = None) -> ApiResponse:
-        """软删除广告，保留广告、支付订单及历史消费数据。"""
+        """软删除广告；存在尚未结算的付款订单时拒绝，避免付款后广告无法生效。"""
         ad = await self._get_ad(ad_id, user_id)
         if not ad:
             return ApiResponse(success=False, code=40001, message="广告不存在或无权删除")
+        if await unsettled_payment_ids(self.session, [ad.id], lock=True):
+            return ApiResponse(success=False, code=40001, message="广告已有支付订单，不能删除；如已付款请等待支付结果，未付款请联系管理员处理")
         ad.is_deleted = True
         await self.session.commit()
         logger.info("广告软删除完成：ad_id={} user_id={}", ad_id, user_id)
@@ -172,8 +180,16 @@ class AdvertisementService:
         ad = await self._get_ad(ad_id)
         if not ad:
             return ApiResponse(success=False, code=40001, message="广告不存在")
-        if selected_status == AdStatus.UNPAID and ad.status != AdStatus.UNPAID and await payment_locked_ids(self.session, [ad.id], lock=True):
-            return ApiResponse(success=False, code=40001, message="广告已有支付订单，不能改为待付款")
+        payment_locked = bool(await payment_locked_ids(self.session, [ad.id], lock=True))
+        if payment_locked and (
+            selected_type != ad.ad_type
+            or selected_date != ad.expire_date
+        ):
+            return ApiResponse(success=False, code=40001, message="广告已有支付订单，不能修改广告类型或到期日期")
+        if ad.status == AdStatus.UNPAID and selected_status not in (None, AdStatus.UNPAID):
+            return ApiResponse(success=False, code=40001, message="待付款广告不能直接修改审核状态，请先完成付款")
+        if ad.status != AdStatus.UNPAID and selected_status == AdStatus.UNPAID:
+            return ApiResponse(success=False, code=40001, message="已进入审核流程的广告不能改回待付款")
         ad.title, ad.content = safe_title, safe_content
         ad.link, ad.image_url, ad.ad_type, ad.expire_date = link, image_url, selected_type, selected_date
         if selected_status:

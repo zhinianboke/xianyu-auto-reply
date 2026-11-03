@@ -196,11 +196,11 @@ export function Settings() {
       {activeTab === 'payment' && <PaymentSettingsTab
         settings={settings}
         setSettings={setSettings}
-        alipaySaving={actions.saving('alipay')}
+        paymentSaving={actions.saving('payment')}
         adPriceSaving={actions.saving('adPrice')}
         withdrawSaving={actions.saving('withdraw')}
         distributionSaving={actions.saving('distribution')}
-        onAlipaySave={() => void actions.saveAlipay()}
+        onPaymentSave={() => void actions.savePayment()}
         onAdPriceSave={(payload) => void actions.saveAdPrices(payload)}
         onWithdrawSave={() => void actions.saveWithdraw()}
         onDistributionSave={() => void actions.saveDistribution()}

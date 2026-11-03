@@ -92,8 +92,13 @@ async def lifespan(app: FastAPI):
     try:
         from common.db.init_database import init_database
         await init_database()
-    except Exception as e:
-        logger.error(f"数据库初始化失败: {e}")
+    except Exception:
+        logger.exception("数据库初始化失败，服务退出")
+        try:
+            await close_redis_client()
+        except Exception:
+            logger.exception("数据库初始化失败后关闭Redis连接失败")
+        raise
 
     # 删除备份日志时会暂存文件，启动时检查进程退出前是否留下未完成的暂存文件。
     try:

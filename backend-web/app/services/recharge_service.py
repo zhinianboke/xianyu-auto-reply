@@ -2,14 +2,14 @@
 充值服务
 
 功能：
-1. 创建充值订单并调用支付宝当面付生成二维码
-2. 处理支付宝异步通知回调
-3. 充值成功后更新用户余额并插入资金流水（基于用户加锁防并发）
-4. 查询充值订单状态
+1. 委托支付结账服务创建充值订单并处理异步回调
+2. 管理员手动调整用户余额和用户续期
+3. 查询充值订单状态
 """
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Optional
 
@@ -22,9 +22,7 @@ from common.models.recharge_order import RechargeOrder
 from common.models.system_setting import SystemSetting
 from common.models.user import User
 from common.models.user_setting import UserSetting
-from app.services.alipay_service import AlipayService
-from app.services.advertisement_payment_service import AdvertisementPaymentService
-from app.services.advertisement_orders import lock_order_advertisement
+from app.services.payment_checkout_service import PaymentCheckoutService
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 logger = logging.getLogger(__name__)
 
@@ -32,6 +30,7 @@ logger = logging.getLogger(__name__)
 RENEW_MONTH_PRICE_KEY = 'user.renew_month_price'
 # 续期最大月数（一次性续期上限，防止误操作或溢出）
 MAX_RENEW_MONTHS = 120
+RECHARGE_PAYMENT_TIMEOUT = timedelta(minutes=30)
 
 # 余额在 user_settings 中的 key
 BALANCE_KEY = 'balance'
@@ -43,201 +42,17 @@ class RechargeService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def create_recharge_order(
-        self, user_id: int, amount: str
-    ) -> Dict[str, Any]:
-        """创建充值订单并生成支付宝二维码
+    async def create_recharge_order(self, user_id: int, amount: str, pay_type: str | None = None) -> Dict[str, Any]:
+        """按当前启用渠道创建充值订单。"""
+        return await PaymentCheckoutService(self.session).create_recharge_order(user_id, amount, pay_type)
 
-        Args:
-            user_id: 用户ID
-            amount: 充值金额
+    async def handle_alipay_notify(self, notify_data: Dict[str, Any]) -> bool:
+        """委托支付结账服务处理支付宝异步通知。"""
+        return await PaymentCheckoutService(self.session).handle_alipay_notify(notify_data)
 
-        Returns:
-            包含订单信息和二维码的字典
-        """
-        # 校验金额
-        try:
-            amt = Decimal(amount)
-            if amt <= 0:
-                return {'success': False, 'message': '充值金额必须大于0'}
-            if amt > Decimal('10000'):
-                return {'success': False, 'message': '单次充值金额不能超过10000元'}
-        except Exception:
-            return {'success': False, 'message': '充值金额格式不正确'}
-
-        # 加载支付宝配置
-        try:
-            config = await AlipayService.load_config(self.session)
-            alipay = AlipayService(config)
-        except ValueError as e:
-            logger.error(f"支付宝配置错误: {e}")
-            return {'success': False, 'message': f'支付宝配置错误: {e}'}
-
-        # 生成订单号
-        order_no = AlipayService.generate_order_no()
-
-        # 调用当面付接口
-        order_data = {
-            'out_trade_no': order_no,
-            'total_amount': str(amt),
-            'subject': f'余额充值 - {order_no}',
-            'body': '用户余额充值',
-            'timeout_express': '30m',
-        }
-        result = alipay.create_f2f_pay(order_data)
-
-        if not result or not result.get('success'):
-            error_msg = result.get('error', '生成支付二维码失败') if result else '生成支付二维码失败'
-            return {'success': False, 'message': error_msg}
-
-        # 保存充值订单
-        order = RechargeOrder(
-            order_no=order_no,
-            user_id=user_id,
-            amount=str(amt),
-            status='pending',
-            qr_code=result['qr_code'],
-        )
-        self.session.add(order)
-        await self.session.commit()
-        await self.session.refresh(order)
-
-        return {
-            'success': True,
-            'data': {
-                'order_id': order.id,
-                'order_no': order_no,
-                'amount': str(amt),
-                'qr_code': result['qr_code'],
-            },
-        }
-
-    async def handle_alipay_notify(
-        self, notify_data: Dict[str, Any]
-    ) -> bool:
-        """处理支付宝异步通知
-
-        Args:
-            notify_data: 支付宝通知数据
-
-        Returns:
-            处理是否成功
-        """
-        out_trade_no = notify_data.get('out_trade_no', '')
-        trade_no = notify_data.get('trade_no', '')
-        trade_status = notify_data.get('trade_status', '')
-
-        logger.info(f"收到支付宝通知: 订单号={out_trade_no}, 状态={trade_status}")
-
-        # 验签
-        try:
-            config = await AlipayService.load_config(self.session)
-            alipay = AlipayService(config)
-        except ValueError as e:
-            logger.error(f"支付宝配置错误，无法验签: {e}")
-            return False
-
-        if not alipay.verify_notify(notify_data):
-            logger.error(f"支付宝通知验签失败: {out_trade_no}")
-            return False
-
-        # 广告先锁广告再锁订单，保持与申请修改和二维码创建相同的锁顺序。
-        await lock_order_advertisement(self.session, out_trade_no)
-        stmt = select(RechargeOrder).where(RechargeOrder.order_no == out_trade_no).with_for_update().execution_options(populate_existing=True)
-        result = await self.session.execute(stmt)
-        order = result.scalar_one_or_none()
-        if not order:
-            logger.error(f"充值订单不存在: {out_trade_no}")
-            return False
-
-        if order.status == 'paid' and order.order_type != 'ad':
-            logger.info(f"充值订单已处理过: {out_trade_no}")
-            return True
-
-        # 判断交易状态
-        if not AlipayService.is_trade_success(trade_status):
-            logger.info(f"交易状态非成功: {trade_status}")
-            return True
-
-        # 按订单类型分流处理：
-        # - ad（广告付款）：明确关联的广告在回调内结算，重试和浏览器轮询均不重复入账。
-        #   历史未关联订单保留原轮询结算路径，不猜测广告归属。
-        # - recharge（余额充值）：加余额 + 写充值流水（原逻辑）。
-        if order.order_type == 'ad':
-            try:
-                await AdvertisementPaymentService(self.session).notify(order, notify_data)
-                logger.info(f"广告付款回调处理完成（不加申请用户余额）: {out_trade_no}")
-                return True
-            except Exception as exc:
-                await self.session.rollback()
-                logger.exception("广告付款回调结算失败: order_no=%s exception=%s", out_trade_no, exc)
-                return False
-
-        # 充值成功，更新余额和插入流水（加锁）
-        await self._process_recharge_success(order, trade_no)
-        return True
-
-    async def _process_recharge_success(
-        self, order: RechargeOrder, trade_no: str
-    ) -> None:
-        """充值成功处理：更新余额+插入流水（基于用户行锁防并发）
-
-        Args:
-            order: 充值订单
-            trade_no: 支付宝交易号
-        """
-        user_id = order.user_id
-        amount = Decimal(order.amount)
-
-        # 使用 SELECT ... FOR UPDATE 对用户余额行加锁，防止并发
-        lock_stmt = select(UserSetting).where(
-            UserSetting.user_id == user_id,
-            UserSetting.key == BALANCE_KEY,
-        ).with_for_update()
-        result = await self.session.execute(lock_stmt)
-        balance_setting = result.scalar_one_or_none()
-
-        # 获取当前余额
-        if balance_setting:
-            balance_before = Decimal(balance_setting.value or '0')
-        else:
-            balance_before = Decimal('0')
-
-        balance_after = balance_before + amount
-
-        # 更新或创建余额设置
-        if balance_setting:
-            balance_setting.value = str(balance_after)
-        else:
-            balance_setting = UserSetting(
-                user_id=user_id,
-                key=BALANCE_KEY,
-                value=str(balance_after),
-                description='用户余额',
-            )
-            self.session.add(balance_setting)
-
-        # 插入资金流水
-        flow = FundFlow(
-            user_id=user_id,
-            type='income',
-            amount=str(amount),
-            balance_before=str(balance_before),
-            balance_after=str(balance_after),
-            description=f'余额充值（支付宝当面付）订单号: {order.order_no}',
-        )
-        self.session.add(flow)
-
-        # 更新充值订单状态
-        order.status = 'paid'
-        order.trade_no = trade_no
-        order.paid_at = get_beijing_now_naive()
-
-        await self.session.commit()
-        logger.info(
-            f"充值成功: 用户={user_id}, 金额={amount}, "
-            f"余额: {balance_before} -> {balance_after}"
-        )
+    async def handle_zzcode_notify(self, notify_data: dict[str, str]) -> bool:
+        """委托支付结账服务处理码支付异步通知。"""
+        return await PaymentCheckoutService(self.session).handle_zzcode_notify(notify_data)
 
     async def manual_recharge(
         self,
@@ -482,12 +297,21 @@ class RechargeService:
         stmt = select(RechargeOrder).where(
             RechargeOrder.order_no == order_no,
             RechargeOrder.user_id == user_id,
-        )
+            RechargeOrder.order_type == 'recharge',
+        ).with_for_update().execution_options(populate_existing=True)
         result = await self.session.execute(stmt)
         order = result.scalar_one_or_none()
 
         if not order:
             return None
+
+        if (
+            order.status == 'pending'
+            and order.created_at
+            and order.created_at + RECHARGE_PAYMENT_TIMEOUT <= get_beijing_now_naive()
+        ):
+            order.status = 'expired'
+            await self.session.commit()
 
         return {
             'order_id': order.id,

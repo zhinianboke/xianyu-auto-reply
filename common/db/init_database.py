@@ -30,6 +30,7 @@ from common.db.default_publish_addresses import (
 from common.db.auto_relist_schema import ensure_auto_relist_schema
 from common.db.advertisement_schema import ensure_advertisement_schema
 from common.db.scheduled_publish_rule_schema import ensure_scheduled_publish_rule_schema
+from common.db.payment_schema import ensure_payment_schema
 from common.db.session import async_engine, async_session_maker
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.security import generate_secret_key, get_password_hash
@@ -320,6 +321,18 @@ class DatabaseInitializer:
             "true",
             "登录页是否展示默认账号密码提示",
         ),
+        ("payment.channel", "alipay", "当前启用的支付渠道"),
+        ("alipay.app_id", "", "支付宝应用ID"),
+        ("alipay.private_key", "", "支付宝应用私钥"),
+        ("alipay.alipay_public_key", "", "支付宝公钥"),
+        ("alipay.gateway_url", "https://openapi.alipay.com/gateway.do", "支付宝网关地址"),
+        ("alipay.notify_url", "", "支付宝异步通知地址"),
+        ("zzcode.pid", "", "码支付商户ID"),
+        ("zzcode.key", "", "码支付商户密钥"),
+        ("zzcode.gateway", "", "码支付请求网关地址"),
+        ("zzcode.notify_url", "", "码支付异步通知地址"),
+        ("zzcode.return_url", "", "码支付页面跳转地址"),
+        ("zzcode.pay_types", "alipay", "码支付开启的支付方式"),
     )
 
     DEFAULT_SCHEDULED_TASKS = (
@@ -1347,15 +1360,23 @@ class DatabaseInitializer:
                 user_id BIGINT NOT NULL COMMENT '用户ID',
                 amount VARCHAR(32) NOT NULL COMMENT '充值金额',
                 order_type VARCHAR(20) NOT NULL DEFAULT 'recharge' COMMENT '订单类型：recharge-余额充值，ad-广告申请付款',
+                channel VARCHAR(16) NOT NULL DEFAULT 'alipay' COMMENT '支付渠道：alipay-支付宝当面付，zzcode-码支付',
+                pay_type VARCHAR(16) DEFAULT NULL COMMENT '码支付子方式：alipay/wxpay/qqpay',
+                zzcode_amount_confirmed TINYINT(1) NOT NULL DEFAULT 0 COMMENT '码支付金额是否已由下单响应或已验签回调确认',
+                callback_merchant_id VARCHAR(128) DEFAULT NULL COMMENT '创建订单时使用的回调验签商户ID',
+                callback_verify_key TEXT NULL COMMENT '创建订单时使用的回调验签密钥或公钥',
                 status VARCHAR(32) NOT NULL DEFAULT 'pending' COMMENT '订单状态：pending-待支付，paid-已支付，expired-已过期，failed-失败',
-                trade_no VARCHAR(128) DEFAULT NULL COMMENT '支付宝交易号',
+                trade_no VARCHAR(128) DEFAULT NULL COMMENT '上游支付交易号',
                 qr_code VARCHAR(512) DEFAULT NULL COMMENT '支付二维码内容',
+                pay_target_kind VARCHAR(16) DEFAULT NULL COMMENT '支付目标类型：qrcode/payurl/urlscheme',
+                pay_url VARCHAR(1000) DEFAULT NULL COMMENT '支付跳转或协议链接',
                 ad_id BIGINT DEFAULT NULL COMMENT '广告付款关联广告ID',
                 ad_settled_at DATETIME DEFAULT NULL COMMENT '广告付款结算时间',
                 paid_at DATETIME DEFAULT NULL COMMENT '支付时间',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 UNIQUE INDEX idx_order_no (order_no),
+                UNIQUE INDEX uk_recharge_trade_no (trade_no),
                 INDEX idx_user_id (user_id),
                 INDEX idx_status (status)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='充值订单表';
@@ -2034,6 +2055,13 @@ class DatabaseInitializer:
         ],
         "xy_recharge_orders": [
             ("order_type", "VARCHAR(20) NOT NULL DEFAULT 'recharge' COMMENT '订单类型：recharge-余额充值，ad-广告申请付款'", "amount"),
+            ("channel", "VARCHAR(16) NOT NULL DEFAULT 'alipay' COMMENT '支付渠道：alipay-支付宝当面付，zzcode-码支付'", "order_type"),
+            ("pay_type", "VARCHAR(16) DEFAULT NULL COMMENT '码支付子方式：alipay/wxpay/qqpay'", "channel"),
+            ("zzcode_amount_confirmed", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '码支付金额是否已由下单响应或已验签回调确认'", "pay_type"),
+            ("callback_merchant_id", "VARCHAR(128) DEFAULT NULL COMMENT '创建订单时使用的回调验签商户ID'", "zzcode_amount_confirmed"),
+            ("callback_verify_key", "TEXT NULL COMMENT '创建订单时使用的回调验签密钥或公钥'", "callback_merchant_id"),
+            ("pay_target_kind", "VARCHAR(16) DEFAULT NULL COMMENT '支付目标类型：qrcode/payurl/urlscheme'", "qr_code"),
+            ("pay_url", "VARCHAR(1000) DEFAULT NULL COMMENT '支付跳转或协议链接'", "pay_target_kind"),
         ],
         "xy_token_cache": [
             ("renew_expire_at", "DATETIME DEFAULT NULL COMMENT '续期Token过期时间'", "expire_at"),
@@ -2273,6 +2301,10 @@ class DatabaseInitializer:
                     async with ddl_connection() as conn:
                         await ensure_advertisement_schema(conn)
 
+                    # 支付表结构是回调入账和幂等处理的前置条件，缺失时禁止带病启动。
+                    async with ddl_connection() as conn:
+                        await ensure_payment_schema(conn)
+
                     # 自动续售表和发布日志关联字段独立幂等迁移，避免依赖旧版本 DDL 顺序。
                     async with ddl_connection() as conn:
                         await ensure_auto_relist_schema(conn, get_beijing_now_naive())
@@ -2361,6 +2393,17 @@ class DatabaseInitializer:
             # 商品定时发布结果
             ("scheduled_publish_result", "success", "成功", 10),
             ("scheduled_publish_result", "failure", "失败", 20),
+            # 支付渠道
+            ("payment_channel", "alipay", "支付宝当面付", 10),
+            ("payment_channel", "zzcode", "码支付", 20),
+            # 码支付子方式
+            ("zzcode_pay_type", "alipay", "支付宝", 10),
+            ("zzcode_pay_type", "wxpay", "微信支付", 20),
+            ("zzcode_pay_type", "qqpay", "QQ钱包", 30),
+            # 支付目标类型
+            ("payment_target_kind", "qrcode", "二维码", 10),
+            ("payment_target_kind", "payurl", "支付链接", 20),
+            ("payment_target_kind", "urlscheme", "应用协议链接", 30),
         )
         async with ddl_connection() as conn:
             for dict_type, dict_value, dict_label, sort_order in items:
@@ -2600,6 +2643,30 @@ class DatabaseInitializer:
         logger.info("检查索引迁移...")
         
         async with ddl_connection() as conn:
+            # 支付交易号全局唯一，防止同一上游交易被并发回调绑定到不同订单。
+            try:
+                check = text("""
+                    SELECT COUNT(*) FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'xy_recharge_orders'
+                    AND INDEX_NAME = 'uk_recharge_trade_no'
+                """)
+                if (await conn.execute(check)).scalar() == 0:
+                    duplicate = await conn.execute(text("""
+                        SELECT trade_no FROM xy_recharge_orders
+                        WHERE trade_no IS NOT NULL AND trade_no <> ''
+                        GROUP BY trade_no HAVING COUNT(*) > 1 LIMIT 1
+                    """))
+                    if duplicate.scalar() is None:
+                        await conn.execute(text(
+                            "ALTER TABLE xy_recharge_orders ADD UNIQUE KEY uk_recharge_trade_no (trade_no)"
+                        ))
+                        logger.info("✓ xy_recharge_orders: 创建 uk_recharge_trade_no 唯一索引")
+                    else:
+                        logger.warning("✗ xy_recharge_orders 存在重复交易号，未创建唯一索引，请先备份并人工核查历史数据")
+            except Exception as e:
+                logger.warning(f"✗ xy_recharge_orders uk_recharge_trade_no 创建失败: {e}")
+
             try:
                 # xy_card_item_relations: 将旧的 uk_card_item(card_id, item_id) 替换为 uk_card_item_dock(card_id, item_id, dock_record_id)
                 # 检查旧索引是否存在

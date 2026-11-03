@@ -350,7 +350,7 @@ export default function AdManage() {
                             >
                               复核
                             </button>
-                          ) : (
+                          ) : ad.status === 'approved' ? (
                             <button
                               onClick={() => handleReject(ad)}
                               className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded"
@@ -358,7 +358,7 @@ export default function AdManage() {
                             >
                               取消复核
                             </button>
-                          )}
+                          ) : null}
                           <button
                             onClick={() => openEditModal(ad)}
                             className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded"
@@ -396,7 +396,8 @@ export default function AdManage() {
           }} typeOptions={adTypeOptions} typesLoading={typesLoading} typesError={typesError} saving={saving} onSave={handleSave}
           onClose={() => setEditAd(null)}>
           <div className="input-group"><label className="input-label">审核状态</label>
-            <Select value={formStatus} onChange={setFormStatus} options={STATUS_OPTIONS} /></div>
+            <Select value={formStatus} onChange={setFormStatus}
+              options={editAd.status === 'unpaid' ? STATUS_OPTIONS.filter((item) => item.value === 'unpaid') : STATUS_OPTIONS.filter((item) => item.value !== 'unpaid')} /></div>
           <div className="input-group"><label className="input-label">到期日期</label>
             <input type="date" value={formExpireDate} onChange={(e) => setFormExpireDate(e.target.value)} className="input-ios" /></div>
         </AdvertisementFormModal>

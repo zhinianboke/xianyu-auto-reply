@@ -10,8 +10,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { X, Loader2, CheckCircle, AlertCircle } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
-import { createRecharge, getRechargeStatus } from '@/api/payment'
+import { createRecharge, getPaymentOptions, getRechargeStatus, type PaymentOption, type PaymentOptions } from '@/api/payment'
 import { useUIStore } from '@/store/uiStore'
+import { getApiErrorMessage } from '@/utils/apiError'
 
 interface RechargeModalProps {
   visible: boolean
@@ -30,7 +31,13 @@ export function RechargeModal({ visible, onClose, onSuccess }: RechargeModalProp
   const [qrCode, setQrCode] = useState('')
   const [orderNo, setOrderNo] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
+  const [paymentOptions, setPaymentOptions] = useState<PaymentOptions | null>(null)
+  const [selectedPayType, setSelectedPayType] = useState<PaymentOption['value'] | ''>('')
+  const [payUrl, setPayUrl] = useState('')
+  const [optionsLoading, setOptionsLoading] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const sessionRef = useRef(0)
 
   /** 清理轮询定时器 */
   const clearPoll = useCallback(() => {
@@ -38,16 +45,25 @@ export function RechargeModal({ visible, onClose, onSuccess }: RechargeModalProp
       clearInterval(pollRef.current)
       pollRef.current = null
     }
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
+    }
   }, [])
 
   /** 重置状态 */
   const reset = useCallback(() => {
+    sessionRef.current += 1
     setStep('input')
     setAmount('')
     setLoading(false)
     setQrCode('')
     setOrderNo('')
     setErrorMsg('')
+    setPaymentOptions(null)
+    setSelectedPayType('')
+    setPayUrl('')
+    setOptionsLoading(false)
     clearPoll()
   }, [clearPoll])
 
@@ -58,14 +74,36 @@ export function RechargeModal({ visible, onClose, onSuccess }: RechargeModalProp
     onClose()
   }, [clearPoll, reset, onClose])
 
-  /** 组件卸载时清理 */
+  const loadPaymentOptions = useCallback(async (session = sessionRef.current) => {
+    setOptionsLoading(true)
+    try {
+      const result = await getPaymentOptions()
+      if (session !== sessionRef.current) return
+      if (!result.success || !result.data) {
+        setErrorMsg(result.message || '加载支付方式失败')
+        setStep('error')
+        return
+      }
+      setPaymentOptions(result.data)
+      if (result.data.pay_types.length === 1) setSelectedPayType(result.data.pay_types[0].value)
+    } catch (error: unknown) {
+      if (session !== sessionRef.current) return
+      setErrorMsg(getApiErrorMessage(error, '加载支付方式失败，请稍后重试'))
+      setStep('error')
+    } finally {
+      if (session === sessionRef.current) setOptionsLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
-    return () => clearPoll()
-  }, [clearPoll])
+    reset()
+    if (visible) void loadPaymentOptions(sessionRef.current)
+    return () => { sessionRef.current += 1; clearPoll() }
+  }, [visible, reset, clearPoll, loadPaymentOptions])
 
   /** 提交充值 */
   const handleSubmit = async () => {
-    if (!amount || loading) return
+    if (!visible || !amount || loading) return
 
     const num = parseFloat(amount)
     if (isNaN(num) || num <= 0) {
@@ -77,44 +115,109 @@ export function RechargeModal({ visible, onClose, onSuccess }: RechargeModalProp
       return
     }
 
+    const session = sessionRef.current
     setLoading(true)
     try {
-      const result = await createRecharge(amount)
-      if (result.success && result.data) {
-        setQrCode(result.data.qr_code)
+      const result = await createRecharge(amount, selectedPayType || undefined)
+      if (session !== sessionRef.current) return
+      if (result.success && result.data?.order_no) {
+        setAmount(result.data.amount)
+        setQrCode(result.data.qr_code || '')
+        setPayUrl(result.data.pay_url || '')
         setOrderNo(result.data.order_no)
+        if (result.data.status === 'paid') {
+          setStep('success')
+          addToast({ message: '充值成功', type: 'success' })
+          closeTimerRef.current = setTimeout(() => {
+            if (session !== sessionRef.current) return
+            onSuccess()
+            handleClose()
+          }, 1500)
+          return
+        }
+        if (result.data.status === 'failed' || result.data.status === 'expired') {
+          const message = result.data.status === 'expired' ? '支付订单已过期，请重新充值' : '支付订单已失败，请重新充值'
+          setErrorMsg(message)
+          setStep('error')
+          return
+        }
+        if (result.data.status !== 'pending') {
+          setErrorMsg('充值订单状态异常，请重新充值或联系管理员')
+          setStep('error')
+          return
+        }
+        if (!result.data.qr_code && !result.data.pay_url) {
+          setErrorMsg('支付服务未返回二维码或支付链接，请重新充值或联系管理员')
+          setStep('error')
+          return
+        }
         setStep('qrcode')
         startPolling(result.data.order_no)
       } else {
         setErrorMsg(result.message || '创建充值订单失败')
         setStep('error')
       }
-    } catch {
-      setErrorMsg('网络错误，请稍后重试')
+    } catch (error: unknown) {
+      if (session !== sessionRef.current) return
+      setErrorMsg(getApiErrorMessage(error, '创建充值订单失败，请稍后重试'))
       setStep('error')
     } finally {
-      setLoading(false)
+      if (session === sessionRef.current) setLoading(false)
     }
   }
 
   /** 开始轮询支付状态 */
   const startPolling = (no: string) => {
     clearPoll()
+    const session = sessionRef.current
+    let inFlight = false
     pollRef.current = setInterval(async () => {
+      if (inFlight || session !== sessionRef.current) return
+      inFlight = true
       try {
         const res = await getRechargeStatus(no)
+        if (session !== sessionRef.current) return
         if (res.success && res.data?.status === 'paid') {
           clearPoll()
+          setAmount(res.data.amount)
           setStep('success')
           addToast({ message: '充值成功', type: 'success' })
           // 延迟关闭，让用户看到成功状态
-          setTimeout(() => {
+          closeTimerRef.current = setTimeout(() => {
+            if (session !== sessionRef.current) return
             onSuccess()
             handleClose()
           }, 1500)
+        } else if (res.success && (res.data?.status === 'failed' || res.data?.status === 'expired')) {
+          clearPoll()
+          const message = res.data.status === 'expired' ? '支付订单已过期，请重新充值' : '支付订单已失败，请重新充值'
+          setErrorMsg(message)
+          setStep('error')
+          addToast({ message, type: 'error' })
+        } else if (res.success && res.data?.status === 'pending') {
+          if (res.data.amount) setAmount(res.data.amount)
+        } else if (res.success) {
+          clearPoll()
+          const message = res.data ? '支付订单状态异常，请重新充值或稍后查看余额' : '支付订单状态数据异常，请重新充值或稍后查看余额'
+          setErrorMsg(message)
+          setStep('error')
+          addToast({ message, type: 'error' })
+        } else if (!res.success) {
+          clearPoll()
+          const message = res.message || '查询支付结果失败，请重新充值或稍后查看余额'
+          setErrorMsg(message)
+          setStep('error')
+          addToast({ message, type: 'error' })
         }
-      } catch {
-        // 轮询失败不做处理，继续重试
+      } catch (error: unknown) {
+        if (session !== sessionRef.current) return
+        clearPoll()
+        const message = getApiErrorMessage(error, '查询支付结果失败，请重新充值或稍后查看余额')
+        setErrorMsg(message)
+        setStep('error')
+        addToast({ message, type: 'error' })
+      } finally {
+        inFlight = false
       }
     }, 3000)
   }
@@ -156,6 +259,14 @@ export function RechargeModal({ visible, onClose, onSuccess }: RechargeModalProp
                 autoFocus
               />
             </div>
+            {paymentOptions?.pay_types && paymentOptions.pay_types.length > 1 && (
+              <div className="input-group">
+                <label className="input-label">支付方式</label>
+                <div className="flex flex-wrap gap-2">
+                  {paymentOptions.pay_types.map((item) => <button key={item.value} type="button" onClick={() => setSelectedPayType(item.value)} className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${selectedPayType === item.value ? 'border-[rgb(var(--color-primary))] bg-[rgb(var(--color-primary-light))] text-[rgb(var(--color-primary))]' : 'border-slate-200 dark:border-slate-700'}`}>{item.label}</button>)}
+                </div>
+              </div>
+            )}
             {/* 快捷金额 */}
             <div className="flex flex-wrap gap-2">
               {['10', '20', '50', '100', '200', '500'].map((v) => (
@@ -174,13 +285,13 @@ export function RechargeModal({ visible, onClose, onSuccess }: RechargeModalProp
             </div>
             <button
               onClick={handleSubmit}
-              disabled={!amount || loading}
+              disabled={!amount || loading || optionsLoading || !paymentOptions || (paymentOptions.pay_types.length > 1 && !selectedPayType)}
               className="btn-ios-primary w-full"
             >
-              {loading ? (
+              {loading || optionsLoading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  生成支付二维码中...
+                  {optionsLoading ? '加载支付方式中...' : '创建支付订单中...'}
                 </>
               ) : (
                 '确认充值'
@@ -193,16 +304,18 @@ export function RechargeModal({ visible, onClose, onSuccess }: RechargeModalProp
         {step === 'qrcode' && (
           <div className="space-y-4 text-center">
             <p className="text-sm text-slate-500 dark:text-slate-400">
-              请使用支付宝扫描下方二维码完成支付
+              {payUrl ? '请点击下方按钮打开支付页面并完成支付' : `请使用${paymentOptions?.channel_label || '对应应用'}扫描下方二维码完成支付`}
             </p>
-            <div className="flex justify-center">
+            {qrCode && <div className="flex justify-center">
               <div className="p-4 bg-white rounded-xl inline-block">
                 <QRCodeSVG value={qrCode} size={200} />
               </div>
-            </div>
+            </div>}
+            {payUrl && <button type="button" onClick={() => window.open(payUrl, '_blank', 'noopener,noreferrer')} className="btn-ios-primary mx-auto">打开支付页面</button>}
             <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">
               ¥{amount}
             </div>
+            {paymentOptions?.channel === 'zzcode' && qrCode && <p className="text-sm font-medium text-amber-600 dark:text-amber-400">请按以上金额完成支付</p>}
             <p className="text-xs text-slate-400">
               订单号: {orderNo}
             </p>
@@ -234,7 +347,7 @@ export function RechargeModal({ visible, onClose, onSuccess }: RechargeModalProp
               充值失败
             </p>
             <p className="text-sm text-slate-500">{errorMsg}</p>
-            <button onClick={reset} className="btn-ios-secondary">
+            <button onClick={() => { reset(); void loadPaymentOptions() }} className="btn-ios-secondary">
               重新充值
             </button>
           </div>

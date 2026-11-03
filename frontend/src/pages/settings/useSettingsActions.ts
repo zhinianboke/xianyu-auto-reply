@@ -24,6 +24,7 @@ import type {
   AuthFooterAdSettings,
   DisclaimerSettings,
   LoginBrandingSettings,
+  PaymentChannel,
   SystemSettings,
   ThemeAppearanceSettings,
   ThemeFontSettings,
@@ -101,11 +102,15 @@ export function useSettingsActions(getSettings: SettingsGetter) {
     })
   }, [addToast, getSettings, persist, run])
 
-  const saveAlipay = useCallback(async () => {
+  const savePayment = useCallback(async () => {
     const settings = getSettings()
     if (!settings) return
-    await run('alipay', async () => {
-      await persist({ 'alipay.app_id': String(settings['alipay.app_id'] || ''), 'alipay.gateway_url': String(settings['alipay.gateway_url'] || ''), 'alipay.private_key': String(settings['alipay.private_key'] || ''), 'alipay.alipay_public_key': String(settings['alipay.alipay_public_key'] || ''), 'alipay.notify_url': String(settings['alipay.notify_url'] || '') }, '支付宝配置保存成功', '支付宝配置保存失败')
+    const channel = String(settings['payment.channel'] || 'alipay') as PaymentChannel
+    const payload: Partial<SystemSettings> = channel === 'zzcode'
+      ? { 'payment.channel': channel, 'zzcode.pid': String(settings['zzcode.pid'] || ''), 'zzcode.key': String(settings['zzcode.key'] || ''), 'zzcode.gateway': String(settings['zzcode.gateway'] || ''), 'zzcode.notify_url': String(settings['zzcode.notify_url'] || ''), 'zzcode.return_url': String(settings['zzcode.return_url'] || ''), 'zzcode.pay_types': String(settings['zzcode.pay_types'] || '') }
+      : { 'payment.channel': channel, 'alipay.app_id': String(settings['alipay.app_id'] || ''), 'alipay.gateway_url': String(settings['alipay.gateway_url'] || ''), 'alipay.private_key': String(settings['alipay.private_key'] || ''), 'alipay.alipay_public_key': String(settings['alipay.alipay_public_key'] || ''), 'alipay.notify_url': String(settings['alipay.notify_url'] || '') }
+    await run('payment', async () => {
+      await persist(payload, '支付配置保存成功', '支付配置保存失败')
     })
   }, [getSettings, persist, run])
 
@@ -209,7 +214,7 @@ export function useSettingsActions(getSettings: SettingsGetter) {
     saving: (key: string) => savingKeys.has(key),
     saveBasic,
     saveSmtp,
-    saveAlipay,
+    savePayment,
     saveWithdraw,
     saveDistribution,
     saveUserExpiry,

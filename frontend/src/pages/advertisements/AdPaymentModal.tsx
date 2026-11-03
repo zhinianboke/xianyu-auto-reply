@@ -13,6 +13,7 @@ import { createAdPayment, checkAdPaymentStatus } from '@/api/advertisements'
 import type { Advertisement } from '@/api/advertisements'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/apiError'
+import { getPaymentOptions, type PaymentOption, type PaymentOptions } from '@/api/payment'
 
 interface AdPaymentModalProps {
   visible: boolean
@@ -33,6 +34,10 @@ export function AdPaymentModal({ visible, ad, onClose, onSuccess }: AdPaymentMod
   const [paymentAmount, setPaymentAmount] = useState('')
   const [advertisementApproved, setAdvertisementApproved] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
+  const [paymentOptions, setPaymentOptions] = useState<PaymentOptions | null>(null)
+  const [selectedPayType, setSelectedPayType] = useState<PaymentOption['value'] | ''>('')
+  const [payUrl, setPayUrl] = useState('')
+  const [optionsLoading, setOptionsLoading] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const sessionRef = useRef(0)
@@ -59,6 +64,10 @@ export function AdPaymentModal({ visible, ad, onClose, onSuccess }: AdPaymentMod
     setPaymentAmount('')
     setAdvertisementApproved(false)
     setErrorMsg('')
+    setPaymentOptions(null)
+    setSelectedPayType('')
+    setPayUrl('')
+    setOptionsLoading(false)
     clearPoll()
   }, [clearPoll])
 
@@ -70,10 +79,34 @@ export function AdPaymentModal({ visible, ad, onClose, onSuccess }: AdPaymentMod
   }, [clearPoll, reset, onClose])
 
   /** 切换广告、关闭或卸载后忽略迟到的订单及轮询结果。 */
+  const loadPaymentOptions = useCallback(async (session = sessionRef.current) => {
+    setOptionsLoading(true)
+    try {
+      const result = await getPaymentOptions()
+      if (session !== sessionRef.current) return
+      if (!result.success || !result.data) {
+        setErrorMsg(result.message || '加载支付方式失败')
+        setStep('error')
+        return
+      }
+      setPaymentOptions(result.data)
+      if (result.data.pay_types.length === 1) setSelectedPayType(result.data.pay_types[0].value)
+    } catch (error: unknown) {
+      if (session !== sessionRef.current) return
+      setErrorMsg(getApiErrorMessage(error, '加载支付方式失败，请稍后重试'))
+      setStep('error')
+    } finally {
+      if (session === sessionRef.current) setOptionsLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     reset()
+    if (visible && ad) {
+      void loadPaymentOptions(sessionRef.current)
+    }
     return () => { sessionRef.current += 1; clearPoll() }
-  }, [visible, ad?.id, reset, clearPoll])
+  }, [visible, ad?.id, reset, clearPoll, loadPaymentOptions])
 
   /** 提交付款 */
   const handleSubmit = async () => {
@@ -82,12 +115,23 @@ export function AdPaymentModal({ visible, ad, onClose, onSuccess }: AdPaymentMod
     const session = sessionRef.current
     setLoading(true)
     try {
-      const result = await createAdPayment(ad.id)
+      const result = await createAdPayment(ad.id, selectedPayType || undefined)
       if (session !== sessionRef.current) return
-      if (result.success && result.data?.qr_code && result.data.order_no) {
-        setQrCode(result.data.qr_code)
+      if (result.success && result.data?.order_no && (result.data.paid || result.data.qr_code || result.data.pay_url)) {
+        setQrCode(result.data.qr_code || '')
+        setPayUrl(result.data.pay_url || '')
         setOrderNo(result.data.order_no)
         setPaymentAmount(result.data.amount)
+        if (result.data.paid) {
+          setStep('success')
+          addToast({ message: '付款成功', type: 'success' })
+          closeTimerRef.current = setTimeout(() => {
+            if (session !== sessionRef.current) return
+            onSuccess()
+            handleClose()
+          }, 1500)
+          return
+        }
         setStep('qrcode')
         startPolling(ad.id, result.data.order_no)
       } else {
@@ -116,6 +160,7 @@ export function AdPaymentModal({ visible, ad, onClose, onSuccess }: AdPaymentMod
         if (session !== sessionRef.current) return
         if (res.success && res.data?.paid === true) {
           clearPoll()
+          if (res.data.amount) setPaymentAmount(res.data.amount)
           setAdvertisementApproved(res.data.status === 'approved')
           setStep('success')
           addToast({ message: '付款成功', type: 'success' })
@@ -125,16 +170,28 @@ export function AdPaymentModal({ visible, ad, onClose, onSuccess }: AdPaymentMod
             onSuccess()
             handleClose()
           }, 1500)
+        } else if (res.success && res.data?.status === 'pending') {
+          if (res.data.amount) setPaymentAmount(res.data.amount)
+        } else if (res.success) {
+          clearPoll()
+          const message = res.data ? '广告付款订单状态异常，请重新生成支付订单或联系管理员' : '广告付款状态数据异常，请重新生成支付订单或联系管理员'
+          setErrorMsg(message)
+          setStep('error')
+          addToast({ message, type: 'error' })
         } else if (!res.success) {
           clearPoll()
-          setErrorMsg(res.message || '广告付款状态查询失败')
+          const message = res.message || '广告付款状态查询失败'
+          setErrorMsg(message)
           setStep('error')
+          addToast({ message, type: 'error' })
         }
       } catch (error: unknown) {
         if (session !== sessionRef.current) return
         clearPoll()
-        setErrorMsg(getApiErrorMessage(error, '广告付款状态查询失败'))
+        const message = getApiErrorMessage(error, '广告付款状态查询失败')
+        setErrorMsg(message)
         setStep('error')
+        addToast({ message, type: 'error' })
       } finally {
         inFlight = false
       }
@@ -184,15 +241,16 @@ export function AdPaymentModal({ visible, ad, onClose, onSuccess }: AdPaymentMod
                 <span className="text-xl font-bold text-amber-600 dark:text-amber-400">¥{ad.total_amount || '0'}</span>
               </div>
             </div>
+            {paymentOptions?.pay_types && paymentOptions.pay_types.length > 1 && <div className="input-group"><label className="input-label">支付方式</label><div className="flex flex-wrap gap-2">{paymentOptions.pay_types.map((item) => <button key={item.value} type="button" onClick={() => setSelectedPayType(item.value)} className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${selectedPayType === item.value ? 'border-[rgb(var(--color-primary))] bg-[rgb(var(--color-primary-light))] text-[rgb(var(--color-primary))]' : 'border-slate-200 dark:border-slate-700'}`}>{item.label}</button>)}</div></div>}
             <button
               onClick={handleSubmit}
-              disabled={loading}
+              disabled={loading || optionsLoading || !paymentOptions || (paymentOptions.pay_types.length > 1 && !selectedPayType)}
               className="btn-ios-primary w-full"
             >
-              {loading ? (
+              {loading || optionsLoading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  生成支付二维码中...
+                  {optionsLoading ? '加载支付方式中...' : '创建支付订单中...'}
                 </>
               ) : (
                 '确认付款'
@@ -205,16 +263,18 @@ export function AdPaymentModal({ visible, ad, onClose, onSuccess }: AdPaymentMod
         {step === 'qrcode' && (
           <div className="space-y-4 text-center">
             <p className="text-sm text-slate-500 dark:text-slate-400">
-              请使用支付宝扫描下方二维码完成支付
+              {payUrl ? '请点击下方按钮打开支付页面并完成支付' : `请使用${paymentOptions?.channel_label || '对应应用'}扫描下方二维码完成支付`}
             </p>
-            <div className="flex justify-center">
+            {qrCode && <div className="flex justify-center">
               <div className="p-4 bg-white rounded-xl inline-block">
                 <QRCodeSVG value={qrCode} size={200} />
               </div>
-            </div>
+            </div>}
+            {payUrl && <button type="button" onClick={() => window.open(payUrl, '_blank', 'noopener,noreferrer')} className="btn-ios-primary mx-auto">打开支付页面</button>}
             <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">
               ¥{paymentAmount}
             </div>
+            {paymentOptions?.channel === 'zzcode' && qrCode && <p className="text-sm font-medium text-amber-600 dark:text-amber-400">请按以上金额完成支付</p>}
             <p className="text-xs text-slate-400">
               订单号: {orderNo}
             </p>
@@ -235,6 +295,7 @@ export function AdPaymentModal({ visible, ad, onClose, onSuccess }: AdPaymentMod
             <p className="text-sm text-slate-500">
               {advertisementApproved ? '广告已自动复核通过' : '付款已确认，请在列表查看广告复核状态'}
             </p>
+            {paymentAmount && <p className="text-sm text-slate-500 dark:text-slate-400">实付金额：¥{paymentAmount}</p>}
           </div>
         )}
 
@@ -246,7 +307,7 @@ export function AdPaymentModal({ visible, ad, onClose, onSuccess }: AdPaymentMod
               付款失败
             </p>
             <p className="text-sm text-slate-500">{errorMsg}</p>
-            <button onClick={reset} className="btn-ios-secondary">
+            <button onClick={() => { reset(); void loadPaymentOptions(sessionRef.current) }} className="btn-ios-secondary">
               重试
             </button>
           </div>

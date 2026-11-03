@@ -13,11 +13,10 @@ import base64
 import json
 import logging
 import random
-import re
 import string
 from typing import Any, Dict, Optional
 
-import requests
+import httpx
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
 from Crypto.Signature import pkcs1_15
@@ -33,14 +32,16 @@ logger = logging.getLogger(__name__)
 class AlipayService:
     """支付宝当面付服务类"""
 
-    def __init__(self, config: Dict[str, str]):
+    def __init__(self, config: Dict[str, str], *, require_private_key: bool = True):
         """初始化支付宝服务
 
         Args:
             config: 支付宝配置字典
         """
         self.config = config
-        required = ['app_id', 'private_key', 'alipay_public_key']
+        required = ['app_id', 'alipay_public_key']
+        if require_private_key:
+            required.append('private_key')
         missing = [k for k in required if not self.config.get(k)]
         if missing:
             raise ValueError(f"支付宝配置缺少必要字段: {', '.join(missing)}")
@@ -65,7 +66,7 @@ class AlipayService:
             'notify_url': settings.get('alipay.notify_url', ''),
         }
 
-    def create_f2f_pay(self, order_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def create_f2f_pay(self, order_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """创建支付宝当面付（扫码支付）
 
         Args:
@@ -74,6 +75,10 @@ class AlipayService:
         Returns:
             成功返回含 qr_code 的字典，失败返回 None
         """
+        params: Dict[str, Any] = {}
+        gateway = self.config.get('gateway_url', 'https://openapi.alipay.com/gateway.do')
+        headers = {'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8'}
+        response: httpx.Response | None = None
         try:
             order_no = order_data['out_trade_no']
             amount = str(order_data['total_amount'])
@@ -101,27 +106,56 @@ class AlipayService:
 
             params['sign'] = self._generate_sign(params)
 
-            gateway = self.config.get('gateway_url', 'https://openapi.alipay.com/gateway.do')
             logger.info(f"发送支付宝当面付请求: 订单号={order_no}, 金额={amount}")
 
-            headers = {'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8'}
-            resp = requests.post(gateway, data=params, headers=headers, timeout=30)
-            return self._parse_precreate_response(resp.text, order_no, amount, subject)
-
-        except Exception as e:
-            logger.error(f"创建支付宝当面付失败: {e}")
-            return None
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(gateway, data=params, headers=headers)
+            if response.status_code < 200 or response.status_code >= 300:
+                logger.error(
+                    "支付宝请求失败: method=POST url=%s query={} headers=%s body=%s status=%s response_headers=%s response_body=%s",
+                    gateway, headers, params, response.status_code, dict(response.headers), response.text,
+                )
+                return {'success': False, 'error': '支付宝服务返回异常状态，请稍后重试'}
+            result = self._parse_precreate_response(response.text, order_no, amount, subject)
+            if not result or not result.get('success'):
+                logger.error(
+                    "支付宝业务失败: method=POST url=%s query={} headers=%s body=%s status=%s response_headers=%s response_body=%s",
+                    gateway, headers, params, response.status_code, dict(response.headers), response.text,
+                )
+            return result
+        except httpx.RequestError as exc:
+            logger.exception(
+                "支付宝网络请求失败: method=POST url=%s query={} headers=%s body=%s exception=%s",
+                gateway, headers, params, exc,
+            )
+            return {'success': False, 'error': '支付宝服务请求失败，请稍后重试'}
+        except Exception as exc:
+            logger.exception(
+                "支付宝请求处理异常: method=POST url=%s query={} headers=%s body=%s status=%s response_headers=%s response_body=%s exception=%s",
+                gateway, headers, params, response.status_code if response else None,
+                dict(response.headers) if response else {}, response.text if response else "", exc,
+            )
+            return {'success': False, 'error': '生成支付宝支付订单失败，请联系管理员'}
 
     def _parse_precreate_response(
         self, text: str, order_no: str, amount: str, subject: str
     ) -> Optional[Dict[str, Any]]:
         """解析当面付API响应"""
-        match = re.search(r'"alipay_trade_precreate_response":\s*(\{[^}]+\})', text)
-        if not match:
+        try:
+            payload = json.loads(text)
+            data = payload.get('alipay_trade_precreate_response')
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            data = None
+            for encoding in ('utf-8-sig', 'gb18030'):
+                try:
+                    payload = json.loads(text.encode('latin1').decode(encoding))
+                    data = payload.get('alipay_trade_precreate_response')
+                    break
+                except (UnicodeEncodeError, UnicodeDecodeError, json.JSONDecodeError, AttributeError, TypeError):
+                    continue
+        if not isinstance(data, dict):
             logger.error(f"无法解析支付宝API响应: {text}")
-            return None
-
-        data = json.loads(match.group(1))
+            return {'success': False, 'error': '支付宝响应格式异常'}
         if data.get('code') == '10000' and data.get('qr_code'):
             logger.info(f"支付宝当面付二维码生成成功: {order_no}")
             return {
@@ -180,12 +214,13 @@ class AlipayService:
     def _format_private_key(raw: str) -> str:
         """格式化私钥为PEM格式"""
         raw = raw.strip()
+        label = 'RSA PRIVATE KEY' if '-----BEGIN RSA PRIVATE KEY-----' in raw else 'PRIVATE KEY'
         for tag in ('-----BEGIN RSA PRIVATE KEY-----', '-----END RSA PRIVATE KEY-----',
                      '-----BEGIN PRIVATE KEY-----', '-----END PRIVATE KEY-----'):
             raw = raw.replace(tag, '')
         raw = raw.replace('\n', '').replace('\r', '').replace(' ', '')
         lines = [raw[i:i + 64] for i in range(0, len(raw), 64)]
-        return f"-----BEGIN RSA PRIVATE KEY-----\n{chr(10).join(lines)}\n-----END RSA PRIVATE KEY-----"
+        return f"-----BEGIN {label}-----\n{chr(10).join(lines)}\n-----END {label}-----"
 
     @staticmethod
     def _format_public_key(raw: str) -> str:
@@ -202,7 +237,7 @@ class AlipayService:
     def generate_order_no() -> str:
         """生成唯一充值订单号"""
         ts = get_beijing_now_naive().strftime('%Y%m%d%H%M%S')
-        rand = ''.join(random.choices(string.digits, k=6))
+        rand = ''.join(random.SystemRandom().choices(string.digits, k=10))
         return f"RC{ts}{rand}"
 
     @staticmethod
