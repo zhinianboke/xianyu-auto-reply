@@ -36,7 +36,7 @@ async def unsettled_payment_ids(session: AsyncSession, ad_ids: list[int], *, loc
     statement = select(RechargeOrder).where(
         RechargeOrder.order_type == "ad",
         RechargeOrder.ad_id.in_(ad_ids),
-        RechargeOrder.status.in_(("pending", "failed", "paid")),
+        RechargeOrder.status.in_(("pending", "failed", "expired", "paid")),
     )
     rows = await session.execute(statement.with_for_update() if lock else statement)
     return {
@@ -44,7 +44,7 @@ async def unsettled_payment_ids(session: AsyncSession, ad_ids: list[int], *, loc
         for order in rows.scalars().all()
         if (
             (order.status == "paid" and order.ad_settled_at is None)
-            or order.status in {"pending", "failed"}
+            or order.status in {"pending", "failed", "expired"}
         )
     }
 

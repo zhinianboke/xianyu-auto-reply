@@ -1,7 +1,7 @@
 """支付渠道金额格式校验公共工具。
 
 功能：
-1. 校验码支付返回及回调的实际支付金额
+1. 校验码支付下单响应返回的最终订单金额
 2. 统一格式化为两位小数字符串，避免充值和广告付款重复实现
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ def normalize_zzcode_amount(value: Any) -> str:
     """校验码支付金额并格式化为两位小数，禁止静默舍入实际支付金额。
 
     Args:
-        value: 码支付下单响应或已验签回调中的 money 字段。
+        value: 码支付下单响应中的 money 字段。
     Returns:
         固定保留两位小数的金额字符串。
     Raises:
@@ -38,8 +38,3 @@ def normalize_zzcode_amount(value: Any) -> str:
     if amount != normalized:
         raise ValueError("码支付金额最多保留两位小数")
     return f"{normalized:.2f}"
-
-
-def zzcode_amount_is_confirmed(order: Any) -> bool:
-    """判断订单金额是否已由码支付下单响应或回调明确确认。"""
-    return bool(getattr(order, "zzcode_amount_confirmed", False))

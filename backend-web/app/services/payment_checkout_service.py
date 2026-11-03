@@ -17,11 +17,10 @@ from app.services.payment_config_service import (
     CHANNEL_ZZCODE,
     PaymentConfigService,
 )
-from app.services.zzcode_service import TRADE_SUCCESS, ZzcodeService
+from app.services.zzcode_service import TRADE_SUCCESS, ZzcodeOrderResultUnknownError, ZzcodeService
 from common.models.fund_flow import FundFlow
 from common.models.recharge_order import RechargeOrder
 from common.models.user_setting import UserSetting
-from common.utils.payment_amount import normalize_zzcode_amount, zzcode_amount_is_confirmed
 from common.utils.time_utils import get_beijing_now_naive
 
 logger = logging.getLogger(__name__)
@@ -104,43 +103,53 @@ class PaymentCheckoutService:
         await self.session.commit()
         try:
             target = await zzcode.create_order(order_no, amount, "用户余额充值", pay_type)
+        except ZzcodeOrderResultUnknownError as exc:
+            order = await self._lock_order(order_no)
+            if order and order.status == "paid":
+                return {"success": True, "code": 200, "message": "支付订单已完成", "data": self._payment_data(order)}
+            logger.error(
+                "码支付充值下单结果未知，保留待支付订单等待回调或人工核查: order_no=%s trade_no=%s exception=%s",
+                order_no, order.trade_no if order else None, exc,
+            )
+            message = "支付已通知但无法确认最终金额，请联系管理员" if order and order.trade_no else str(exc)
+            return {"success": False, "code": 40001, "message": message, "data": None}
         except ValueError as exc:
             order = await self._lock_order(order_no)
             if order and order.status == "paid":
                 return {"success": True, "code": 200, "message": "支付订单已完成", "data": self._payment_data(order)}
             if order and order.status == "pending":
+                # 无法读取下单结果时不能猜测唯一尾数后的最终金额；即使已经
+                # 收到成功通知，也保留交易号供人工核查，禁止按初始金额误入账。
                 order.status = "failed"
                 await self.session.commit()
+            if order and order.trade_no:
+                return {"success": False, "code": 40001, "message": "支付已通知但无法确认最终金额，请联系管理员", "data": None}
             return {"success": False, "code": 40001, "message": str(exc), "data": None}
-        actual_amount = amount
-        if target.get("money") not in (None, ""):
-            try:
-                actual_amount = normalize_zzcode_amount(target["money"])
-            except (InvalidOperation, TypeError, ValueError) as exc:
-                logger.exception("码支付下单返回金额无效: order_no=%s money=%s exception=%s", order_no, target.get("money"), exc)
-                order = await self._lock_order(order_no)
-                if order and order.status == "paid":
-                    self._apply_target(order, target)
-                    await self.session.commit()
-                    return {"success": True, "code": 200, "message": "支付订单已完成", "data": self._payment_data(order)}
-                if order and order.status == "pending":
-                    order.status = "failed"
-                    await self.session.commit()
-                return {"success": False, "code": 40001, "message": "码支付返回金额无效，请联系管理员", "data": None}
+        actual_amount = target.get("money") or amount
         order = await self._lock_order(order_no)
         if not order:
             return {"success": False, "code": 40001, "message": "支付订单不存在", "data": None}
-        if order.status == "pending":
-            order.amount = actual_amount
-            if target.get("money") not in (None, ""):
-                order.zzcode_amount_confirmed = True
-        elif order.status == "paid" and target.get("money") not in (None, "") and Decimal(order.amount) != Decimal(actual_amount):
+        if order.status in {"pending", "failed", "expired"}:
+            order.amount = str(actual_amount)
+            # 成功下单响应已经返回，此时订单最终应付金额已确定；即使上游未显式返回
+            # money，也按本系统提交的金额结算。失败/过期通知可能与下单响应交错到达，
+            # 仍需先保存最终金额，避免后续成功通知按初始金额入账。
+            order.zzcode_amount_confirmed = True
+        elif order.status == "paid" and target.get("money") not in (None, "") and Decimal(order.amount) != Decimal(str(actual_amount)):
             logger.error(
                 "码支付充值下单金额与已入账回调金额不一致: order_no=%s order_amount=%s upstream_amount=%s",
                 order_no, order.amount, actual_amount,
             )
         self._apply_target(order, target)
+        saved_trade_no = str(order.trade_no or "") if order.status != "paid" else ""
         await self.session.commit()
+        if saved_trade_no:
+            settled = await self._settle_saved_zzcode_recharge(order_no, saved_trade_no)
+            if settled:
+                return {"success": True, "code": 200, "message": "支付订单已完成", "data": self._payment_data(settled)}
+            return {"success": False, "code": 40001, "message": "支付已通知但余额入账失败，请联系管理员", "data": None}
+        if order.status in {"failed", "expired"}:
+            return {"success": False, "code": 40001, "message": "支付订单已失效，请重新发起充值", "data": None}
         return {"success": True, "code": 200, "message": "支付订单创建成功", "data": self._payment_data(order)}
 
     async def handle_alipay_notify(self, values: dict[str, Any]) -> bool:
@@ -235,30 +244,38 @@ class PaymentCheckoutService:
             except Exception as exc:
                 logger.exception("%s金额校验失败: order_no=%s order_amount=%s paid_amount=%s values=%s exception=%s", source, order_no, order.amount, paid_amount, values, exc)
                 return False
-        elif channel == CHANNEL_ZZCODE and order.order_type == "recharge":
-            try:
-                received_amount_text = normalize_zzcode_amount(paid_amount)
-            except (InvalidOperation, TypeError, ValueError) as exc:
-                logger.exception(
-                    "%s实付金额无效: order_no=%s order_amount=%s paid_amount=%s values=%s exception=%s",
-                    source, order_no, order.amount, paid_amount, values, exc,
-                )
-                return False
-            if order.status != "paid" and zzcode_amount_is_confirmed(order) and Decimal(order.amount) != Decimal(received_amount_text):
-                logger.error(
-                    "%s实付金额与码支付下单确认金额不匹配: order_no=%s order_amount=%s paid_amount=%s values=%s",
-                    source, order_no, order.amount, paid_amount, values,
-                )
-                return False
         if not trade_no:
             logger.error("%s缺少上游交易号: order_no=%s values=%s", source, order_no, values)
             return False
-        if order.status == "paid" and order.trade_no and order.trade_no != trade_no:
+        if order.trade_no and order.trade_no != trade_no:
             logger.error(
-                "%s交易号与已支付订单不匹配: order_no=%s order_trade_no=%s trade_no=%s values=%s",
+                "%s交易号与订单已记录交易号不匹配: order_no=%s order_trade_no=%s trade_no=%s values=%s",
                 source, order_no, order.trade_no, trade_no, values,
             )
             return False
+        if channel == CHANNEL_ZZCODE and order.status != "paid":
+            if not order.zzcode_amount_confirmed and not (
+                order.pay_target_kind or order.qr_code or order.pay_url
+            ):
+                logger.warning(
+                    "%s早于码支付下单结果落库，暂存交易号并等待下单请求主动结算: order_no=%s order_amount=%s notify_amount=%s values=%s",
+                    source, order_no, order.amount, paid_amount, values,
+                )
+                if not order.trade_no:
+                    order.trade_no = trade_no
+                    try:
+                        await self.session.commit()
+                    except IntegrityError as exc:
+                        await self.session.rollback()
+                        logger.exception(
+                            "%s暂存交易号唯一性冲突: order_no=%s trade_no=%s exception=%s",
+                            source, order_no, trade_no, exc,
+                        )
+                return False
+            logger.info(
+                "%s已验签，忽略通知金额并按订单金额结算: order_no=%s order_amount=%s notify_amount=%s",
+                source, order_no, order.amount, paid_amount,
+            )
         if order.order_type == "ad":
             if order.status not in {"pending", "failed", "expired", "paid"}:
                 logger.error("%s广告订单状态无效: order_no=%s status=%s values=%s", source, order_no, order.status, values)
@@ -268,7 +285,6 @@ class PaymentCheckoutService:
                     order, values, source=source,
                     amount_key="money" if channel == CHANNEL_ZZCODE else "total_amount",
                     verify_amount=channel == CHANNEL_ALIPAY,
-                    use_paid_amount=channel == CHANNEL_ZZCODE,
                 )
                 return True
             except Exception as exc:
@@ -279,12 +295,6 @@ class PaymentCheckoutService:
             logger.error("%s订单类型无效: order_no=%s order_type=%s values=%s", source, order_no, order.order_type, values)
             return False
         if order.status == "paid":
-            if channel == CHANNEL_ZZCODE and Decimal(order.amount) != Decimal(received_amount_text):
-                logger.error(
-                    "%s实付金额与已入账订单不匹配: order_no=%s order_amount=%s paid_amount=%s values=%s",
-                    source, order_no, order.amount, paid_amount, values,
-                )
-                return False
             if not order.trade_no:
                 order.trade_no = trade_no
                 try:
@@ -298,16 +308,33 @@ class PaymentCheckoutService:
             logger.error("%s订单状态或交易号无效: order_no=%s status=%s trade_no=%s", source, order_no, order.status, trade_no)
             return False
         try:
-            # 码支付可能通过尾数生成唯一付款金额；验签后的回调金额才是用户实付金额。
-            # 在余额和流水入账前同步覆盖订单金额，使回调先于下单响应时也按实付金额结算。
-            if channel == CHANNEL_ZZCODE:
-                order.amount = received_amount_text
-                order.zzcode_amount_confirmed = True
+            # 码支付通知 money 可能仍是原始金额，实际应付金额以下单响应写入的
+            # 订单金额为准；支付宝金额已在上方严格核对。
             await self._process_recharge_success(order, trade_no, channel)
             return True
-        except ValueError as exc:
+        except (InvalidOperation, ValueError) as exc:
+            await self.session.rollback()
             logger.error("%s充值入账失败: order_no=%s trade_no=%s exception=%s", source, order_no, trade_no, exc)
             return False
+
+    async def _settle_saved_zzcode_recharge(self, order_no: str, trade_no: str) -> RechargeOrder | None:
+        """下单响应落库后主动结算此前已验签、但早于下单响应到达的码支付通知。"""
+        try:
+            ok = await self._settle_notify(
+                order_no, trade_no, "", CHANNEL_ZZCODE, "码支付下单响应补偿",
+                {"out_trade_no": order_no, "trade_no": trade_no},
+            )
+            if not ok:
+                return None
+            order = await self._get_order_for_verify(order_no)
+            return order if order and order.status == "paid" else None
+        except Exception as exc:
+            await self.session.rollback()
+            logger.exception(
+                "码支付下单响应补偿入账异常: order_no=%s trade_no=%s exception=%s",
+                order_no, trade_no, exc,
+            )
+            return None
 
     async def _process_recharge_success(self, order: RechargeOrder, trade_no: str, channel: str) -> None:
         """锁定余额并原子写入余额、资金流水和支付状态。"""
@@ -337,13 +364,22 @@ class PaymentCheckoutService:
         order.status = "paid"
         order.trade_no = trade_no
         order.paid_at = get_beijing_now_naive()
+        order_no = order.order_no
+        user_id = order.user_id
+        order_amount = order.amount
         try:
             await self.session.commit()
         except IntegrityError as exc:
             await self.session.rollback()
-            logger.exception("充值交易号唯一性冲突: channel=%s order_no=%s trade_no=%s exception=%s", channel, order.order_no, trade_no, exc)
+            logger.exception(
+                "充值交易号唯一性冲突: channel=%s order_no=%s trade_no=%s exception=%s",
+                channel, order_no, trade_no, exc,
+            )
             raise ValueError("支付交易已被其他订单处理") from exc
-        logger.info("充值成功: channel=%s user_id=%s order_no=%s amount=%s balance_before=%s balance_after=%s", channel, order.user_id, order.order_no, order.amount, before, after)
+        logger.info(
+            "充值成功: channel=%s user_id=%s order_no=%s amount=%s balance_before=%s balance_after=%s",
+            channel, user_id, order_no, order_amount, before, after,
+        )
 
     async def _lock_order(self, order_no: str) -> RechargeOrder | None:
         """按订单号锁定并刷新订单状态。"""

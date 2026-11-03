@@ -39,7 +39,7 @@ class RechargeOrder(Base):
     )
     zzcode_amount_confirmed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0",
-        comment='码支付金额是否已由下单响应或已验签回调确认'
+        comment='码支付订单金额是否已确认'
     )
     callback_merchant_id: Mapped[Optional[str]] = mapped_column(
         String(128), nullable=True, comment='创建订单时使用的回调验签商户ID'

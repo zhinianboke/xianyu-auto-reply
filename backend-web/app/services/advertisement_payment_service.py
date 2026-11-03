@@ -8,17 +8,17 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.alipay_service import AlipayService
 from app.services.advertisement_orders import find_payment_order, lock_order_advertisement, payment_expired
+from app.services.alipay_service import AlipayService
 from app.services.payment_config_service import CHANNEL_ALIPAY, CHANNEL_ZZCODE, PaymentConfigService
-from app.services.zzcode_service import ZzcodeService
+from app.services.zzcode_service import ZzcodeOrderResultUnknownError, ZzcodeService
 from common.models.advertisement import Advertisement, AdStatus
 from common.models.fund_flow import FundFlow
 from common.models.recharge_order import RechargeOrder
 from common.models.user import User, UserRole
 from common.models.user_setting import UserSetting
 from common.schemas.common import ApiResponse
-from common.utils.payment_amount import normalize_zzcode_amount, zzcode_amount_is_confirmed
+from common.utils.payment_amount import normalize_zzcode_amount
 from common.utils.time_utils import get_beijing_now_naive
 
 
@@ -35,18 +35,25 @@ class AdvertisementPaymentService:
         ).with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
         if not ad:
             return ApiResponse(success=False, code=40001, message="广告不存在")
+        paid = await find_payment_order(self.session, ad.id, user_id, "paid")
+        if paid:
+            if paid.ad_settled_at:
+                return ApiResponse(
+                    success=True, message="支付订单已完成",
+                    data=self._serialize_payment(paid, ad.id),
+                )
+            return ApiResponse(success=False, code=40001, message="该广告已有已支付订单，请刷新列表或联系管理员")
         if ad.status != AdStatus.UNPAID:
             return ApiResponse(success=False, code=40001, message="该广告当前状态不可付款")
         try:
             amount = Decimal(ad.total_amount or "0")
-            if not amount.is_finite() or amount <= 0:
+            if not amount.is_finite() or amount <= 0 or amount.as_tuple().exponent < -2:
                 raise ValueError("广告费用信息异常")
         except (InvalidOperation, ValueError):
             return ApiResponse(success=False, code=40001, message="广告费用信息异常")
+        amount_text = f"{amount:.2f}"
         if not isinstance(ad.months, int) or not 1 <= ad.months <= 120:
             return ApiResponse(success=False, code=40001, message="广告购买月数异常，请联系管理员")
-        if await find_payment_order(self.session, ad.id, user_id, "paid"):
-            return ApiResponse(success=False, code=40001, message="该广告已有已支付订单，请刷新列表或联系管理员")
         pending = await find_payment_order(self.session, ad.id, user_id, "pending")
         if pending and not payment_expired(pending):
             try:
@@ -68,77 +75,88 @@ class AdvertisementPaymentService:
         config_service = PaymentConfigService(self.session)
         channel = await config_service.get_channel()
         order_no = AlipayService.generate_order_no()
+        saved_zzcode_trade_no = ""
         if channel == CHANNEL_ZZCODE:
             try:
                 resolved_type = await config_service.resolve_pay_type(pay_type)
                 zzcode = ZzcodeService(await config_service.get_zzcode_config())
             except ValueError as exc:
                 return ApiResponse(success=False, code=40001, message=str(exc))
-            order = RechargeOrder(order_no=order_no, user_id=user_id, amount=str(amount), order_type="ad",
+            order = RechargeOrder(order_no=order_no, user_id=user_id, amount=amount_text, order_type="ad",
                 channel=channel, pay_type=resolved_type, ad_id=ad.id, status="pending",
                 callback_merchant_id=str(zzcode.config["pid"]), callback_verify_key=str(zzcode.config["key"]),
                 created_at=get_beijing_now_naive())
             self.session.add(order)
             await self.session.commit()
             try:
-                target = await zzcode.create_order(order_no, f"{amount:.2f}", f"广告申请付款 - {ad.title}", resolved_type)
+                target = await zzcode.create_order(order_no, amount_text, f"广告申请付款 - {ad.title}", resolved_type)
+            except ZzcodeOrderResultUnknownError as exc:
+                await lock_order_advertisement(self.session, order_no, user_id=user_id, fallback_ad_id=ad.id)
+                locked_order = (await self.session.execute(select(RechargeOrder).where(
+                    RechargeOrder.order_no == order_no,
+                ).with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
+                if locked_order and locked_order.status == "paid" and locked_order.ad_settled_at:
+                    return ApiResponse(success=True, message="支付订单已完成", data=self._serialize_payment(locked_order, ad.id))
+                logger.error(
+                    "码支付广告下单结果未知，保留待支付订单等待回调或人工核查：ad_id={} order_no={} trade_no={} exception={}",
+                    ad.id, order_no, locked_order.trade_no if locked_order else None, exc,
+                )
+                message = "支付已通知但无法确认最终金额，请联系管理员" if locked_order and locked_order.trade_no else str(exc)
+                return ApiResponse(success=False, code=40001, message=message)
             except ValueError as exc:
+                await lock_order_advertisement(self.session, order_no, user_id=user_id, fallback_ad_id=ad.id)
                 locked_order = (await self.session.execute(select(RechargeOrder).where(
                     RechargeOrder.order_no == order_no,
                 ).with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
                 if locked_order and locked_order.status == "paid" and locked_order.ad_settled_at:
                     return ApiResponse(success=True, message="支付订单已完成", data=self._serialize_payment(locked_order, ad.id))
                 if locked_order and locked_order.status == "pending":
+                    # 无法读取下单结果时不能猜测唯一尾数后的最终金额；已收到
+                    # 成功通知也只保留交易号，禁止按广告原始费用误结算。
                     locked_order.status = "failed"
                     await self.session.commit()
+                if locked_order and locked_order.trade_no:
+                    return ApiResponse(success=False, code=40001, message="支付已通知但无法确认最终金额，请联系管理员")
                 return ApiResponse(success=False, code=40001, message=str(exc))
+            await lock_order_advertisement(self.session, order_no, user_id=user_id, fallback_ad_id=ad.id)
             order = (await self.session.execute(select(RechargeOrder).where(
                 RechargeOrder.order_no == order_no,
             ).with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
             if not order:
                 return ApiResponse(success=False, code=40001, message="支付订单不存在")
+            # 下单成功响应是唯一尾数最终金额的来源。失败/过期通知可能先于响应到达，
+            # 即使尚未暂存成功交易号，也必须保存最终金额供后续成功通知结算。
+            can_confirm_amount = order.status in {"pending", "failed", "expired"}
             if target.get("money") not in (None, ""):
-                try:
-                    actual_amount = normalize_zzcode_amount(target["money"])
-                except (InvalidOperation, TypeError, ValueError) as exc:
-                    if order.status == "pending":
-                        order.status = "failed"
-                        await self.session.commit()
-                        logger.opt(exception=exc).error(
-                            "码支付广告下单返回金额无效：ad_id={} order_no={} money={}",
-                            ad.id, order_no, target.get("money"),
-                        )
-                        return ApiResponse(success=False, code=40001, message="码支付返回金额无效，请联系管理员")
-                    if order.status != "paid":
-                        return ApiResponse(success=False, code=40001, message="码支付订单状态异常，请联系管理员")
-                    logger.opt(exception=exc).error(
-                        "码支付广告下单金额无效但订单已由回调结算：ad_id={} order_no={} money={}",
-                        ad.id, order_no, target.get("money"),
+                actual_amount = str(target["money"])
+                if can_confirm_amount:
+                    order.amount = actual_amount
+                elif order.status == "paid" and Decimal(order.amount) != Decimal(actual_amount):
+                    logger.error(
+                        "码支付广告下单金额与已结算回调金额不一致：ad_id={} order_no={} order_amount={} upstream_amount={}",
+                        ad.id, order_no, order.amount, actual_amount,
                     )
-                else:
-                    if order.status == "pending":
-                        order.amount = actual_amount
-                        order.zzcode_amount_confirmed = True
-                    elif order.status == "paid" and Decimal(order.amount) != Decimal(actual_amount):
-                        logger.error(
-                            "码支付广告下单金额与已结算回调金额不一致：ad_id={} order_no={} order_amount={} upstream_amount={}",
-                            ad.id, order_no, order.amount, actual_amount,
-                        )
+            if can_confirm_amount:
+                # 成功下单响应已经返回，最终应付金额以上游 money 为准；未返回
+                # money 时保留提交金额，回调通知不得再用自身 money 覆盖。
+                order.zzcode_amount_confirmed = True
             self._apply_target(order, target)
+            if can_confirm_amount and order.trade_no:
+                saved_zzcode_trade_no = str(order.trade_no)
         else:
             try:
                 alipay = AlipayService(await config_service.get_alipay_config())
             except ValueError as exc:
                 logger.opt(exception=exc).error("广告付款支付宝配置错误：ad_id={}", ad_id)
                 return ApiResponse(success=False, code=40001, message=f"支付宝配置错误：{exc}")
-            order = RechargeOrder(order_no=order_no, user_id=user_id, amount=str(amount), order_type="ad",
+            order = RechargeOrder(order_no=order_no, user_id=user_id, amount=amount_text, order_type="ad",
                 channel=CHANNEL_ALIPAY, ad_id=ad.id, status="pending",
                 callback_merchant_id=alipay.config["app_id"], callback_verify_key=alipay.config["alipay_public_key"],
                 created_at=get_beijing_now_naive())
             self.session.add(order)
             await self.session.commit()
             result = await alipay.create_f2f_pay({
-                "out_trade_no": order_no, "total_amount": str(amount), "subject": f"广告申请付款 - {ad.title}",
+                "out_trade_no": order_no, "total_amount": amount_text, "subject": f"广告申请付款 - {ad.title}",
                 "body": f"广告申请付款 ID:{ad.id}", "timeout_express": "30m",
             })
             order = (await self.session.execute(select(RechargeOrder).where(
@@ -156,6 +174,12 @@ class AdvertisementPaymentService:
             order.qr_code = result["qr_code"]
             order.pay_target_kind = "qrcode"
         await self.session.commit()
+        if saved_zzcode_trade_no:
+            return await self._settle_saved_zzcode_notify(
+                order_no, saved_zzcode_trade_no, user_id, ad.id,
+            )
+        if channel == CHANNEL_ZZCODE and order.status in {"failed", "expired"}:
+            return ApiResponse(success=False, code=40001, message="支付订单已失效，请重新生成支付订单")
         logger.info("广告付款订单创建成功：ad_id={} type={} channel={} order_no={} amount={}", ad.id, ad.ad_type.value, channel, order_no, order.amount)
         return ApiResponse(success=True, data=self._serialize_payment(order, ad.id))
 
@@ -247,7 +271,7 @@ class AdvertisementPaymentService:
             return ApiResponse(success=False, code=40001, message=str(exc))
 
     async def notify(self, order: RechargeOrder, notify_data: dict, *, source: str = "支付宝异步通知",
-        amount_key: str = "total_amount", verify_amount: bool = True, use_paid_amount: bool = False) -> None:
+        amount_key: str = "total_amount", verify_amount: bool = True) -> None:
         """校验实际支付金额并提交广告结算；失败由回调入口回滚并通知上游重试。
 
         Args:
@@ -256,17 +280,10 @@ class AdvertisementPaymentService:
             source: 回调来源说明，用于异常日志及错误信息。
             amount_key: 回调数据中的实付金额字段名。
             verify_amount: 是否要求实付金额严格等于订单金额，支付宝使用此模式。
-            use_paid_amount: 是否将回调实付金额作为订单最终金额，码支付使用此模式。
         Returns:
             无返回值；结算成功后提交订单、管理员余额和资金流水。
         """
-        if use_paid_amount:
-            paid_amount_text = normalize_zzcode_amount(notify_data.get(amount_key, ""))
-            if (order.status == "paid" or zzcode_amount_is_confirmed(order)) and Decimal(order.amount) != Decimal(paid_amount_text):
-                raise ValueError(f"{source}实付金额与码支付确认的广告订单金额不一致")
-            order.amount = paid_amount_text
-            order.zzcode_amount_confirmed = True
-        elif verify_amount:
+        if verify_amount:
             paid_amount = Decimal(str(notify_data.get(amount_key, '')))
             if not paid_amount.is_finite() or paid_amount != Decimal(order.amount):
                 raise ValueError(f'{source}金额与广告订单金额不一致')
@@ -282,6 +299,48 @@ class AdvertisementPaymentService:
             order.paid_at = get_beijing_now_naive()
         await self.settle(order)
         await self.session.commit()
+
+    async def _settle_saved_zzcode_notify(
+        self, order_no: str, trade_no: str, user_id: int, ad_id: int,
+    ) -> ApiResponse:
+        """下单响应落库后结算此前已验签、但早于下单响应到达的广告付款通知。"""
+        try:
+            await lock_order_advertisement(
+                self.session, order_no, user_id=user_id, fallback_ad_id=ad_id,
+            )
+            order = (await self.session.execute(select(RechargeOrder).where(
+                RechargeOrder.order_no == order_no,
+                RechargeOrder.user_id == user_id,
+                RechargeOrder.order_type == "ad",
+                RechargeOrder.ad_id == ad_id,
+            ).with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
+            if not order:
+                raise ValueError("广告支付订单不存在")
+            if order.channel != CHANNEL_ZZCODE:
+                raise ValueError("广告支付订单渠道不匹配")
+            if order.trade_no != trade_no:
+                raise ValueError("广告支付订单交易号不匹配")
+            if order.status == "paid" and order.ad_settled_at:
+                return ApiResponse(success=True, message="支付订单已完成", data=self._serialize_payment(order, ad_id))
+            if order.status not in {"pending", "failed", "expired"}:
+                raise ValueError("广告支付订单状态异常")
+            order.status = "paid"
+            order.paid_at = get_beijing_now_naive()
+            await self.settle(order, ad_id)
+            await self.session.commit()
+            return ApiResponse(success=True, message="支付订单已完成", data=self._serialize_payment(order, ad_id))
+        except (ValueError, InvalidOperation) as exc:
+            await self.session.rollback()
+            logger.opt(exception=exc).error(
+                "码支付广告下单响应补偿结算失败：ad_id={} order_no={}", ad_id, order_no,
+            )
+            return ApiResponse(success=False, code=40001, message=str(exc))
+        except Exception as exc:
+            await self.session.rollback()
+            logger.opt(exception=exc).error(
+                "码支付广告下单响应补偿结算异常：ad_id={} order_no={}", ad_id, order_no,
+            )
+            return ApiResponse(success=False, code=40001, message="支付已通知但广告结算失败，请联系管理员")
 
     @staticmethod
     def _apply_target(order: RechargeOrder, target: dict[str, str | None]) -> None:
