@@ -599,3 +599,85 @@ async def send_telegram_notification(config_data: Dict[str, Any], message: str) 
     except Exception as e:
         logger.error(f"📱 发送Telegram通知异常: {e}")
         return False
+
+
+async def send_to_notification_channels(
+    channels: list[Dict[str, Any]],
+    message: str,
+    *,
+    template_type: str | None = None,
+    template_context: Dict[str, Any] | None = None,
+    attachment_path: str | None = None,
+) -> bool:
+    """将同一条通知发送到多个已启用渠道。
+
+    Args:
+        channels: 渠道列表。每项至少包含 channel_type/type 与 channel_config/config；
+            可选 enabled（默认 True）、channel_name/name（仅日志）。
+        message: 系统默认正文；渠道配置了对应模板时优先渲染模板。
+        template_type: 模板类型（chat/delivery/account/listing），为空则不渲染模板。
+        template_context: 模板占位符上下文。
+        attachment_path: 邮件附件路径（仅 email 渠道使用）。
+
+    Returns:
+        至少一个渠道发送成功时返回 True。
+    """
+    from common.utils.notification_template import render_notification_template
+
+    if not channels:
+        return False
+
+    notification_sent = False
+    for channel in channels:
+        if not channel.get("enabled", True):
+            continue
+
+        channel_type = channel.get("channel_type") or channel.get("type")
+        channel_config = channel.get("channel_config")
+        if channel_config is None:
+            channel_config = channel.get("config")
+        channel_name = channel.get("channel_name") or channel.get("name") or "Unknown"
+
+        try:
+            config_data = parse_notification_config(channel_config)
+            channel_message = (
+                render_notification_template(
+                    config_data,
+                    template_type,
+                    template_context or {},
+                    message,
+                )
+                if template_type
+                else message
+            )
+
+            if channel_type in ("ding_talk", "dingtalk"):
+                await send_dingtalk_notification(config_data, channel_message)
+                notification_sent = True
+            elif channel_type in ("feishu", "lark"):
+                await send_feishu_notification(config_data, channel_message)
+                notification_sent = True
+            elif channel_type == "bark":
+                await send_bark_notification(config_data, channel_message)
+                notification_sent = True
+            elif channel_type == "email":
+                await send_email_notification(config_data, channel_message, attachment_path)
+                notification_sent = True
+            elif channel_type == "webhook":
+                await send_webhook_notification(config_data, channel_message)
+                notification_sent = True
+            elif channel_type in ("wechat", "wechat_work"):
+                await send_wechat_notification(config_data, channel_message)
+                notification_sent = True
+            elif channel_type == "telegram":
+                await send_telegram_notification(config_data, channel_message)
+                notification_sent = True
+            elif channel_type == "pushplus":
+                await send_pushplus_notification(config_data, channel_message)
+                notification_sent = True
+            else:
+                logger.warning(f"不支持的通知渠道类型: {channel_type}")
+        except Exception as notify_error:
+            logger.error(f"发送通知失败 ({channel_name}): {notify_error}")
+
+    return notification_sent
