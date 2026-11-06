@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class AIReplySettings(BaseModel):
@@ -19,6 +19,9 @@ class AIReplySettings(BaseModel):
     ai_time_range_end: str = ""
     manual_reply_ai_pause_enabled: bool = False
     manual_reply_ai_pause_minutes: int = Field(default=10, ge=1, le=1440)
+    ai_pre_reply_enabled: bool = False
+    ai_pre_reply_text: str = Field(default="收到，稍等一下", max_length=200)
+    ai_pre_reply_cooldown_minutes: int = Field(default=30, ge=1, le=1440)
 
 
 class AIReplySettingsUpdate(BaseModel):
@@ -40,6 +43,16 @@ class AIReplySettingsUpdate(BaseModel):
     # 不在更新入参上限制取值范围：前端清空输入会传 0，若在此用 ge/le 校验会触发
     # FastAPI 422（非统一 200 格式）。取值范围统一由 service 层 clamp 到 1-1440。
     manual_reply_ai_pause_minutes: int | None = None
+    ai_pre_reply_enabled: bool | None = None
+    ai_pre_reply_text: str | None = Field(default=None, max_length=200)
+    ai_pre_reply_cooldown_minutes: int | None = Field(default=None, ge=1, le=1440)
+
+    @model_validator(mode="after")
+    def validate_enabled_pre_reply_text(self) -> AIReplySettingsUpdate:
+        if self.ai_pre_reply_enabled is True and self.ai_pre_reply_text is not None:
+            if not self.ai_pre_reply_text.strip():
+                raise ValueError("开启AI生成前确认消息时，确认文案不能为空")
+        return self
 
 
 class AIModelListRequest(BaseModel):

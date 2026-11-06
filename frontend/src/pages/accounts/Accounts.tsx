@@ -207,6 +207,9 @@ export function Accounts() {
   const [aiTimeRangeEnd, setAiTimeRangeEnd] = useState('')
   const [aiManualReplyPauseEnabled, setAiManualReplyPauseEnabled] = useState(false)
   const [aiManualReplyPauseMinutes, setAiManualReplyPauseMinutes] = useState(10)
+  const [aiPreReplyEnabled, setAiPreReplyEnabled] = useState(false)
+  const [aiPreReplyText, setAiPreReplyText] = useState('收到，稍等一下')
+  const [aiPreReplyCooldownMinutes, setAiPreReplyCooldownMinutes] = useState(30)
   const [aiSettingsSaving, setAiSettingsSaving] = useState(false)
   const [aiSettingsLoading, setAiSettingsLoading] = useState(false)
   const [aiTesting, setAiTesting] = useState(false)
@@ -1453,6 +1456,9 @@ export function Accounts() {
       setAiTimeRangeEnd(formatTime(settings.ai_time_range_end))
       setAiManualReplyPauseEnabled(settings.manual_reply_ai_pause_enabled ?? false)
       setAiManualReplyPauseMinutes(settings.manual_reply_ai_pause_minutes ?? 10)
+      setAiPreReplyEnabled(settings.ai_pre_reply_enabled ?? false)
+      setAiPreReplyText(settings.ai_pre_reply_text ?? '收到，稍等一下')
+      setAiPreReplyCooldownMinutes(settings.ai_pre_reply_cooldown_minutes ?? 30)
     } catch (error) {
       const detail = getApiErrorMessage(error, '加载AI设置失败')
       addToast({ type: 'error', message: detail })
@@ -1545,6 +1551,14 @@ export function Accounts() {
         return
       }
     }
+    if (aiPreReplyEnabled && !aiPreReplyText.trim()) {
+      addToast({ type: 'warning', message: '开启AI生成前确认消息时，确认文案不能为空' })
+      return
+    }
+    if (!Number.isInteger(aiPreReplyCooldownMinutes) || aiPreReplyCooldownMinutes < 1 || aiPreReplyCooldownMinutes > 1440) {
+      addToast({ type: 'warning', message: '确认消息冷却时间须为1到1440分钟' })
+      return
+    }
     try {
       setAiSettingsSaving(true)
       const result = await updateAIReplySettings(aiSettingsAccount.id, {
@@ -1561,6 +1575,9 @@ export function Accounts() {
         ai_time_range_end: aiTimeRangeEnd,
         manual_reply_ai_pause_enabled: aiManualReplyPauseEnabled,
         manual_reply_ai_pause_minutes: aiManualReplyPauseMinutes,
+        ai_pre_reply_enabled: aiPreReplyEnabled,
+        ai_pre_reply_text: aiPreReplyText,
+        ai_pre_reply_cooldown_minutes: aiPreReplyCooldownMinutes,
       })
       if (!result.success) {
         addToast({ type: 'warning', message: result.message || 'AI配置未填写完整，无法开启AI回复' })
@@ -1589,6 +1606,14 @@ export function Accounts() {
       addToast({ type: 'warning', message: getAIConfigIncompleteMessage(missingItems) })
       return
     }
+    if (aiPreReplyEnabled && !aiPreReplyText.trim()) {
+      addToast({ type: 'warning', message: '开启AI生成前确认消息时，确认文案不能为空' })
+      return
+    }
+    if (!Number.isInteger(aiPreReplyCooldownMinutes) || aiPreReplyCooldownMinutes < 1 || aiPreReplyCooldownMinutes > 1440) {
+      addToast({ type: 'warning', message: '确认消息冷却时间须为1到1440分钟' })
+      return
+    }
     // 先保存设置再测试
     try {
       setAiTesting(true)
@@ -1606,6 +1631,9 @@ export function Accounts() {
         ai_time_range_end: aiTimeRangeEnd,
         manual_reply_ai_pause_enabled: aiManualReplyPauseEnabled,
         manual_reply_ai_pause_minutes: aiManualReplyPauseMinutes,
+        ai_pre_reply_enabled: aiPreReplyEnabled,
+        ai_pre_reply_text: aiPreReplyText,
+        ai_pre_reply_cooldown_minutes: aiPreReplyCooldownMinutes,
       })
       if (!saveResult.success) {
         addToast({ type: 'warning', message: saveResult.message || 'AI配置未填写完整，无法测试AI连接' })
@@ -3672,6 +3700,59 @@ export function Accounts() {
                             max="1440"
                           />
                           <span className="text-sm text-slate-500 dark:text-slate-400">分钟（1–1440）</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {aiEnabled && (
+                    <div className="bg-slate-50 dark:bg-slate-800/40 rounded-xl p-3.5 border border-slate-100 dark:border-slate-800 space-y-3">
+                      <div className="flex items-center justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-medium text-slate-900 dark:text-slate-100">AI生成前发送确认消息</p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">仅在即将调用AI生成时发送；关键词、默认回复和被拦截的消息不会发送。</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setAiPreReplyEnabled(value => !value)}
+                          className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                            aiPreReplyEnabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'
+                          }`}
+                          aria-label="切换AI生成前确认消息"
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                              aiPreReplyEnabled ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                      {aiPreReplyEnabled && (
+                        <div className="space-y-3">
+                          <div className="input-group">
+                            <label className="input-label">确认文案</label>
+                            <input
+                              type="text"
+                              value={aiPreReplyText}
+                              onChange={(e) => setAiPreReplyText(e.target.value)}
+                              className="input-ios"
+                              maxLength={200}
+                              placeholder="收到，稍等一下"
+                            />
+                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">最多200个字符；发送失败不会阻止最终AI回复。</p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <label className="input-label mb-0 shrink-0">冷却时间</label>
+                            <input
+                              type="number"
+                              value={aiPreReplyCooldownMinutes}
+                              onChange={(e) => setAiPreReplyCooldownMinutes(Number(e.target.value))}
+                              className="input-ios w-28"
+                              min="1"
+                              max="1440"
+                            />
+                            <span className="text-sm text-slate-500 dark:text-slate-400">分钟（按账号+买家+商品）</span>
+                          </div>
                         </div>
                       )}
                     </div>

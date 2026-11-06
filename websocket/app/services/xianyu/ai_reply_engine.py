@@ -16,7 +16,7 @@ import asyncio
 import json
 import time
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import httpx
 from loguru import logger
@@ -419,6 +419,9 @@ class AIReplyEngine:
             "ai_time_range_end": "",
             "manual_reply_ai_pause_enabled": False,
             "manual_reply_ai_pause_minutes": 10,
+            "ai_pre_reply_enabled": False,
+            "ai_pre_reply_text": "收到，稍等一下",
+            "ai_pre_reply_cooldown_minutes": 30,
         }
 
     def _extract_ai_settings(self, ai_settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -444,6 +447,19 @@ class AIReplyEngine:
         )
         payload["manual_reply_ai_pause_minutes"] = max(
             1, min(1440, int(payload.get("manual_reply_ai_pause_minutes", 10) or 10))
+        )
+        payload["ai_pre_reply_enabled"] = bool(
+            payload.get("ai_pre_reply_enabled", False)
+        )
+        payload["ai_pre_reply_text"] = str(
+            payload.get("ai_pre_reply_text", "收到，稍等一下") or ""
+        )
+        payload["ai_pre_reply_cooldown_minutes"] = max(
+            1,
+            min(
+                1440,
+                int(payload.get("ai_pre_reply_cooldown_minutes", 30) or 30),
+            ),
         )
         return payload
     
@@ -715,6 +731,9 @@ class AIReplyEngine:
         item_id: str,
         db_session: AsyncSession,
         skip_wait: bool = False,
+        pre_generation_callback: Optional[
+            Callable[[], Awaitable[Optional[bool]]]
+        ] = None,
     ) -> Optional[str]:
         """生成AI回复
         
@@ -727,6 +746,7 @@ class AIReplyEngine:
             item_id: 商品ID
             db_session: 数据库会话
             skip_wait: 是否跳过等待（默认False）
+            pre_generation_callback: 真正调用模型前的可选异步回调；显式返回False时取消模型调用
             
         Returns:
             AI回复或None
@@ -931,6 +951,34 @@ class AIReplyEngine:
                     settings.get("model_name"),
                 )
                 logger.info(f"【{cookie_id}】使用{provider_name} API生成回复 (provider_type={provider_type})")
+
+                # 所有本地确定性返回都已结束。仅在真正调用模型前执行可选回调，
+                # 并在回调前后复查人工接管，避免等待期间发生接管仍调用模型。
+                def takeover_active() -> bool:
+                    return pause_manager.is_chat_paused(chat_id, cookie_id) or (
+                        settings.get("manual_reply_ai_pause_enabled")
+                        and pause_manager.is_ai_reply_paused(cookie_id, user_id, item_id)
+                    )
+
+                if takeover_active():
+                    logger.info(f"【{cookie_id}】模型调用前检测到人工接管，跳过AI调用: chat_id={chat_id}")
+                    return None
+
+                if pre_generation_callback is not None:
+                    try:
+                        callback_result = await pre_generation_callback()
+                        if callback_result is False:
+                            logger.info(f"【{cookie_id}】模型调用前回调检测到人工接管，跳过AI调用: chat_id={chat_id}")
+                            return None
+                    except Exception as callback_exc:
+                        logger.warning(
+                            f"【{cookie_id}】模型调用前回调失败，继续生成最终回复: {callback_exc}"
+                        )
+
+                if takeover_active():
+                    logger.info(f"【{cookie_id}】模型调用前回调结束后检测到人工接管，跳过AI调用: chat_id={chat_id}")
+                    return None
+
                 if provider_type == "dashscope_app":
                     reply = await self._call_dashscope_api(settings, messages)
                 elif provider_type == "gemini":

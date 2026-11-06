@@ -197,6 +197,11 @@ xianyu_auto_reply/
 # ------------------------------------------
 test/
 tests/
+!tests/
+tests/*
+!tests/auto_reply_test_harness.py
+!tests/test_ai_pre_reply_runtime.py
+!tests/test_ai_pre_reply_settings.py
 
 # ------------------------------------------
 # 静态资源（根目录）

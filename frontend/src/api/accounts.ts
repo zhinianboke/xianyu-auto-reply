@@ -484,6 +484,9 @@ export interface AIReplySettings {
   ai_time_range_end?: string
   manual_reply_ai_pause_enabled?: boolean
   manual_reply_ai_pause_minutes?: number
+  ai_pre_reply_enabled?: boolean
+  ai_pre_reply_text?: string
+  ai_pre_reply_cooldown_minutes?: number
   // 兼容旧字段（前端内部使用）
   enabled?: boolean
 }
@@ -525,6 +528,15 @@ export const updateAIReplySettings = (cookieId: string, settings: Partial<AIRepl
   }
   if (settings.manual_reply_ai_pause_minutes !== undefined) {
     payload.manual_reply_ai_pause_minutes = settings.manual_reply_ai_pause_minutes
+  }
+  if (settings.ai_pre_reply_enabled !== undefined) {
+    payload.ai_pre_reply_enabled = settings.ai_pre_reply_enabled
+  }
+  if (settings.ai_pre_reply_text !== undefined) {
+    payload.ai_pre_reply_text = settings.ai_pre_reply_text
+  }
+  if (settings.ai_pre_reply_cooldown_minutes !== undefined) {
+    payload.ai_pre_reply_cooldown_minutes = settings.ai_pre_reply_cooldown_minutes
   }
   return put(`${AI_SETTINGS_PREFIX}/${cookieId}`, payload)
 }
