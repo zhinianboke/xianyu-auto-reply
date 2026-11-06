@@ -4,6 +4,9 @@
 """
 from __future__ import annotations
 
+import hmac
+import os
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 from loguru import logger
@@ -30,18 +33,18 @@ class SendMessageResponse(BaseModel):
 
 # ==================== 工具函数 ====================
 
-# API秘钥（从配置读取）
+# API秘钥（仅从环境变量读取，不提供默认值）
 def get_api_secret_key() -> str:
-    """获取API密钥"""
-    from app.core.config import get_settings
-    settings = get_settings()
-    # 优先从环境变量读取，否则使用默认值
-    return getattr(settings, 'api_secret_key', 'xianyu_api_secret_2024')
+    """获取API密钥：环境变量 MESSAGE_SEND_API_KEY"""
+    return os.getenv("MESSAGE_SEND_API_KEY", "").strip()
 
 
 def verify_api_key(api_key: str) -> bool:
-    """验证API秘钥"""
-    return api_key == get_api_secret_key()
+    """验证API秘钥；未配置密钥时接口视为禁用，一律拒绝"""
+    secret = get_api_secret_key()
+    if not secret:
+        return False
+    return hmac.compare_digest(api_key.encode("utf-8"), secret.encode("utf-8"))
 
 
 def clean_param(param_str: str) -> str:
@@ -78,7 +81,7 @@ async def send_message(request: SendMessageRequest):
         
         # 验证秘钥
         if not verify_api_key(cleaned_api_key):
-            logger.warning(f"API秘钥验证失败: {cleaned_api_key}")
+            logger.warning("API秘钥验证失败（未配置 MESSAGE_SEND_API_KEY 或秘钥不匹配）")
             return SendMessageResponse(
                 success=False,
                 message="API秘钥验证失败"
