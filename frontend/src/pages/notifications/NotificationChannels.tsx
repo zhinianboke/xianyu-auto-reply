@@ -106,12 +106,32 @@ const channelTypes = [
 
 type ChannelType = typeof channelTypes[number]['type']
 
-type NotificationTemplateType = 'chat' | 'delivery' | 'account'
+type NotificationTemplateType = 'chat' | 'delivery' | 'account' | 'monitor'
+type NotificationEventType = NotificationTemplateType
+type NotificationEventSettings = Record<NotificationEventType, boolean>
+
+const notificationEventDefinitions: Array<{
+  type: NotificationEventType
+  label: string
+}> = [
+  { type: 'chat', label: '聊天消息通知' },
+  { type: 'delivery', label: '自动发货通知' },
+  { type: 'account', label: '账号状态通知' },
+  { type: 'monitor', label: '上新监控通知' },
+]
+
+const defaultNotificationEvents: NotificationEventSettings = {
+  chat: true,
+  delivery: true,
+  account: true,
+  monitor: true,
+}
 
 const templateConfigKeys: Record<NotificationTemplateType, string> = {
   chat: 'chat_template',
   delivery: 'delivery_template',
   account: 'account_template',
+  monitor: 'monitor_template',
 }
 
 const templateVariables: Record<NotificationTemplateType, Array<{ name: string; label: string }>> = {
@@ -153,6 +173,21 @@ const templateVariables: Record<NotificationTemplateType, Array<{ name: string; 
     { name: 'verification_info', label: '验证信息' },
     { name: 'time', label: '通知时间' },
   ],
+  monitor: [
+    { name: 'task_name', label: '监控任务名称' },
+    { name: 'task_id', label: '监控任务 ID' },
+    { name: 'keyword', label: '搜索关键词' },
+    { name: 'item_id', label: '商品 ID' },
+    { name: 'title', label: '商品标题' },
+    { name: 'price', label: '商品价格' },
+    { name: 'area', label: '商品地区' },
+    { name: 'seller_nick', label: '卖家昵称' },
+    { name: 'seller_credit', label: '卖家信用' },
+    { name: 'free_shipping', label: '是否包邮' },
+    { name: 'tags', label: '商品标签' },
+    { name: 'item_url', label: '商品链接' },
+    { name: 'time', label: '通知时间' },
+  ],
 }
 
 const defaultTemplates: Record<NotificationTemplateType, string> = {
@@ -181,12 +216,25 @@ const defaultTemplates: Record<NotificationTemplateType, string> = {
 详情: {{detail}}
 
 请检查账号状态。`,
+  monitor: `【闲鱼商品监控】
+任务: {{task_name}}
+
+商品: {{title}}
+价格: {{price}}
+地区: {{area}}
+卖家: {{seller_nick}}
+卖家信用: {{seller_credit}}
+包邮: {{free_shipping}}
+标签: {{tags}}
+链接: {{item_url}}
+时间: {{time}}`,
 }
 
 const templateDefinitions: Array<{ type: NotificationTemplateType; label: string }> = [
   { type: 'chat', label: '聊天消息模板' },
   { type: 'delivery', label: '自动发货模板' },
   { type: 'account', label: '账号状态模板' },
+  { type: 'monitor', label: '商品监控模板' },
 ]
 
 const getTemplateValidationError = (template: string, templateType: NotificationTemplateType): string | null => {
@@ -209,8 +257,18 @@ const getTemplateValidationError = (template: string, templateType: Notification
 const splitTemplateConfig = (config?: Record<string, unknown>) => {
   const templates: Record<NotificationTemplateType, string> = { ...defaultTemplates }
   const channelConfig: Record<string, unknown> = {}
+  const notificationEvents: NotificationEventSettings = { ...defaultNotificationEvents }
 
   for (const [key, value] of Object.entries(config || {})) {
+    if (key === 'notification_events' && value && typeof value === 'object' && !Array.isArray(value)) {
+      const savedEvents = value as Record<string, unknown>
+      for (const definition of notificationEventDefinitions) {
+        if (typeof savedEvents[definition.type] === 'boolean') {
+          notificationEvents[definition.type] = savedEvents[definition.type] as boolean
+        }
+      }
+      continue
+    }
     const templateType = templateDefinitions.find((definition) => templateConfigKeys[definition.type] === key)?.type
     if (templateType) {
       if (typeof value === 'string' && value.trim()) {
@@ -221,7 +279,7 @@ const splitTemplateConfig = (config?: Record<string, unknown>) => {
     }
   }
 
-  return { templates, channelConfig }
+  return { templates, channelConfig, notificationEvents }
 }
 
 const channelTypeLabels: Record<string, string> = Object.fromEntries(
@@ -239,6 +297,7 @@ export function NotificationChannels() {
   const [formName, setFormName] = useState('')
   const [formConfig, setFormConfig] = useState('')
   const [formTemplates, setFormTemplates] = useState<Record<NotificationTemplateType, string>>({ ...defaultTemplates })
+  const [formNotificationEvents, setFormNotificationEvents] = useState<NotificationEventSettings>({ ...defaultNotificationEvents })
   const [formEnabled, setFormEnabled] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -346,6 +405,7 @@ export function NotificationChannels() {
       setFormConfig('')
     }
     setFormTemplates({ ...defaultTemplates })
+    setFormNotificationEvents({ ...defaultNotificationEvents })
     setFormEnabled(true)
     setIsModalOpen(true)
   }
@@ -357,7 +417,7 @@ export function NotificationChannels() {
     setEditingChannel(channel)
     setFormName(channel.name)
     // 编辑时如果配置为空，也填充默认样例
-    const { templates, channelConfig } = splitTemplateConfig(channel.config)
+    const { templates, channelConfig, notificationEvents } = splitTemplateConfig(channel.config)
     if (Object.keys(channelConfig).length > 0) {
       setFormConfig(JSON.stringify(channelConfig, null, 2))
     } else if (typeConfig?.defaultConfig) {
@@ -366,6 +426,7 @@ export function NotificationChannels() {
       setFormConfig('')
     }
     setFormTemplates(templates)
+    setFormNotificationEvents(notificationEvents)
     setFormEnabled(channel.enabled)
     setIsModalOpen(true)
   }
@@ -409,6 +470,8 @@ export function NotificationChannels() {
           config[templateConfigKeys[definition.type]] = template
         }
       }
+
+      config.notification_events = { ...formNotificationEvents }
 
       const data = {
         name: formName.trim(),
@@ -591,7 +654,19 @@ export function NotificationChannels() {
       {/* 配置弹窗 */}
       {isModalOpen && selectedType && (
         <div className="modal-overlay">
-          <div className="modal-content max-w-lg max-h-[90vh] overflow-y-auto">
+          <div
+            className="modal-content relative"
+            style={{
+              width: 'min(42rem, calc(100vw - 2rem))',
+              height: 'min(85vh, calc(100vh - 2rem))',
+              minWidth: 'min(36rem, calc(100vw - 2rem))',
+              minHeight: 'min(32rem, calc(100vh - 2rem))',
+              maxWidth: 'calc(100vw - 2rem)',
+              maxHeight: 'calc(100vh - 2rem)',
+              overflow: 'hidden',
+              resize: 'both',
+            }}
+          >
             <div className="modal-header flex items-center justify-between">
               <h2 className="text-lg font-semibold">
                 {editingChannel ? '编辑' : '配置'}{channelTypeLabels[selectedType]}
@@ -623,6 +698,78 @@ export function NotificationChannels() {
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                     {getConfigHint(selectedType)}
                   </p>
+                </div>
+                <div>
+                  <p className="input-label">通知事件开关</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    关闭某一事件通知后，该渠道不再接收对应类型的通知。
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+                  <div className="flex items-center justify-between rounded-lg bg-blue-50/70 dark:bg-blue-900/20 px-3 py-2">
+                    <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">全部通知</p>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-label="全部通知"
+                      aria-checked={notificationEventDefinitions.every(({ type }) => formNotificationEvents[type])}
+                      data-testid="notification-event-all"
+                      onClick={() => {
+                        const nextValue = !notificationEventDefinitions.every(({ type }) => formNotificationEvents[type])
+                        setFormNotificationEvents({
+                          chat: nextValue,
+                          delivery: nextValue,
+                          account: nextValue,
+                          monitor: nextValue,
+                        })
+                      }}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        notificationEventDefinitions.every(({ type }) => formNotificationEvents[type])
+                          ? 'bg-blue-600'
+                          : 'bg-slate-300 dark:bg-slate-600'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          notificationEventDefinitions.every(({ type }) => formNotificationEvents[type])
+                            ? 'translate-x-6'
+                            : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {notificationEventDefinitions.map((definition) => (
+                      <div
+                        key={definition.type}
+                        className="flex items-center justify-between gap-3 rounded-lg border border-slate-100 dark:border-slate-700 px-3 py-2"
+                      >
+                        <p className="min-w-0 text-sm font-medium text-slate-700 dark:text-slate-200">{definition.label}</p>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-label={definition.label}
+                          aria-checked={formNotificationEvents[definition.type]}
+                          data-testid={`notification-event-${definition.type}`}
+                          onClick={() => setFormNotificationEvents((events) => ({
+                            ...events,
+                            [definition.type]: !events[definition.type],
+                          }))}
+                          className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                            formNotificationEvents[definition.type]
+                              ? 'bg-blue-600'
+                              : 'bg-slate-300 dark:bg-slate-600'
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                              formNotificationEvents[definition.type] ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
                 <div className="border-t border-slate-200 dark:border-slate-700 pt-4 space-y-4">
                   <div>

@@ -68,11 +68,19 @@ async def send_dingtalk_notification(config_data: Dict[str, Any], message: str) 
             sign = base64.b64encode(hmac_code).decode('utf-8')
             webhook_url += f'&timestamp={timestamp}&sign={sign}'
 
+        # 钉钉机器人使用 Markdown。Markdown 会把普通单换行合并成同一段，
+        # 为每个非空行补两个尾随空格，使模板中的换行按原样展示。
+        normalized_message = str(message or "").replace("\r\n", "\n").replace("\r", "\n")
+        markdown_message = "\n".join(
+            line if not line or line.endswith("  ") else f"{line}  "
+            for line in normalized_message.split("\n")
+        )
+
         data = {
             "msgtype": "markdown",
             "markdown": {
                 "title": "闲鱼自动回复通知",
-                "text": message
+                "text": markdown_message
             }
         }
 

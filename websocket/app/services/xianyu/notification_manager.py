@@ -27,7 +27,10 @@ from common.utils.notification_utils import (
 )
 from common.services.token_api_mode import TOKEN_API_NAMES
 from common.utils.text_utils import safe_str
-from common.utils.notification_template import render_notification_template
+from common.utils.notification_template import (
+    is_notification_event_enabled,
+    render_notification_template,
+)
 
 
 class NotificationManager:
@@ -439,6 +442,13 @@ class NotificationManager:
 
             try:
                 config_data = parse_notification_config(channel_config)
+                if template_type and not is_notification_event_enabled(config_data, template_type):
+                    logger.info(
+                        "📱 通知渠道 {} 已关闭 {} 事件，跳过发送",
+                        notification.get('channel_name', 'Unknown'),
+                        template_type,
+                    )
+                    continue
                 logger.info(f"📱 解析后配置: {config_data}")
                 channel_message = render_notification_template(
                     config_data,

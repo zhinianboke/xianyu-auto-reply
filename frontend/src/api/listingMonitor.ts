@@ -34,6 +34,15 @@ export interface ListingMonitorTask {
   price_min?: number | null
   price_max?: number | null
   publish_days?: number | null
+  personal_only: boolean
+  free_shipping_only: boolean
+  region_province?: string | null
+  region_city?: string | null
+  region_district?: string | null
+  include_keywords: string[]
+  exclude_keywords: string[]
+  min_seller_credit_level?: number | null
+  notification_channel_ids: number[]
   interval_minutes: number
   collect_pages: number
   account_ids: string[]
@@ -91,6 +100,15 @@ export interface ListingMonitorTaskSaveParams {
   price_min?: number | null
   price_max?: number | null
   publish_days?: number | null
+  personal_only?: boolean
+  free_shipping_only?: boolean
+  region_province?: string | null
+  region_city?: string | null
+  region_district?: string | null
+  include_keywords?: string[]
+  exclude_keywords?: string[]
+  min_seller_credit_level?: number | null
+  notification_channel_ids?: number[]
   interval_minutes: number
   collect_pages: number
   account_ids: string[]
@@ -278,6 +296,9 @@ export interface ListingMonitorItem {
   seller_avatar?: string | null
   want_count?: string | null
   tags?: string | null
+  is_free_shipping?: boolean | null
+  seller_credit_level?: number | null
+  seller_credit_label?: string | null
   publish_time?: string | null
   target_url?: string | null
   has_detail?: boolean
