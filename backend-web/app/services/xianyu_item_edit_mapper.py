@@ -226,7 +226,7 @@ def _map_videos(detail: dict[str, Any]) -> list[dict[str, Any]]:
 
     editdetail 的 imageInfoDOList 里 type 非 0 的条目即视频（含 videoUrl/mediaCloudFileId 等）。
     编辑弹窗需要能播放预览（用 videoUrl 作为 url），提交时又要能让后端认出这是平台已有视频
-    并原样回传（靠 file_id=mediaCloudFileId 与提交时重新拉取的快照匹配），避免全量覆盖丢视频，
+    并原样回传（靠 mediaCloudFileId 或平台回传的 videoId 匹配快照），避免全量覆盖丢视频，
     也避免对平台已有视频做无意义的二次上传。
 
     Args:
@@ -239,7 +239,7 @@ def _map_videos(detail: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(entry, dict) or as_int(entry.get("type")) == 0:
             continue
         video_url = _text(entry.get("videoUrl"))
-        file_id = _text(entry.get("mediaCloudFileId"))
+        file_id = _text(entry.get("mediaCloudFileId") or entry.get("videoId"))
         if not video_url or not file_id:
             continue
         videos.append(
