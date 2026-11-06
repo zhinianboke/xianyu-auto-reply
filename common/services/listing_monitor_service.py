@@ -21,6 +21,7 @@ from common.models.listing_monitor_task import ListingMonitorTask
 from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_log import ListingMonitorLog
 from common.models.listing_monitor_category import ListingMonitorCategory
+from common.models.notification_channel import NotificationChannel
 from common.models.xy_account import XYAccount
 from common.models.user import User
 from common.services.listing_monitor_category_access import ensure_category_accessible
@@ -87,6 +88,15 @@ def _task_to_dict(task: ListingMonitorTask) -> Dict[str, Any]:
         "price_min": float(task.price_min) if task.price_min is not None else None,
         "price_max": float(task.price_max) if task.price_max is not None else None,
         "publish_days": task.publish_days,
+        "personal_only": bool(task.personal_only),
+        "free_shipping_only": bool(task.free_shipping_only),
+        "region_province": task.region_province,
+        "region_city": task.region_city,
+        "region_district": task.region_district,
+        "include_keywords": list(task.include_keywords or []),
+        "exclude_keywords": list(task.exclude_keywords or []),
+        "min_seller_credit_level": task.min_seller_credit_level,
+        "notification_channel_ids": list(task.notification_channel_ids or []),
         "interval_minutes": task.interval_minutes,
         "collect_pages": task.collect_pages,
         "proxy_url": task.proxy_url,
@@ -144,6 +154,9 @@ def _item_to_dict(item: ListingMonitorItem, task_keyword: Optional[str] = None) 
         "seller_avatar": item.seller_avatar,
         "want_count": item.want_count,
         "tags": item.tags,
+        "is_free_shipping": item.is_free_shipping,
+        "seller_credit_level": item.seller_credit_level,
+        "seller_credit_label": item.seller_credit_label,
         "publish_time": safe_isoformat(item.publish_time),
         "target_url": item.target_url,
         "has_detail": bool(item.detail_json),
@@ -267,6 +280,79 @@ class ListingMonitorService:
         # 降价监控不使用上新天数筛选（仅上新监控有效）
         if payload.get("monitor_type") == "price_drop" and "publish_days" in payload:
             payload["publish_days"] = None
+
+        # 商品后置筛选（搜索接口不完整支持这些条件，采集后、下单前统一执行）
+        if "personal_only" in data or not partial:
+            payload["personal_only"] = bool(data.get("personal_only", True))
+        if "free_shipping_only" in data or not partial:
+            payload["free_shipping_only"] = bool(data.get("free_shipping_only", False))
+
+        for field, label in (
+            ("region_province", "省份"),
+            ("region_city", "城市"),
+            ("region_district", "区县"),
+        ):
+            if field in data or not partial:
+                value = str(data.get(field) or "").strip()
+                if len(value) > 50:
+                    raise ValueError(f"{label}长度不能超过50个字符")
+                payload[field] = value or None
+
+        for field, label in (
+            ("include_keywords", "必须包含关键词"),
+            ("exclude_keywords", "排除关键词"),
+        ):
+            if field in data or not partial:
+                values = data.get(field) or []
+                if not isinstance(values, (list, tuple, set)):
+                    raise ValueError(f"{label}格式不正确")
+                cleaned: List[str] = []
+                for raw in values:
+                    value = str(raw).strip()
+                    if len(value) > 100:
+                        raise ValueError(f"{label}单项长度不能超过100个字符")
+                    if value and value not in cleaned:
+                        cleaned.append(value)
+                if len(cleaned) > 30:
+                    raise ValueError(f"{label}最多配置30项")
+                payload[field] = cleaned
+
+        if "min_seller_credit_level" in data or not partial:
+            raw_credit = data.get("min_seller_credit_level")
+            if raw_credit in (None, "", 0, "0"):
+                payload["min_seller_credit_level"] = None
+            else:
+                try:
+                    credit_level = int(raw_credit)
+                except (TypeError, ValueError):
+                    raise ValueError("最低卖家信用等级格式不正确")
+                if credit_level < 1 or credit_level > 5:
+                    raise ValueError("最低卖家信用等级必须为1~5")
+                payload["min_seller_credit_level"] = credit_level
+
+        if "notification_channel_ids" in data or not partial:
+            raw_channel_ids = data.get("notification_channel_ids") or []
+            if not isinstance(raw_channel_ids, (list, tuple, set)):
+                raise ValueError("通知渠道列表格式不正确")
+            channel_ids: List[int] = []
+            for raw_id in raw_channel_ids:
+                try:
+                    channel_id = int(raw_id)
+                except (TypeError, ValueError):
+                    raise ValueError("通知渠道ID格式不正确")
+                if channel_id > 0 and channel_id not in channel_ids:
+                    channel_ids.append(channel_id)
+            if channel_ids:
+                stmt = select(NotificationChannel.id).where(
+                    NotificationChannel.id.in_(channel_ids),
+                    NotificationChannel.enabled.is_(True),
+                )
+                if owner_id is not None:
+                    stmt = stmt.where(NotificationChannel.owner_id == owner_id)
+                valid_ids = set((await self.session.execute(stmt)).scalars().all())
+                if valid_ids != set(channel_ids):
+                    raise ValueError("通知渠道不存在、未启用或无权使用")
+            payload["notification_channel_ids"] = channel_ids
 
         # 任务间隔
         if "interval_minutes" in data or not partial:

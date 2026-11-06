@@ -12,6 +12,14 @@ TEMPLATE_CONFIG_KEYS = {
     "chat": "chat_template",
     "delivery": "delivery_template",
     "account": "account_template",
+    "monitor": "monitor_template",
+}
+
+NOTIFICATION_EVENT_KEYS = {
+    "chat": "chat",
+    "delivery": "delivery",
+    "account": "account",
+    "monitor": "monitor",
 }
 
 TEMPLATE_VARIABLES = {
@@ -53,6 +61,21 @@ TEMPLATE_VARIABLES = {
         "verification_info",
         "time",
     },
+    "monitor": {
+        "task_name",
+        "task_id",
+        "keyword",
+        "item_id",
+        "title",
+        "price",
+        "area",
+        "seller_nick",
+        "seller_credit",
+        "free_shipping",
+        "tags",
+        "item_url",
+        "time",
+    },
 }
 
 _PLACEHOLDER_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
@@ -86,6 +109,7 @@ def validate_notification_templates(config_data: Mapping[str, Any] | None) -> st
         "chat": "聊天消息",
         "delivery": "自动发货",
         "account": "账号异常",
+        "monitor": "商品监控",
     }
     for template_type, config_key in TEMPLATE_CONFIG_KEYS.items():
         if config_key not in config_data or config_data[config_key] is None:
@@ -124,3 +148,26 @@ def render_notification_template(
         return "未知" if value is None else str(value)
 
     return _PLACEHOLDER_RE.sub(replace_placeholder, template)
+
+
+def is_notification_event_enabled(
+    config_data: Mapping[str, Any] | None,
+    event_type: str,
+) -> bool:
+    """判断渠道是否允许发送指定事件。
+
+    旧渠道没有 ``notification_events`` 配置时默认开启，保证升级后行为兼容。
+    新配置中的值只接受布尔值；字符串形式同时兼容常见的 true/false 表达。
+    """
+    event_key = NOTIFICATION_EVENT_KEYS.get(event_type)
+    if not event_key:
+        return True
+
+    events = (config_data or {}).get("notification_events")
+    if not isinstance(events, Mapping) or event_key not in events:
+        return True
+
+    value = events[event_key]
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off", "disabled"}
+    return bool(value)

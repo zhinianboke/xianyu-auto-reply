@@ -34,7 +34,10 @@ from common.models.xy_order import XYOrder
 from common.db.session import async_session_maker
 from common.db.redis_client import distributed_lock
 from common.utils.default_reply_api import call_reply_api
-from common.utils.notification_template import render_notification_template
+from common.utils.notification_template import (
+    is_notification_event_enabled,
+    render_notification_template,
+)
 from common.services.remote_location_message_api import (
     RemoteLocationMessageError,
     fetch_remote_location_message,
@@ -1152,6 +1155,12 @@ class AutoReplyService:
                     )
                     
                     config_data = parse_notification_config(channel_config)
+                    if not is_notification_event_enabled(config_data, "chat"):
+                        logger.info(
+                            f"【{self.cookie_id}】通知渠道 {notification.get('channel_name', 'Unknown')} "
+                            "已关闭聊天消息通知，跳过发送"
+                        )
+                        continue
                     channel_message = render_notification_template(
                         config_data,
                         "chat",
