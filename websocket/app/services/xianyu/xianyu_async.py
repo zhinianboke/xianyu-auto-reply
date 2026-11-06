@@ -2066,7 +2066,15 @@ class XianyuAsync:
             except Exception as reg_e:
                 logger.warning(f"【{self.cookie_id}】注册发送结果检测失败（不影响发送）: {self._safe_str(reg_e)}")
 
-            await websocket.send(msg_str)
+            try:
+                await websocket.send(msg_str)
+            except BaseException:
+                # 失败或取消时不会把 Future 交给上层，必须在本层清理。
+                if registered_mid is not None:
+                    self._pending_mid_futures.pop(registered_mid, None)
+                if send_future is not None and not send_future.done():
+                    send_future.cancel()
+                raise
             logger.info(f"【{self.cookie_id}】发送消息成功: {content[:50]}...")
             return {
                 "success": True,

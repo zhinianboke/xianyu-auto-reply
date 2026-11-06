@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import time
 import traceback
@@ -32,7 +33,7 @@ from common.models.auto_reply_message_log import XYAutoReplyMessageLog
 from common.models.user_setting import UserSetting
 from common.models.xy_order import XYOrder
 from common.db.session import async_session_maker
-from common.db.redis_client import distributed_lock
+from common.db.redis_client import distributed_lock, get_redis_client
 from common.utils.default_reply_api import call_reply_api
 from common.utils.notification_template import render_notification_template
 from common.services.remote_location_message_api import (
@@ -242,6 +243,100 @@ class AutoReplyService:
         else:
             result["content"] = content
         return result
+
+    @staticmethod
+    def _build_ai_pre_reply_cooldown_key(
+        account_id: str, buyer_id: str, item_id: str
+    ) -> str:
+        scope = "\x1f".join((str(account_id), str(buyer_id), str(item_id or "")))
+        digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()
+        return f"ai_pre_reply:cooldown:{digest}"
+
+    async def _claim_ai_pre_reply_cooldown(
+        self, buyer_id: str, item_id: str, cooldown_minutes: int
+    ) -> bool:
+        """使用 Redis 原子占位确认消息冷却；Redis 异常时安全跳过确认消息。"""
+        cooldown_seconds = max(1, min(1440, int(cooldown_minutes or 30))) * 60
+        key = self._build_ai_pre_reply_cooldown_key(
+            self.cookie_id, buyer_id, item_id
+        )
+        try:
+            redis_client = await get_redis_client()
+            return bool(
+                await redis_client.set(
+                    key,
+                    "1",
+                    nx=True,
+                    ex=cooldown_seconds,
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                f"【{self.cookie_id}】AI生成前确认消息冷却占位失败，跳过确认消息: {exc}"
+            )
+            return False
+
+    def _is_ai_takeover_active(
+        self,
+        ai_settings: Dict[str, Any],
+        chat_id: str,
+        buyer_id: str,
+        item_id: str,
+    ) -> bool:
+        """检查整段会话接管及买家+商品维度的 AI 专用暂停。"""
+        return pause_manager.is_chat_paused(chat_id, self.cookie_id) or (
+            ai_settings.get("manual_reply_ai_pause_enabled")
+            and pause_manager.is_ai_reply_paused(
+                self.cookie_id, buyer_id, item_id or ""
+            )
+        )
+
+    async def _track_ai_pre_reply_send_result(
+        self,
+        send_future,
+        mid: Optional[str],
+        pre_reply_trace: Dict[str, Any],
+    ) -> None:
+        """复用文本发送回执等待路径，消费 Future 并记录平台拦截结果。"""
+        wait_fn = getattr(self.xianyu_instance, "wait_send_reject_reason", None)
+        if not callable(wait_fn):
+            pre_reply_trace["send_status"] = "unknown"
+            return
+        try:
+            reject_reason = await wait_fn(send_future, mid)
+            if reject_reason:
+                pre_reply_trace["send_status"] = "failed"
+                pre_reply_trace["reject_reason"] = str(reject_reason)
+                logger.warning(
+                    f"【{self.cookie_id}】AI生成前确认消息被平台拦截: {reject_reason}"
+                )
+            else:
+                pre_reply_trace["send_status"] = "success"
+        except Exception as exc:
+            pre_reply_trace["send_status"] = "unknown"
+            pre_reply_trace["response_error"] = str(exc)
+            logger.warning(
+                f"【{self.cookie_id}】AI生成前确认消息回执检测异常: {exc}"
+            )
+
+    def _spawn_ai_pre_reply_send_result_check(
+        self,
+        send_future,
+        mid: Optional[str],
+        pre_reply_trace: Dict[str, Any],
+    ):
+        """后台等待确认消息回执，不串行阻塞后续模型调用。"""
+        coro = self._track_ai_pre_reply_send_result(
+            send_future, mid, pre_reply_trace
+        )
+        try:
+            tracker = getattr(self.xianyu_instance, "_create_tracked_task", None)
+            if callable(tracker):
+                return tracker(coro)
+            return asyncio.create_task(coro)
+        except Exception:
+            coro.close()
+            raise
     
     def _is_send_results_success(self, send_results: List[Dict[str, Any]]) -> bool:
         """判断发送结果是否全部成功"""
@@ -749,6 +844,7 @@ class AutoReplyService:
                     chat_id=chat_id,
                     item_id=item_id,
                     msg_time=msg_time,
+                    websocket=websocket,
                 )
                 
                 if reply:
@@ -1194,6 +1290,7 @@ class AutoReplyService:
         chat_id: str,
         item_id: Optional[str] = None,
         msg_time: str = "",
+        websocket=None,
     ) -> Optional[Any]:
         """获取自动回复(主入口)
         
@@ -1235,7 +1332,13 @@ class AutoReplyService:
                     return keyword_reply
                 
                 ai_reply = await self.get_ai_reply(
-                    session, send_user_name, send_user_id, send_message, item_id, chat_id
+                    session,
+                    send_user_name,
+                    send_user_id,
+                    send_message,
+                    item_id,
+                    chat_id,
+                    websocket=websocket,
                 )
                 if ai_reply:
                     return ai_reply
@@ -2116,6 +2219,7 @@ class AutoReplyService:
         send_message: str,
         item_id: Optional[str],
         chat_id: str,
+        websocket=None,
     ) -> Optional[str]:
         """获取AI回复
         
@@ -2220,6 +2324,97 @@ class AutoReplyService:
 
             if reply_trace is not None:
                 reply_trace.setdefault("context_snapshot", {})["ai_item_info"] = item_info
+
+            # 商品查询和设置读取都可能让出事件循环；进入引擎前先复查接管状态。
+            if self._is_ai_takeover_active(
+                ai_settings, chat_id, send_user_id, item_id or ""
+            ):
+                logger.info(
+                    f"【{self.cookie_id}】AI引擎调用前检测到人工接管，跳过AI回复: chat_id={chat_id}"
+                )
+                return None
+
+            async def send_pre_reply_before_generation() -> Optional[bool]:
+                if not ai_settings.get("ai_pre_reply_enabled") or websocket is None:
+                    return True
+                pre_reply_text = str(ai_settings.get("ai_pre_reply_text") or "").strip()
+                if not pre_reply_text:
+                    return True
+
+                cooldown_minutes = int(
+                    ai_settings.get("ai_pre_reply_cooldown_minutes", 30) or 30
+                )
+                pre_reply_trace: Dict[str, Any] = {
+                    "enabled": True,
+                    "cooldown_minutes": cooldown_minutes,
+                    "cooldown_claimed": False,
+                    "sent": False,
+                }
+                if reply_trace is not None:
+                    reply_trace.setdefault("context_snapshot", {})[
+                        "ai_pre_reply"
+                    ] = pre_reply_trace
+
+                if self._is_ai_takeover_active(
+                    ai_settings, chat_id, send_user_id, item_id or ""
+                ):
+                    pre_reply_trace["skipped_reason"] = "human_takeover"
+                    return False
+
+                cooldown_claimed = await self._claim_ai_pre_reply_cooldown(
+                    send_user_id, item_id or "", cooldown_minutes
+                )
+                pre_reply_trace["cooldown_claimed"] = cooldown_claimed
+                if not cooldown_claimed:
+                    return True
+
+                # Redis 占位会让出事件循环；发送前必须再次检查两种暂停。
+                if self._is_ai_takeover_active(
+                    ai_settings, chat_id, send_user_id, item_id or ""
+                ):
+                    pre_reply_trace["skipped_reason"] = "human_takeover"
+                    return False
+
+                try:
+                    pre_reply_result = await self.xianyu_instance.send_msg(
+                        websocket=websocket,
+                        chat_id=chat_id,
+                        send_user_id=send_user_id,
+                        content=pre_reply_text,
+                    )
+                    pre_reply_trace["sent"] = bool(
+                        pre_reply_result and pre_reply_result.get("success")
+                    )
+                    if not pre_reply_trace["sent"]:
+                        pre_reply_trace["send_status"] = "failed"
+                        pre_reply_trace["error"] = str(
+                            (pre_reply_result or {}).get("error_message")
+                            or "发送结果为空"
+                        )
+                        logger.warning(
+                            f"【{self.cookie_id}】AI生成前确认消息发送失败，继续生成最终回复"
+                        )
+                    else:
+                        send_future = pre_reply_result.get("send_future")
+                        mid = pre_reply_result.get("mid")
+                        if send_future is not None:
+                            pre_reply_trace["send_status"] = "pending"
+                            self._spawn_ai_pre_reply_send_result_check(
+                                send_future, mid, pre_reply_trace
+                            )
+                        else:
+                            pre_reply_trace["send_status"] = "success"
+                except Exception as pre_reply_exc:
+                    pre_reply_trace["send_status"] = "failed"
+                    pre_reply_trace["error"] = str(pre_reply_exc)
+                    logger.warning(
+                        f"【{self.cookie_id}】AI生成前确认消息发送失败，继续生成最终回复: {pre_reply_exc}"
+                    )
+
+                # 发送本身也会让出事件循环；若此时人工接管则不再调用模型。
+                return not self._is_ai_takeover_active(
+                    ai_settings, chat_id, send_user_id, item_id or ""
+                )
             
             reply = await ai_engine.generate_reply(
                 message=send_message,
@@ -2230,6 +2425,7 @@ class AutoReplyService:
                 item_id=item_id or "",
                 db_session=session,
                 skip_wait=True,
+                pre_generation_callback=send_pre_reply_before_generation,
             )
             
             if reply:

@@ -35,6 +35,9 @@ DEFAULT_AI_SETTINGS = {
     "ai_time_range_end": "",
     "manual_reply_ai_pause_enabled": False,
     "manual_reply_ai_pause_minutes": 10,
+    "ai_pre_reply_enabled": False,
+    "ai_pre_reply_text": "收到，稍等一下",
+    "ai_pre_reply_cooldown_minutes": 30,
 }
 
 
@@ -68,6 +71,19 @@ class AIReplySettingsService:
         )
         payload["manual_reply_ai_pause_minutes"] = max(
             1, min(1440, int(payload.get("manual_reply_ai_pause_minutes", 10) or 10))
+        )
+        payload["ai_pre_reply_enabled"] = bool(
+            payload.get("ai_pre_reply_enabled", False)
+        )
+        payload["ai_pre_reply_text"] = str(
+            payload.get("ai_pre_reply_text", "收到，稍等一下") or ""
+        )
+        payload["ai_pre_reply_cooldown_minutes"] = max(
+            1,
+            min(
+                1440,
+                int(payload.get("ai_pre_reply_cooldown_minutes", 30) or 30),
+            ),
         )
         return payload
 
@@ -116,6 +132,20 @@ class AIReplySettingsService:
             merged["manual_reply_ai_pause_minutes"] = int(
                 payload.get("manual_reply_ai_pause_minutes") or 10
             )
+        if "ai_pre_reply_enabled" in payload:
+            merged["ai_pre_reply_enabled"] = bool(
+                payload.get("ai_pre_reply_enabled")
+            )
+        if "ai_pre_reply_text" in payload:
+            pre_reply_text = str(payload.get("ai_pre_reply_text") or "")
+            if len(pre_reply_text) > 200:
+                raise ValueError("AI生成前确认文案不能超过200个字符")
+            merged["ai_pre_reply_text"] = pre_reply_text
+        if "ai_pre_reply_cooldown_minutes" in payload:
+            cooldown_minutes = int(payload.get("ai_pre_reply_cooldown_minutes") or 0)
+            if not 1 <= cooldown_minutes <= 1440:
+                raise ValueError("AI生成前确认消息冷却时间须为1到1440分钟")
+            merged["ai_pre_reply_cooldown_minutes"] = cooldown_minutes
         merged["provider_type"] = normalize_ai_provider_type(
             merged.get("provider_type"),
             merged.get("base_url"),
@@ -125,6 +155,13 @@ class AIReplySettingsService:
             missing_fields = get_ai_settings_missing_fields(merged)
             if missing_fields:
                 raise ValueError(f"AI配置未填写完整，请先补全：{'、'.join(missing_fields)}")
+        if merged.get("ai_pre_reply_enabled"):
+            pre_reply_text = str(merged.get("ai_pre_reply_text") or "").strip()
+            if not pre_reply_text:
+                raise ValueError("开启AI生成前确认消息时，确认文案不能为空")
+            if len(pre_reply_text) > 200:
+                raise ValueError("AI生成前确认文案不能超过200个字符")
+            merged["ai_pre_reply_text"] = pre_reply_text
         merged["enabled"] = merged["ai_enabled"]
         
         metadata = dict(account.metadata_json or {})
