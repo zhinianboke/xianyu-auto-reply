@@ -578,7 +578,7 @@ class AIReplyPreAcknowledgementRuntimeTest(unittest.IsolatedAsyncioTestCase):
         service.get_default_reply = AsyncMock(return_value="默认回复")
 
         keyword_reply = await service.get_reply(
-            "buyer", "buyer-a", "命中关键词", "chat-a", websocket=object()
+            "buyer", "buyer-a", "命中关键词", "chat-a", item_id="item-a", websocket=object()
         )
         self.assertEqual(keyword_reply, "关键词回复")
         service.get_ai_reply.assert_not_awaited()
@@ -588,7 +588,7 @@ class AIReplyPreAcknowledgementRuntimeTest(unittest.IsolatedAsyncioTestCase):
         service.get_keyword_reply.reset_mock(return_value=True)
         service.get_keyword_reply.return_value = None
         default_reply = await service.get_reply(
-            "buyer", "buyer-a", "普通消息", "chat-a", websocket=object()
+            "buyer", "buyer-a", "普通消息", "chat-a", item_id="item-a", websocket=object()
         )
         self.assertEqual(default_reply, "默认回复")
         service.get_ai_reply.assert_awaited_once()
@@ -763,6 +763,86 @@ class TextSendCleanupTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_socket_cancellation_cleans_pending_future(self):
         await self._send(asyncio.CancelledError())
+
+
+class BuyerConsultationGateTest(unittest.IsolatedAsyncioTestCase):
+    def _service(self):
+        module = load_auto_reply_module()
+        module.async_session_maker = lambda: _SessionContext()
+        service = module.AutoReplyService("account-a", SimpleNamespace(myid="seller"))
+        service.get_keyword_reply = AsyncMock(return_value="关键词回复")
+        service.get_ai_reply = AsyncMock(return_value="AI回复")
+        service.get_default_reply = AsyncMock(return_value="默认回复")
+        return module, service
+
+    async def test_system_sender_is_blocked_even_with_product(self):
+        _, service = self._service()
+        for sender in ("2222880673631", "2222880673631@goofish", "2223046249624"):
+            with self.subTest(sender=sender):
+                reply = await service.get_reply("system", sender, "咨询", "chat", item_id="product")
+                self.assertIsNone(reply)
+        service.get_keyword_reply.assert_not_awaited()
+        service.get_ai_reply.assert_not_awaited()
+        service.get_default_reply.assert_not_awaited()
+
+    async def test_missing_product_is_blocked_before_all_reply_strategies(self):
+        _, service = self._service()
+        for item_id in (None, "", " ", "0", "-1"):
+            with self.subTest(item_id=item_id):
+                reply = await service.get_reply("buyer", "buyer", "多少钱", "chat", item_id=item_id)
+                self.assertIsNone(reply)
+        service.get_keyword_reply.assert_not_awaited()
+        service.get_ai_reply.assert_not_awaited()
+        service.get_default_reply.assert_not_awaited()
+
+    async def test_missing_sender_is_blocked(self):
+        _, service = self._service()
+        reply = await service.get_reply("", "", "咨询", "chat", item_id="product")
+        self.assertIsNone(reply)
+        service.get_keyword_reply.assert_not_awaited()
+        service.get_ai_reply.assert_not_awaited()
+
+    async def test_foreign_product_still_fails_ownership_check(self):
+        from unittest.mock import patch
+        _, service = self._service()
+        service._build_auto_reply_log_payload = lambda parsed: {"context_snapshot": {}}
+        service._record_auto_reply_log = AsyncMock()
+        service._send_notification = AsyncMock()
+        service.get_filter_keywords = AsyncMock(return_value=[])
+        service.get_reply = AsyncMock()
+        rate_module = types.ModuleType("app.services.xianyu.rate_service")
+        rate_module.__dict__["check_item_belongs_to_account"] = AsyncMock(return_value=False)
+        with patch.dict(sys.modules, {"app.services.xianyu.rate_service": rate_module}):
+            await service.handle_chat_message({"send_user_id": "buyer", "send_message": "咨询", "chat_id": "chat", "item_id": "foreign-product"}, object())
+        self.assertIsNotNone(service._record_auto_reply_log.await_args)
+        payload = service._record_auto_reply_log.await_args.args[0]
+        self.assertEqual(payload["decision_reason"], "item_not_belong")
+        service.get_reply.assert_not_awaited()
+
+    async def test_real_product_consultation_keeps_existing_reply_flow(self):
+        module, service = self._service()
+        module.async_session_maker = lambda: _SessionContext()
+        reply = await service.get_reply("buyer", "buyer", "多少钱", "chat", item_id="product")
+        self.assertEqual(reply, "关键词回复")
+        service.get_keyword_reply.assert_awaited_once()
+
+    async def test_message_entry_records_skip_reason_without_entering_reply_flow(self):
+        _, service = self._service()
+        service._build_auto_reply_log_payload = lambda parsed: {"context_snapshot": {}}
+        service._record_auto_reply_log = AsyncMock()
+        service._send_notification = AsyncMock()
+        service.get_filter_keywords = AsyncMock(return_value=[])
+        service.get_reply = AsyncMock()
+        for sender, item_id, reason in (
+            ("2222880673631", "product", "system_sender"),
+            ("buyer", "", "missing_item_context"),
+        ):
+            with self.subTest(reason=reason):
+                await service.handle_chat_message({"send_user_id": sender, "send_message": "咨询", "chat_id": "chat", "item_id": item_id}, object())
+                payload = service._record_auto_reply_log.await_args.args[0]
+                self.assertEqual(payload["process_status"], "skipped")
+                self.assertEqual(payload["decision_reason"], reason)
+        service.get_reply.assert_not_awaited()
 
 
 if __name__ == "__main__":

@@ -36,6 +36,10 @@ from common.db.session import async_session_maker
 from common.db.redis_client import distributed_lock, get_redis_client
 from common.utils.default_reply_api import call_reply_api
 from common.utils.notification_template import render_notification_template
+from common.utils.xianyu_official_accounts import (
+    is_xianyu_official_robot_user,
+    normalize_goofish_user_id,
+)
 from common.services.remote_location_message_api import (
     RemoteLocationMessageError,
     fetch_remote_location_message,
@@ -59,6 +63,20 @@ class AutoReplyService:
     7. 默认回复(支持只回复一次)
     """
     
+    # 用户确认的系统通知账号；仅禁止自动回复，不影响人工聊天或订单处理。
+    SYSTEM_NOTIFICATION_USER_IDS = frozenset({"2222880673631"})
+
+    @classmethod
+    def buyer_consultation_skip_reason(cls, sender_id, item_id) -> Optional[str]:
+        sender = normalize_goofish_user_id(sender_id)
+        if sender in cls.SYSTEM_NOTIFICATION_USER_IDS or is_xianyu_official_robot_user(sender):
+            return "system_sender"
+        if not sender:
+            return "missing_sender"
+        if str(item_id or "").strip() in ("", "0", "-1"):
+            return "missing_item_context"
+        return None
+
     # 需要跳过自动回复的系统消息列表（参照旧框架message_handler_core.py）
     # 这些消息不需要自动回复
     # 注意：评价消息需要单独处理自动评价，不在此处跳过
@@ -780,8 +798,15 @@ class AutoReplyService:
                     )
                 return
             
+            # 只自动回复有商品关联的买家咨询；此处早于去重、前置消息及所有回复策略。
+            consultation_skip = self.buyer_consultation_skip_reason(send_user_id, item_id)
+            if consultation_skip:
+                log_payload["process_status"] = "skipped"
+                log_payload["decision_reason"] = consultation_skip
+                return
+
             # 4. 检查商品是否属于当前账号
-            # 只有商品ID存在时才检查归属，商品ID不存在则继续执行原有逻辑
+            # 有商品关联仍须通过当前账号归属校验。
             if item_id:
                 from app.services.xianyu.rate_service import check_item_belongs_to_account
                 belongs_to_account = await check_item_belongs_to_account(self.cookie_id, item_id)
@@ -803,7 +828,7 @@ class AutoReplyService:
                             msg_time=msg_time,
                         )
                     return
-            # 商品ID不存在时继续执行原有逻辑
+            # 仅通过商品归属校验的咨询进入后续回复流程。
 
             # 保存买家和商品上下文。人工回复消息只会携带卖家自己的 ID，
             # 需复用此前买家消息中的 buyer_id，才能按买家+商品精确暂停 AI。
@@ -1319,6 +1344,13 @@ class AutoReplyService:
                     reply_trace.setdefault("context_snapshot", {})["pause_remaining_seconds"] = remaining
                 return None
             
+            consultation_skip = self.buyer_consultation_skip_reason(send_user_id, item_id)
+            if consultation_skip:
+                if reply_trace is not None:
+                    reply_trace["process_status"] = "skipped"
+                    reply_trace["decision_reason"] = consultation_skip
+                return None
+
             async with async_session_maker() as session:
                 keyword_reply = await self.get_keyword_reply(
                     session, send_user_name, send_user_id, send_message, item_id, chat_id

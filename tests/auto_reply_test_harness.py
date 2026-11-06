@@ -88,7 +88,7 @@ def _install_import_stubs() -> None:
     _module("common.db.redis_client", distributed_lock=None, get_redis_client=None)
 
     utils_package = _module("common.utils")
-    utils_package.__path__ = []
+    utils_package.__path__ = [str(Path(__file__).resolve().parents[1] / "common/utils")]
     _module("common.utils.default_reply_api", call_reply_api=None)
     _module("common.utils.notification_template", render_notification_template=None)
     _module(
