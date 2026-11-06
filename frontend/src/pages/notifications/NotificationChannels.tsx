@@ -7,7 +7,7 @@ import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
-import type { NotificationChannel } from '@/types'
+import type { NotificationChannel, NotifyType } from '@/types'
 
 // 所有支持的渠道类型配置
 const channelTypes = [
@@ -189,6 +189,22 @@ const templateDefinitions: Array<{ type: NotificationTemplateType; label: string
   { type: 'account', label: '账号状态模板' },
 ]
 
+// 渠道级开关：关掉哪一类，这个渠道就不接哪一类事件，正文模板留着不丢
+const ALL_NOTIFY_TYPES: NotifyType[] = ['chat', 'delivery', 'account']
+const NOTIFY_TYPE_HINTS: Record<NotifyType, string> = {
+  chat: '买家每发一条消息都推，最耗额度',
+  delivery: '每次自动发货推一次',
+  account: '账号掉线 / Cookie 到期 / Token 刷新失败',
+}
+
+const parseNotifyTypes = (raw: unknown): NotifyType[] => {
+  if (raw === undefined || raw === null) return [...ALL_NOTIFY_TYPES]
+  const items = Array.isArray(raw) ? raw : String(raw).split(',')
+  const picked = ALL_NOTIFY_TYPES.filter((t) => items.map((v) => String(v).trim()).includes(t))
+  // 全没勾等于永不触发，没意义，回落全开
+  return picked.length > 0 ? picked : [...ALL_NOTIFY_TYPES]
+}
+
 const getTemplateValidationError = (template: string, templateType: NotificationTemplateType): string | null => {
   if (!template.trim()) return null
 
@@ -239,6 +255,7 @@ export function NotificationChannels() {
   const [formName, setFormName] = useState('')
   const [formConfig, setFormConfig] = useState('')
   const [formTemplates, setFormTemplates] = useState<Record<NotificationTemplateType, string>>({ ...defaultTemplates })
+  const [formNotifyTypes, setFormNotifyTypes] = useState<NotifyType[]>([...ALL_NOTIFY_TYPES])
   const [formEnabled, setFormEnabled] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -346,8 +363,17 @@ export function NotificationChannels() {
       setFormConfig('')
     }
     setFormTemplates({ ...defaultTemplates })
+    setFormNotifyTypes([...ALL_NOTIFY_TYPES])
     setFormEnabled(true)
     setIsModalOpen(true)
+  }
+
+  const toggleFormNotifyType = (type: NotifyType) => {
+    setFormNotifyTypes((prev) => {
+      const next = prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]
+      // 三类全关等于这个渠道永不触发，回落全开
+      return next.length === 0 ? [...ALL_NOTIFY_TYPES] : next
+    })
   }
 
   // 打开编辑弹窗
@@ -366,6 +392,7 @@ export function NotificationChannels() {
       setFormConfig('')
     }
     setFormTemplates(templates)
+    setFormNotifyTypes(parseNotifyTypes(channel.config?.notify_types))
     setFormEnabled(channel.enabled)
     setIsModalOpen(true)
   }
@@ -408,6 +435,13 @@ export function NotificationChannels() {
         if (template.trim() && template !== defaultTemplates[definition.type]) {
           config[templateConfigKeys[definition.type]] = template
         }
+      }
+
+      // 渠道级事件开关写进 config，发送端据此过滤；全开时不写，保持配置干净
+      if (formNotifyTypes.length === ALL_NOTIFY_TYPES.length) {
+        delete config.notify_types
+      } else {
+        config.notify_types = [...formNotifyTypes]
       }
 
       const data = {
@@ -631,9 +665,32 @@ export function NotificationChannels() {
                       预填为系统默认正文；修改后才会保存为自定义模板，留空可恢复系统默认正文。支持英文占位符，例如 {'{{buyer_nick}}'}。
                     </p>
                   </div>
-                  {templateDefinitions.map((definition) => (
+                  {templateDefinitions.map((definition) => {
+                    const typeOn = formNotifyTypes.includes(definition.type)
+                    return (
                     <div key={definition.type}>
-                      <label className="input-label">{definition.label}</label>
+                      <div className="flex items-center justify-between gap-3">
+                        <label className="input-label mb-0">{definition.label}</label>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs ${typeOn ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400 dark:text-slate-500'}`}>
+                            {typeOn ? '推送' : '不推送'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => toggleFormNotifyType(definition.type)}
+                            title={NOTIFY_TYPE_HINTS[definition.type]}
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                              typeOn ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                typeOn ? 'translate-x-6' : 'translate-x-1'
+                              }`}
+                            />
+                          </button>
+                        </div>
+                      </div>
                       <textarea
                         value={formTemplates[definition.type]}
                         onChange={(event) => setFormTemplates((templates) => ({
@@ -646,7 +703,8 @@ export function NotificationChannels() {
                         可用变量：{templateVariables[definition.type].map(({ name, label }) => `{{${name}}}（${label}）`).join('、')}
                       </p>
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-slate-700 dark:text-slate-200">启用此渠道</span>

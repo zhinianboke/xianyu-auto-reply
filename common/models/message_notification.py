@@ -25,6 +25,12 @@ class MessageNotification(TimestampMixin, Base):
     account_identifier: Mapped[str] = mapped_column(String(80), nullable=False, comment='账号标识')
     channel_id: Mapped[int] = mapped_column(BigInteger, index=True, comment='渠道ID')
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment='是否启用')
+    # 该渠道订阅哪几类通知，逗号分隔的子集：chat-聊天消息 / delivery-发货失败 / account-账号异常
+    # 空值等同全开，兼容历史数据
+    notify_types: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="chat,delivery,account",
+        server_default="chat,delivery,account", comment='订阅的通知类型，逗号分隔'
+    )
 
     channel: Mapped["NotificationChannel"] = relationship(
         "NotificationChannel",

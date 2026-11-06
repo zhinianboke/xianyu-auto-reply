@@ -922,6 +922,7 @@ class DatabaseInitializer:
                 account_identifier VARCHAR(80) NOT NULL COMMENT '账号标识',
                 channel_id BIGINT NOT NULL COMMENT '渠道ID',
                 enabled TINYINT(1) DEFAULT 1 COMMENT '是否启用',
+                notify_types VARCHAR(64) NOT NULL DEFAULT 'chat,delivery,account' COMMENT '订阅的通知类型，逗号分隔',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_owner_id (owner_id),
@@ -2067,6 +2068,9 @@ class DatabaseInitializer:
         ],
         "xy_token_cache": [
             ("renew_expire_at", "DATETIME DEFAULT NULL COMMENT '续期Token过期时间'", "expire_at"),
+        ],
+        "xy_message_notifications": [
+            ("notify_types", "VARCHAR(64) NOT NULL DEFAULT 'chat,delivery,account' COMMENT '订阅的通知类型，逗号分隔'", "enabled"),
         ],
         "xy_product_materials": [
             ("price_mode", "VARCHAR(20) NOT NULL DEFAULT 'fixed' COMMENT '价格模式：fixed-固定价格，random-随机价格'", "price"),
