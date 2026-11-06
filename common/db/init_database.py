@@ -32,6 +32,7 @@ from common.db.advertisement_schema import ensure_advertisement_schema
 from common.db.scheduled_publish_rule_schema import ensure_scheduled_publish_rule_schema
 from common.db.payment_schema import ensure_payment_schema
 from common.db.item_query_indexes import ensure_item_query_indexes
+from common.db.api_keyword_schema import ensure_api_keyword_schema
 from common.db.session import async_engine, async_session_maker
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.security import generate_secret_key, get_password_hash
@@ -2317,6 +2318,10 @@ class DatabaseInitializer:
                     # 商品管理与卡券待选商品索引统一自检，只补齐缺失索引。
                     async with ddl_connection() as conn:
                         await ensure_item_query_indexes(conn)
+
+                    # API关键词配置供自动回复执行，表结构与中文字典统一幂等补齐。
+                    async with ddl_connection() as conn:
+                        await ensure_api_keyword_schema(conn)
 
                     # 2. 创建默认管理员用户
                     await self.create_default_admin()

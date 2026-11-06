@@ -9,16 +9,16 @@
 from __future__ import annotations
 
 from loguru import logger
-from sqlalchemy import select, and_, or_
+from sqlalchemy import and_, or_, select
 
-from common.db.session import async_session_maker
-from common.models.xy_personal_blacklist import XYPersonalBlacklist
-from common.models.xy_account import XYAccount
 from app.services.xianyu.delivery_rules.base_rule import (
     BaseDeliveryRule,
     RuleCheckResult,
 )
 from app.services.xianyu.delivery_rules.context import DeliveryCheckContext
+from common.db.session import async_session_maker
+from common.models.xy_account import XYAccount
+from common.models.xy_personal_blacklist import XYPersonalBlacklist
 
 
 class PersonalBlacklistRule(BaseDeliveryRule):
@@ -43,6 +43,8 @@ class PersonalBlacklistRule(BaseDeliveryRule):
     async def check(self, context: DeliveryCheckContext) -> RuleCheckResult:
         """检查买家是否在个人黑名单中"""
         pf = context.log_prefix or f"【{context.cookie_id}】"
+        if context.strict and (context.owner_id is None or not context.buyer_id):
+            raise ValueError("缺少所属用户或买家信息，无法执行黑名单检查")
 
         try:
             hit_record = await self._find_blacklist_record(
@@ -52,6 +54,9 @@ class PersonalBlacklistRule(BaseDeliveryRule):
                 owner_id=context.owner_id,
             )
         except Exception as e:
+            if context.strict:
+                logger.exception("{}个人黑名单检查失败", pf)
+                raise ValueError("个人黑名单检查失败，已停止API同步发货") from e
             logger.error(f"{pf}[个人黑名单规则] 查询异常: {e}")
             # 查询异常不拦截，放行
             return RuleCheckResult(

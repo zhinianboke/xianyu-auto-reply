@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 from common.db.session import async_engine
 
-DATABASE_PROBE_TIMEOUT = 5.0
+DATABASE_PROBE_TIMEOUT = 50.0
 
 
 async def check_database_connection() -> bool:

@@ -48,6 +48,7 @@ from . import (
     items,
     selectable_items,
     keywords,
+    api_keywords,
     message,
     message_filters,
     notifications,
@@ -135,6 +136,7 @@ api_router.include_router(external_message_logs.router, tags=["公开消息日�
 api_router.include_router(external_orders.router, tags=["公开订单查询"])  # 已定义prefix="/external/orders"
 api_router.include_router(external_publish.router, tags=["公开商品发布"])  # 已定义prefix="/external/publish"
 api_router.include_router(keywords.router, prefix="/keywords-with-item-id", tags=["关键词管理"])
+api_router.include_router(api_keywords.router)
 api_router.include_router(cards.router, prefix="/cards", tags=["卡券管理"])
 api_router.include_router(distribution.router, prefix="/distribution", tags=["分销管理"])
 api_router.include_router(card_dock.router, tags=["分销卡券"])  # 已定义prefix="/card-dock"

@@ -44,3 +44,6 @@ class DeliveryCheckContext:
 
     # 卖家所属用户ID
     owner_id: int | None = None
+
+    # API关键词要求检查失败时停止，其他入口保持原异常处理行为。
+    strict: bool = False

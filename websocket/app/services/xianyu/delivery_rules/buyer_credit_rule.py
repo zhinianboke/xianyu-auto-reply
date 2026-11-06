@@ -19,6 +19,7 @@ from app.services.xianyu.delivery_rules.base_rule import (
     RuleCheckResult,
 )
 from app.services.xianyu.delivery_rules.context import DeliveryCheckContext
+from common.utils.xianyu_utils import generate_sign, trans_cookies
 
 
 class BuyerCreditRule(BaseDeliveryRule):
@@ -51,6 +52,8 @@ class BuyerCreditRule(BaseDeliveryRule):
 
         # 接口异常（-1）→ 不命中，放行
         if total_count < 0:
+            if context.strict:
+                raise ValueError("买家信用度接口检查失败，已停止API同步发货")
             logger.warning(
                 f"{pf}[买家信用度规则] 评价接口异常，无法确认 buyer_id={context.buyer_id}，跳过本规则"
             )
@@ -112,8 +115,6 @@ class BuyerCreditRule(BaseDeliveryRule):
             return -1
 
         try:
-            from common.utils.xianyu_utils import trans_cookies, generate_sign
-
             cookies = trans_cookies(cookies_str)
             timestamp = str(int(time.time() * 1000))
             data_payload = {

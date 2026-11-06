@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -162,12 +163,13 @@ def replace_order_context_variables(text: str, order_context: Optional[Dict[str,
         return text
 
 
-def recursive_replace_params(obj: Any, param_mapping: dict) -> Any:
+def recursive_replace_params(obj: Any, param_mapping: dict, *, single_pass: bool = False) -> Any:
     """递归替换参数中的占位符
 
     Args:
         obj: 要处理的对象（dict/list/str/其他）
         param_mapping: 参数映射字典
+        single_pass: 只替换原始模板的变量，不把用户消息中的花括号作为新变量再次解析。
 
     Returns:
         替换后的对象
@@ -175,11 +177,14 @@ def recursive_replace_params(obj: Any, param_mapping: dict) -> Any:
     if isinstance(obj, dict):
         result = {}
         for key, value in obj.items():
-            result[key] = recursive_replace_params(value, param_mapping)
+            result[key] = recursive_replace_params(value, param_mapping, single_pass=single_pass)
         return result
     elif isinstance(obj, list):
-        return [recursive_replace_params(item, param_mapping) for item in obj]
+        return [recursive_replace_params(item, param_mapping, single_pass=single_pass) for item in obj]
     elif isinstance(obj, str):
+        if single_pass and param_mapping:
+            pattern = "|".join(re.escape(f"{{{key}}}") for key in param_mapping)
+            return re.sub(pattern, lambda match: str(param_mapping[match.group()[1:-1]]), obj)
         # 替换字符串中的占位符
         result = obj
         for param_key, param_value in param_mapping.items():

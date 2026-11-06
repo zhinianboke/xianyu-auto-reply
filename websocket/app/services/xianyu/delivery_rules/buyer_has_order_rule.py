@@ -8,15 +8,15 @@
 from __future__ import annotations
 
 from loguru import logger
-from sqlalchemy import select, func, and_
+from sqlalchemy import and_, func, select
 
-from common.db.session import async_session_maker
-from common.models.xy_order import XYOrder
 from app.services.xianyu.delivery_rules.base_rule import (
     BaseDeliveryRule,
     RuleCheckResult,
 )
 from app.services.xianyu.delivery_rules.context import DeliveryCheckContext
+from common.db.session import async_session_maker
+from common.models.xy_order import XYOrder
 
 
 class BuyerHasOrderRule(BaseDeliveryRule):
@@ -52,6 +52,9 @@ class BuyerHasOrderRule(BaseDeliveryRule):
                 item_id=context.item_id if same_item_only else None,
             )
         except Exception as e:
+            if context.strict:
+                logger.exception("{}买家已有订单检查失败", pf)
+                raise ValueError("买家已有订单检查失败，已停止API同步发货") from e
             logger.error(f"{pf}[买家已有订单规则] 查询异常: {e}")
             # 查询异常不拦截，放行
             return RuleCheckResult(
