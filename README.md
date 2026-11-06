@@ -87,6 +87,18 @@
 | Docker / Docker Compose | 容器化部署 |
 | Nginx | 前端静态资源与反向代理 |
 
+## 商品查询性能与更新
+
+商品管理与卡券关联商品查询采用独立优化链路：商品管理每页只执行精确计数和本页商品/配置状态两次 SQL，保持 ID、标题、详情搜索及原接口字段；关联弹窗使用轻量分页接口 `/api/v1/items/selectable/paginated`，只返回 ID、标题和价格，点击「查询」或回车后筛选名称/ID。全选与分页使用相同筛选条件，跨账号重复商品合并展示，旧请求不会覆盖新查询结果。
+
+部署本次更新需要同时更新网页前端与 backend-web。索引实现位于 `common/db/item_query_indexes.py`，统一由 `common/db/init_database.py` 的 `init_all()` 在现有数据库自检锁内调用；backend-web 启动和单独执行统一初始化入口都会幂等补齐商品索引 `idx_cat_created_id(created_at, id)`、`idx_cat_account_created_id(account_id, created_at, id)`，并检查普通用户排序索引 `idx_cat_owner_created(owner_id, created_at)` 和完整的 `item_id` 索引。检查时排除截断索引、不可见索引及不能支持当前排序的索引。只增加缺失索引，不改写商品数据。首次在大表创建索引可能延长启动时间，失败会在初始化日志中明确显示。查询日志记录总数、返回数及耗时，方便核对生产效果。原 `/items/paginated` 字段格式与移动端兼容，移动端目录无需更新。
+
+普通 B-tree 索引无法直接加速任意 `%关键词%` 包含搜索；商品管理保留详情搜索，因此大范围详情关键词查询仍与匹配范围有关。
+
+商品查询的启动补索引将缺失索引合并为一次 `ALTER TABLE ... ALGORITHM=INPLACE, LOCK=NONE`，减少大表重复扫描，数据库不支持时明确报错，不自动降级到 COPY 或锁表算法。启动日志在执行前打印索引名称，完成后打印耗时。`lock_wait_timeout` 仅限制元数据锁等待，不限制实际索引构建时间；在线构建仍消耗磁盘和 CPU，开始及结束需要短暂元数据锁，应在低峰期安排执行，运行期间避免重复执行及并发启动初始化。
+
+排查卡住时在另一数据库连接执行 `SHOW FULL PROCESSLIST`、`SHOW INDEX FROM xy_catalog_items`，并结合 `information_schema.INNODB_TRX` 检查未提交长事务（需要 `PROCESS` 权限，权限不足时由 DBA 执行）。`Waiting for table metadata lock` 表示等锁，SELECT 的 `Creating sort index` 表示查询排序；`Sleep` 本身不代表锁持有者。先取消不需要的等待 DDL，再核对具体阻塞事务，禁止批量终止空闲连接或删除数据。
+
 ## 系统要求
 
 ### 开发环境

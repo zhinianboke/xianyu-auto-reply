@@ -31,6 +31,7 @@ from common.db.auto_relist_schema import ensure_auto_relist_schema
 from common.db.advertisement_schema import ensure_advertisement_schema
 from common.db.scheduled_publish_rule_schema import ensure_scheduled_publish_rule_schema
 from common.db.payment_schema import ensure_payment_schema
+from common.db.item_query_indexes import ensure_item_query_indexes
 from common.db.session import async_engine, async_session_maker
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.security import generate_secret_key, get_password_hash
@@ -2312,6 +2313,10 @@ class DatabaseInitializer:
                     # 商品定时发布规则、发布记录和触发记录表单独做幂等自检。
                     async with ddl_connection() as conn:
                         await ensure_scheduled_publish_rule_schema(conn)
+
+                    # 商品管理与卡券待选商品索引统一自检，只补齐缺失索引。
+                    async with ddl_connection() as conn:
+                        await ensure_item_query_indexes(conn)
 
                     # 2. 创建默认管理员用户
                     await self.create_default_admin()

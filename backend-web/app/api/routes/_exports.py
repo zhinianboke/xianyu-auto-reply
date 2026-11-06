@@ -46,6 +46,7 @@ from . import (
     goofish_crawler,
     health,
     items,
+    selectable_items,
     keywords,
     message,
     message_filters,
@@ -114,6 +115,7 @@ api_router.include_router(user_settings.router, prefix="/user-settings", tags=["
 api_router.include_router(cookies.router, prefix="/cookies", tags=["账号管理"])
 
 # 商品和订单
+api_router.include_router(selectable_items.router)  # 静态选择路由必须在商品动态路由之前挂载
 api_router.include_router(items.items_router, tags=["商品管理"])  # items.py已定义prefix="/items"
 api_router.include_router(orders.router, prefix="/orders", tags=["订单管理"])
 api_router.include_router(product_publish.router, tags=["商品发布"])  # 已定义prefix="/product-publish"
