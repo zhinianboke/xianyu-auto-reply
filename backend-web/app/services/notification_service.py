@@ -198,7 +198,9 @@ class MessageNotificationService:
         if subscription:
             subscription.enabled = bool(payload.enabled)
             subscription.account_identifier = account.account_id
-            subscription.notify_types = self.normalize_notify_types(payload.notify_types)
+            # 只有显式传了才改：旧客户端只切启用/禁用时不会把已有订阅重置成全开
+            if payload.notify_types is not None:
+                subscription.notify_types = self.normalize_notify_types(payload.notify_types)
         else:
             subscription = MessageNotification(
                 owner_id=owner_id,

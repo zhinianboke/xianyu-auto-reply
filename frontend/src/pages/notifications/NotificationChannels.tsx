@@ -227,6 +227,8 @@ const splitTemplateConfig = (config?: Record<string, unknown>) => {
   const channelConfig: Record<string, unknown> = {}
 
   for (const [key, value] of Object.entries(config || {})) {
+    // notify_types 由正文模板上方的开关控制，不放进「配置 (JSON)」输入框，避免两处重复
+    if (key === 'notify_types') continue
     const templateType = templateDefinitions.find((definition) => templateConfigKeys[definition.type] === key)?.type
     if (templateType) {
       if (typeof value === 'string' && value.trim()) {
