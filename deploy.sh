@@ -24,6 +24,7 @@ echo ""
 # ========== 检查环境 ==========
 INSTALL_ROOT=()
 DOCKER_PREFIX=()
+INSTALL_APT_UPDATED=0
 
 install_error() {
     printf '[错误] %s\n' "$*" >&2
@@ -43,6 +44,15 @@ install_as_root() {
     "${INSTALL_ROOT[@]}" "$@" </dev/null
 }
 
+# Debian/Ubuntu 安装软件前刷新索引；任一软件源更新失败立即停止，同次部署只刷新一次。
+update_install_index() {
+    if [ "$INSTALL_PM" != apt ] || [ "$INSTALL_APT_UPDATED" = 1 ]; then return; fi
+    echo '[信息] 正在更新 APT 软件包索引…'
+    install_as_root apt-get -o APT::Update::Error-Mode=any update ||
+        install_error 'APT 软件包索引更新失败，请检查软件源和网络后重试'
+    INSTALL_APT_UPDATED=1
+}
+
 # 以安装权限检查配置和符号链接，避免普通账号无读取权限时误判为不存在。
 install_path_exists() {
     install_as_root test -e "$1" || install_as_root test -L "$1"
@@ -52,6 +62,7 @@ install_path_exists() {
 download_install_file() {
     if ! command -v wget >/dev/null 2>&1; then
         detect_install_os
+        update_install_index
         install_as_root "$INSTALL_PM" install -y wget || install_error '安装 wget 下载工具失败'
     fi
     wget --tries=3 --timeout=30 -O "$2" "$1" </dev/null
@@ -76,6 +87,7 @@ install_docker() {
     detect_install_os
     echo '[信息] Docker 未安装，开始自动安装…'
     if [ "$INSTALL_PM" = apt ]; then
+        update_install_index
         install_as_root env DEBIAN_FRONTEND=noninteractive apt install -y docker.io || install_error 'Docker 安装失败'
     else
         install_as_root yum install -y yum-utils device-mapper-persistent-data lvm2 ||

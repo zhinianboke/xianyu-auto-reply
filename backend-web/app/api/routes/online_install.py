@@ -38,7 +38,8 @@ from common.utils.http_utils import get_client_ip
 
 FIELD_LABELS = {
     "host": "服务器地址", "port": "SSH 端口", "username": "SSH 用户名",
-    "password": "SSH 密码", "install_path": "安装目录", "task_id": "安装任务编号",
+    "password": "SSH 密码", "task_id": "安装任务编号",
+    "auth_method": "SSH 认证方式", "private_key": "SSH 私钥", "private_key_passphrase": "私钥口令",
     "cursor": "日志读取位置",
     "X-Install-Session": "安装会话标识",
 }
@@ -65,11 +66,15 @@ class OnlineInstallRoute(APIRoute):
             try:
                 response = await handler(request)
             except RequestValidationError as exc:
-                fields = list(dict.fromkeys(FIELD_LABELS.get(str(error["loc"][-1]), "提交参数") for error in exc.errors()))
+                messages = []
+                for error in exc.errors():
+                    detail = error.get("ctx", {}).get("error")
+                    field = FIELD_LABELS.get(str(error["loc"][-1]), "提交参数")
+                    messages.append(str(detail) if isinstance(detail, ValueError) else f"{field}填写不正确，请检查后重试")
                 log.exception(f"[在线安装] 参数错误：{exc.errors()}")
                 response = JSONResponse(
                     status_code=200,
-                    content=ApiResponse(success=False, code=40001, message=f"{'、'.join(fields)}填写不正确，请检查后重试").model_dump(),
+                    content=ApiResponse(success=False, code=40001, message="；".join(dict.fromkeys(messages))).model_dump(),
                 )
             except HTTPException as exc:
                 message = str(exc.detail)
@@ -98,7 +103,7 @@ async def test_connection(
     connection: SSHConnectionRequest, request: Request,
     scope_id: str = Depends(get_online_install_scope),
 ) -> ApiResponse:
-    """无需登录，仅测试 SSH 密码连接，返回真实服务器 SSH 版本。"""
+    """无需登录，仅测试所选 SSH 认证方式，返回真实服务器 SSH 版本。"""
     request.state.online_install_log.info(f"[在线安装] 测试连接：scope={scope_id} target={connection.host}:{connection.port}")
     data = await asyncio.to_thread(test_ssh_connection, connection)
     return ApiResponse(success=True, code=200, message="SSH 连接测试成功", data=data)

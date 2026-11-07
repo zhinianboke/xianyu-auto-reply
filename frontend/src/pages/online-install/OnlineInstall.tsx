@@ -1,4 +1,4 @@
-/** 公开导航下的在线安装页面：SSH 密码表单、固定脚本说明和可滚动实时日志。 */
+/** 公开导航下的在线安装页面：SSH 密码 / 私钥认证、固定脚本说明和实时日志。 */
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { CheckCircle2, Loader2, Play, Server, Terminal, Wifi, XCircle } from 'lucide-react'
@@ -11,16 +11,31 @@ import { useOnlineInstall } from './useOnlineInstall'
 
 const INSTALL_COMMAND = "curl -fsSL https://xy-update.zhinianboke.com/deploy.sh | sed 's/\\r$//' | bash"
 
+type InstallForm = Omit<InstallConnection, 'auth_method'> & {
+  auth_method: 'password' | 'private_key'
+  password: string
+  private_key: string
+  private_key_passphrase: string
+}
+
 /** 无需登录展示 SSH 安装表单与当前浏览器会话的安装日志。 */
 export function OnlineInstall() {
   const install = useOnlineInstall()
-  const [form, setForm] = useState<InstallConnection>({ host: '', port: 22, username: 'root', password: '', install_path: '/opt/xianyu-auto-reply' })
+  const [form, setForm] = useState<InstallForm>({ host: '', port: 22, username: 'root', auth_method: 'password', password: '', private_key: '', private_key_passphrase: '' })
   const [confirming, setConfirming] = useState(false)
   const [autoScroll, setAutoScroll] = useState(true)
   const formRef = useRef<HTMLFormElement>(null)
   const logRef = useRef<HTMLPreElement>(null)
   const busy = install.restoring || install.testing || install.submitting || install.running || install.polling
-  const connectedForm = { ...form, host: form.host.trim(), username: form.username.trim(), install_path: form.install_path.trim() }
+  const connectedForm: InstallConnection = {
+    host: form.host.trim(), port: form.port, username: form.username.trim(),
+    ...(form.auth_method === 'private_key'
+      ? { auth_method: 'private_key' as const, private_key: form.private_key, private_key_passphrase: form.private_key_passphrase }
+      : { auth_method: 'password' as const, password: form.password }),
+  }
+  const { clearConnectionTest } = install
+
+  useEffect(() => { clearConnectionTest() }, [form, clearConnectionTest])
 
   useEffect(() => {
     if (autoScroll && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
@@ -50,14 +65,29 @@ export function OnlineInstall() {
                   <input required maxLength={128} disabled={busy} value={form.username} onChange={event => setForm(current => ({ ...current, username: event.target.value }))} autoComplete="off" className="input-ios mt-1.5 w-full" />
                 </label>
               </div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">SSH 密码
-                <PasswordInput required disabled={busy} value={form.password} onChange={password => setForm(current => ({ ...current, password }))} placeholder="请输入 SSH 密码" className="mt-1.5" inputClassName="w-full" />
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">认证方式
+                <select disabled={busy} value={form.auth_method} onChange={event => setForm(current => ({ ...current, auth_method: event.target.value as InstallForm['auth_method'] }))} className="input-ios mt-1.5 w-full">
+                  <option value="password">密码认证</option>
+                  <option value="private_key">私钥认证</option>
+                </select>
               </label>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">安装目录
-                <input required maxLength={512} pattern="/[^\r\n]+" disabled={busy} value={form.install_path} onChange={event => setForm(current => ({ ...current, install_path: event.target.value }))} placeholder="例如 /opt/xianyu-auto-reply" className="input-ios mt-1.5 w-full" />
-              </label>
+              {form.auth_method === 'password' ? (
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">SSH 密码
+                  <PasswordInput required disabled={busy} value={form.password} onChange={password => setForm(current => ({ ...current, password }))} placeholder="请输入 SSH 密码" className="mt-1.5" inputClassName="w-full" />
+                </label>
+              ) : (
+                <>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">SSH 私钥
+                    <textarea required maxLength={65536} rows={6} disabled={busy} value={form.private_key} onChange={event => setForm(current => ({ ...current, private_key: event.target.value }))} placeholder="请粘贴完整私钥，包含 BEGIN / END 行" autoComplete="off" autoCapitalize="off" spellCheck={false} className="input-ios mt-1.5 w-full resize-y text-xs leading-5" />
+                    <span className="mt-1.5 block text-xs font-normal text-slate-500 dark:text-slate-400">支持 OpenSSH / PEM 格式的 RSA、Ed25519、ECDSA 私钥；请勿填写 .pub 公钥。</span>
+                  </label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">私钥口令（选填）
+                    <PasswordInput disabled={busy} value={form.private_key_passphrase} onChange={private_key_passphrase => setForm(current => ({ ...current, private_key_passphrase }))} placeholder="私钥已加密时填写，未加密请留空" showLabel="显示私钥口令" hideLabel="隐藏私钥口令" className="mt-1.5" inputClassName="w-full" />
+                  </label>
+                </>
+              )}
               <div className="rounded-md bg-slate-50 p-3 text-xs text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
-                <p className="mb-2 font-medium">将在服务器安装目录执行：</p>
+                <p className="mb-2 font-medium">将在 SSH 登录后的默认目录执行：</p>
                 <code className="break-all leading-5">{INSTALL_COMMAND}</code>
               </div>
               {install.serverInfo && <p className="break-all text-sm text-emerald-600 dark:text-emerald-400">{install.serverInfo}</p>}
@@ -91,7 +121,7 @@ export function OnlineInstall() {
         </div>
         <PublicPageFooter />
       </main>
-      <ConfirmModal isOpen={confirming} title="确认在线安装" message={<span>将在服务器 <strong className="break-all">{connectedForm.host}:{connectedForm.port}</strong> 的 <strong className="break-all">{connectedForm.install_path}</strong> 目录执行部署脚本，并启动闲鱼自动回复服务。</span>} confirmText="确定安装" cancelText="关闭" onCancel={() => setConfirming(false)} onConfirm={() => { setConfirming(false); install.startInstall(connectedForm) }} />
+      <ConfirmModal isOpen={confirming} title="确认在线安装" message={<span>将在服务器 <strong className="break-all">{connectedForm.host}:{connectedForm.port}</strong> 的 SSH 登录默认目录执行部署脚本，并启动闲鱼自动回复服务。</span>} confirmText="确定安装" cancelText="关闭" onCancel={() => setConfirming(false)} onConfirm={() => { setConfirming(false); install.startInstall(connectedForm) }} />
     </div>
   )
 }

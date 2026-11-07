@@ -2,7 +2,7 @@
 在线安装任务服务。
 
 功能：共享 Redis 任务与增量日志、同一服务器互斥、请求幂等、线程执行阻塞 SSH。
-任务使用授权范围隔离，密码仅用于本次 SSH 连接，不存入任务缓存。
+任务使用授权范围隔离，密码、私钥及口令仅用于本次 SSH 连接，不存入任务缓存。
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _task_key(scope_id: str, task_id: UUID) -> str:
 
 
 def _request_signature(request: OnlineInstallRequest) -> str:
-    """哈希完整连接配置，用于识别同一请求的幂等重试而不缓存原始密码。"""
+    """哈希完整连接配置，用于识别同一请求的幂等重试而不缓存原始认证凭据。"""
     return hashlib.sha256(request.model_dump_json().encode()).hexdigest()
 
 

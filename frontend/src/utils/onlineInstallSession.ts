@@ -1,4 +1,4 @@
-/** 在线安装的访客会话和任务恢复标识；不保存 SSH 密码或连接配置。 */
+/** 在线安装的访客会话和任务恢复标识；不保存 SSH 密码、私钥、口令或连接配置。 */
 import { createRequestId } from '@/utils/uuid'
 
 const SESSION_KEY = 'online-install-session'

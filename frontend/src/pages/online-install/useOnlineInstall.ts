@@ -7,7 +7,7 @@ import { getApiErrorMessage } from '@/utils/apiError'
 import { createRequestId } from '@/utils/uuid'
 import { forgetInstallTask, readInstallTask, rememberInstallTask } from '@/utils/onlineInstallSession'
 
-/** 管理本次安装生命周期；SSH 密码只保留在页面表单，不写入浏览器存储。 */
+/** 管理本次安装生命周期；SSH 密码、私钥及口令只保留在内存，不写入浏览器存储。 */
 export function useOnlineInstall() {
   const addToast = useUIStore(state => state.addToast)
   const [taskId, setTaskId] = useState<string | null>(null)
@@ -64,6 +64,9 @@ export function useOnlineInstall() {
     })
     return () => { cancelled = true }
   }, [showNetworkError])
+
+  /** 修改连接配置后清除旧测试结果，避免把其他凭据的成功状态用于当前连接。 */
+  const clearConnectionTest = useCallback(() => { setServerInfo('') }, [])
 
   const testConnection = useCallback((connection: InstallConnection) => {
     if (inFlight.current || running || polling || restoring) return
@@ -208,5 +211,5 @@ export function useOnlineInstall() {
     }).catch(showNetworkError).finally(() => { inFlight.current = false })
   }
 
-  return { restoring, testing, submitting, running, polling, logs, result, error, serverInfo, taskId, testConnection, startInstall, resumeLogs, resetTask }
+  return { restoring, testing, submitting, running, polling, logs, result, error, serverInfo, taskId, testConnection, clearConnectionTest, startInstall, resumeLogs, resetTask }
 }

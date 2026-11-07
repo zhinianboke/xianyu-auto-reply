@@ -9,16 +9,17 @@ async function installRequestConfig() {
   return { headers: { 'X-Install-Session': await getInstallSession() } }
 }
 
-export interface SSHConnection {
+type SSHAuthentication =
+  | { auth_method?: 'password'; password: string }
+  | { auth_method: 'private_key'; private_key: string; private_key_passphrase?: string }
+
+export type SSHConnection = {
   host: string
   port: number
   username: string
-  password: string
-}
+} & SSHAuthentication
 
-export interface InstallConnection extends SSHConnection {
-  install_path: string
-}
+export type InstallConnection = SSHConnection
 
 export interface InstallLogs {
   task_id: string

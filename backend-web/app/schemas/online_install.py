@@ -1,20 +1,38 @@
-"""在线安装请求校验：SSH 密码连接信息与服务器安装目录。"""
+"""在线安装请求校验：SSH 密码或私钥认证信息。"""
 from __future__ import annotations
 
 import re
 from ipaddress import ip_address
-from posixpath import normpath
+from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class SSHConnectionRequest(BaseModel):
-    """校验 SSH 地址、端口、账号和密码，不改变密码中的空格。"""
+    """校验 SSH 连接及所选认证方式；保留密码和私钥口令中的空格。"""
 
     host: str = Field(min_length=1, max_length=253)
     port: int = Field(default=22, ge=1, le=65535)
     username: str = Field(min_length=1, max_length=128)
-    password: str = Field(min_length=1, max_length=1024)
+    auth_method: Literal["password", "private_key"] = "password"
+    password: str = Field(default="", max_length=1024)
+    private_key: str = Field(default="", max_length=65536)
+    private_key_passphrase: str = Field(default="", max_length=1024)
+
+    @model_validator(mode="after")
+    def validate_authentication(self) -> SSHConnectionRequest:
+        """要求所选方式的凭据并清空另一方式的字段，使幂等签名只包含实际认证信息。"""
+        if self.auth_method == "password":
+            if not self.password:
+                raise ValueError("密码认证方式下，SSH 密码不能为空")
+            self.private_key = ""
+            self.private_key_passphrase = ""
+        else:
+            self.private_key = self.private_key.replace("\r\n", "\n").replace("\r", "\n").strip().lstrip("\ufeff").strip()
+            if not self.private_key:
+                raise ValueError("私钥认证方式下，请填写完整的 SSH 私钥")
+            self.password = ""
+        return self
 
     @field_validator("host")
     @classmethod
@@ -41,19 +59,4 @@ class SSHConnectionRequest(BaseModel):
 
 
 class OnlineInstallRequest(SSHConnectionRequest):
-    """在 SSH 连接信息上增加 Linux 绝对安装目录。"""
-
-    install_path: str = Field(default="/opt/xianyu-auto-reply", min_length=1, max_length=512)
-
-    @field_validator("install_path")
-    @classmethod
-    def validate_install_path(cls, value: str) -> str:
-        """要求明确的绝对目录，禁止根目录和控制字符；执行时另行 shell 转义。"""
-        if any(ord(char) < 32 or ord(char) == 127 for char in value):
-            raise ValueError("安装目录不能包含控制字符")
-        path = normpath(value.strip())
-        if path.startswith("//"):
-            path = "/" + path.lstrip("/")
-        if path == "/" or not path.startswith("/"):
-            raise ValueError("安装目录必须为 Linux 绝对路径，且不能为根目录或包含控制字符")
-        return path
+    """安装仅接收 SSH 连接信息，在服务器登录后的默认目录执行脚本。"""
