@@ -108,7 +108,7 @@ class NotificationManager:
             logger.info(f"📱 开始发送消息通知 - 账号: {self.cookie_id}, 买家: {send_user_name}")
 
             # 获取账号的通知配置
-            notifications = db_manager.get_account_notifications(self.cookie_id)
+            notifications = db_manager.get_account_notifications(self.cookie_id, notify_type='chat')
             if not notifications:
                 logger.warning(f"📱 账号 {self.cookie_id} 未配置消息通知，跳过通知发送")
                 return
@@ -175,7 +175,7 @@ class NotificationManager:
                 logger.warning(f"📱 检查自动发货通知过滤规则失败: {self._safe_str(e)}")
 
             # 获取账号的通知配置
-            notifications = db_manager.get_account_notifications(self.cookie_id)
+            notifications = db_manager.get_account_notifications(self.cookie_id, notify_type='delivery')
             if not notifications:
                 logger.warning("未配置消息通知，跳过自动发货通知")
                 return
@@ -291,7 +291,7 @@ class NotificationManager:
                 return
 
             from common.db.compat import db_manager
-            notifications = db_manager.get_account_notifications(self.cookie_id)
+            notifications = db_manager.get_account_notifications(self.cookie_id, notify_type='account')
 
             if not notifications:
                 logger.warning("未配置消息通知，跳过Token刷新通知")

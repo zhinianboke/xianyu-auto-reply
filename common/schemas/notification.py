@@ -26,4 +26,6 @@ class NotificationChannelUpdate(BaseModel):
 class MessageNotificationSet(BaseModel):
     channel_id: int
     enabled: bool = True
+    # 订阅哪几类通知，子集：chat / delivery / account。缺省全开，保持旧客户端行为
+    notify_types: list[str] | None = None
 
