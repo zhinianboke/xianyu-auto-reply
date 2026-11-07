@@ -23,6 +23,7 @@ import { GetSourceCode } from '@/pages/auth/GetSourceCode'
 // 页面组件懒加载，按需加载提升首屏速度
 const Dashboard = React.lazy(() => import('@/pages/dashboard/Dashboard').then(m => ({ default: m.Dashboard })))
 const Home = React.lazy(() => import('@/pages/home/Home').then(m => ({ default: m.Home })))
+const OnlineInstall = React.lazy(() => import('@/pages/online-install/OnlineInstall').then(m => ({ default: m.OnlineInstall })))
 const DataOverview = React.lazy(() => import('@/pages/data_analysis/DataOverview').then(m => ({ default: m.DataOverview })))
 const Accounts = React.lazy(() => import('@/pages/accounts/Accounts').then(m => ({ default: m.Accounts })))
 const Items = React.lazy(() => import('@/pages/items/Items').then(m => ({ default: m.Items })))
@@ -322,6 +323,7 @@ function App() {
         <Routes>
           {/* Public routes */}
           <Route path="/" element={<Home />} />
+          <Route path="/online-install" element={<OnlineInstall />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />

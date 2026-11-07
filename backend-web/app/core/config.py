@@ -39,6 +39,11 @@ class BackendWebConfig(BaseConfig):
     version: str = Field(default="0.1.0")
     api_v1_prefix: str = Field(default="/api/v1")
     service_port: int = Field(default=8089, alias="BACKEND_WEB_PORT")
+
+    # 在线安装的连接、执行时限及共享任务日志保留时间（秒）。
+    online_install_connect_timeout: int = Field(default=60, ge=1, le=60)
+    online_install_timeout: int = Field(default=7200, ge=60, le=7200)
+    online_install_retention_seconds: int = Field(default=86400, ge=7200)
     
     # JWT配置
     # 注意：jwt_secret_key 由数据库统一托管（启动时 ensure_jwt_secret_key 自动生成/加载并写回此实例），

@@ -193,13 +193,17 @@ xianyu-auto-reply/
 
 ### 方式一：服务器一键部署（推荐）
 
-服务器已安装 Docker 与 Docker Compose 后，直接执行一键部署脚本即可：
+在 Linux 服务器上执行一键部署脚本即可；脚本会检查 Docker 和 Compose，缺失时自动安装（需要 root 或免密 sudo）：
 
 ```bash
 curl -fsSL https://xy-update.zhinianboke.com/deploy.sh | sed 's/\r$//' | bash
 ```
 
-该脚本会自动完成部署所需的配置生成、镜像拉取、旧容器清理与服务启动。
+该脚本会自动完成环境准备、配置生成、镜像拉取、旧容器清理与服务启动。安装方式采用 `http://selfdownload.zhinianboke.com/shell/build-env1.sh`：Debian/Ubuntu 执行 `apt install -y docker.io`；CentOS 执行 `yum install -y yum-utils device-mapper-persistent-data lvm2`，通过 `yum-config-manager --add-repo http://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo` 添加源，再安装 `docker-ce docker-ce-cli containerd.io`。首次安装且 `/etc/docker/daemon.json` 不存在时，从 `https://selfdownload.zhinianboke.com/file/website/docker/daemon.json` 下载配置并重启 Docker；已有配置保留。已有可用的 `docker compose` 或 `docker-compose` 直接复用；缺失时从 `http://selfdownload.zhinianboke.com/file/website/docker/docker-compose` 下载独立命令，安装到 `/usr/local/bin/docker-compose` 并建立 `/usr/bin/docker-compose` 软链接，再验证能否运行。缺少 wget 时自动安装。整个过程无需交互确认，安装或运行失败会显示错误并停止。
+
+`deploy.sh` 为单文件脚本，包含环境安装、`.env` 和 Compose 配置生成及部署流程，无需配套脚本。原有 `.env` 保留，首次运行自动生成默认配置。
+
+首页顶部的「在线安装」提供无需登录的 SSH 安装页面：填写服务器 IP / 域名、端口、用户名、密码和安装目录，点击「测试连接」仅验证 SSH；点击「开始安装」并确认后，直接在目标目录执行上面的脚本，不额外检查 Docker。安装日志在固定高度区域内实时显示，支持自动滚动、失败结果提示和当前浏览器会话内刷新恢复。网页后端需要安装 `backend-web/pyproject.toml` 中的 SSH 依赖；任务与日志共用项目 Redis，通过随机访客会话隔离，SSH 密码不保存到任务缓存或浏览器存储。`ONLINE_INSTALL_CONNECT_TIMEOUT`、`ONLINE_INSTALL_TIMEOUT`、`ONLINE_INSTALL_RETENTION_SECONDS` 分别控制连接超时、脚本执行上限和日志保留期，默认 60 秒、7200 秒（2 小时）和 86400 秒（1 天）。`deploy.sh`、`deploy_remote.sh`、`update.sh`、`build.sh` 生成的配置，以及 Docker Compose 和本地启动器均同步这些参数；已有部署的 `.env` / `.env.remote` 若未配置则使用新默认值，显式配置的旧值仍保留，需要手动调整后重新部署生效。离开页面不会取消服务器上的安装，连接中断时应按日志提示检查实际安装结果。
 
 更新版本，直接执行一键更新脚本即可：
 
@@ -215,6 +219,7 @@ cd xianyu-auto-reply
 bash deploy.sh
 ```
 
+- 自动检查 Docker 和 Compose，缺失时安装，并验证 Docker 服务可用
 - 首次运行会自动生成 `.env` 配置文件和 `docker-compose.deploy.yml`
 - 从阿里云镜像仓库拉取预构建镜像并启动
 - 如果检测到加密版容器会自动清理（保留数据卷）
