@@ -9,6 +9,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base
 
+SETTLEMENT_STATUS_DICT = "settlement_status"
+SETTLEMENT_PAYMENT_TYPE_DICT = "settlement_payment_type"
+SETTLEMENT_STATUSES = ("pending_review", "approved", "rejected", "paid")
+
 
 class SettlementRecord(Base):
     """用户结算记录表"""

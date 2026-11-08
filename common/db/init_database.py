@@ -2387,6 +2387,13 @@ class DatabaseInitializer:
     async def init_data_dictionaries(self):
         """幂等初始化数据字典中的枚举值。"""
         items = (
+            # 用户结算记录结果与收款方式：管理员修改选项和中文展示统一从字典读取。
+            ("settlement_status", "pending_review", "待审核", 10),
+            ("settlement_status", "approved", "已通过", 20),
+            ("settlement_status", "rejected", "已拒绝", 30),
+            ("settlement_status", "paid", "已打款", 40),
+            ("settlement_payment_type", "alipay", "支付宝", 10),
+            ("settlement_payment_type", "wechat", "微信", 20),
             # 邮件触发操作
             ("email_trigger_operation", "register_verification_code", "注册验证码", 10),
             ("email_trigger_operation", "reset_password_verification_code", "找回密码验证码", 20),
