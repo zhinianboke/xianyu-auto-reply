@@ -193,7 +193,7 @@ xianyu-auto-reply/
 
 ### 方式一：服务器一键部署（推荐）
 
-在 Linux 服务器上执行一键部署脚本即可；脚本会检查 Docker 和 Compose，缺失时自动安装（需要 root 或免密 sudo）：
+在 Linux 服务器上执行一键部署脚本即可；脚本开始时会打印检测到的系统名称、完整版本号、发行版标识和 CPU 架构，再检查 Docker 和 Compose，缺失时自动安装（需要 root 或免密 sudo）：
 
 ```bash
 curl -fsSL https://xy-update.zhinianboke.com/deploy.sh | sed 's/\r$//' | bash
@@ -203,9 +203,11 @@ curl -fsSL https://xy-update.zhinianboke.com/deploy.sh | sed 's/\r$//' | bash
 
 `deploy.sh` 为单文件脚本，包含环境安装、`.env` 和 Compose 配置生成及部署流程，无需配套脚本。原有 `.env` 保留，首次运行自动生成默认配置。
 
-仅在检测到 Docker 未安装时，`deploy.sh` 才自动切换 Debian / CentOS 软件源。Debian 会先备份整个 `/etc/apt` 到 `/etc/apt.backup.时间戳.进程号`，将默认 Debian 与安全更新源切换为清华镜像，再执行 APT 索引更新。兼容 `sources.list`、`sources.list.d/*.list`、Debian 12/13 的 `.sources` 格式，以及 `mirror+file` 镜像列表；保留发行版代号、仓库组件和签名配置。
+仅在检测到 Docker 未安装时，`deploy.sh` 才自动切换 Debian / Ubuntu / CentOS 软件源。Debian 不限定版本号，逐个检查现有源的版本代号和仓库：正常源存在时使用清华镜像，否则检查阿里云 `debian-archive` 归档镜像。主仓库或安全仓库均不存在、网络检查失败时明确报错并停止；正常源和归档源都不存在的 `-updates`、`-proposed-updates`、`-backports`、`-backports-sloppy` 附加仓库会提示并停用，避免 APT 更新出现 404。全部检查通过后先备份整个 `/etc/apt` 到 `/etc/apt.backup.时间戳.进程号`，再改写配置并执行 APT 索引更新。兼容 `sources.list`、`sources.list.d/*.list`、`.sources` 格式及 `mirror+file` 源；同一文件、同一 `.sources` 段内的多个版本与仓库会分别处理，保留发行版代号、仓库组件、签名和第三方源。归档条目单独关闭 `Check-Valid-Until` 有效期检查，保留签名验证；正常源不关闭有效期检查。旧系统缺少 `/etc/os-release` 或 `apt` 时分别兼容 `/etc/debian_version` 和 `apt-get`。换源兼容不代表任意旧系统都能运行当前 Docker：极旧版本可能没有 `docker.io`、内核或签名密钥不满足要求，脚本会显示实际失败原因，不擅自升级系统或跳过签名验证。
 
-CentOS Linux 7/8 按对应版本下载 `http://mirrors.aliyun.com/repo/Centos-7.repo` / `http://mirrors.aliyun.com/repo/Centos-8.repo`，先备份 `/etc/yum.repos.d`，再将旧 `CentOS-*.repo` 文件改为带备份后缀的文件，写入阿里云配置并依次执行 `yum clean all`、`yum makecache`、`yum update -y`，之后安装 Docker。CentOS 7 写入 `CentOS-Base.repo`；CentOS 8 按参考代码分别下载并写入 `CentOS-Linux-BaseOS.repo`、`CentOS-Linux-AppStream.repo`，两个文件使用相同下载地址和内容。CentOS Stream 不套用 CentOS Linux 7/8 的源。Docker 已安装时不换源、不执行系统软件包更新；缺少 curl 时仅按当前源安装，Debian/Ubuntu 会先刷新 APT 索引。第三方源保留，备份、换源、缓存刷新或软件包更新失败会明确报错并停止。
+Ubuntu 不限定版本号，按现有源的发行版代号逐个验证仓库：amd64/i386 使用清华 `ubuntu`，ARM 等其他架构使用清华 `ubuntu-ports`；正常仓库不存在时检查中科大 `ubuntu-old-releases/ubuntu` 归档源。校验 Release 的 Origin、Suite 和架构，主仓库或安全仓库不存在、网络或内容异常时明确报错；两类源均不存在的 updates/backports/proposed 附加仓库会提示并停用。兼容传统 `.list`、Ubuntu 24.04 起使用的 `.sources`、多 URI/suite、区域官方源和 mirror 源；保留签名、第三方源及已停用条目，仅为 Ubuntu 官方源补齐安装 `docker.io` 所需的 universe 组件。所有仓库验证及配置生成成功后，先备份完整 `/etc/apt`，再写入并执行 APT 更新，归档条目单独关闭有效期检查而保留签名验证。旧 Ubuntu 缺少 os-release 时兼容 lsb-release。不升级发行版；极旧系统、仓库未提供 docker.io 或内核不兼容时仍会显示实际安装错误，不能保证全部历史版本完成 Docker 部署。
+
+CentOS Linux 7/8 按对应版本下载 `http://mirrors.aliyun.com/repo/Centos-7.repo` / `http://mirrors.aliyun.com/repo/Centos-8.repo`，先备份 `/etc/yum.repos.d`，再将旧 `CentOS-*.repo` 文件改为带备份后缀的文件，写入阿里云配置并依次执行 `yum clean all`、`yum makecache`、`yum update -y`，之后安装 Docker。CentOS 7 写入 `CentOS-Base.repo`；CentOS Linux 8 按参考代码分别下载并写入 `CentOS-Linux-BaseOS.repo`、`CentOS-Linux-AppStream.repo`，两个文件使用相同下载地址和内容。CentOS Stream 8 从 `http://mirrors.aliyun.com/repo/centos-stream/8/` 下载对应的 `CentOS-Stream-BaseOS.repo`、`CentOS-Stream-AppStream.repo`、Extras、Extras-common 等专用文件，按仓库 ID 采用下载文件中的 baseurl（含阿里云 vault 归档路径）。Stream 9/10 按[清华官方配置模板](https://mirrors.tuna.tsinghua.edu.cn/help/centos-stream/)在脚本内生成匹配版本的仓库地址，使用 `https://mirrors.tuna.tsinghua.edu.cn/centos-stream/9-stream/` / `10-stream/`；BaseOS、AppStream、CRB、HighAvailability、NFV、RT、ResilientStorage 的二进制、源码和调试仓库分别匹配，extras-common 的二进制和源码仓库使用对应 SIGs 路径。保留原有仓库 ID、GPG 密钥路径和启用状态，兼容已有阿里云、清华、华为云配置的再次执行；不使用 CentOS Linux 8 的 repo。所有模板和处理逻辑都在 `deploy.sh` 内，无需额外脚本。停用原 mirrorlist/metalink，保留仓库启用状态、GPG 签名配置和第三方自定义源；先逐个验证启用仓库的 repomd.xml，再备份完整目录和写入，下载、未知启用官方仓库或索引异常会报错并停止。Stream 兼容仅提供 dnf 的系统，使用 dnf-plugins-core 依赖并从同一个阿里云 Docker CE repo 地址下载配置，不依赖 yum-config-manager。Docker 已安装时不换源、不执行系统软件包更新；缺少 curl 时仅按当前源安装，Debian/Ubuntu 会先刷新 APT 索引。第三方源保留，备份、换源、缓存刷新或软件包更新失败会明确报错并停止。
 
 首页顶部的「在线安装」提供无需登录的 SSH 安装页面：填写服务器 IP / 域名、端口和用户名，认证方式可选择「密码认证」或「私钥认证」。密码认证填写 SSH 密码；私钥认证粘贴包含 BEGIN / END 行的完整 RSA、Ed25519 或 ECDSA 私钥（支持 OpenSSH / PEM 格式及 PKCS#8，加密私钥还需填写口令，不能使用 `.pub` 公钥）。点击「测试连接」仅验证 SSH；点击「开始安装」并确认后，直接在 SSH 登录后的默认目录执行上面的脚本，无需指定或切换目录，不额外检查 Docker。安装日志在固定高度区域内实时显示，支持自动滚动、失败结果提示和当前浏览器会话内刷新恢复。网页后端需要安装 `backend-web/pyproject.toml` 中的 SSH 依赖；任务与日志共用项目 Redis，通过随机访客会话隔离，SSH 密码、私钥及口令不保存到任务缓存或浏览器存储。`ONLINE_INSTALL_CONNECT_TIMEOUT`、`ONLINE_INSTALL_TIMEOUT`、`ONLINE_INSTALL_RETENTION_SECONDS` 分别控制连接超时、脚本执行上限和日志保留期，默认 60 秒、7200 秒（2 小时）和 86400 秒（1 天）。`deploy.sh`、`deploy_remote.sh`、`update.sh`、`build.sh` 生成的配置，以及 Docker Compose 和本地启动器均同步这些参数；已有部署的 `.env` / `.env.remote` 若未配置则使用新默认值，显式配置的旧值仍保留，需要手动调整后重新部署生效。离开页面不会取消服务器上的安装，连接中断时应按日志提示检查实际安装结果。
 
@@ -405,6 +407,8 @@ cd frontend
 npm install
 npm run dev
 ```
+
+Vite 开发环境会在文件加载前拒绝 `/@fs/`、`/@id/` 等请求中的目录读取，并校验 `?html-proxy&index=...` 对应的真实模块缓存；无效代理（包括把 YAML 配置当作 HTML 代理或请求不存在的脚本索引）直接返回中文请求错误。前端终端记录「拒绝目录读取」或「拒绝无效 HTML 代理」、请求地址、来源页面及连接 IP/端口，避免偶发无效请求触发 `EISDIR`、`No matching HTML proxy module` 并向已打开页面广播错误遮罩。正常页面路由、在线安装日志接口、真实文件、虚拟模块和有效 HTML 内联脚本代理继续按原流程处理；更新 `frontend/vite.config.ts` 及 `frontend/config/dev_request_guard.ts` 后需要重启已有前端开发进程。
 
 #### 5. 启动返佣子系统
 
