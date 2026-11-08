@@ -1,7 +1,7 @@
-/** 在线安装交互：SSH 测试、幂等提交、增量日志轮询及当前会话恢复。 */
+/** 在线安装交互：SSH 测试、幂等提交、增量日志轮询、耗时计时及当前会话恢复。 */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { isAxiosError } from 'axios'
-import { getOnlineInstallLogs, startOnlineInstall, testSSHConnection, type InstallConnection, type InstallLogs } from '@/api/onlineInstall'
+import { getOnlineInstallLogs, startOnlineInstall, testSSHConnection, type InstallConnection, type InstallLogs, type InstallTaskTiming } from '@/api/onlineInstall'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { createRequestId } from '@/utils/uuid'
@@ -18,6 +18,8 @@ export function useOnlineInstall() {
   const [polling, setPolling] = useState(false)
   const [logs, setLogs] = useState('')
   const [result, setResult] = useState<InstallLogs | null>(null)
+  const [timing, setTiming] = useState<InstallTaskTiming | null>(null)
+  const [elapsedSeconds, setElapsedSeconds] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [serverInfo, setServerInfo] = useState('')
   const cursor = useRef(0)
@@ -26,6 +28,22 @@ export function useOnlineInstall() {
   const lastResultMessage = useRef('')
   const mounted = useRef(true)
   const pollGeneration = useRef(0)
+  const canReset = !!result?.finished && !result.has_more && !running && !polling && !restoring && !testing && !submitting
+
+  // 以服务器耗时为基准，使用单调时钟补齐轮询间隔；浏览器时区、改时和刷新不会重置计时。
+  useEffect(() => {
+    if (!timing) { setElapsedSeconds(null); return }
+    const receivedAt = performance.now()
+    const updateElapsed = () => setElapsedSeconds(Math.floor(timing.elapsed_seconds + (timing.finished ? 0 : (performance.now() - receivedAt) / 1000)))
+    updateElapsed()
+    if (timing.finished) return
+    const timer = setInterval(updateElapsed, 1000)
+    return () => clearInterval(timer)
+  }, [timing])
+
+  const elapsedText = elapsedSeconds === null ? null : [
+    Math.floor(elapsedSeconds / 3600), Math.floor(elapsedSeconds / 60) % 60, elapsedSeconds % 60,
+  ].map(part => String(part).padStart(2, '0')).join(':')
 
   useEffect(() => {
     mounted.current = true
@@ -69,7 +87,7 @@ export function useOnlineInstall() {
   const clearConnectionTest = useCallback(() => { setServerInfo('') }, [])
 
   const testConnection = useCallback((connection: InstallConnection) => {
-    if (inFlight.current || running || polling || restoring) return
+    if (inFlight.current || running || polling || restoring || (taskId && !canReset)) return
     inFlight.current = true
     setTesting(true)
     setError('')
@@ -83,10 +101,10 @@ export function useOnlineInstall() {
       inFlight.current = false
       if (mounted.current) setTesting(false)
     })
-  }, [running, polling, restoring, addToast, showError, showNetworkError])
+  }, [running, polling, restoring, taskId, canReset, addToast, showError, showNetworkError])
 
   const startInstall = useCallback((connection: InstallConnection) => {
-    if (inFlight.current || running || polling || restoring) return
+    if (inFlight.current || running || polling || restoring || (taskId && !canReset)) return
     let id: string | null = null
     let submitted = false
     inFlight.current = true
@@ -95,6 +113,7 @@ export function useOnlineInstall() {
     setServerInfo('')
     setLogs('')
     setResult(null)
+    setTiming(null)
     setTaskId(null)
     cursor.current = 0
     lastResultMessage.current = ''
@@ -123,6 +142,7 @@ export function useOnlineInstall() {
       setResult(null)
       lastResultMessage.current = ''
       setTaskId(response.data.task_id)
+      setTiming(response.data)
       setRunning(true)
       setPolling(true)
       pendingRequest.current = null
@@ -140,7 +160,7 @@ export function useOnlineInstall() {
       inFlight.current = false
       if (mounted.current) setSubmitting(false)
     })
-  }, [running, polling, restoring, addToast, showError, showNetworkError])
+  }, [running, polling, restoring, taskId, canReset, addToast, showError, showNetworkError])
 
   useEffect(() => {
     if (!taskId || !polling) return
@@ -159,6 +179,7 @@ export function useOnlineInstall() {
         cursor.current = data.cursor
         setLogs(current => current + data.logs.join(''))
         setResult(data)
+        setTiming(data)
         setError('')
         if (data.finished && !data.has_more) {
           setRunning(false)
@@ -193,7 +214,7 @@ export function useOnlineInstall() {
     setPolling(true)
   }
   const resetTask = () => {
-    if (inFlight.current || restoring) return
+    if (inFlight.current || !canReset) return
     inFlight.current = true
     void forgetInstallTask().then(() => {
       if (!mounted.current) return
@@ -202,6 +223,7 @@ export function useOnlineInstall() {
       setRunning(false)
       setPolling(false)
       setResult(null)
+      setTiming(null)
       setLogs('')
       setError('')
       setServerInfo('')
@@ -211,5 +233,5 @@ export function useOnlineInstall() {
     }).catch(showNetworkError).finally(() => { inFlight.current = false })
   }
 
-  return { restoring, testing, submitting, running, polling, logs, result, error, serverInfo, taskId, testConnection, clearConnectionTest, startInstall, resumeLogs, resetTask }
+  return { restoring, testing, submitting, running, polling, canReset, elapsedText, logs, result, error, serverInfo, taskId, testConnection, clearConnectionTest, startInstall, resumeLogs, resetTask }
 }

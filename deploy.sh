@@ -24,6 +24,8 @@ echo ""
 # ========== 检查环境 ==========
 INSTALL_ROOT=()
 DOCKER_PREFIX=()
+INSTALL_OS=''
+INSTALL_OS_VERSION=''
 INSTALL_APT_UPDATED=0
 
 install_error() {
@@ -44,6 +46,71 @@ install_as_root() {
     "${INSTALL_ROOT[@]}" "$@" </dev/null
 }
 
+# Debian 默认源切换至清华镜像；先备份完整 APT 配置，保留版本、组件、签名及第三方源。
+configure_debian_mirror() {
+    [ "$INSTALL_OS" = debian ] || return 0
+    require_install_root
+    local backup_dir="/etc/apt.backup.$(date +%Y%m%d%H%M%S).$$" source_file
+    install_as_root cp -a -- /etc/apt "$backup_dir" || install_error '备份 APT 配置失败，未切换软件源'
+    echo "[信息] APT 配置已备份：$backup_dir"
+    echo '[信息] 正在将 Debian 默认软件源切换至清华镜像…'
+    for source_file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources \
+        /etc/apt/mirrors/debian.list /etc/apt/mirrors/debian-security.list; do
+        install_as_root test -f "$source_file" || continue
+        install_as_root sed -i -E \
+            -e 's#https?://(deb|security)\.debian\.org/debian-security/?([[:space:]]|$)#https://mirrors.tuna.tsinghua.edu.cn/debian-security/\2#g' \
+            -e 's#https?://deb\.debian\.org/debian/?([[:space:]]|$)#https://mirrors.tuna.tsinghua.edu.cn/debian/\1#g' \
+            -e 's#mirror\+file:/+etc/apt/mirrors/debian-security\.list([[:space:]]|$)#https://mirrors.tuna.tsinghua.edu.cn/debian-security/\1#g' \
+            -e 's#mirror\+file:/+etc/apt/mirrors/debian\.list([[:space:]]|$)#https://mirrors.tuna.tsinghua.edu.cn/debian/\1#g' \
+            "$source_file" || install_error "切换 Debian 软件源失败：$source_file，原配置备份于 $backup_dir"
+    done
+}
+
+# 使用用户提供的 CentOS 7/8 阿里云配置；CentOS 8 分别下载 BaseOS 和 AppStream 文件。
+configure_centos_mirror() {
+    [ "$INSTALL_OS" = centos ] || return 0
+    require_install_root
+    local repo_url source_file index
+    local -a repo_targets=() download_files=()
+    local backup_suffix="$(date +%Y%m%d%H%M%S).$$" repo_dir=/etc/yum.repos.d
+    if grep -qs 'CentOS Stream' /etc/*release*; then
+        install_error 'CentOS Stream 不能使用 CentOS Linux 7/8 软件源，请先配置匹配的软件源'
+    fi
+    case "$INSTALL_OS_VERSION" in
+        7) repo_url=http://mirrors.aliyun.com/repo/Centos-7.repo; repo_targets=("$repo_dir/CentOS-Base.repo") ;;
+        8) repo_url=http://mirrors.aliyun.com/repo/Centos-8.repo; repo_targets=("$repo_dir/CentOS-Linux-BaseOS.repo" "$repo_dir/CentOS-Linux-AppStream.repo") ;;
+        *) install_error "自动换源仅支持 CentOS Linux 7/8，当前版本为 $INSTALL_OS_VERSION" ;;
+    esac
+    echo "[信息] 正在下载 CentOS $INSTALL_OS_VERSION 阿里云软件源…"
+    for ((index=0; index<${#repo_targets[@]}; index++)); do
+        download_files[index]=$(mktemp) ||
+            { rm -f -- "${download_files[@]}"; install_error '无法创建 CentOS 软件源下载临时文件'; }
+        download_install_file "$repo_url" "${download_files[index]}" ||
+            { rm -f -- "${download_files[@]}"; install_error "下载 CentOS 阿里云软件源失败：${repo_targets[index]}，未切换软件源"; }
+        if ! grep -q '^\[base\]' "${download_files[index]}" || \
+            { [ "$INSTALL_OS_VERSION" = 8 ] && ! grep -q '^\[AppStream\]' "${download_files[index]}"; }; then
+            rm -f -- "${download_files[@]}"
+            install_error '下载的 CentOS 软件源缺少 BaseOS 或 AppStream 配置，未切换软件源'
+        fi
+    done
+    install_as_root cp -a -- "$repo_dir" "$repo_dir.backup.$backup_suffix" ||
+        { rm -f -- "${download_files[@]}"; install_error '备份 YUM 配置失败，未切换软件源'; }
+    echo "[信息] YUM 配置已备份：$repo_dir.backup.$backup_suffix"
+    for source_file in "$repo_dir"/CentOS-*.repo; do
+        install_as_root test -f "$source_file" || continue
+        install_as_root mv -- "$source_file" "$source_file.backup.$backup_suffix" ||
+            { rm -f -- "${download_files[@]}"; install_error "备份旧 CentOS 软件源失败：$source_file"; }
+    done
+    for ((index=0; index<${#repo_targets[@]}; index++)); do
+        install_as_root install -m 0644 "${download_files[index]}" "${repo_targets[index]}" ||
+            { rm -f -- "${download_files[@]}"; install_error "写入 CentOS 阿里云软件源失败，原配置备份于 $repo_dir.backup.$backup_suffix"; }
+    done
+    rm -f -- "${download_files[@]}"
+    install_as_root yum clean all || install_error '清理 YUM 缓存失败'
+    install_as_root yum makecache || install_error '刷新 YUM 缓存失败，请检查阿里云软件源和网络'
+    install_as_root yum update -y || install_error '更新 CentOS 系统软件包失败，请检查软件源和网络'
+}
+
 # Debian/Ubuntu 安装软件前刷新索引；任一软件源更新失败立即停止，同次部署只刷新一次。
 update_install_index() {
     if [ "$INSTALL_PM" != apt ] || [ "$INSTALL_APT_UPDATED" = 1 ]; then return; fi
@@ -58,21 +125,25 @@ install_path_exists() {
     install_as_root test -e "$1" || install_as_root test -L "$1"
 }
 
-# 使用参考脚本的 wget 下载方式，失败时保留真实错误输出。
+# 统一用 curl 将地址 $1 下载到文件 $2；自动补齐 curl，返回下载状态并保留错误输出。
 download_install_file() {
-    if ! command -v wget >/dev/null 2>&1; then
+    if ! command -v curl >/dev/null 2>&1; then
+        require_install_root
         detect_install_os
         update_install_index
-        install_as_root "$INSTALL_PM" install -y wget || install_error '安装 wget 下载工具失败'
+        echo '[信息] curl 未安装，开始自动安装下载工具…'
+        install_as_root "$INSTALL_PM" install -y curl || install_error '安装 curl 下载工具失败'
     fi
-    wget --tries=3 --timeout=30 -O "$2" "$1" </dev/null
+    curl -fsSL --retry 3 --connect-timeout 30 --max-time 120 -o "$2" "$1" </dev/null
 }
 
 # 仅缺少组件时识别发行版；已可用的 Docker/Compose 不重复安装。
 detect_install_os() {
-    local ID=''
+    local ID='' VERSION_ID=''
     [ -r /etc/os-release ] || install_error '无法识别 Linux 发行版：缺少 /etc/os-release'
     . /etc/os-release
+    INSTALL_OS="$ID"
+    INSTALL_OS_VERSION="${VERSION_ID%%.*}"
     case "$ID" in
         ubuntu|debian) INSTALL_PM=apt ;;
         centos) INSTALL_PM=yum ;;
@@ -83,9 +154,13 @@ detect_install_os() {
 
 # 直接采用 build-env1.sh 的 Docker 包、阿里云源和 daemon.json 下载地址。
 install_docker() {
+    # 软件源切换仅在 Docker 命令不存在时执行，已安装的环境及其软件源保持原样。
+    if type -P docker >/dev/null 2>&1; then return; fi
     require_install_root
     detect_install_os
     echo '[信息] Docker 未安装，开始自动安装…'
+    configure_debian_mirror
+    configure_centos_mirror
     if [ "$INSTALL_PM" = apt ]; then
         update_install_index
         install_as_root env DEBIAN_FRONTEND=noninteractive apt install -y docker.io || install_error 'Docker 安装失败'

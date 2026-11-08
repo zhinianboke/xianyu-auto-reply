@@ -1,7 +1,7 @@
-/** 公开导航下的在线安装页面：SSH 密码 / 私钥认证、固定脚本说明和实时日志。 */
+/** 公开导航下的在线安装页面：SSH 密码 / 私钥认证、固定脚本说明、实时日志和安装耗时。 */
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { CheckCircle2, Loader2, Play, Server, Terminal, Wifi, XCircle } from 'lucide-react'
+import { CheckCircle2, Clock, Loader2, Play, Server, Terminal, Wifi, XCircle } from 'lucide-react'
 import { AuthNavbar, PublicPageFooter } from '@/components/common/AuthNavbar'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { PasswordInput } from '@/components/common/PasswordInput'
@@ -26,7 +26,7 @@ export function OnlineInstall() {
   const [autoScroll, setAutoScroll] = useState(true)
   const formRef = useRef<HTMLFormElement>(null)
   const logRef = useRef<HTMLPreElement>(null)
-  const busy = install.restoring || install.testing || install.submitting || install.running || install.polling
+  const busy = install.restoring || install.testing || install.submitting || install.running || install.polling || (!!install.taskId && !install.canReset)
   const connectedForm: InstallConnection = {
     host: form.host.trim(), port: form.port, username: form.username.trim(),
     ...(form.auth_method === 'private_key'
@@ -108,14 +108,15 @@ export function OnlineInstall() {
                 <span className="min-w-0">{install.result ? `开始时间：${install.result.created_at}（北京时间）` : '执行输出将在这里显示'}</span>
                 <label className="flex shrink-0 items-center gap-1.5"><input type="checkbox" checked={autoScroll} onChange={event => setAutoScroll(event.target.checked)} className="accent-[rgb(var(--color-primary))]" />自动滚动</label>
               </div>
+              {install.taskId && <p className="flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-200"><Clock className="h-4 w-4 shrink-0 text-[rgb(var(--color-primary))]" /><span>安装耗时：</span><span className="tabular-nums">{install.elapsedText ?? '正在获取…'}</span></p>}
               <pre ref={logRef} aria-label="安装实时日志" tabIndex={0} className="h-[360px] overflow-auto rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-6 text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 sm:h-[440px] whitespace-pre-wrap break-all">{install.logs || '暂无安装输出，请填写 SSH 配置后开始安装。'}</pre>
               {install.result?.finished && <p className={cn('flex items-start gap-2 rounded-md p-3 text-sm', install.result.success ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300' : 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300')}>{install.result.success ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0" />}{install.result.message}</p>}
               {install.error && <p role="alert" className="break-words rounded-md bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">{install.error}</p>}
               <div className="flex flex-wrap gap-2">
                 {install.taskId && !install.polling && <button type="button" disabled={install.submitting || install.testing} onClick={install.resumeLogs} className="btn-ios-secondary btn-sm">重新读取日志</button>}
-                {install.taskId && !install.submitting && !install.testing && <button type="button" onClick={install.resetTask} className="btn-ios-secondary btn-sm">{install.running ? '结束日志查看' : '开始新的安装'}</button>}
+                {install.taskId && !install.submitting && !install.testing && <button type="button" disabled={!install.canReset} onClick={install.resetTask} className="btn-ios-secondary btn-sm">开始新的安装</button>}
               </div>
-              {install.taskId && <p className="text-xs text-slate-500 dark:text-slate-400">刷新页面可恢复当前安装日志。离开页面或结束日志查看后，服务器上的安装任务仍会继续执行。</p>}
+              {install.taskId && <p className="text-xs text-slate-500 dark:text-slate-400">刷新页面可恢复当前安装日志和耗时。安装任务结束前不能重置或开始新的安装，离开页面不会中断服务器上的安装。</p>}
             </div>
           </section>
         </div>

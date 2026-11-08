@@ -21,16 +21,20 @@ export type SSHConnection = {
 
 export type InstallConnection = SSHConnection
 
-export interface InstallLogs {
+export interface InstallTaskTiming {
   task_id: string
+  created_at: string
+  finished: boolean
+  elapsed_seconds: number
+}
+
+export interface InstallLogs extends InstallTaskTiming {
   logs: string[]
   cursor: number
   has_more: boolean
-  finished: boolean
   success: boolean | null
   exit_code: number | null
   message: string
-  created_at: string
 }
 
 export interface InstallResponse<T> {
@@ -47,7 +51,7 @@ export async function testSSHConnection(connection: SSHConnection) {
 
 /** 请求 UUID 由页面生成，网络重试复用同一 UUID，避免重复执行安装。 */
 export async function startOnlineInstall(taskId: string, connection: InstallConnection) {
-  return post<InstallResponse<{ task_id: string }>>(`${PREFIX}/tasks/${taskId}`, connection, await installRequestConfig())
+  return post<InstallResponse<InstallTaskTiming>>(`${PREFIX}/tasks/${taskId}`, connection, await installRequestConfig())
 }
 
 /** 拉取已读取游标之后的真实输出，保持项目统一 90 秒请求超时。 */

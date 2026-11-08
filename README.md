@@ -199,11 +199,17 @@ xianyu-auto-reply/
 curl -fsSL https://xy-update.zhinianboke.com/deploy.sh | sed 's/\r$//' | bash
 ```
 
-该脚本会自动完成环境准备、配置生成、镜像拉取、旧容器清理与服务启动。安装方式采用 `http://selfdownload.zhinianboke.com/shell/build-env1.sh`：Debian/Ubuntu 安装前先执行 `apt-get -o APT::Update::Error-Mode=any update` 刷新软件包索引，成功后执行 `apt install -y docker.io`，任一软件源更新失败则显示错误并停止；CentOS 执行 `yum install -y yum-utils device-mapper-persistent-data lvm2`，通过 `yum-config-manager --add-repo http://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo` 添加源，再安装 `docker-ce docker-ce-cli containerd.io`。首次安装且 `/etc/docker/daemon.json` 不存在时，从 `https://selfdownload.zhinianboke.com/file/website/docker/daemon.json` 下载配置并重启 Docker；已有配置保留。已有可用的 `docker compose` 或 `docker-compose` 直接复用；缺失时从 `http://selfdownload.zhinianboke.com/file/website/docker/docker-compose` 下载独立命令，安装到 `/usr/local/bin/docker-compose` 并建立 `/usr/bin/docker-compose` 软链接，再验证能否运行。缺少 wget 时自动安装，Debian/Ubuntu 同样先刷新索引，同次部署只刷新一次。整个过程无需交互确认，安装或运行失败会显示错误并停止。
+该脚本会自动完成环境准备、配置生成、镜像拉取、旧容器清理与服务启动。安装方式采用 `http://selfdownload.zhinianboke.com/shell/build-env1.sh`：Debian/Ubuntu 安装前先执行 `apt-get -o APT::Update::Error-Mode=any update` 刷新软件包索引，成功后执行 `apt install -y docker.io`，任一软件源更新失败则显示错误并停止；CentOS 执行 `yum install -y yum-utils device-mapper-persistent-data lvm2`，通过 `yum-config-manager --add-repo http://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo` 添加源，再安装 `docker-ce docker-ce-cli containerd.io`。首次安装且 `/etc/docker/daemon.json` 不存在时，从 `https://selfdownload.zhinianboke.com/file/website/docker/daemon.json` 下载配置并重启 Docker；已有配置保留。已有可用的 `docker compose` 或 `docker-compose` 直接复用；缺失时从 `http://selfdownload.zhinianboke.com/file/website/docker/docker-compose` 下载独立命令，安装到 `/usr/local/bin/docker-compose` 并建立 `/usr/bin/docker-compose` 软链接，再验证能否运行。部署脚本内文件下载统一使用 `curl -fsSL`，支持重定向、失败重试及连接/下载超时，HTTP 错误会停止安装，不再依赖 wget。curl 并非所有系统都预装，缺少时自动安装，Debian/Ubuntu 同样先刷新索引，同次部署只刷新一次。整个过程无需交互确认，安装或运行失败会显示错误并停止。
 
 `deploy.sh` 为单文件脚本，包含环境安装、`.env` 和 Compose 配置生成及部署流程，无需配套脚本。原有 `.env` 保留，首次运行自动生成默认配置。
 
+仅在检测到 Docker 未安装时，`deploy.sh` 才自动切换 Debian / CentOS 软件源。Debian 会先备份整个 `/etc/apt` 到 `/etc/apt.backup.时间戳.进程号`，将默认 Debian 与安全更新源切换为清华镜像，再执行 APT 索引更新。兼容 `sources.list`、`sources.list.d/*.list`、Debian 12/13 的 `.sources` 格式，以及 `mirror+file` 镜像列表；保留发行版代号、仓库组件和签名配置。
+
+CentOS Linux 7/8 按对应版本下载 `http://mirrors.aliyun.com/repo/Centos-7.repo` / `http://mirrors.aliyun.com/repo/Centos-8.repo`，先备份 `/etc/yum.repos.d`，再将旧 `CentOS-*.repo` 文件改为带备份后缀的文件，写入阿里云配置并依次执行 `yum clean all`、`yum makecache`、`yum update -y`，之后安装 Docker。CentOS 7 写入 `CentOS-Base.repo`；CentOS 8 按参考代码分别下载并写入 `CentOS-Linux-BaseOS.repo`、`CentOS-Linux-AppStream.repo`，两个文件使用相同下载地址和内容。CentOS Stream 不套用 CentOS Linux 7/8 的源。Docker 已安装时不换源、不执行系统软件包更新；缺少 curl 时仅按当前源安装，Debian/Ubuntu 会先刷新 APT 索引。第三方源保留，备份、换源、缓存刷新或软件包更新失败会明确报错并停止。
+
 首页顶部的「在线安装」提供无需登录的 SSH 安装页面：填写服务器 IP / 域名、端口和用户名，认证方式可选择「密码认证」或「私钥认证」。密码认证填写 SSH 密码；私钥认证粘贴包含 BEGIN / END 行的完整 RSA、Ed25519 或 ECDSA 私钥（支持 OpenSSH / PEM 格式及 PKCS#8，加密私钥还需填写口令，不能使用 `.pub` 公钥）。点击「测试连接」仅验证 SSH；点击「开始安装」并确认后，直接在 SSH 登录后的默认目录执行上面的脚本，无需指定或切换目录，不额外检查 Docker。安装日志在固定高度区域内实时显示，支持自动滚动、失败结果提示和当前浏览器会话内刷新恢复。网页后端需要安装 `backend-web/pyproject.toml` 中的 SSH 依赖；任务与日志共用项目 Redis，通过随机访客会话隔离，SSH 密码、私钥及口令不保存到任务缓存或浏览器存储。`ONLINE_INSTALL_CONNECT_TIMEOUT`、`ONLINE_INSTALL_TIMEOUT`、`ONLINE_INSTALL_RETENTION_SECONDS` 分别控制连接超时、脚本执行上限和日志保留期，默认 60 秒、7200 秒（2 小时）和 86400 秒（1 天）。`deploy.sh`、`deploy_remote.sh`、`update.sh`、`build.sh` 生成的配置，以及 Docker Compose 和本地启动器均同步这些参数；已有部署的 `.env` / `.env.remote` 若未配置则使用新默认值，显式配置的旧值仍保留，需要手动调整后重新部署生效。离开页面不会取消服务器上的安装，连接中断时应按日志提示检查实际安装结果。
+
+在线安装日志区显示「安装耗时」，格式为时:分:秒。计时从服务器创建安装任务开始，成功、失败或连接中断导致任务结束后固定耗时；刷新页面会恢复原任务及耗时，重新读取日志不会重置计时。安装任务结束且末尾日志读取完毕前，「开始新的安装」保持禁用；日志查询失败只暂停读取，不清除任务，也不开放重置。
 
 更新版本，直接执行一键更新脚本即可：
 

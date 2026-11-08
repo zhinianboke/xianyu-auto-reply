@@ -1,7 +1,7 @@
 """
 在线安装任务服务。
 
-功能：共享 Redis 任务与增量日志、同一服务器互斥、请求幂等、线程执行阻塞 SSH。
+功能：共享 Redis 任务与增量日志、记录安装耗时、同一服务器互斥、请求幂等、线程执行阻塞 SSH。
 任务使用授权范围隔离，密码、私钥及口令仅用于本次 SSH 连接，不存入任务缓存。
 """
 from __future__ import annotations
@@ -9,13 +9,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from datetime import datetime
 from uuid import UUID
 
 from app.core.config import get_settings
 from app.schemas.online_install import OnlineInstallRequest
 from app.services.online_install_ssh import OnlineInstallError, run_install_script
 from common.db.redis_client import DistributedLock, get_redis_client
-from common.utils.time_utils import get_beijing_now
+from common.utils.time_utils import BEIJING_TZ, get_beijing_now
 
 
 def _task_key(scope_id: str, task_id: UUID) -> str:
@@ -36,11 +37,33 @@ async def _read_task(key: str) -> dict | None:
     return json.loads(raw) if raw else None
 
 
+def _task_elapsed_seconds(task: dict, now: float) -> float:
+    """根据任务起止时间计算耗时（秒）；兼容旧缓存，结束后的耗时不随查询时间增长。"""
+    started_at = task.get("started_at")
+    if started_at is None:
+        started_at = datetime.strptime(task["created_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=BEIJING_TZ).timestamp()
+    finished_at = task.get("finished_at")
+    if finished_at is None:
+        finished_at = task["heartbeat_at"] if task["finished"] else now
+    return round(max(0, finished_at - started_at), 3)
+
+
+def _task_summary(task: dict) -> dict:
+    """返回任务标识与服务器计时信息，幂等重试复用原始开始时间和完成耗时。"""
+    return {
+        "task_id": task["task_id"], "created_at": task["created_at"],
+        "finished": task["finished"],
+        "elapsed_seconds": _task_elapsed_seconds(task, get_beijing_now().timestamp()),
+    }
+
+
 async def _save_task(key: str, task: dict, output: str | None = None) -> None:
-    """原子保存心跳、任务结果与新增原始输出，并更新有限缓存保留期。"""
+    """原子保存心跳、首次结束时间、任务结果与新增原始输出，并更新有限缓存保留期。"""
     client = await get_redis_client()
     retention = get_settings().online_install_retention_seconds
     task["heartbeat_at"] = get_beijing_now().timestamp()
+    if task["finished"] and task.get("finished_at") is None:
+        task["finished_at"] = task["heartbeat_at"]
     async with client.pipeline(transaction=True) as pipe:
         pipe.set(key, json.dumps(task, ensure_ascii=False), ex=retention)
         if output:
@@ -68,7 +91,7 @@ async def prepare_install_task(
     if existing:
         if existing["signature"] != signature:
             raise OnlineInstallError("此安装请求已提交，连接配置发生变化，请重新开始安装")
-        return {"task_id": str(task_id)}, None
+        return _task_summary(existing), None
     settings = get_settings()
     target = hashlib.sha256(f"{request.host}:{request.port}".encode()).hexdigest()
     lock = DistributedLock(
@@ -78,7 +101,7 @@ async def prepare_install_task(
     if not await lock.acquire(blocking=False):
         existing = await _read_task(key)
         if existing and existing["signature"] == signature:
-            return {"task_id": str(task_id)}, None
+            return _task_summary(existing), None
         raise OnlineInstallError("此服务器已有安装任务正在执行，请等待完成后再试")
     try:
         # 同一任务在读取缓存与获取目标锁之间可能已由另一请求创建并完成。
@@ -87,11 +110,13 @@ async def prepare_install_task(
             if existing["signature"] != signature:
                 raise OnlineInstallError("此安装请求已提交，连接配置发生变化，请重新开始安装")
             await lock.release()
-            return {"task_id": str(task_id)}, None
+            return _task_summary(existing), None
+        started_at = get_beijing_now()
         task = {
             "task_id": str(task_id), "signature": signature,
-            "created_at": get_beijing_now().strftime("%Y-%m-%d %H:%M:%S"),
-            "heartbeat_at": get_beijing_now().timestamp(),
+            "created_at": started_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "started_at": started_at.timestamp(), "finished_at": None,
+            "heartbeat_at": started_at.timestamp(),
             "finished": False, "success": None, "exit_code": None,
             "message": "安装任务已启动，正在连接服务器…",
         }
@@ -105,12 +130,12 @@ async def prepare_install_task(
             if not existing or existing["signature"] != signature:
                 raise OnlineInstallError("此安装请求已提交，连接配置发生变化，请重新开始安装")
             await lock.release()
-            return {"task_id": str(task_id)}, None
+            return _task_summary(existing), None
     except BaseException:
         await lock.release()
         raise
     log.info(f"[在线安装] 创建任务完成：task_id={task_id} target={request.host}:{request.port}")
-    return {"task_id": str(task_id)}, lock
+    return _task_summary(task), lock
 
 
 def _next_event(iterator) -> dict | None:
@@ -190,7 +215,7 @@ async def get_install_logs(scope_id: str, task_id: UUID, cursor: int) -> dict:
         task_id: 本次安装 UUID。
         cursor: 已读取日志段数，页面刷新后可从零重新读取。
     Returns:
-        日志、下一游标、是否读取完毕及真实任务结果。
+        日志、下一游标、是否读取完毕、真实任务结果及服务器计算的安装耗时。
     """
     key = _task_key(scope_id, task_id)
     client = await get_redis_client()
@@ -206,7 +231,8 @@ async def get_install_logs(scope_id: str, task_id: UUID, cursor: int) -> dict:
     if cursor > total:
         raise OnlineInstallError("安装日志位置无效，请重新加载日志")
     stale_after = max(90, get_settings().online_install_connect_timeout * 3 + 30)
-    if not task["finished"] and get_beijing_now().timestamp() - task["heartbeat_at"] > stale_after:
+    now = get_beijing_now().timestamp()
+    if not task["finished"] and now - task["heartbeat_at"] > stale_after:
         task.update(finished=True, success=False, message="安装任务失去连接，无法确认结果，请检查目标服务器的实际状态")
     return {
         "task_id": str(task_id), "logs": logs, "cursor": cursor + len(logs),
@@ -214,4 +240,5 @@ async def get_install_logs(scope_id: str, task_id: UUID, cursor: int) -> dict:
         "finished": task["finished"], "success": task["success"],
         "exit_code": task["exit_code"], "message": task["message"],
         "created_at": task["created_at"],
+        "elapsed_seconds": _task_elapsed_seconds(task, now),
     }
