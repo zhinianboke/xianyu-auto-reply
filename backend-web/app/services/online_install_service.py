@@ -208,23 +208,24 @@ async def execute_install_task(
 
 
 async def get_install_logs(scope_id: str, task_id: UUID, cursor: int) -> dict:
-    """按授权范围读取最多 100 段新增日志；发现失去心跳的任务时明确提示结果无法确认。
+    """安装中读取最多 100 段日志；结束后仅返回最终结果，不再补读历史输出。
 
     Args:
         scope_id: 与创建任务一致的授权范围。
         task_id: 本次安装 UUID。
         cursor: 已读取日志段数，页面刷新后可从零重新读取。
     Returns:
-        日志、下一游标、是否读取完毕、真实任务结果及服务器计算的安装耗时。
+        增量输出或最终日志、下一游标、真实任务结果和安装耗时。
     """
     key = _task_key(scope_id, task_id)
     client = await get_redis_client()
-    # 元数据、日志总数和日志片段必须取同一快照，避免完成状态与末尾日志错位。
+    # 同一快照读取完成状态和末尾日志，避免取到完成状态却遗漏最终结果。
     async with client.pipeline(transaction=True) as pipe:
         pipe.get(key)
         pipe.llen(f"{key}:logs")
         pipe.lrange(f"{key}:logs", cursor, cursor + 99)
-        raw, total, logs = await pipe.execute()
+        pipe.lindex(f"{key}:logs", -1)
+        raw, total, logs, final_log = await pipe.execute()
     if raw is None:
         raise OnlineInstallError("安装任务不存在、已过保留期或无权访问")
     task = json.loads(raw)
@@ -232,11 +233,19 @@ async def get_install_logs(scope_id: str, task_id: UUID, cursor: int) -> dict:
         raise OnlineInstallError("安装日志位置无效，请重新加载日志")
     stale_after = max(90, get_settings().online_install_connect_timeout * 3 + 30)
     now = get_beijing_now().timestamp()
-    if not task["finished"] and now - task["heartbeat_at"] > stale_after:
+    lost_connection = not task["finished"] and now - task["heartbeat_at"] > stale_after
+    if lost_connection:
         task.update(finished=True, success=False, message="安装任务失去连接，无法确认结果，请检查目标服务器的实际状态")
+        # 此结果由当前检测产生，不能把上次下载进度误当作最终失败日志。
+        final_log = f"\n[{get_beijing_now():%Y-%m-%d %H:%M:%S}] {task['message']}\n"
+    if task["finished"]:
+        logs = [final_log] if final_log and (cursor < total or lost_connection) else []
+        next_cursor = total
+    else:
+        next_cursor = cursor + len(logs)
     return {
-        "task_id": str(task_id), "logs": logs, "cursor": cursor + len(logs),
-        "has_more": cursor + len(logs) < total,
+        "task_id": str(task_id), "logs": logs, "cursor": next_cursor,
+        "has_more": not task["finished"] and next_cursor < total,
         "finished": task["finished"], "success": task["success"],
         "exit_code": task["exit_code"], "message": task["message"],
         "created_at": task["created_at"],

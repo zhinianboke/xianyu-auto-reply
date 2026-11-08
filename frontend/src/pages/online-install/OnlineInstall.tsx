@@ -101,7 +101,7 @@ export function OnlineInstall() {
           <section className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <h2 className="flex items-center gap-2 font-semibold text-slate-800 dark:text-slate-100"><Terminal className="h-4 w-4 text-[rgb(var(--color-primary))]" />安装日志</h2>
-              {(install.running || install.polling) && <span role="status" className="flex items-center gap-1.5 text-xs text-[rgb(var(--color-primary))]"><Loader2 className="h-3.5 w-3.5 animate-spin" />{install.polling ? (install.running ? '正在安装' : '正在读取日志') : '日志读取已暂停'}</span>}
+              {(install.running || install.polling) && <span role="status" className="flex items-center gap-1.5 text-xs text-[rgb(var(--color-primary))]"><Loader2 className="h-3.5 w-3.5 animate-spin" />{install.polling ? '正在安装' : '日志读取已暂停'}</span>}
             </div>
             <div className="space-y-3 p-4">
               <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
@@ -113,7 +113,7 @@ export function OnlineInstall() {
               {install.result?.finished && <p className={cn('flex items-start gap-2 rounded-md p-3 text-sm', install.result.success ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300' : 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300')}>{install.result.success ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0" />}{install.result.message}</p>}
               {install.error && <p role="alert" className="break-words rounded-md bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">{install.error}</p>}
               <div className="flex flex-wrap gap-2">
-                {install.taskId && !install.polling && <button type="button" disabled={install.submitting || install.testing} onClick={install.resumeLogs} className="btn-ios-secondary btn-sm">重新读取日志</button>}
+                {install.taskId && !install.polling && !install.result?.finished && <button type="button" disabled={install.submitting || install.testing} onClick={install.resumeLogs} className="btn-ios-secondary btn-sm">重新读取日志</button>}
                 {install.taskId && !install.submitting && !install.testing && <button type="button" disabled={!install.canReset} onClick={install.resetTask} className="btn-ios-secondary btn-sm">开始新的安装</button>}
               </div>
               {install.taskId && <p className="text-xs text-slate-500 dark:text-slate-400">刷新页面可恢复当前安装日志和耗时。安装任务结束前不能重置或开始新的安装，离开页面不会中断服务器上的安装。</p>}

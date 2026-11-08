@@ -5,7 +5,7 @@ import { getOnlineInstallLogs, startOnlineInstall, testSSHConnection, type Insta
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { createRequestId } from '@/utils/uuid'
-import { forgetInstallTask, readInstallTask, rememberInstallTask } from '@/utils/onlineInstallSession'
+import { forgetInstallTask, readInstallResult, readInstallTask, rememberInstallResult, rememberInstallTask } from '@/utils/onlineInstallSession'
 
 /** 管理本次安装生命周期；SSH 密码、私钥及口令只保留在内存，不写入浏览器存储。 */
 export function useOnlineInstall() {
@@ -28,7 +28,7 @@ export function useOnlineInstall() {
   const lastResultMessage = useRef('')
   const mounted = useRef(true)
   const pollGeneration = useRef(0)
-  const canReset = !!result?.finished && !result.has_more && !running && !polling && !restoring && !testing && !submitting
+  const canReset = !!result?.finished && !running && !polling && !restoring && !testing && !submitting
 
   // 以服务器耗时为基准，使用单调时钟补齐轮询间隔；浏览器时区、改时和刷新不会重置计时。
   useEffect(() => {
@@ -70,11 +70,27 @@ export function useOnlineInstall() {
 
   useEffect(() => {
     let cancelled = false
-    void readInstallTask().then(id => {
+    void readInstallTask().then(async id => {
       if (cancelled) return
       setTaskId(id)
-      setRunning(!!id)
-      setPolling(!!id)
+      if (!id) return
+      const completed = await readInstallResult(id).catch(reason => {
+        if (!cancelled) showNetworkError(reason)
+        return null
+      })
+      if (cancelled) return
+      if (completed) {
+        cursor.current = completed.cursor
+        lastResultMessage.current = completed.message
+        setResult(completed)
+        setTiming(completed)
+        setLogs(completed.logs.join(''))
+        setRunning(false)
+        setPolling(false)
+        return
+      }
+      setRunning(true)
+      setPolling(true)
     }).catch(reason => {
       if (!cancelled) showNetworkError(reason)
     }).finally(() => {
@@ -177,17 +193,24 @@ export function useOnlineInstall() {
         }
         const data = response.data
         cursor.current = data.cursor
-        setLogs(current => current + data.logs.join(''))
+        // 兼容旧后端的完成响应：不追加尚未读完的下载进度，只展示真实结果 message。
+        const output = data.finished
+          ? (data.has_more ? `\n${data.message}\n` : data.logs.slice(-1).join('') || `\n${data.message}\n`)
+          : data.logs.join('')
+        setLogs(current => current + output)
         setResult(data)
         setTiming(data)
         setError('')
-        if (data.finished && !data.has_more) {
-          setRunning(false)
-          setPolling(false)
+        // 任务完成立即停止安装状态、计时和轮询，无需等待历史日志游标追平。
+        setRunning(!data.finished)
+        if (data.finished) {
+          // 保存明确字段和最终日志，刷新已完成任务时无需请求或重播历史输出。
+          void rememberInstallResult(data, output).catch(showNetworkError)
           if (lastResultMessage.current !== data.message) {
             lastResultMessage.current = data.message
             addToast({ type: data.success ? 'success' : 'error', message: data.message })
           }
+          setPolling(false)
           return
         }
         timer = setTimeout(poll, data.has_more ? 50 : 2000)
@@ -205,7 +228,7 @@ export function useOnlineInstall() {
   }, [taskId, polling, addToast, showError, showNetworkError])
 
   const resumeLogs = () => {
-    if (inFlight.current || restoring || polling || !taskId) return
+    if (inFlight.current || restoring || polling || !taskId || result?.finished) return
     pollGeneration.current += 1
     cursor.current = 0
     setLogs('')
