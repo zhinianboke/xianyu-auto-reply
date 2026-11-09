@@ -1,9 +1,10 @@
-"""API关键词配置服务：真实保存、账号权限校验及分页查询，不执行外部API。"""
+"""API关键词配置服务：保存、软删除、账号权限校验及分页查询，不执行外部API。"""
 from __future__ import annotations
 
 import hashlib
 import json
 from typing import Any
+from uuid import uuid5
 
 from loguru import logger
 from sqlalchemy import func, select
@@ -22,7 +23,9 @@ from common.models.xy_api_keyword_rule import (
     PARAMETER_PLACEHOLDERS,
     XYApiKeywordRule,
 )
+from common.models.xy_catalog_item import XYCatalogItem
 from common.schemas.api_keyword import (
+    ApiKeywordBatchCreate,
     ApiKeywordConfig,
     ApiKeywordCreate,
     ApiKeywordUpdate,
@@ -73,6 +76,18 @@ class ApiKeywordService:
             logger.exception("API关键词账号校验失败: owner_id={}, account={}", owner_id, identifier)
             raise
 
+    async def _validate_items(self, owner_id: int, account_pk: int, item_ids: list[str]) -> None:
+        """校验新绑定商品均属于当前账号和用户；参数为商品列表，失败抛出中文错误。"""
+        if not item_ids:
+            return
+        existing = set((await self.session.scalars(select(XYCatalogItem.item_id).where(
+            XYCatalogItem.owner_id == owner_id,
+            XYCatalogItem.account_pk == account_pk,
+            XYCatalogItem.item_id.in_(item_ids),
+        ))).all())
+        if set(item_ids) - existing:
+            raise ValueError("选择的商品不存在或不属于当前账号，请重新选择")
+
     @staticmethod
     def _editable_values(rule: XYApiKeywordRule) -> dict[str, Any]:
         """统一提取表单字段，JSON空值与前端回显一致，不包含账号、幂等标识及时间。"""
@@ -96,24 +111,31 @@ class ApiKeywordService:
         """序列化配置，隐藏内部幂等标识，ID使用字符串避免前端精度丢失。"""
         return {
             "id": str(rule.id), "account_id": identifier, "keyword": rule.keyword,
+            "item_id": rule.item_id or "",
             "url": rule.url, "method": rule.method, "timeout": rule.timeout,
             "headers": rule.headers or {}, "params": rule.params or {},
             "response_field": rule.response_field,
             "sync_confirm_delivery": rule.sync_confirm_delivery,
             "trigger_after_order": rule.trigger_after_order,
+            "follow_order_quantity": rule.follow_order_quantity,
+            "skip_same_message": rule.skip_same_message,
             "created_at": rule.created_at.isoformat(), "updated_at": rule.updated_at.isoformat(),
             "revision": ApiKeywordService._revision(rule),
         }
 
-    async def _get_rule(self, owner_id: int | None, identifier: str, rule_id: int, *, for_update: bool = False) -> XYApiKeywordRule:
-        """按账号权限及用户隔离读取原配置，编辑时锁定该行并刷新会话缓存。"""
+    async def _get_rule(
+        self, owner_id: int | None, identifier: str, rule_id: int, *,
+        for_update: bool = False, include_deleted: bool = False,
+    ) -> XYApiKeywordRule:
+        """按账号权限及用户隔离读取配置；修改时锁行，删除重试可读取已删除记录。"""
         account_pk, account_owner = await self._account_scope(owner_id, identifier)
         stmt = select(XYApiKeywordRule).where(
             XYApiKeywordRule.id == rule_id,
             XYApiKeywordRule.account_id == account_pk,
             XYApiKeywordRule.owner_id == account_owner,
-            XYApiKeywordRule.is_deleted.is_(False),
         ).execution_options(populate_existing=True)
+        if not include_deleted:
+            stmt = stmt.where(XYApiKeywordRule.is_deleted.is_(False))
         if for_update:
             stmt = stmt.with_for_update()
         rule = (await self.session.execute(stmt)).scalar_one_or_none()
@@ -157,6 +179,8 @@ class ApiKeywordService:
                 return detail
             if revision != payload.expected_revision:
                 raise ValueError("该API配置已被修改，请关闭编辑窗口后重新打开再保存")
+            if payload.item_id and payload.item_id != rule.item_id:
+                await self._validate_items(rule.owner_id, rule.account_id, [payload.item_id])
             for name, value in values.items():
                 setattr(rule, name, value)
                 if name in {"headers", "params"}:
@@ -171,6 +195,35 @@ class ApiKeywordService:
         except Exception:
             await self.session.rollback()
             logger.exception("API关键词修改失败: owner_id={}, account={}, id={}, config={}", owner_id, identifier, rule_id, values)
+            raise
+
+    @with_db_retry(retry_on_lock_contention=True)
+    async def delete(self, owner_id: int | None, identifier: str, rule_id: int) -> dict[str, str]:
+        """按原账号和用户权限软删除配置，保留原数据，重复请求返回成功。
+
+        Args:
+            owner_id: 用户权限范围，管理员为None。
+            identifier: 配置所属账号标识。
+            rule_id: 待删除配置主键。
+        Returns:
+            已删除配置的主键及账号；失败回滚并抛出中文错误。
+        """
+        try:
+            rule = await self._get_rule(
+                owner_id, identifier, rule_id, for_update=True, include_deleted=True,
+            )
+            already_deleted = rule.is_deleted
+            if not already_deleted:
+                rule.is_deleted = True
+                rule.updated_at = get_beijing_now_naive().replace(microsecond=0)
+            data = {"id": str(rule.id), "account_id": identifier}
+            await self.session.commit()
+            logger.info("API关键词软删除成功: owner_id={}, account={}, id={}, already_deleted={}",
+                        owner_id, identifier, rule_id, already_deleted)
+            return data
+        except Exception:
+            await self.session.rollback()
+            logger.exception("API关键词软删除失败: owner_id={}, account={}, id={}", owner_id, identifier, rule_id)
             raise
 
     @classmethod
@@ -191,38 +244,74 @@ class ApiKeywordService:
         Returns:
             已提交的配置详情；失败回滚并抛出错误。
         """
+        return (await self._create_configs(owner_id, identifier, [payload.model_dump(mode="json")]))[0]
+
+    @with_db_retry()
+    async def create_batch(
+        self, owner_id: int | None, identifier: str, payload: ApiKeywordBatchCreate,
+    ) -> dict[str, Any]:
+        """多选商品原子保存；参数为账号和批量表单，返回各商品配置及保存条数。"""
+        item_ids = sorted(payload.item_ids)
+        config = payload.config.model_dump(mode="json")
+        values = [{
+            **config, "item_id": item_id,
+            "request_id": str(payload.config.request_id if index == 0 else uuid5(payload.config.request_id, item_id)),
+        } for index, item_id in enumerate(item_ids)]
+        items = await self._create_configs(owner_id, identifier, values)
+        return {"list": items, "total": len(items)}
+
+    @classmethod
+    def _saved_configs(cls, rules: list[XYApiKeywordRule], values: list[dict], identifier: str, item_scope: str) -> list[dict]:
+        """检查单条或批量重试内容；参数为已存配置和请求，返回按请求排序的详情。"""
+        by_request = {rule.request_id: rule for rule in rules}
+        if len(by_request) != len(values):
+            raise ValueError("该请求已保存过其他商品配置，请关闭窗口后重新新建")
+        details = []
+        for value in values:
+            rule = by_request[value["request_id"]]
+            if rule.request_item_scope and rule.request_item_scope != item_scope:
+                raise ValueError("该请求已保存过其他商品配置，请关闭窗口后重新新建")
+            cls._check_same_request(rule, value)
+            details.append(cls._detail(rule, identifier))
+        return details
+
+    async def _create_configs(self, owner_id: int | None, identifier: str, values: list[dict]) -> list[dict]:
+        """单条与多商品保存共用事务、权限及幂等检查；参数为配置列表，返回已提交详情。"""
         account_pk, account_owner = await self._account_scope(owner_id, identifier)
-        values = payload.model_dump(mode="json")
+        item_scope = self._values_revision({"item_ids": sorted(value["item_id"] or "" for value in values)})
         existing_stmt = select(XYApiKeywordRule).where(
-            XYApiKeywordRule.request_id == str(payload.request_id),
+            XYApiKeywordRule.request_id.in_([value["request_id"] for value in values]),
             XYApiKeywordRule.owner_id == account_owner,
             XYApiKeywordRule.account_id == account_pk,
             XYApiKeywordRule.is_deleted.is_(False),
         )
         try:
-            existing = (await self.session.execute(existing_stmt)).scalar_one_or_none()
+            existing = list((await self.session.scalars(existing_stmt)).all())
             if existing:
-                self._check_same_request(existing, values)
-                return self._detail(existing, identifier)
+                details = self._saved_configs(existing, values, identifier, item_scope)
+                await self.session.commit()
+                return details
             options = await self.get_options()
-            if payload.method not in {item["value"] for item in options["methods"]}:
+            if values[0]["method"] not in {item["value"] for item in options["methods"]}:
                 raise ValueError("该请求方法已禁用，请重新选择")
-            rule = XYApiKeywordRule(owner_id=account_owner, account_id=account_pk, **values)
-            self.session.add(rule)
+            await self._validate_items(account_owner, account_pk, [value["item_id"] for value in values if value["item_id"]])
+            rules = [XYApiKeywordRule(owner_id=account_owner, account_id=account_pk, request_item_scope=item_scope, **value) for value in values]
+            self.session.add_all(rules)
             await self.session.flush()
-            detail = self._detail(rule, identifier)
+            details = [self._detail(rule, identifier) for rule in rules]
             await self.session.commit()
-            logger.info("API关键词保存成功: owner_id={}, account={}, id={}, config={}",
-                        account_owner, identifier, detail["id"], values)
-            return detail
+            logger.info("API关键词保存成功: owner_id={}, account={}, ids={}, config={}",
+                        account_owner, identifier, [item["id"] for item in details], values)
+            return details
         except IntegrityError:
             await self.session.rollback()
             try:
-                existing = (await self.session.execute(existing_stmt)).scalar_one_or_none()
+                existing = list((await self.session.scalars(existing_stmt)).all())
                 if existing:
-                    self._check_same_request(existing, values)
-                    return self._detail(existing, identifier)
-                logger.exception("API关键词标识冲突: account={}, request_id={}", identifier, payload.request_id)
+                    details = self._saved_configs(existing, values, identifier, item_scope)
+                    await self.session.commit()
+                    return details
+                logger.exception("API关键词标识冲突: account={}, config={}", identifier, values)
                 raise ValueError("保存请求标识冲突，请关闭窗口后重新新建") from None
             except Exception:
                 await self.session.rollback()

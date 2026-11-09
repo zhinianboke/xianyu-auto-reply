@@ -1,12 +1,15 @@
 /** API关键词新建和编辑表单，读取最新配置并保存指定字段。 */
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { createApiKeyword, createApiKeywordRequestId, getApiKeywordDetail, getApiKeywordOptions, updateApiKeyword } from '@/api/apiKeywords'
+import type { ApiResponse, Item } from '@/types'
+import { getItems } from '@/api/items'
+import { createApiKeyword, createApiKeywordsBatch, createApiKeywordRequestId, getApiKeywordDetail, getApiKeywordOptions, updateApiKeyword } from '@/api/apiKeywords'
 import type { ApiKeywordOptions } from '@/api/apiKeywords'
 import { Loading } from '@/components/common/Loading'
 import { Select } from '@/components/common/Select'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/apiError'
+import { KeywordItemSelector } from './KeywordItemSelector'
 
 interface Props { accountId: string; ruleId?: string; onClose: () => void; onSaved: () => void }
 
@@ -24,6 +27,9 @@ function parseObject(value: string, label: string): Promise<Record<string, unkno
 export function ApiKeywordFormModal({ accountId, ruleId, onClose, onSaved }: Props) {
   const { addToast } = useUIStore()
   const [keyword, setKeyword] = useState('')
+  const [selectedItemIds, setSelectedItemIds] = useState<string[]>([])
+  const [items, setItems] = useState<Item[]>([])
+  const [itemSearch, setItemSearch] = useState('')
   const [url, setUrl] = useState('')
   const [method, setMethod] = useState('GET')
   const [timeout, setTimeout] = useState('60')
@@ -32,6 +38,8 @@ export function ApiKeywordFormModal({ accountId, ruleId, onClose, onSaved }: Pro
   const [responseField, setResponseField] = useState('')
   const [syncConfirmDelivery, setSyncConfirmDelivery] = useState(false)
   const [triggerAfterOrder, setTriggerAfterOrder] = useState(false)
+  const [followOrderQuantity, setFollowOrderQuantity] = useState(false)
+  const [skipSameMessage, setSkipSameMessage] = useState(false)
   const [options, setOptions] = useState<ApiKeywordOptions | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -46,12 +54,17 @@ export function ApiKeywordFormModal({ accountId, ruleId, onClose, onSaved }: Pro
     setLoading(true)
     setLoadError('')
     setOptions(null)
-    Promise.all([getApiKeywordOptions(), ruleId ? getApiKeywordDetail(accountId, ruleId) : Promise.resolve(null)]).then(([result, detail]) => {
+    Promise.all([getApiKeywordOptions(), getItems(accountId), ruleId ? getApiKeywordDetail(accountId, ruleId) : Promise.resolve(null)]).then(([result, itemResult, detail]) => {
       if (!active) return
       if (!result.success || !result.data || !result.data.methods.length) {
         setLoadError(result.message || '读取API关键词选项失败')
         return
       }
+      if (!itemResult.success) {
+        setLoadError(itemResult.message || '读取商品列表失败')
+        return
+      }
+      setItems(itemResult.data)
       if (ruleId) {
         if (!detail?.success || !detail.data) {
           setLoadError(detail?.message || '读取API关键词配置失败')
@@ -59,6 +72,7 @@ export function ApiKeywordFormModal({ accountId, ruleId, onClose, onSaved }: Pro
         }
         const current = detail.data
         setKeyword(current.keyword)
+        setSelectedItemIds(current.item_id ? [current.item_id] : [])
         setUrl(current.url)
         setMethod(current.method)
         setTimeout(String(current.timeout))
@@ -67,6 +81,8 @@ export function ApiKeywordFormModal({ accountId, ruleId, onClose, onSaved }: Pro
         setResponseField(current.response_field)
         setSyncConfirmDelivery(current.sync_confirm_delivery)
         setTriggerAfterOrder(current.trigger_after_order)
+        setFollowOrderQuantity(current.follow_order_quantity)
+        setSkipSameMessage(current.skip_same_message)
         expectedRevision.current = current.revision
       } else {
         setMethod(current => result.data!.methods.some(item => item.value === current)
@@ -98,14 +114,17 @@ export function ApiKeywordFormModal({ accountId, ruleId, onClose, onSaved }: Pro
     }
     submitting.current = true
     setSaving(true)
-    Promise.all([parseObject(headers, '请求头'), parseObject(params, '请求参数')]).then(([parsedHeaders, parsedParams]) => {
+    Promise.all([parseObject(headers, '请求头'), parseObject(params, '请求参数')]).then<ApiResponse>(([parsedHeaders, parsedParams]) => {
       const values = {
         keyword, url, method, timeout: Number(timeout),
+        item_id: ruleId ? selectedItemIds[0] || '' : '',
         headers: parsedHeaders, params: parsedParams, response_field: responseField,
         sync_confirm_delivery: syncConfirmDelivery, trigger_after_order: triggerAfterOrder,
+        follow_order_quantity: followOrderQuantity, skip_same_message: skipSameMessage,
       }
       if (ruleId) return updateApiKeyword(accountId, ruleId, { ...values, expected_revision: expectedRevision.current })
       if (!requestId.current) requestId.current = createApiKeywordRequestId()
+      if (selectedItemIds.length) return createApiKeywordsBatch(accountId, { ...values, request_id: requestId.current }, selectedItemIds)
       return createApiKeyword(accountId, { ...values, request_id: requestId.current })
     }).then(result => {
       if (!result.success) {
@@ -132,13 +151,16 @@ export function ApiKeywordFormModal({ accountId, ruleId, onClose, onSaved }: Pro
           {loadError && <div className="text-sm text-red-600 dark:text-red-400 flex items-center gap-3" role="alert">
             <span>{loadError}</span><button type="button" className="btn-ios-secondary" onClick={() => setReload(value => value + 1)}>重试</button>
           </div>}
-          <fieldset disabled={saving || loading || !options} className="space-y-4">
+          <fieldset disabled={saving || loading || !options} className="min-w-0 w-full max-w-full space-y-4">
             <div>
               <label className="input-label" htmlFor="api-keyword-text">触发关键字 <span className="text-red-500">*</span></label>
               <textarea id="api-keyword-text" className="input-ios h-20" value={keyword} onChange={event => setKeyword(event.target.value)}
                 required maxLength={12000} placeholder="例如：查询,进度,订单状态" />
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">支持中英文逗号分隔，多个关键字对应同一份API配置。</p>
             </div>
+            <KeywordItemSelector items={items} search={itemSearch} onSearchChange={setItemSearch}
+              multiple={!ruleId} value={selectedItemIds} onChange={setSelectedItemIds}
+              disabled={saving || loading || !options} />
             <div className="border border-slate-200 dark:border-slate-700 rounded-lg p-4 space-y-4">
               <div>
                 <label className="input-label" htmlFor="api-keyword-url">API地址 <span className="text-red-500">*</span></label>
@@ -179,6 +201,8 @@ export function ApiKeywordFormModal({ accountId, ruleId, onClose, onSaved }: Pro
             <div className="space-y-3">{[
               { label: '是否同步确认发货', value: syncConfirmDelivery, setter: setSyncConfirmDelivery },
               { label: '下单后触发', value: triggerAfterOrder, setter: setTriggerAfterOrder },
+              { label: '跟随订单数量触发', value: followOrderQuantity, setter: setFollowOrderQuantity },
+              { label: '相同消息不触发', value: skipSameMessage, setter: setSkipSameMessage },
             ].map(item => <div key={item.label} className="flex items-center justify-between gap-4">
               <span className="input-label mb-0">{item.label}</span>
               <button type="button" role="switch" aria-checked={item.value} aria-label={item.label}
@@ -187,6 +211,8 @@ export function ApiKeywordFormModal({ accountId, ruleId, onClose, onSaved }: Pro
                 <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${item.value ? 'translate-x-6' : 'translate-x-1'}`} />
               </button>
             </div>)}</div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">相同消息不触发：同一买家在同一商品下已有相同消息处理成功时跳过，处理失败的消息可重试。</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">跟随订单数量触发：按同一买家在当前商品的最新有效订单购买数量限制成功次数，每个命中关键词分别计数。</p>
           </fieldset>
         </div>
         <div className="modal-footer">

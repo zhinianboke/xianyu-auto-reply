@@ -10,6 +10,7 @@ from common.models.data_dictionary import XYDataDictionary
 from common.models.xy_api_keyword_rule import (
     HTTP_METHOD_DICTIONARY,
     PARAMETER_DICTIONARY,
+    TRIGGER_REASON_DICTIONARY,
     XYApiKeywordRule,
 )
 from common.utils.time_utils import get_beijing_now_naive
@@ -53,11 +54,14 @@ async def ensure_api_keyword_schema(conn: AsyncConnection) -> None:
         (PARAMETER_DICTIONARY, "item_id", "商品ID", 10),
         (PARAMETER_DICTIONARY, "message", "消息内容", 20),
         (PARAMETER_DICTIONARY, "actId", "消息链接（actId）", 30),
+        (TRIGGER_REASON_DICTIONARY, "api_keyword_same_message", "相同消息已处理成功", 10),
+        (TRIGGER_REASON_DICTIONARY, "api_keyword_order_quantity", "订单数量限制未满足", 20),
+        (TRIGGER_REASON_DICTIONARY, "api_keyword_trigger_busy", "该买家商品的API消息正在处理", 30),
     )
     now = get_beijing_now_naive()
     existing = set((await conn.execute(select(
         XYDataDictionary.dict_type, XYDataDictionary.dict_value,
-    ).where(XYDataDictionary.dict_type.in_((HTTP_METHOD_DICTIONARY, PARAMETER_DICTIONARY))))).all())
+    ).where(XYDataDictionary.dict_type.in_((HTTP_METHOD_DICTIONARY, PARAMETER_DICTIONARY, TRIGGER_REASON_DICTIONARY))))).all())
     for dict_type, value, label, sort_order in dictionary_rows:
         if (dict_type, value) not in existing:
             await conn.execute(insert(XYDataDictionary).values(

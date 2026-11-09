@@ -9,6 +9,7 @@ from typing import Any
 from loguru import logger
 
 from app.services.xianyu.api_keyword_lock import api_keyword_order_lock
+from app.services.xianyu.api_keyword_trigger_guard import ApiKeywordTriggerGuard
 from app.services.xianyu.resource_manager import pause_manager
 from common.services.api_keyword_client import request_api_keyword
 from common.services.api_keyword_runtime import (
@@ -42,6 +43,20 @@ class ApiKeywordHandler:
         self.send_checked = False
         self.sent_segments: set[int] = set()
         self.signature = ""
+        self.trigger_guard = ApiKeywordTriggerGuard(reply_service, {}, buyer_id, item_id)
+
+    async def close(self) -> None:
+        """最终消息日志落库后释放触发保护，无参数和返回值。"""
+        await self.trigger_guard.close()
+
+    async def finalize_log(self, log_id: int | None) -> None:
+        """核对最终日志是否落库；成功回复写库失败时保留可恢复日志，防止再次调用API。"""
+        try:
+            await self.trigger_guard.finalize_log(log_id)
+        except Exception:
+            logger.exception("API关键词成功消息日志及恢复记录保存失败: account={}, buyer={}, item={}",
+                             self.service.cookie_id, self.buyer_id, self.item_id)
+            raise
 
     def _context(self, **values) -> None:
         """记录运行结果到现有自动回复日志上下文，供后台查看。"""
@@ -54,10 +69,11 @@ class ApiKeywordHandler:
             config["owner_id"], self.service.cookie_id, self.buyer_id, self.item_id, order_id,
         )
 
-    async def _send(self, content: str) -> None:
+    async def _send(self, content: str, *, enforce_trigger: bool = False) -> None:
         """通过公共发送方法发送纯文本，不解释API返回的内部图片指令。"""
+        send_options = {"before_send": self.trigger_guard.ensure_owned} if enforce_trigger and self.trigger_guard.enabled else {}
         self.results.extend(await self.service._send_text_with_separator(
-            self.websocket, self.chat_id, self.buyer_id, content,
+            self.websocket, self.chat_id, self.buyer_id, content, **send_options,
         ))
 
     def _restore_checkpoint(self, current) -> None:
@@ -101,10 +117,12 @@ class ApiKeywordHandler:
 
     async def _request_and_send(self, config, message: str, ensure_owned=None) -> bool:
         """请求API、保存响应日志并发送；人工暂停或消息发送失败时停止后续确认。"""
+        await self.trigger_guard.ensure_owned()
         if ensure_owned is not None:
             await ensure_owned()
         if not self.content:
             self.content = await request_api_keyword(config, self.item_id, message)
+        await self.trigger_guard.ensure_owned()
         segments = self.service._build_text_reply_segments(self.content)
         if not segments:
             raise ValueError("API结果没有可发送的文本内容")
@@ -131,21 +149,26 @@ class ApiKeywordHandler:
             return True
         if not config["sync_confirm_delivery"]:
             # 普通API回复沿用公共发送的分段间隔；进度持久化仅用于同步发货分支。
-            await self._send(self.content)
+            await self.trigger_guard.ensure_owned()
+            await self._send(self.content, enforce_trigger=True)
             if not self.service._is_send_results_success(self.results):
                 raise ValueError(self.service._get_send_error_message(self.results) or "API结果发送失败")
+            if self.trigger_guard.enabled:
+                # 开启成功日志限制时，先等发送检测再落库，避免被拦截消息短暂占用次数。
+                await self._check_send_rejection()
             return True
         for segment in segments:
             if segment["index"] in self.sent_segments:
                 continue
             if self._confirmation_paused():
                 return False
+            await self.trigger_guard.ensure_owned()
             if ensure_owned is not None:
                 await ensure_owned()
                 if await self._lookup_order(config, self.order["id"]) is None:
                     raise ValueError("订单状态已变化，已停止发送API结果，请核对订单")
             start = len(self.results)
-            await self._send(segment["content"])
+            await self._send(segment["content"], enforce_trigger=True)
             current_results = self.results[start:]
             if not self.service._is_send_results_success(current_results):
                 raise ValueError(self.service._get_send_error_message(current_results) or "API结果发送失败")
@@ -226,6 +249,7 @@ class ApiKeywordHandler:
         """重新核对订单并调用既有免拼/确认发货；只有平台成功才保存为已发货。"""
         if self._confirmation_paused():
             return
+        await self.trigger_guard.ensure_owned()
         await ensure_owned()
         current = await get_api_confirmation_order(self.order)
         if current is None:
@@ -234,6 +258,7 @@ class ApiKeywordHandler:
         if handler is None:
             raise ValueError("自动发货服务未初始化，无法同步确认发货")
         await self._pre_check(current)
+        await self.trigger_guard.ensure_owned()
         await ensure_owned()
         current = await get_api_confirmation_order(self.order)
         if current is None:
@@ -243,6 +268,7 @@ class ApiKeywordHandler:
         self.confirm_attempted = True
         # API关键词的同步开关是此规则的显式发货配置，覆盖账号只发卡券/同意后发货模式。
         if current["is_bargain"] and current["status"] not in {"shipped", "completed"}:
+            await self.trigger_guard.ensure_owned()
             free_result = await handler.auto_freeshipping(
                 current["order_no"], self.item_id, self.buyer_id, force=True,
             )
@@ -256,6 +282,7 @@ class ApiKeywordHandler:
             raise ValueError("订单状态已变化，已停止确认发货，请核对订单")
         if self._confirmation_paused():
             return
+        await self.trigger_guard.ensure_owned()
         confirm_result = await handler.auto_confirm(current["order_no"], self.item_id, force=True)
         self._context(api_keyword_confirm_result=confirm_result)
         if not is_shipping_result_ok(confirm_result):
@@ -301,12 +328,19 @@ class ApiKeywordHandler:
             await self._confirm(config, ensure_owned)
 
     async def run(self, config: dict[str, Any], message: str) -> list[dict[str, Any]]:
-        """执行规则两个开关的组合，返回真实发送结果；失败给买家提示并写后台日志。"""
+        """先核对触发限制再执行API及发货，返回真实结果；失败给买家提示并写日志。"""
+        self.trigger_guard = ApiKeywordTriggerGuard(self.service, config, self.buyer_id, self.item_id)
         self._context(api_keyword_rule_id=config["id"],
                       api_keyword_trigger_after_order=config["trigger_after_order"],
-                      api_keyword_sync_confirm_delivery=config["sync_confirm_delivery"])
+                      api_keyword_sync_confirm_delivery=config["sync_confirm_delivery"],
+                      api_keyword_follow_order_quantity=config.get("follow_order_quantity", False),
+                      api_keyword_skip_same_message=config.get("skip_same_message", False))
         try:
-            self.signature = hashlib.sha256(json.dumps(config, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+            if not await self.trigger_guard.check(message):
+                return self.results
+            # 触发限制不改变API请求或发货配置，排除新开关可兼容升级前的订单恢复记录。
+            delivery_config = {key: value for key, value in config.items() if key not in {"follow_order_quantity", "skip_same_message"}}
+            self.signature = hashlib.sha256(json.dumps(delivery_config, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
             if config["trigger_after_order"]:
                 self.order = await self._lookup_order(config)
                 if self.order is None and config["sync_confirm_delivery"]:

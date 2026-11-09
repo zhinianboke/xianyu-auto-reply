@@ -9,10 +9,12 @@ interface StandardApiErrorResponse {
   message?: string
 }
 
+const REQUEST_TIMEOUT = 90000
+
 // 创建 axios 实例
 const request: AxiosInstance = axios.create({
   baseURL: '',
-  timeout: 90000,
+  timeout: REQUEST_TIMEOUT,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -90,6 +92,7 @@ const refreshAccessToken = async (): Promise<string> => {
   try {
     // 刷新接口使用独立 axios 调用，避免再次进入本实例的鉴权拦截器。
     const response = await axios.post('/api/v1/auth/refresh', {}, {
+      timeout: REQUEST_TIMEOUT,
       headers: { Authorization: `Bearer ${refreshToken}` },
     })
     const data = response.data

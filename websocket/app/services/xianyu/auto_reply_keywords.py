@@ -93,7 +93,10 @@ class AutoReplyKeywordsMixin:
                             reply_trace["matched_keyword"] = matched_keyword
                             reply_trace["matched_rule_type"] = "keyword_item"
                             reply_trace.setdefault("context_snapshot", {})["matched_item_title"] = kw.get("item_title") or None
-                        
+
+                        if kw_type == "api_keyword":
+                            return self._api_keyword_reply(kw, reply_trace)
+
                         if kw_type == "image" and image_url:
                             image_reply = await self._handle_image_keyword(matched_keyword, image_url)
                             if reply_trace is not None:
@@ -169,11 +172,7 @@ class AutoReplyKeywordsMixin:
                         reply_trace["matched_rule_type"] = "keyword_common"
 
                     if kw_type == "api_keyword":
-                        if reply_trace is not None:
-                            # 沿用通用关键词日志分类，API规则标识写入上下文。
-                            reply_trace.setdefault("context_snapshot", {})["api_keyword_rule_id"] = kw["api_config"]["id"]
-                        # 返回配置，聊天入口关闭查询会话后再执行HTTP请求及发货。
-                        return {"_reply_mode": "api_keyword", "config": kw["api_config"]}
+                        return self._api_keyword_reply(kw, reply_trace)
 
                     if kw_type == "image" and image_url:
                         image_reply = await self._handle_image_keyword(matched_keyword, image_url)
@@ -235,6 +234,17 @@ class AutoReplyKeywordsMixin:
         except Exception as e:
             logger.error(f"【{self.cookie_id}】获取关键词回复失败: {e}")
             return None
+
+    @staticmethod
+    def _api_keyword_reply(keyword_rule: dict, reply_trace: dict | None) -> dict:
+        """生成商品或通用API回复快照；参数为规则和日志，返回延后执行的API配置。"""
+        if reply_trace is not None:
+            reply_trace.setdefault("context_snapshot", {}).update(
+                api_keyword_rule_id=keyword_rule["api_config"]["id"],
+                api_keyword_item_id=keyword_rule.get("item_id") or None,
+            )
+        # 聊天入口释放查询会话后再执行HTTP请求和发货，两个匹配范围共用此入口。
+        return {"_reply_mode": "api_keyword", "config": keyword_rule["api_config"]}
 
     async def _list_keywords(self, session: AsyncSession, account: XYAccount) -> list[dict]:
         """获取关键词列表（参照旧框架，添加is_active条件）"""

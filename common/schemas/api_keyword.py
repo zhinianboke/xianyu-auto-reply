@@ -20,12 +20,25 @@ from common.models.xy_api_keyword_rule import HTTP_METHODS
 from common.utils.response_field import parse_response_field_path
 
 
+def normalize_item_id(value: Any) -> str | None:
+    """校验并规范API关键词商品标识；空值返回None，非法输入抛出中文错误。"""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("商品ID必须是字符串")  # noqa: TRY004 -- Pydantic校验需转换为业务错误
+    value = value.strip()
+    if len(value) > 64 or any(char.isspace() or ord(char) < 32 for char in value):
+        raise ValueError("商品ID不能超过64个字符或包含空白字符")
+    return value or None
+
+
 class ApiKeywordConfig(BaseModel):
     """新建与编辑共用的可修改字段，账号和所属用户由服务端校验。"""
 
     model_config = ConfigDict(extra="forbid")
 
     keyword: str
+    item_id: str | None = None
     url: str
     method: str = "GET"
     timeout: int = 60
@@ -34,6 +47,14 @@ class ApiKeywordConfig(BaseModel):
     response_field: str = ""
     sync_confirm_delivery: StrictBool = False
     trigger_after_order: StrictBool = False
+    follow_order_quantity: StrictBool = False
+    skip_same_message: StrictBool = False
+
+    @field_validator("item_id", mode="before")
+    @classmethod
+    def validate_item_id(cls, value: Any) -> str | None:
+        """新建和编辑共用商品标识校验，空值表示通用规则。"""
+        return normalize_item_id(value)
 
     @field_validator("keyword")
     @classmethod
@@ -128,6 +149,34 @@ class ApiKeywordCreate(ApiKeywordConfig):
     """新建配置；request_id为客户端生成的内部幂等标识，无需用户填写。"""
 
     request_id: UUID
+
+
+class ApiKeywordBatchCreate(BaseModel):
+    """多选商品新建请求，一次事务保存全部商品，失败不产生部分配置。"""
+
+    model_config = ConfigDict(extra="forbid")
+    config: ApiKeywordCreate
+    item_ids: list[str] = Field(min_length=1)
+
+    @field_validator("item_ids", mode="before")
+    @classmethod
+    def validate_item_ids(cls, value: Any) -> list[str]:
+        """规范多选商品列表，拒绝空商品、重复标识和非法类型。"""
+        if not isinstance(value, list):
+            raise ValueError("请选择需要绑定的商品")  # noqa: TRY004 -- Pydantic校验需转换为业务错误
+        normalized = [normalize_item_id(item) for item in value]
+        if not normalized or any(item is None for item in normalized):
+            raise ValueError("批量新建必须选择具体商品")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("选择的商品存在重复，请重新选择")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_batch_scope(self) -> ApiKeywordBatchCreate:
+        """商品范围统一来自多选列表，拒绝同时指定单个绑定商品。"""
+        if self.config.item_id is not None:
+            raise ValueError("批量新建请通过商品列表指定绑定商品")
+        return self
 
 
 class ApiKeywordUpdate(ApiKeywordConfig):

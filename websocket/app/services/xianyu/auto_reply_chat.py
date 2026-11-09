@@ -35,6 +35,7 @@ class AutoReplyChatMixin:
         """
         log_payload = self._build_auto_reply_log_payload(parsed_message)
         reply_trace_token = self._reply_trace_var.set(log_payload)
+        api_handler = None
         try:
             send_user_id = parsed_message.get("send_user_id", "")
             send_user_name = parsed_message.get("send_user_name", "")
@@ -187,9 +188,10 @@ class AutoReplyChatMixin:
                     # 格式：__IMAGE_SEND__|类型标识|image_url
                     # 类型标识：KW:keyword（关键词）、DR:item_id（默认回复）、空（不需要更新）
                     if isinstance(reply, dict) and reply.get("_reply_mode") == "api_keyword":
-                        send_results = await ApiKeywordHandler(
+                        api_handler = ApiKeywordHandler(
                             self, websocket, chat_id, send_user_id, item_id,
-                        ).run(reply["config"], send_message)
+                        )
+                        send_results = await api_handler.run(reply["config"], send_message)
                         if log_payload.get("_api_keyword_error") or log_payload.get("process_status") == "skipped":
                             await self._unmark_chat_processed(chat_id, send_message)
                     elif isinstance(reply, dict) and reply.get("_reply_mode") == "external_contact":
@@ -375,12 +377,24 @@ class AutoReplyChatMixin:
                     msg_time=msg_time,
                 )
             
+        except asyncio.CancelledError:
+            if api_handler is not None and log_payload.get("process_status") != "success":
+                log_payload.update(process_status="failed", decision_reason="failed", error_message="API关键词处理被取消，可重新触发")
+                await self._unmark_chat_processed(chat_id, send_message)
+            raise
         except Exception as e:
-            logger.error(f"【{self.cookie_id}】处理聊天消息失败: {e}")
-            log_payload["process_status"] = "failed"
-            log_payload["decision_reason"] = "failed"
-            log_payload["error_message"] = str(e)
+            logger.exception("【{}】处理聊天消息失败", self.cookie_id)
+            if api_handler is not None and log_payload.get("process_status") == "success":
+                # 回复已成功时，通知等后续异常不能使成功日志失效，否则去重及额度会被绕过。
+                log_payload.setdefault("context_snapshot", {})["api_keyword_post_reply_error"] = str(e)
+            else:
+                log_payload["process_status"] = "failed"
+                log_payload["decision_reason"] = "failed"
+                log_payload["error_message"] = str(e)
+                if api_handler is not None:
+                    await self._unmark_chat_processed(chat_id, send_message)
         finally:
+            log_id = None
             try:
                 log_payload.pop("_api_send_checked", None)
                 log_payload.pop("_api_keyword_error", None)
@@ -399,4 +413,11 @@ class AutoReplyChatMixin:
                 if log_id and pending_send_waiters:
                     self._spawn_send_status_writeback(log_id, pending_send_waiters)
             finally:
-                self._reply_trace_var.reset(reply_trace_token)
+                try:
+                    if api_handler is not None:
+                        try:
+                            await api_handler.finalize_log(log_id)
+                        finally:
+                            await api_handler.close()
+                finally:
+                    self._reply_trace_var.reset(reply_trace_token)

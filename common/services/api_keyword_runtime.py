@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 from loguru import logger
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.db.retry import with_db_retry
@@ -19,6 +19,7 @@ PENDING_DELIVERY_STATUSES = ("pending_ship", "pending", "paid", "待发货")
 CONFIG_FIELDS = (
     "id", "owner_id", "account_id", "url", "method", "timeout", "headers",
     "params", "response_field", "sync_confirm_delivery", "trigger_after_order",
+    "follow_order_quantity", "skip_same_message",
 )
 ORDER_FIELDS = (
     "id", "owner_id", "account_id", "buyer_id", "item_id", "order_no",
@@ -45,7 +46,7 @@ async def list_api_keyword_rules(session: AsyncSession, owner_id: int, account_p
         raise
     return [{
         "type": "api_keyword",
-        "item_id": "",
+        "item_id": rule.item_id or "",
         "keyword": "\n".join(part.strip() for part in re.split(r"[,，\r\n]+", rule.keyword) if part.strip()),
         "api_config": {field: getattr(rule, field) for field in CONFIG_FIELDS},
     } for rule in rules]
@@ -106,7 +107,8 @@ async def _read_api_order(scope: tuple, order_id: int | None, statuses: tuple[st
         if order_id is not None:
             stmt = stmt.where(XYOrder.id == order_id)
         order = (await session.execute(
-            stmt.order_by(XYOrder.created_at.desc(), XYOrder.id.desc()).limit(1)
+            stmt.order_by(func.coalesce(XYOrder.placed_at, XYOrder.created_at).desc(),
+                          XYOrder.id.desc()).limit(1)
         )).mappings().first()
         return dict(order) if order else None
 

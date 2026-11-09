@@ -1,4 +1,4 @@
-"""API关键词新建、编辑及配置查询接口，不触发自动回复、发货或外部API请求。"""
+"""API关键词新建、编辑、软删除及配置查询接口，不触发发货或外部API请求。"""
 from __future__ import annotations
 
 from typing import Annotated
@@ -12,7 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api import deps
 from app.services.api_keyword_service import ApiKeywordService
 from common.models.user import User
-from common.schemas.api_keyword import ApiKeywordCreate, ApiKeywordUpdate
+from common.schemas.api_keyword import (
+    ApiKeywordBatchCreate,
+    ApiKeywordCreate,
+    ApiKeywordUpdate,
+)
 from common.schemas.common import ApiResponse
 from common.utils.auth_scope import resolve_owner_scope
 
@@ -62,6 +66,27 @@ async def list_api_keywords(
     except SQLAlchemyError:
         logger.exception("API关键词列表查询失败: user_id={}, account={}", user_id, account_id)
         return ApiResponse(success=False, code=50001, message="查询API关键词失败，请稍后重试")
+
+
+@router.post("/{account_id}/batch", response_model=ApiResponse)
+async def create_api_keywords_batch(
+    account_id: str, payload: Annotated[dict, Body()], current_user: CurrentUser, session: DatabaseSession,
+) -> ApiResponse:
+    """按多选商品一次保存配置，全部成功才提交，失败返回中文原因。"""
+    user_id = current_user.id
+    owner_id, _ = resolve_owner_scope(current_user)
+    try:
+        validated = ApiKeywordBatchCreate.model_validate(payload)
+        data = await ApiKeywordService(session).create_batch(owner_id, account_id, validated)
+        return ApiResponse(success=True, message=f"成功保存{data['total']}条API关键词", data=data)
+    except ValidationError as exc:
+        logger.warning("API关键词批量校验失败: user_id={}, account={}, payload={}, error={}", user_id, account_id, payload, exc)
+        return ApiResponse(success=False, code=40001, message=_validation_message(exc))
+    except ValueError as exc:
+        return ApiResponse(success=False, code=40001, message=str(exc))
+    except SQLAlchemyError:
+        logger.exception("API关键词批量保存失败: user_id={}, account={}, payload={}", user_id, account_id, payload)
+        return ApiResponse(success=False, code=50001, message="保存API关键词失败，请稍后重试")
 
 
 @router.post("/{account_id}", response_model=ApiResponse)
@@ -127,3 +152,31 @@ async def update_api_keyword(
     except SQLAlchemyError:
         logger.exception("API关键词修改失败: user_id={}, account={}, id={}, payload={}", user_id, account_id, rule_id, payload)
         return ApiResponse(success=False, code=50001, message="修改API关键词失败，请稍后重试")
+
+
+@router.delete("/{account_id}/{rule_id}", response_model=ApiResponse)
+async def delete_api_keyword(
+    account_id: str, rule_id: RuleId, current_user: CurrentUser, session: DatabaseSession,
+) -> ApiResponse:
+    """删除权限范围内的API关键词，保留数据并统一使用HTTP200及中文结果。
+
+    Args:
+        account_id: 配置所属账号标识。
+        rule_id: 配置主键。
+        current_user: 当前登录用户。
+        session: 请求级数据库会话。
+    Returns:
+        统一响应体，成功包含配置主键及账号，失败包含中文原因。
+    """
+    user_id = current_user.id
+    owner_id, _ = resolve_owner_scope(current_user)
+    try:
+        data = await ApiKeywordService(session).delete(owner_id, account_id, rule_id)
+        return ApiResponse(success=True, message="API关键词删除成功", data=data)
+    except ValueError as exc:
+        logger.warning("API关键词删除校验失败: user_id={}, account={}, id={}, error={}",
+                       user_id, account_id, rule_id, exc)
+        return ApiResponse(success=False, code=40001, message=str(exc))
+    except Exception:  # noqa: BLE001 -- 删除失败必须记录异常并向用户返回中文结果
+        logger.exception("API关键词删除失败: user_id={}, account={}, id={}", user_id, account_id, rule_id)
+        return ApiResponse(success=False, code=50001, message="删除API关键词失败，请稍后重试")
