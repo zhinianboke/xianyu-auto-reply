@@ -20,6 +20,7 @@ export function useAdminSettlements(userId: number) {
     setError(message)
     addToast({ type: 'error', message })
   }, [addToast])
+  const clearError = () => setError('')
 
   /** 保留后端分页口径；关闭或切换用户后旧请求不得更新界面。 */
   const load = useCallback((page = 1, pageSize = 20) => {
@@ -80,5 +81,5 @@ export function useAdminSettlements(userId: number) {
     })
   }
 
-  return { data, loading, saving, error, load, save }
+  return { data, loading, saving, error, load, save, clearError }
 }

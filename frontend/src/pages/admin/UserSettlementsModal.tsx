@@ -1,6 +1,7 @@
 /** 用户管理结算记录弹窗：按用户分页展示，支持修改每条数据的结算结果。 */
 import { useState } from 'react'
 import { ClipboardList, Loader2, RefreshCw } from 'lucide-react'
+import { Pager } from '@/components/common/Pager'
 import type { User } from '@/types'
 import type { AdminSettlementRecord } from '@/api/adminSettlements'
 import { SettlementResultModal } from './SettlementResultModal'
@@ -13,7 +14,7 @@ const displayTime = (value?: string) => value ? value.replace('T', ' ').slice(0,
 export function UserSettlementsModal({ user, onClose }: { user: User; onClose: () => void }) {
   const records = useAdminSettlements(user.user_id)
   const [editing, setEditing] = useState<AdminSettlementRecord | null>(null)
-  const { data, loading, saving, error, load, save } = records
+  const { data, loading, saving, error, load, save, clearError } = records
   const page = data?.page ?? 1
   const pageSize = data?.page_size ?? 20
   const total = data?.total ?? 0
@@ -50,27 +51,19 @@ export function UserSettlementsModal({ user, onClose }: { user: User; onClose: (
                     <td className="max-w-[180px] break-words text-red-600 dark:text-red-400">{record.reject_reason || '—'}</td>
                     <td className="min-w-[160px] max-w-[300px] whitespace-pre-wrap break-words">{record.remark || '—'}</td>
                     <td className="whitespace-nowrap">{displayTime(record.created_at)}</td><td className="whitespace-nowrap">{displayTime(record.updated_at)}</td>
-                    <td><button type="button" className="btn-ios-secondary btn-sm whitespace-nowrap" disabled={busy} onClick={() => setEditing(record)}>修改结果</button></td>
+                    <td><button type="button" className="btn-ios-secondary btn-sm whitespace-nowrap" disabled={busy} onClick={() => { clearError(); setEditing(record) }}>修改结果</button></td>
                   </tr>)}
                 </tbody>
               </table>
             </div>
             {loading && <div role="status" className="absolute inset-0 flex items-center justify-center gap-2 bg-white/80 dark:bg-slate-800/85"><Loader2 className="h-6 w-6 animate-spin text-[rgb(var(--color-primary))]" /><span className="text-sm text-slate-700 dark:text-slate-200">正在读取结算记录…</span></div>}
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
-            <label className="flex items-center gap-2">每页<select className="input-ios w-auto py-1" value={pageSize} disabled={busy} onChange={event => load(1, Number(event.target.value))}>
-              {[10, 20, 50, 100].map(size => <option key={size} value={size}>{size}</option>)}
-            </select>条，共 {total} 条</label>
-            <div className="flex items-center gap-2">
-              <button type="button" className="btn-ios-secondary btn-sm" disabled={busy || page <= 1} onClick={() => load(page - 1, pageSize)}>上一页</button>
-              <span>第 {page} / {totalPages || 1} 页</span>
-              <button type="button" className="btn-ios-secondary btn-sm" disabled={busy || page >= totalPages} onClick={() => load(page + 1, pageSize)}>下一页</button>
-            </div>
-          </div>
+          <Pager page={page} pageSize={pageSize} total={total} totalPages={totalPages} loading={busy}
+            onPageChange={next => load(next, pageSize)} onPageSizeChange={size => load(1, size)} />
         </div>
       </div>
       {editing && <SettlementResultModal key={`${editing.id}:${editing.revision}`} record={editing} options={data?.options.statuses ?? []} saving={saving} error={error}
-        onClose={() => { if (!saving) setEditing(null) }}
+        onClose={() => { if (!saving) { setEditing(null); clearError() } }}
         onSave={payload => { void save(editing.id, payload).then(saved => { if (saved) setEditing(null) }) }} />}
     </div>
   )

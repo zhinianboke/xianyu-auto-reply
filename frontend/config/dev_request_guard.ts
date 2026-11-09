@@ -20,6 +20,26 @@ function transformRequestUrl(url: string, server: ViteDevServer): string {
   return url.startsWith('/@id/') ? url.slice('/@id/'.length).replace('__x00__', '\0') : url
 }
 
+const browserExternalPrefix = '__vite-browser-external'
+
+/** 拒绝向浏览器外部模块名称插入脚本或路径穿越的请求，普通模块名称保持兼容。 */
+function unsafeBrowserExternalModule(id: string): boolean {
+  id = id.replace(/^\0/, '')
+  if (!id.startsWith(browserExternalPrefix) || id === browserExternalPrefix) return false
+  if (!id.startsWith(`${browserExternalPrefix}:`)) return true
+  const name = id.slice(browserExternalPrefix.length + 1)
+  return !name || /["'`;{}<>\u0000-\u001f\u007f\u2028\u2029]/.test(name)
+    || name.replace(/\\/g, '/').split('/').some(segment => segment === '..')
+}
+
+/** 安全生成 Vite 的外部模块提示；名称只作为字符串，不能成为待转换的脚本。 */
+function browserExternalCode(id: string): string {
+  const name = id.slice(browserExternalPrefix.length + 1)
+  const start = JSON.stringify(`Module "${name}" has been externalized for browser compatibility. Cannot access "${name}.`)
+  const end = JSON.stringify('" in client code. See https://vite.dev/guide/troubleshooting.html#module-externalized-for-browser-compatibility for more details.')
+  return `export default new Proxy({}, { get(_, key) { throw new Error(${start} + String(key) + ${end}); } });`
+}
+
 /** 仅校验 HTML 代理的真实缓存；缺失模块返回请求错误，其他插件异常仍按原流程报错。 */
 async function invalidHtmlProxy(url: string, server: ViteDevServer): Promise<boolean> {
   const id = transformRequestUrl(url, server)
@@ -78,9 +98,18 @@ async function requestedDirectory(url: string, server: ViteDevServer): Promise<s
 /** 在 Vite 中间件前校验 URL；正常页面、有效 HTML 代理和后端代理请求继续处理。 */
 export function rejectUnsafeDevServerPaths(): Plugin {
   const sensitiveRoots = new Set(['/etc', '/proc', '/sys', '/dev', '/var', '/root'])
+  let production = false
 
   return {
     name: 'reject-unsafe-dev-server-paths',
+    apply: 'serve',
+    enforce: 'pre',
+    configResolved(config) { production = config.isProduction },
+    load(id) {
+      // 比 Vite 自带加载器更早执行，连依赖解析产生的模块名称也必须安全转义。
+      if (id.startsWith(browserExternalPrefix)) return production ? 'export default {}' : browserExternalCode(id)
+      return null
+    },
     configureServer(server) {
       server.middlewares.use((req: IncomingMessage, res: ServerResponse, next) => {
         if (!req.url) return next()
@@ -89,16 +118,24 @@ export function rejectUnsafeDevServerPaths(): Plugin {
           decodedUrl = decodeURI(req.url)
           const pathname = new URL(decodedUrl, 'http://vite.local').pathname
           const decodedPathname = decodeURIComponent(pathname).replace(/[\\]+/g, '/')
+          if (unsafeBrowserExternalModule(transformRequestUrl(decodedUrl, server))
+            || unsafeBrowserExternalModule(transformRequestUrl(decodedPathname, server))) {
+            logRejectedRequest(server, req, '拒绝非法浏览器外部模块')
+            rejectRequest(res, '浏览器外部模块请求不合法')
+            return
+          }
           const segments = decodedPathname.split('/').filter(Boolean)
           const rootPath = segments.length > 0 ? `/${segments[0].toLowerCase()}` : ''
           const isWindowsAbsolutePath = /^\/[a-z]:\//i.test(decodedPathname)
           const isUncPath = decodedPathname.startsWith('//')
           const hasTraversal = segments.some(segment => segment === '..')
           if (sensitiveRoots.has(rootPath) || isWindowsAbsolutePath || isUncPath || hasTraversal) {
+            logRejectedRequest(server, req, '拒绝非法路径')
             rejectRequest(res, '请求路径不合法')
             return
           }
         } catch {
+          logRejectedRequest(server, req, '拒绝非法请求编码')
           rejectRequest(res, '请求地址编码不合法')
           return
         }

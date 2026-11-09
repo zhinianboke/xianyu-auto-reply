@@ -110,6 +110,8 @@ class AdminSettlementService:
             # 即使与上次时间落在同一秒，也显式写入北京时间，不触发数据库本地时区的 now()。
             flag_modified(record, "updated_at")
             audit = f"[{record.updated_at:%Y-%m-%d %H:%M:%S}] 管理员ID={admin_id} 修改结算结果：{old_label} → {chosen['label']}"
+            if before["reject_reason"] and before["reject_reason"] != payload.reject_reason:
+                audit += f"；原拒绝原因：{before['reject_reason']}"
             if payload.reject_reason:
                 audit += f"；拒绝原因：{payload.reject_reason}"
             if payload.remark:

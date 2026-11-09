@@ -414,6 +414,8 @@ npm run dev
 
 Vite 开发环境会在文件加载前拒绝 `/@fs/`、`/@id/` 等请求中的目录读取，并校验 `?html-proxy&index=...` 对应的真实模块缓存；无效代理（包括把 YAML 配置当作 HTML 代理或请求不存在的脚本索引）直接返回中文请求错误。前端终端记录「拒绝目录读取」或「拒绝无效 HTML 代理」、请求地址、来源页面及连接 IP/端口，避免偶发无效请求触发 `EISDIR`、`No matching HTML proxy module` 并向已打开页面广播错误遮罩。正常页面路由、在线安装日志接口、真实文件、虚拟模块和有效 HTML 内联脚本代理继续按原流程处理；更新 `frontend/vite.config.ts` 及 `frontend/config/dev_request_guard.ts` 后需要重启已有前端开发进程。
 
+开发请求校验也会拒绝含脚本注入或路径穿越的 `__vite-browser-external` 模块请求，并安全转义外部模块名称，避免其进入 Vite 的代码转换后触发 `Unknown glob option "base"` 等错误遮罩。拒绝日志包含原始 URL、来源页面和连接 IP/端口，正常模块及后端代理继续处理。不要通过关闭错误遮罩或启用未知的 glob 参数来处理此类请求；更新后重启现有前端开发进程即可生效。
+
 #### 5. 启动返佣子系统
 
 ```bash
