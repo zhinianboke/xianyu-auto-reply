@@ -14,9 +14,10 @@ from app.services.xianyu.resource_manager import pause_manager
 from common.services.api_keyword_client import request_api_keyword
 from common.services.api_keyword_runtime import (
     API_DELIVERY_METADATA_KEY,
+    FULFILLED_ORDER_STATUSES,
     get_api_confirmation_order,
-    get_api_recovery_order,
     get_pending_api_order,
+    get_trigger_api_order,
     save_api_order_checkpoint,
     save_api_order_delivery,
 )
@@ -67,9 +68,18 @@ class ApiKeywordHandler:
         if self.trace is not None:
             self.trace.setdefault("context_snapshot", {}).update(values)
 
-    async def _lookup_order(self, config, order_id=None):
-        """按所属用户、账号、买家及商品核对最新订单或指定订单。"""
-        return await get_pending_api_order(
+    async def _lookup_order(self, config, order_id=None, *, for_trigger: bool = False):
+        """按所属用户、账号、买家及商品核对订单，触发资格允许已发货及已完成。
+
+        Args:
+            config: 当前API配置，包含所属用户ID。
+            order_id: 可选的指定订单主键。
+            for_trigger: 是否只检查下单资格；默认仍只读取待发货订单供发货使用。
+        Returns:
+            符合对应状态要求的订单快照，没有符合条件的订单时返回None。
+        """
+        lookup = get_trigger_api_order if for_trigger else get_pending_api_order
+        return await lookup(
             config["owner_id"], self.service.cookie_id, self.buyer_id, self.item_id, order_id,
         )
 
@@ -271,7 +281,7 @@ class ApiKeywordHandler:
             return
         self.confirm_attempted = True
         # API关键词的同步开关是此规则的显式发货配置，覆盖账号只发卡券/同意后发货模式。
-        if current["is_bargain"] and current["status"] not in {"shipped", "completed"}:
+        if current["is_bargain"] and current["status"] not in FULFILLED_ORDER_STATUSES:
             await self.trigger_guard.ensure_owned()
             free_result = await handler.auto_freeshipping(
                 current["order_no"], self.item_id, self.buyer_id, force=True,
@@ -306,15 +316,33 @@ class ApiKeywordHandler:
         return True
 
     async def _process_order(self, config, message, ensure_owned) -> None:
-        """持有共享订单锁时恢复结果、预检查、发送并确认，阶段结果落库后可安全重试。"""
+        """持锁处理符合下单资格的订单，待发货恢复并确认，已发货/已完成仅回复。
+
+        Args:
+            config: 当前API及同步确认发货配置。
+            message: 买家的完整触发消息。
+            ensure_owned: 检查订单锁仍有效的异步方法。
+        Returns:
+            无返回值；回复结果及处理上下文保存在当前处理实例中。
+        """
         current = await self._lookup_order(config, self.order["id"])
         if current is None:
             current = await get_api_confirmation_order(self.order)
             if current is None:
                 raise ValueError("订单已不处于待发货状态，请核对订单后重试")
         self.order = current
-        self._restore_checkpoint(current)
-        if current["status"] in {"shipped", "completed"}:
+        if current["status"] in FULFILLED_ORDER_STATUSES:
+            checkpoint = (current.get("metadata_json") or {}).get(API_DELIVERY_METADATA_KEY)
+            needs_recovery = bool(
+                checkpoint and current.get("card_only_delivered")
+                and not str(current.get("delivery_content") or "").strip()
+            )
+            if not needs_recovery:
+                # 已完成发货的订单仍具备下单资格，仅返回本次API结果，不覆盖原发货记录。
+                await self._request_and_send({**config, "sync_confirm_delivery": False}, message, ensure_owned)
+                self._context(api_keyword_delivery_skipped="订单已发货或已完成，仅回复API结果，跳过重复确认发货")
+                return
+            self._restore_checkpoint(current)
             if not self.checkpoint_saved or not self.send_checked:
                 raise ValueError("订单状态已变化，无法核实API结果完整发送，请核对发货记录")
             # 平台已发货但本地保存曾失败，只核实平台并补结果，禁止重新请求或发送。
@@ -323,6 +351,7 @@ class ApiKeywordHandler:
                                   decision_reason="reply_sent", send_status="success")
             await self._confirm(config, ensure_owned)
             return
+        self._restore_checkpoint(current)
         if config["trigger_after_order"]:
             await self._pre_check(current)
             await ensure_owned()
@@ -346,13 +375,9 @@ class ApiKeywordHandler:
             delivery_config = {key: value for key, value in config.items() if key not in {"follow_order_quantity", "skip_same_message"}}
             self.signature = hashlib.sha256(json.dumps(delivery_config, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
             if config["trigger_after_order"]:
-                self.order = await self._lookup_order(config)
-                if self.order is None and config["sync_confirm_delivery"]:
-                    self.order = await get_api_recovery_order(
-                        config["owner_id"], self.service.cookie_id, self.buyer_id, self.item_id, self.signature,
-                    )
+                self.order = await self._lookup_order(config, for_trigger=True)
                 if self.order is None:
-                    raise ValueError("未找到您在该商品下的待发货订单，请先下单并完成付款")
+                    raise ValueError("未找到您在该商品下的有效订单（待发货、已发货或已完成），请先下单并完成付款")
                 self._context(api_keyword_order_no=self.order["order_no"])
                 if self.trace is not None:
                     self.trace["order_no"] = self.order["order_no"]

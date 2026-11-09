@@ -10,9 +10,7 @@ from common.db.retry import with_db_retry
 from common.db.session import async_session_maker
 from common.models.auto_reply_message_log import XYAutoReplyMessageLog
 from common.models.xy_order import XYOrder
-from common.services.api_keyword_runtime import PENDING_DELIVERY_STATUSES
-
-VALID_QUANTITY_STATUSES = (*PENDING_DELIVERY_STATUSES, "shipped", "completed")
+from common.services.api_keyword_runtime import VALID_API_ORDER_STATUSES
 
 
 def _success_scope(owner_id: int, account_id: str, buyer_id: str, item_id: str) -> list:
@@ -67,7 +65,7 @@ async def check_api_keyword_trigger(
                 ).where(
                     XYOrder.owner_id == config["owner_id"], XYOrder.account_id == account_id,
                     XYOrder.buyer_id == buyer_id, XYOrder.item_id == item_id,
-                    XYOrder.status.in_(VALID_QUANTITY_STATUSES),
+                    XYOrder.status.in_(VALID_API_ORDER_STATUSES),
                 ).order_by(func.coalesce(XYOrder.placed_at, XYOrder.created_at).desc(),
                            XYOrder.id.desc()).limit(1))).mappings().first()
                 if order is None:

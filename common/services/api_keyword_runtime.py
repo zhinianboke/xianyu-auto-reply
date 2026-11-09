@@ -1,4 +1,4 @@
-"""API关键词运行数据访问：配置读取、待发货订单核对及发货结果保存。"""
+"""API关键词运行数据访问：配置读取、下单资格及待发货订单核对、发货结果保存。"""
 from __future__ import annotations
 
 import re
@@ -14,8 +14,11 @@ from common.models.xy_api_keyword_rule import XYApiKeywordRule
 from common.models.xy_order import XYOrder
 from common.utils.time_utils import get_beijing_now_naive
 
-# pending/paid/中文状态用于兼容历史订单；未支付、退款及已发货状态不得放行。
+# pending/paid/中文状态兼容历史待发货订单；发货操作仍只允许待发货状态。
 PENDING_DELIVERY_STATUSES = ("pending_ship", "pending", "paid", "待发货")
+FULFILLED_ORDER_STATUSES = ("shipped", "completed")
+# 下单资格及订单数量限制接受待发货、已发货、已完成，排除未付款、退款和关闭。
+VALID_API_ORDER_STATUSES = (*PENDING_DELIVERY_STATUSES, *FULFILLED_ORDER_STATUSES)
 CONFIG_FIELDS = (
     "id", "owner_id", "account_id", "url", "method", "timeout", "headers",
     "params", "response_field", "sync_confirm_delivery", "trigger_after_order",
@@ -55,7 +58,7 @@ async def list_api_keyword_rules(session: AsyncSession, owner_id: int, account_p
 def _order_scope(owner_id: int, account_id: str, buyer_id: str, item_id: str) -> tuple:
     """构造精确订单隔离条件；缺少身份或商品时拒绝扩大查询范围。"""
     if not owner_id or not account_id or not buyer_id or not item_id or item_id == "未知商品":
-        raise ValueError("缺少买家或商品信息，无法核对待发货订单")
+        raise ValueError("缺少买家或商品信息，无法核对订单")
     return (
         XYOrder.owner_id == owner_id,
         XYOrder.account_id == str(account_id),
@@ -78,23 +81,27 @@ async def get_pending_api_order(
 async def get_api_confirmation_order(order: dict[str, Any]) -> dict[str, Any] | None:
     """只复核已发送结果的原订单，兼容免拼期间已同步为已发货/已完成；退款关闭仍拒绝。"""
     scope = _order_scope(order["owner_id"], order["account_id"], order["buyer_id"], order["item_id"])
-    return await _read_api_order(scope, order["id"], (*PENDING_DELIVERY_STATUSES, "shipped", "completed"))
+    return await _read_api_order(scope, order["id"], VALID_API_ORDER_STATUSES)
 
 
 @with_db_retry()
-async def get_api_recovery_order(
-    owner_id: int, account_id: str, buyer_id: str, item_id: str, signature: str,
+async def get_trigger_api_order(
+    owner_id: int, account_id: str, buyer_id: str, item_id: str,
+    order_id: int | None = None,
 ) -> dict[str, Any] | None:
-    """仅恢复同规则已完整发送、已发货但正式结果尚未落库的最新原订单，不允许新取API结果。"""
+    """读取符合下单资格的最新订单，不将触发资格用于放开发货状态限制。
+
+    Args:
+        owner_id: 所属系统用户ID。
+        account_id: 闲鱼账号标识。
+        buyer_id: 买家闲鱼用户ID。
+        item_id: 当前商品ID。
+        order_id: 可选的指定订单主键，复查时不切换到其他订单。
+    Returns:
+        同买家同商品的待发货、已发货或已完成订单；没有符合条件的订单时返回None。
+    """
     scope = _order_scope(owner_id, account_id, buyer_id, item_id)
-    order = await _read_api_order(scope, None, ("shipped", "completed"))
-    if order is None or not order["card_only_delivered"] or str(order.get("delivery_content") or "").strip():
-        return None
-    checkpoint = (order.get("metadata_json") or {}).get(API_DELIVERY_METADATA_KEY)
-    if (not isinstance(checkpoint, dict) or checkpoint.get("signature") != signature
-            or checkpoint.get("send_checked") is not True):
-        return None
-    return order
+    return await _read_api_order(scope, order_id, VALID_API_ORDER_STATUSES)
 
 
 async def _read_api_order(scope: tuple, order_id: int | None, statuses: tuple[str, ...]) -> dict[str, Any] | None:
