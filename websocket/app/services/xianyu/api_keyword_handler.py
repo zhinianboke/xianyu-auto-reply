@@ -23,6 +23,10 @@ from common.services.api_keyword_runtime import (
 from common.services.delivery_utils import is_shipping_result_ok
 
 
+class ApiKeywordDeliveryConflict(ValueError):
+    """订单已有发货结果的业务冲突，只记录原因与上下文，无需异常堆栈。"""
+
+
 class ApiKeywordHandler:
     """使用当前自动回复实例发送API结果，不重新取卡券或触发完整自动发货流程。"""
 
@@ -84,7 +88,7 @@ class ApiKeywordHandler:
                 raise ValueError("订单API发送检测进度格式异常，请核对发货记录")
             if (checkpoint.get("signature") != self.signature
                     or not isinstance(checkpoint.get("content"), str) or not checkpoint["content"].strip()):
-                raise ValueError("该订单已有其他API发货结果，请先核对原发货记录")
+                raise ApiKeywordDeliveryConflict("该订单已有其他API发货结果，请先核对原发货记录")
             self.content = checkpoint["content"]
             self.send_checked = bool(checkpoint.get("send_checked"))
             segments = checkpoint.get("sent_segments", [])
@@ -94,9 +98,9 @@ class ApiKeywordHandler:
             self.checkpoint_saved = True
             self._context(api_keyword_reused_result=True)
         elif current.get("card_only_delivered"):
-            raise ValueError("该订单已由其他发货流程处理，请先核对发货记录")
+            raise ApiKeywordDeliveryConflict("该订单已由其他发货流程处理，请先核对发货记录")
         elif str(current.get("delivery_content") or "").strip():
-            raise ValueError("该订单已有发货内容，请先核对原发货记录")
+            raise ApiKeywordDeliveryConflict("该订单已有发货内容，请先核对原发货记录")
 
     async def _pre_check(self, current) -> None:
         """复用自动发货拦截入口；下单限制分支在取API结果之前执行。"""
@@ -380,9 +384,12 @@ class ApiKeywordHandler:
             else:
                 await self._request_and_send(config, message)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("API关键词执行失败: account={}, buyer={}, item={}, rule_id={}",
-                             self.service.cookie_id, self.buyer_id, self.item_id, config["id"])
             error = str(exc)
+            logger.opt(exception=not isinstance(exc, ApiKeywordDeliveryConflict)).error(
+                "API关键词执行失败: account={}, buyer={}, item={}, rule_id={}, order_no={}, error_type={}, error={}",
+                self.service.cookie_id, self.buyer_id, self.item_id, config["id"],
+                (self.order or {}).get("order_no"), type(exc).__name__, error,
+            )
             self._context(api_keyword_error=error)
             if self.trace is not None:
                 self.trace["_api_keyword_error"] = error
