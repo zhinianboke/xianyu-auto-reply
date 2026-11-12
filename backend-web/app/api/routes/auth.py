@@ -19,6 +19,7 @@ from common.schemas.auth import LoginRequest, LoginResponse, VerifyResponse
 from common.schemas.common import ApiResponse
 from common.schemas.user import UserCreate, UserPublic
 from app.services.auth import AuthService
+from app.services.system_setting_service import SystemSettingService
 from app.services.user_service import UserService
 from app.services.user_login_log_service import (
     LOGIN_METHOD_EMAIL_CODE,
@@ -29,6 +30,19 @@ from app.services.user_login_log_service import (
 from common.utils.http_utils import get_client_ip
 
 router = APIRouter(tags=["auth"])
+
+# 系统设置里的开关统一存成字符串（"true"/"false"/"1"/"0"），
+# 缺省（None 或空串）一律按关闭处理，与前端 ToggleSetting 的默认值保持一致
+_TRUE_SETTING_VALUES = {"true", "1", "yes", "on"}
+
+
+def _is_setting_enabled(value: object) -> bool:
+    """把系统设置中的字符串布尔值解析成 bool"""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in _TRUE_SETTING_VALUES
 
 
 class ResetPasswordRequest(BaseModel):
@@ -251,7 +265,17 @@ async def check_default_password(
 async def register_user(
     payload: UserCreate,
     user_service: UserService = Depends(deps.get_user_service),
+    setting_service: SystemSettingService = Depends(deps.get_system_setting_service),
 ) -> ApiResponse:
+    # 「允许用户注册」开关此前只在前端生效（隐藏注册入口），
+    # 接口本身始终开放，直接 POST 依然能建号，这里补上服务端校验
+    settings = await setting_service.list_settings()
+    if not _is_setting_enabled(settings.get("registration_enabled")):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="系统未开放注册，请联系管理员",
+        )
+
     # 验证邮箱验证码
     if payload.email and payload.verification_code:
         code_valid, code_msg = check_email_code(payload.email, payload.verification_code, "register")
