@@ -21,9 +21,9 @@ from typing import Any
 from loguru import logger
 
 from app.core.paths import STATIC_ROOT
-from app.services.xianyu_direct_payload import DirectPublishError, text as _text
+from common.services.xianyu_direct_payload import DirectPublishError, text as _text
 from app.services.xianyu_item_edit_mapper import map_edit_detail_to_form
-from app.services.xianyu_item_payload_builder import build_item_payload
+from common.services.xianyu_item_payload_builder import build_item_payload
 from common.services.xianyu_mtop import mtop_call
 from common.services.xianyu_publish_service import detect_publish_account_capability
 

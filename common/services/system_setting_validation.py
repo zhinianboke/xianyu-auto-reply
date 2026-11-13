@@ -4,12 +4,27 @@
 功能：
 1. 校验日志保留天数
 2. 校验金额、端口、枚举和邮箱类系统设置
+3. 统一解析系统设置中的布尔值
 """
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
 from common.utils.email_utils import normalize_email_address
+
+
+_TRUE_SETTING_VALUES = {"true", "1", "yes", "on"}
+
+
+def parse_boolean_setting(raw_value: object) -> bool:
+    """解析布尔设置；空值或无法识别的值按关闭处理。
+
+    Args:
+        raw_value: 数据库字符串、布尔值或数字形式的设置值。
+    Returns:
+        是否为 true、1、yes 或 on，忽略大小写与首尾空格。
+    """
+    return str(raw_value or "").strip().lower() in _TRUE_SETTING_VALUES
 
 
 def parse_log_retention_days(raw_value: str) -> tuple[int | None, str | None]:

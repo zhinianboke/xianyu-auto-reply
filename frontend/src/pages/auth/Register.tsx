@@ -4,10 +4,12 @@ import { MessageSquare, User, Lock, Mail, KeyRound, Eye, EyeOff } from 'lucide-r
 import { AuthNavbar } from '@/components/common/AuthNavbar'
 import { SafeHtml } from '@/components/common/SafeHtml'
 import { getDefaultAuthFooterAdSettings } from '@/api/settings'
-import { register, getRegistrationStatus, generateCaptcha, verifyCaptcha, sendVerificationCode, getAuthFooterAdSettings } from '@/api/auth'
+import { register, generateCaptcha, verifyCaptcha, sendVerificationCode, getAuthFooterAdSettings } from '@/api/auth'
 import { useUIStore } from '@/store/uiStore'
 import { cn } from '@/utils/cn'
 import { ButtonLoading } from '@/components/common/Loading'
+import { RegistrationGate } from './RegistrationGate'
+import { useRegistrationStatus } from './useRegistrationStatus'
 
 export function Register() {
   const navigate = useNavigate()
@@ -15,7 +17,7 @@ export function Register() {
 
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
-  const [registrationEnabled, setRegistrationEnabled] = useState(true)
+  const { enabled: registrationEnabled, error: registrationError, reload: reloadRegistration } = useRegistrationStatus()
   const [authFooterAd, setAuthFooterAd] = useState(() => getDefaultAuthFooterAdSettings())
 
   // Form states
@@ -34,25 +36,21 @@ export function Register() {
   const [verifying, setVerifying] = useState(false)
 
   useEffect(() => {
-    getRegistrationStatus()
-      .then((result) => {
-        setRegistrationEnabled(result.enabled)
-        if (!result.enabled) {
-          addToast({ type: 'warning', message: '注册功能已关闭' })
-          // 跳转到登录页面
-          setTimeout(() => navigate('/login'), 1500)
-        }
-      })
-      .catch(() => {})
-
     getAuthFooterAdSettings()
       .then((result) => setAuthFooterAd(result))
       .catch(() => {})
-  }, [navigate, addToast])
+  }, [])
 
   useEffect(() => {
-    loadCaptcha()
-  }, [])
+    if (registrationEnabled !== false) return
+    addToast({ type: 'warning', message: '注册功能已关闭' })
+    const timer = setTimeout(() => navigate('/login'), 1500)
+    return () => clearTimeout(timer)
+  }, [registrationEnabled, navigate, addToast])
+
+  useEffect(() => {
+    if (registrationEnabled === true) loadCaptcha()
+  }, [registrationEnabled])
 
   useEffect(() => {
     if (countdown > 0) {
@@ -197,7 +195,11 @@ export function Register() {
     }
   }
 
-  if (!registrationEnabled) {
+  if (registrationEnabled === null) {
+    return <RegistrationGate error={registrationError} reload={reloadRegistration} />
+  }
+
+  if (registrationEnabled === false) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center p-4">
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700 p-8 text-center max-w-sm">

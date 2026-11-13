@@ -12,7 +12,9 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
-from app.api.routes.captcha import check_email_code
+from app.api.routes.geetest import check_geetest_verified
+from common.services.email_verification_code_service import check_email_code
+from common.services.registration_policy import get_registration_rejection_message
 from app.core.security import decode_token, get_password_hash
 from common.models.user import User, UserRole, UserStatus
 from common.schemas.auth import LoginRequest, LoginResponse, VerifyResponse
@@ -30,20 +32,6 @@ from app.services.user_login_log_service import (
 from common.utils.http_utils import get_client_ip
 
 router = APIRouter(tags=["auth"])
-
-# 系统设置里的开关统一存成字符串（"true"/"false"/"1"/"0"），
-# 缺省（None 或空串）一律按关闭处理，与前端 ToggleSetting 的默认值保持一致
-_TRUE_SETTING_VALUES = {"true", "1", "yes", "on"}
-
-
-def _is_setting_enabled(value: object) -> bool:
-    """把系统设置中的字符串布尔值解析成 bool"""
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    return str(value).strip().lower() in _TRUE_SETTING_VALUES
-
 
 class ResetPasswordRequest(BaseModel):
     """重置密码请求"""
@@ -89,7 +77,6 @@ async def login_user(
         return LoginResponse(success=False, message=message)
 
     # 检查是否启用了登录滑动验证码
-    from app.services.system_setting_service import SystemSettingService
     setting_service = SystemSettingService(session)
     all_settings = await setting_service.list_settings()
     captcha_enabled_str = all_settings.get("login_captcha_enabled")
@@ -99,8 +86,6 @@ async def login_user(
     if payload.username and payload.password:
         # 账号密码登录 - 需要滑动验证（如果开启）
         if captcha_enabled:
-            from app.api.routes.geetest import check_geetest_verified
-
             if not payload.geetest_challenge:
                 return await fail_login("请完成滑动验证")
 
@@ -112,8 +97,6 @@ async def login_user(
     elif payload.email and payload.password:
         # 邮箱密码登录 - 需要滑动验证（如果开启）
         if captcha_enabled:
-            from app.api.routes.geetest import check_geetest_verified
-
             if not payload.geetest_challenge:
                 return await fail_login("请完成滑动验证")
 
@@ -261,19 +244,29 @@ async def check_default_password(
     )
 
 
-@router.post("/register", response_model=ApiResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=ApiResponse)
 async def register_user(
     payload: UserCreate,
     user_service: UserService = Depends(deps.get_user_service),
     setting_service: SystemSettingService = Depends(deps.get_system_setting_service),
 ) -> ApiResponse:
-    # 「允许用户注册」开关此前只在前端生效（隐藏注册入口），
-    # 接口本身始终开放，直接 POST 依然能建号，这里补上服务端校验
+    """按当前注册开关与邮箱验证码创建用户。
+
+    Args:
+        payload: 用户注册资料与邮箱验证码。
+        user_service: 用户查询与创建服务。
+        setting_service: 读取当前注册开关的设置服务。
+    Returns:
+        统一业务响应，关闭注册时不消费验证码或创建账号。
+    """
+    # 在消费验证码和创建账号前重新读取开关，旧验证码不能绕过已关闭的注册。
     settings = await setting_service.list_settings()
-    if not _is_setting_enabled(settings.get("registration_enabled")):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="系统未开放注册，请联系管理员",
+    rejection_message = get_registration_rejection_message(settings)
+    if rejection_message:
+        return ApiResponse(
+            success=False,
+            code=status.HTTP_403_FORBIDDEN,
+            message=rejection_message,
         )
 
     # 验证邮箱验证码

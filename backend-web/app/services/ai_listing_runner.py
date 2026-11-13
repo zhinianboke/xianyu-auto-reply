@@ -35,7 +35,7 @@ from common.services.ai_image_client import (
     generate_images,
 )
 from common.services.ai_text_client import DEFAULT_TEXT_TIMEOUT
-from app.services.xianyu_item_snapshot import as_bool
+from common.services.xianyu_item_snapshot import as_bool
 
 # 图片生成的并发度（单任务内）与全局并发上限（跨任务）
 IMAGE_CONCURRENCY = 3

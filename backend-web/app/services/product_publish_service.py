@@ -14,8 +14,8 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.xianyu_item_snapshot import as_bool
-from app.services.xianyu_direct_payload import DirectPublishError, build_sku_payload
+from common.services.xianyu_item_snapshot import as_bool
+from common.services.xianyu_direct_payload import DirectPublishError, build_sku_payload
 from common.models.data_dictionary import XYDataDictionary
 from common.models.product_material import ProductMaterial
 from common.services.product_material_price import (

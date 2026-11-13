@@ -28,9 +28,11 @@ from common.services.remote_token_api import (
     validate_remote_token_settings,
 )
 from common.services.system_setting_validation import (
+    parse_boolean_setting,
     parse_log_retention_days,
     validate_business_setting,
 )
+from common.services.registration_policy import REGISTRATION_ENABLED_KEY
 from common.services.token_api_mode import (
     TOKEN_API_MODE_REMOTE,
     TOKEN_API_MODE_SETTING_KEY,
@@ -58,7 +60,6 @@ ALIPAY_SETTING_KEYS = {
     "alipay.gateway_url", "alipay.notify_url",
 }
 
-_TRUE_VALUES = {"true", "1", "yes", "on"}
 _TRIMMED_SETTING_KEYS = {
     "smtp_port",
     "smtp_user",
@@ -87,11 +88,6 @@ class ValidatedSystemSettings:
     retention_days: int | None = None
 
 
-def _is_truthy(raw_value: object) -> bool:
-    """统一解析系统设置中的布尔字符串。"""
-    return str(raw_value or "").strip().lower() in _TRUE_VALUES
-
-
 def _normalize_email_setting(key: str, value: str) -> tuple[str, str | None]:
     """规范化允许留空的邮箱设置。"""
     if key not in {"smtp_user", "withdraw.notify_email"} or not value:
@@ -106,6 +102,8 @@ def _normalize_email_setting(key: str, value: str) -> tuple[str, str | None]:
 def _normalize_setting_value(key: str, raw_value: str) -> tuple[str, str | None]:
     """规范化并校验单个设置值，不处理需要完整目标状态的跨字段约束。"""
     value = str(raw_value or "")
+    if key == REGISTRATION_ENABLED_KEY:
+        value = "true" if parse_boolean_setting(raw_value) else "false"
     if key in _TRIMMED_SETTING_KEYS:
         value = value.strip()
 
@@ -172,7 +170,7 @@ def _validate_target_state(target: Mapping[str, str], changed_keys: set[str]) ->
     """基于本次提交后的完整目标状态校验跨字段约束。"""
     if changed_keys.intersection({PROXY_URL_KEY, PROXY_ENABLED_KEY}):
         proxy_url = str(target.get(PROXY_URL_KEY) or "").strip()
-        if _is_truthy(target.get(PROXY_ENABLED_KEY)) and not proxy_url:
+        if parse_boolean_setting(target.get(PROXY_ENABLED_KEY)) and not proxy_url:
             return "开启代理前请先填写代理 API 的 URL"
 
     payment_keys = {PAYMENT_CHANNEL_KEY, *ALIPAY_SETTING_KEYS, *ZZCODE_SETTING_KEYS}

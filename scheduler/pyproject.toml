@@ -30,6 +30,9 @@ dependencies = [
     "bcrypt==5.0.0",
     "playwright",
     "Pillow>=10.0.0",
+    # 公共单品发布的图片/视频模块依赖，与网页后端保持一致。
+    "pycryptodome>=3.19.0",
+    "opencv-python-headless>=4.10.0",
 ]
 
 [build-system]

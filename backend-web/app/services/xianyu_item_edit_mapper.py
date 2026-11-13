@@ -21,8 +21,8 @@ from typing import Any
 
 from loguru import logger
 
-from app.services.xianyu_direct_payload import text as _text
-from app.services.xianyu_item_snapshot import (
+from common.services.xianyu_direct_payload import text as _text
+from common.services.xianyu_item_snapshot import (
     as_bool,
     as_int,
     shipping_method_from_post_fee,
