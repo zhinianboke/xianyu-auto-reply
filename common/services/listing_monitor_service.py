@@ -24,6 +24,10 @@ from common.models.listing_monitor_category import ListingMonitorCategory
 from common.models.xy_account import XYAccount
 from common.models.user import User
 from common.services.listing_monitor_category_access import ensure_category_accessible
+from common.services.listing_monitor_keyword import (
+    KEYWORD_MATCH_MODES,
+    normalize_keyword_match_mode,
+)
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
 
 # 合法分页大小
@@ -84,6 +88,7 @@ def _task_to_dict(task: ListingMonitorTask) -> Dict[str, Any]:
         "category_id": task.category_id,
         "monitor_type": task.monitor_type,
         "keyword": task.keyword,
+        "keyword_match_mode": getattr(task, "keyword_match_mode", None) or "off",
         "price_min": float(task.price_min) if task.price_min is not None else None,
         "price_max": float(task.price_max) if task.price_max is not None else None,
         "publish_days": task.publish_days,
@@ -96,6 +101,7 @@ def _task_to_dict(task: ListingMonitorTask) -> Dict[str, Any]:
         "dm_batch_size": task.dm_batch_size,
         "order_batch_size": task.order_batch_size,
         "direct_order": bool(task.direct_order),
+        "notify_on_collect": bool(task.notify_on_collect),
         "is_enabled": bool(task.is_enabled),
         "last_run_at": safe_isoformat(task.last_run_at),
         "remark": task.remark,
@@ -236,6 +242,18 @@ class ListingMonitorService:
                 raise ValueError("商品关键字长度不能超过200个字符")
             payload["keyword"] = keyword
 
+        # 多关键词匹配模式：off / any / all（匹配范围=标题或内容）
+        if "keyword_match_mode" in data or not partial:
+            raw_mode = data.get("keyword_match_mode")
+            if raw_mode is None or raw_mode == "":
+                mode = "off"
+            else:
+                raw = str(raw_mode).strip().lower()
+                if raw not in KEYWORD_MATCH_MODES:
+                    raise ValueError("关键词匹配模式仅支持：off（不过滤）、any（标题或内容含任一）、all（标题或内容含全部）")
+                mode = normalize_keyword_match_mode(raw)
+            payload["keyword_match_mode"] = mode
+
         # 价格区间
         price_min = _to_decimal(data["price_min"]) if "price_min" in data else None
         price_max = _to_decimal(data["price_max"]) if "price_max" in data else None
@@ -352,6 +370,10 @@ class ListingMonitorService:
         # 采集后直接下单开关
         if "direct_order" in data or not partial:
             payload["direct_order"] = bool(data.get("direct_order"))
+
+        # 采集到新增商品后推送通知渠道开关
+        if "notify_on_collect" in data or not partial:
+            payload["notify_on_collect"] = bool(data.get("notify_on_collect"))
 
         # 创建时校验：配置了下单账号则私信内容必填（开启"采集后直接下单"时跳过私信，无需私信内容）
         if not partial and payload.get("order_account_ids") and not payload.get("dm_content") and not payload.get("direct_order"):
