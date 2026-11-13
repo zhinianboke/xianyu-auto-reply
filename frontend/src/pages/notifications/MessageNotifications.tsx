@@ -9,7 +9,16 @@ import { useAuthStore } from '@/store/authStore'
 import { PageLoading } from '@/components/common/Loading'
 import { Select } from '@/components/common/Select'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
-import type { MessageNotification, NotificationChannel, Account } from '@/types'
+import type { MessageNotification, NotificationChannel, Account, NotifyType } from '@/types'
+
+// 与「模板管理」里的三个模板一一对应。绑定渠道后可只勾其中几个，
+// 只留「账号状态模板」时，买家聊天和发货成功都不会再消耗推送额度。
+const NOTIFY_TYPE_LABELS: Record<NotifyType, string> = {
+  chat: '聊天消息模板',
+  delivery: '自动发货模板',
+  account: '账号状态模板',
+}
+const ALL_NOTIFY_TYPES: NotifyType[] = ['chat', 'delivery', 'account']
 
 export function MessageNotifications() {
   const { addToast } = useUIStore()
@@ -22,6 +31,7 @@ export function MessageNotifications() {
   const [formAccountId, setFormAccountId] = useState('')
   const [formChannelId, setFormChannelId] = useState('')
   const [formEnabled, setFormEnabled] = useState(true)
+  const [formNotifyTypes, setFormNotifyTypes] = useState<NotifyType[]>([...ALL_NOTIFY_TYPES])
   const [saving, setSaving] = useState(false)
 
   // 删除确认弹窗状态
@@ -74,7 +84,12 @@ export function MessageNotifications() {
 
   const handleToggleEnabled = async (notification: MessageNotification) => {
     try {
-      await setMessageNotification(notification.cookie_id, notification.channel_id, !notification.enabled)
+      await setMessageNotification(
+        notification.cookie_id,
+        notification.channel_id,
+        !notification.enabled,
+        notification.notify_types,
+      )
       addToast({ type: 'success', message: notification.enabled ? '通知已禁用' : '通知已启用' })
       loadNotifications()
     } catch {
@@ -100,7 +115,16 @@ export function MessageNotifications() {
     setFormAccountId('')
     setFormChannelId('')
     setFormEnabled(true)
+    setFormNotifyTypes([...ALL_NOTIFY_TYPES])
     setIsModalOpen(true)
+  }
+
+  const toggleFormNotifyType = (type: NotifyType) => {
+    setFormNotifyTypes((prev) => {
+      const next = prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]
+      // 全取消没有意义，回落到全开，避免渠道变成永不触发
+      return next.length === 0 ? [...ALL_NOTIFY_TYPES] : next
+    })
   }
 
   const closeModal = () => {
@@ -120,7 +144,7 @@ export function MessageNotifications() {
 
     setSaving(true)
     try {
-      await setMessageNotification(formAccountId, Number(formChannelId), formEnabled)
+      await setMessageNotification(formAccountId, Number(formChannelId), formEnabled, formNotifyTypes)
       addToast({ type: 'success', message: '通知已添加' })
       closeModal()
       loadNotifications()
@@ -174,6 +198,7 @@ export function MessageNotifications() {
               <tr>
                 <th>账号ID</th>
                 <th>通知渠道</th>
+                <th>推送模板</th>
                 <th>状态</th>
                 <th>操作</th>
               </tr>
@@ -181,7 +206,7 @@ export function MessageNotifications() {
             <tbody>
               {notifications.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="text-center py-8 text-gray-500">
+                  <td colSpan={5} className="text-center py-8 text-gray-500">
                     <div className="flex flex-col items-center gap-2">
                       <Mail className="w-12 h-12 text-gray-300" />
                       <p>暂无消息通知配置</p>
@@ -199,6 +224,19 @@ export function MessageNotifications() {
                     </td>
                     <td className="text-sm">
                       {notification.channel_name || `渠道 ${notification.channel_id}`}
+                    </td>
+                    <td className="text-xs whitespace-nowrap">
+                      {(notification.notify_types && notification.notify_types.length > 0
+                        ? notification.notify_types
+                        : ALL_NOTIFY_TYPES
+                      ).map((t) => (
+                        <span
+                          key={t}
+                          className="inline-block mr-1 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"
+                        >
+                          {NOTIFY_TYPE_LABELS[t] || t}
+                        </span>
+                      ))}
                     </td>
                     <td>
                       {notification.enabled ? (
@@ -279,6 +317,32 @@ export function MessageNotifications() {
                     ]}
                     placeholder="请选择通知渠道"
                   />
+                </div>
+                <div className="input-group">
+                  <label className="input-label">启用哪几个模板</label>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {ALL_NOTIFY_TYPES.map((t) => {
+                      const on = formNotifyTypes.includes(t)
+                      return (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => toggleFormNotifyType(t)}
+                          className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                            on
+                              ? 'bg-blue-50 border-blue-500 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300'
+                              : 'bg-white border-slate-300 text-slate-500 dark:bg-slate-800 dark:border-slate-600'
+                          }`}
+                        >
+                          {NOTIFY_TYPE_LABELS[t]}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    只勾「账号状态模板」时，仅在账号掉线、Cookie 失效、需要重新扫码时推送；
+                    买家聊天和每单发货都不会再消耗你的推送额度
+                  </p>
                 </div>
                 <div className="flex items-center justify-between pt-2">
                   <span className="text-sm font-medium text-slate-700 dark:text-slate-200">启用此通知</span>

@@ -1061,11 +1061,13 @@ class DBManagerCompat:
                 'total_cleaned': 0
             }
     
-    def get_account_notifications(self, cookie_id: str) -> List[Dict[str, Any]]:
+    def get_account_notifications(self, cookie_id: str, notify_type: str = None) -> List[Dict[str, Any]]:
         """获取账号的通知配置
         
         Args:
             cookie_id: Cookie ID
+            notify_type: 通知类型 chat/delivery/account。给定值时只返回订阅了该类型的渠道，
+                         为空时返回全部绑定（兼容旧调用）
             
         Returns:
             通知配置列表
@@ -1090,10 +1092,25 @@ class DBManagerCompat:
                 
                 notifications = []
                 for notification, channel in rows:
+                    # 绑定级订阅（账号+渠道），空值视为全开，兼容历史数据
+                    subscribed = getattr(notification, "notify_types", None)
+                    if notify_type:
+                        allowed = {t.strip() for t in str(subscribed or "").split(",") if t.strip()}
+                        if allowed and notify_type not in allowed:
+                            continue
+                        # 渠道级开关（存在渠道 config 的 notify_types 里）：两级都允许才推
+                        cfg = getattr(channel, "config_payload", None) or {}
+                        raw = cfg.get("notify_types") if isinstance(cfg, dict) else None
+                        if raw:
+                            seq = raw if isinstance(raw, (list, tuple)) else str(raw).split(",")
+                            ch_allowed = {str(t).strip() for t in seq if str(t).strip()}
+                            if ch_allowed and notify_type not in ch_allowed:
+                                continue
                     notifications.append({
                         'id': notification.id,
                         'channel_id': channel.id,
                         'enabled': notification.enabled,
+                        'notify_types': subscribed or 'chat,delivery,account',
                         'channel_name': channel.name,
                         'channel_type': channel.channel_type,
                         'channel_config': channel.config_payload

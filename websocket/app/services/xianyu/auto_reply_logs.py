@@ -300,7 +300,8 @@ class AutoReplyLogsMixin:
         try:
             
             # 获取账号的通知配置(使用get_account_notifications方法)
-            notifications = db_manager.get_account_notifications(self.cookie_id)
+            # 这里只发聊天消息，必须带上类型，否则只订阅「账号状态」的渠道也会被聊天刷屏
+            notifications = db_manager.get_account_notifications(self.cookie_id, notify_type='chat')
             if not notifications:
                 logger.info(f"【{self.cookie_id}】未配置消息通知，跳过通知发送")
                 return

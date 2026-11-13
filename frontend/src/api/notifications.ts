@@ -108,6 +108,7 @@ interface BackendNotification {
   channel_name?: string
   channel_type?: string
   channel_config?: string
+  notify_types?: string[]
 }
 
 // 获取所有消息通知配置
@@ -124,6 +125,7 @@ export const getMessageNotifications = async (): Promise<{ success: boolean; dat
           channel_id: item.channel_id,
           channel_name: item.channel_name,
           enabled: item.enabled,
+          notify_types: (item.notify_types as MessageNotification['notify_types']) || undefined,
         })
       }
     }
@@ -132,8 +134,18 @@ export const getMessageNotifications = async (): Promise<{ success: boolean; dat
 }
 
 // 设置消息通知 - 后端接口需要 cookie_id 作为路径参数
-export const setMessageNotification = (cookieId: string, channelId: number, enabled: boolean): Promise<ApiResponse> => {
-  return post(`${MESSAGE_PREFIX}/${cookieId}`, { channel_id: channelId, enabled })
+export const setMessageNotification = (
+  cookieId: string,
+  channelId: number,
+  enabled: boolean,
+  notifyTypes?: string[],
+): Promise<ApiResponse> => {
+  const payload: Record<string, unknown> = { channel_id: channelId, enabled }
+  // 不传则沿用后端默认（全类型），保持旧调用点行为不变
+  if (notifyTypes && notifyTypes.length > 0) {
+    payload.notify_types = notifyTypes
+  }
+  return post(`${MESSAGE_PREFIX}/${cookieId}`, payload)
 }
 
 // 删除消息通知
