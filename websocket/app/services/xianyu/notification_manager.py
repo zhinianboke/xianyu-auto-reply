@@ -9,22 +9,14 @@
 使用common/utils/notification_utils.py中的通知发送函数
 """
 import time
-import asyncio
 import hashlib
 from decimal import Decimal, InvalidOperation
 from loguru import logger
 
-from common.utils.notification_utils import (
-    parse_notification_config,
-    send_dingtalk_notification,
-    send_feishu_notification,
-    send_bark_notification,
-    send_email_notification,
-    send_webhook_notification,
-    send_wechat_notification,
-    send_telegram_notification,
-    send_pushplus_notification
-)
+from common.db.compat import db_manager
+from common.utils.notification_cooldown import get_notification_cooldown
+from common.utils.notification_utils import parse_notification_config
+from common.utils.notification_dispatch import dispatch_notification
 from common.services.token_api_mode import TOKEN_API_NAMES
 from common.utils.text_utils import safe_str
 from common.utils.notification_template import render_notification_template
@@ -33,12 +25,6 @@ from common.utils.notification_template import render_notification_template
 class NotificationManager:
     """通知管理器"""
 
-    # 类级别共享冷却字典：按 cookie_id 分组保存各通知类型的最后发送时间
-    # 目的：同一账号即使创建了多个 NotificationManager 实例（如 XianyuAsync 持久实例
-    # 与 XianyuSliderStealth._send_account_disabled_notification 临时新建实例），
-    # 也共享同一份冷却记录，避免短时间内发送多条重复通知。
-    _shared_last_notification_time: dict = {}
-    
     def __init__(self, cookie_id: str):
         """初始化通知管理器
         
@@ -47,13 +33,11 @@ class NotificationManager:
         """
         self.cookie_id = cookie_id
         
-        # 通知防重复机制：取该 cookie_id 在共享字典中的子字典，所有同 cookie_id 的实例共享
-        if cookie_id not in NotificationManager._shared_last_notification_time:
-            NotificationManager._shared_last_notification_time[cookie_id] = {}
-        self.last_notification_time = NotificationManager._shared_last_notification_time[cookie_id]
+        # 滑块线程和WebSocket事件循环共用占位，避免多个实例同时发送相同通知。
+        self._cooldown = get_notification_cooldown(cookie_id)
+        self.last_notification_time = self._cooldown.last_sent
         self.notification_cooldown = 300  # 5分钟
         self.token_refresh_notification_cooldown = 10800  # 3小时
-        self.notification_lock = asyncio.Lock()
     
     def _safe_str(self, e) -> str:
         """安全地将异常转换为字符串（委托公共实现）"""
@@ -62,9 +46,10 @@ class NotificationManager:
     async def send_notification(self, send_user_name: str, send_user_id: str, 
                                send_message: str, item_id: str = None, chat_id: str = None):
         """发送消息通知"""
+        notification_hash = None
+        reservation = None
+        notification_sent = False
         try:
-            from common.db.compat import db_manager
-
             # 过滤系统默认消息
             system_messages = ['发来一条消息', '发来一条新消息']
             if send_message in system_messages:
@@ -84,26 +69,12 @@ class NotificationManager:
 
             # 生成通知唯一标识
             notification_key = f"{chat_id or 'unknown'}_{send_user_id}_{send_message}"
-            notification_hash = hashlib.md5(notification_key.encode('utf-8')).hexdigest()
+            notification_hash = "chat:" + hashlib.md5(notification_key.encode('utf-8')).hexdigest()
             
-            async with self.notification_lock:
-                current_time = time.time()
-                if notification_hash in self.last_notification_time:
-                    time_since_last = current_time - self.last_notification_time[notification_hash]
-                    if time_since_last < self.notification_cooldown:
-                        remaining_seconds = int(self.notification_cooldown - time_since_last)
-                        logger.warning(f"📱 通知在冷却期内（剩余 {remaining_seconds} 秒），跳过重复发送")
-                        return
-
-                self.last_notification_time[notification_hash] = current_time
-                
-                # 清理过期记录
-                expired_keys = [
-                    key for key, timestamp in self.last_notification_time.items()
-                    if current_time - timestamp > 3600
-                ]
-                for key in expired_keys:
-                    del self.last_notification_time[key]
+            reservation = self._cooldown.reserve(notification_hash, self.notification_cooldown)
+            if reservation is None:
+                logger.warning("📱 相同聊天通知正在发送或处于冷却期内，跳过重复发送")
+                return
 
             logger.info(f"📱 开始发送消息通知 - 账号: {self.cookie_id}, 买家: {send_user_name}")
 
@@ -133,7 +104,7 @@ class NotificationManager:
                              f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
 
             # 发送通知到各渠道
-            await self._send_to_channels(
+            notification_sent = await self._send_to_channels(
                 notifications,
                 notification_msg,
                 template_type="chat",
@@ -151,15 +122,15 @@ class NotificationManager:
             )
 
         except Exception as e:
-            logger.error(f"📱 处理消息通知失败: {self._safe_str(e)}")
+            logger.exception(f"📱 处理消息通知失败: {self._safe_str(e)}")
+        finally:
+            self._cooldown.finish(notification_hash, reservation, notification_sent)
 
     async def send_delivery_failure_notification(self, send_user_name: str, send_user_id: str,
                                                   item_id: str, error_message: str, chat_id: str = None,
                                                   order_id: str = None):
         """发送自动发货结果通知。"""
         try:
-            from common.db.compat import db_manager
-
             # 检查消息过滤规则（跳过消息通知）
             # 自动发货通知此前不走过滤，导致"发货成功"等结果无法被消息过滤屏蔽，此处补齐。
             # 匹配对象为发货结果文本 error_message（即通知中的"结果"字段），
@@ -261,36 +232,25 @@ class NotificationManager:
             attachment_path: 附件路径（可选）
             verification_url: 验证链接（可选）
         """
+        reservation = None
+        notification_sent = False
         try:
             # 检查是否是正常的令牌过期，跳过通知
             if self._is_normal_token_expiry(error_message):
                 logger.warning(f"检测到正常的令牌过期，跳过通知: {error_message}")
                 return
 
-            current_time = time.time()
-            last_time = self.last_notification_time.get(notification_type, 0)
-
             # 根据错误类型决定冷却时间
             if self._is_token_related_error(error_message):
                 cooldown_time = self.token_refresh_notification_cooldown
-                cooldown_desc = "3小时"
             else:
                 cooldown_time = self.notification_cooldown
-                cooldown_desc = f"{self.notification_cooldown // 60}分钟"
 
-            # 检查冷却时间
-            if current_time - last_time < cooldown_time:
-                remaining_time = cooldown_time - (current_time - last_time)
-                remaining_hours = int(remaining_time // 3600)
-                remaining_minutes = int((remaining_time % 3600) // 60)
-                if remaining_hours > 0:
-                    time_desc = f"{remaining_hours}小时{remaining_minutes}分钟"
-                else:
-                    time_desc = f"{remaining_minutes}分钟"
-                logger.warning(f"Token刷新通知在冷却期内，跳过发送 (还需等待 {time_desc})")
+            reservation = self._cooldown.reserve(notification_type, cooldown_time)
+            if reservation is None:
+                logger.warning("相同账号状态通知正在发送或处于冷却期内，跳过重复发送")
                 return
 
-            from common.db.compat import db_manager
             notifications = db_manager.get_account_notifications(self.cookie_id, notify_type='account')
 
             if not notifications:
@@ -361,12 +321,13 @@ class NotificationManager:
             )
 
             if notification_sent:
-                self.last_notification_time[notification_type] = current_time
-                next_send_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(current_time + cooldown_time))
+                next_send_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time() + cooldown_time))
                 logger.info(f"Token刷新通知已发送，下次可发送时间: {next_send_time}")
 
         except Exception as e:
-            logger.error(f"处理Token刷新通知失败: {self._safe_str(e)}")
+            logger.exception(f"处理Token刷新通知失败: {self._safe_str(e)}")
+        finally:
+            self._cooldown.finish(notification_type, reservation, notification_sent)
 
     def _is_normal_token_expiry(self, error_message: str) -> bool:
         """检查是否是正常的令牌过期"""
@@ -447,32 +408,10 @@ class NotificationManager:
                     message,
                 ) if template_type else message
 
-                if channel_type in ('ding_talk', 'dingtalk'):
-                    await send_dingtalk_notification(config_data, channel_message)
-                    notification_sent = True
-                elif channel_type in ('feishu', 'lark'):
-                    await send_feishu_notification(config_data, channel_message)
-                    notification_sent = True
-                elif channel_type == 'bark':
-                    await send_bark_notification(config_data, channel_message)
-                    notification_sent = True
-                elif channel_type == 'email':
-                    await send_email_notification(config_data, channel_message, attachment_path)
-                    notification_sent = True
-                elif channel_type == 'webhook':
-                    await send_webhook_notification(config_data, channel_message)
-                    notification_sent = True
-                elif channel_type in ('wechat', 'wechat_work'):
-                    await send_wechat_notification(config_data, channel_message)
-                    notification_sent = True
-                elif channel_type == 'telegram':
-                    await send_telegram_notification(config_data, channel_message)
-                    notification_sent = True
-                elif channel_type == 'pushplus':
-                    await send_pushplus_notification(config_data, channel_message)
-                    notification_sent = True
-                else:
-                    logger.warning(f"不支持的通知渠道类型: {channel_type}")
+                success = await dispatch_notification(
+                    channel_type, config_data, channel_message, attachment_path
+                )
+                notification_sent = notification_sent or success
 
             except Exception as notify_error:
                 logger.error(f"发送通知失败 ({notification.get('channel_name', 'Unknown')}): {self._safe_str(notify_error)}")

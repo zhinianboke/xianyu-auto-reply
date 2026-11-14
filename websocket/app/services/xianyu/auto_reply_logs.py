@@ -9,17 +9,8 @@ from loguru import logger
 
 from common.db.compat import db_manager
 from common.utils.notification_template import render_notification_template
-from common.utils.notification_utils import (
-    parse_notification_config,
-    send_bark_notification,
-    send_dingtalk_notification,
-    send_email_notification,
-    send_feishu_notification,
-    send_pushplus_notification,
-    send_telegram_notification,
-    send_webhook_notification,
-    send_wechat_notification,
-)
+from common.utils.notification_utils import parse_notification_config
+from common.utils.notification_dispatch import dispatch_notification
 
 
 class AutoReplyLogsMixin:
@@ -356,25 +347,8 @@ class AutoReplyLogsMixin:
                         notification_content,
                     )
                     
-                    if channel_type in ('dingtalk', 'ding_talk'):
-                        await send_dingtalk_notification(config_data, channel_message)
-                    elif channel_type in ('feishu', 'lark'):
-                        await send_feishu_notification(config_data, channel_message)
-                    elif channel_type == 'bark':
-                        await send_bark_notification(config_data, channel_message)
-                    elif channel_type == 'email':
-                        await send_email_notification(config_data, channel_message)
-                    elif channel_type == 'webhook':
-                        await send_webhook_notification(config_data, channel_message)
-                    elif channel_type in ('wechat', 'wechat_work'):
-                        await send_wechat_notification(config_data, channel_message)
-                    elif channel_type == 'telegram':
-                        await send_telegram_notification(config_data, channel_message)
-                    elif channel_type == 'pushplus':
-                        await send_pushplus_notification(config_data, channel_message)
-                    else:
-                        logger.warning(f"【{self.cookie_id}】不支持的通知渠道类型: {channel_type}")
-                        
+                    await dispatch_notification(channel_type, config_data, channel_message)
+
                 except Exception as e:
                     logger.error(f"【{self.cookie_id}】发送{channel_type}通知失败: {e}")
                     

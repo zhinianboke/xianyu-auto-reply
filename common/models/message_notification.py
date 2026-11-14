@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Boolean, String
+from sqlalchemy import BigInteger, Boolean, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from common.db.base_class import Base, TimestampMixin
@@ -18,6 +18,17 @@ class MessageNotification(TimestampMixin, Base):
     """消息通知表 - 关联账号和通知渠道"""
 
     __tablename__ = "xy_message_notifications"
+    __table_args__ = (
+        Index(
+            "idx_msg_notify_owner_account_channel_deleted",
+            "owner_id",
+            "account_pk",
+            "channel_id",
+            "is_deleted",
+            "enabled",
+            "id",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment='通知ID')
     owner_id: Mapped[int] = mapped_column(BigInteger, index=True, comment='所属用户ID')
@@ -30,6 +41,9 @@ class MessageNotification(TimestampMixin, Base):
     notify_types: Mapped[str] = mapped_column(
         String(64), nullable=False, default="chat,delivery,account",
         server_default="chat,delivery,account", comment='订阅的通知类型，逗号分隔'
+    )
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0", comment="是否删除：0-正常，1-已删除"
     )
 
     channel: Mapped["NotificationChannel"] = relationship(

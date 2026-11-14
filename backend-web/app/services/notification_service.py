@@ -1,149 +1,38 @@
 ﻿from __future__ import annotations
 
-import json
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.message_notification import MessageNotification
 from common.models.notification_channel import NotificationChannel
+from common.models.data_dictionary import XYDataDictionary
 from common.models.xy_account import XYAccount
 from common.schemas.notification import (
     MessageNotificationSet,
-    NotificationChannelCreate,
-    NotificationChannelUpdate,
 )
-from common.utils.notification_template import validate_notification_templates
+from common.services.notification_types import (
+    DEFAULT_NOTIFICATION_TYPES,
+    NOTIFICATION_TYPE_DICTIONARY,
+    NotificationTypeValueError,
+    normalize_notification_types,
+    resolve_stored_notification_types,
+)
 from app.services.account_service import AccountService
-
-
-class NotificationTemplateValidationError(ValueError):
-    """Raised when a notification channel contains an invalid template."""
-
-
-class NotificationChannelService:
-    """Manage notification channels for a user."""
-
-    def __init__(self, session: AsyncSession):
-        self.session = session
-
-    async def list_channels(self, owner_id: int) -> list[dict[str, Any]]:
-        stmt = (
-            select(NotificationChannel)
-            .where(NotificationChannel.owner_id == owner_id)
-            .order_by(NotificationChannel.created_at.desc())
-        )
-        result = await self.session.execute(stmt)
-        return [self._serialize(channel) for channel in result.scalars().all()]
-
-    async def create_channel(
-        self,
-        owner_id: int,
-        payload: NotificationChannelCreate,
-    ) -> dict[str, Any]:
-        config = self._parse_config(payload.config)
-        self._validate_template_config(config)
-        channel = NotificationChannel(
-            owner_id=owner_id,
-            name=payload.name.strip(),
-            channel_type=payload.type.strip(),
-            config_payload=config,
-            enabled=bool(payload.enabled),
-        )
-        self.session.add(channel)
-        await self.session.commit()
-        await self.session.refresh(channel)
-        return self._serialize(channel)
-
-    async def get_channel(self, owner_id: int, channel_id: int) -> NotificationChannel | None:
-        stmt = select(NotificationChannel).where(
-            NotificationChannel.owner_id == owner_id,
-            NotificationChannel.id == channel_id,
-        )
-        result = await self.session.execute(stmt)
-        return result.scalars().first()
-
-    async def update_channel(
-        self,
-        owner_id: int,
-        channel_id: int,
-        payload: NotificationChannelUpdate,
-    ) -> dict[str, Any] | None:
-        channel = await self.get_channel(owner_id, channel_id)
-        if not channel:
-            return None
-
-        config = None
-        if payload.config is not None:
-            config = self._parse_config(payload.config)
-            self._validate_template_config(config)
-
-        if payload.name is not None:
-            channel.name = payload.name.strip()
-        if payload.type is not None:
-            channel.channel_type = payload.type.strip()
-        if payload.config is not None:
-            channel.config_payload = config
-        if payload.enabled is not None:
-            channel.enabled = bool(payload.enabled)
-
-        self.session.add(channel)
-        await self.session.commit()
-        await self.session.refresh(channel)
-        return self._serialize(channel)
-
-    async def delete_channel(self, owner_id: int, channel_id: int) -> bool:
-        channel = await self.get_channel(owner_id, channel_id)
-        if not channel:
-            return False
-        await self.session.delete(channel)
-        await self.session.commit()
-        return True
-
-    def _serialize(self, channel: NotificationChannel) -> dict[str, Any]:
-        return {
-            "id": channel.id,
-            "name": channel.name,
-            "type": channel.channel_type,
-            "config": channel.config_payload or {},
-            "enabled": channel.enabled,
-            "created_at": channel.created_at,
-            "updated_at": channel.updated_at,
-        }
-
-    def _parse_config(self, config: str | dict | None) -> dict | None:
-        if config is None:
-            return None
-        if isinstance(config, dict):
-            return config
-        value = config.strip()
-        if not value:
-            return None
-        try:
-            parsed = json.loads(value)
-            return parsed if isinstance(parsed, dict) else {"value": parsed}
-        except json.JSONDecodeError:
-            return {"raw": value}
-
-    def _validate_template_config(self, config: dict | None) -> None:
-        """校验渠道配置中的模板字段，避免无效模板入库。
-
-        Args:
-            config: 解析后的通知渠道配置。
-        Returns:
-            校验成功时不返回内容；失败时抛出模板校验异常。
-        """
-        validation_error = validate_notification_templates(config)
-        if validation_error:
-            raise NotificationTemplateValidationError(validation_error)
+# 保留原服务导出路径，兼容现有路由和依赖注入。
+from app.services.notification_channel_service import (
+    NotificationChannelService,
+    NotificationConfigValidationError,
+    NotificationTemplateValidationError,
+    NotificationTypeValidationError,
+)
 
 
 class MessageNotificationService:
     """Account notification subscriptions."""
 
-    VALID_NOTIFY_TYPES = ("chat", "delivery", "account")
-    DEFAULT_NOTIFY_TYPES = "chat,delivery,account"
+    DEFAULT_NOTIFY_TYPES = ",".join(DEFAULT_NOTIFICATION_TYPES)
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -151,28 +40,96 @@ class MessageNotificationService:
 
     @classmethod
     def normalize_notify_types(cls, value) -> str:
-        """把入参归一化成逗号分隔串。
+        """严格校验入参并归一化成逗号分隔串。
 
-        只保留合法值，按固定顺序输出；空值或全非法时回落到全开，
-        避免用户误操作把渠道变成永不触发。
+        Args:
+            value: 客户端显式提交的通知类型列表。
+        Returns:
+            按公共固定顺序排列的逗号分隔值。
+        Raises:
+            NotificationTypeValidationError: 类型为空或包含未知值。
         """
         if value is None:
             return cls.DEFAULT_NOTIFY_TYPES
-        if isinstance(value, str):
-            items = [x.strip() for x in value.split(",")]
-        else:
-            items = [str(x).strip() for x in list(value)]
-        picked = [t for t in cls.VALID_NOTIFY_TYPES if t in {i for i in items if i}]
-        return ",".join(picked) if picked else cls.DEFAULT_NOTIFY_TYPES
+        try:
+            return ",".join(normalize_notification_types(value))
+        except NotificationTypeValueError as error:
+            raise NotificationTypeValidationError(str(error)) from error
+
+    async def get_notify_type_options(self) -> list[dict[str, str]]:
+        """从数据字典读取通知事件类型及中文名称。"""
+        result = await self.session.execute(
+            select(XYDataDictionary)
+            .where(
+                XYDataDictionary.dict_type == NOTIFICATION_TYPE_DICTIONARY,
+                XYDataDictionary.enabled.is_(True),
+                XYDataDictionary.dict_value.in_(DEFAULT_NOTIFICATION_TYPES),
+            )
+            .order_by(XYDataDictionary.sort_order.asc(), XYDataDictionary.id.asc())
+        )
+        return [
+            {"value": item.dict_value, "label": item.dict_label}
+            for item in result.scalars().all()
+        ]
 
     async def list_notifications(self, owner_id: int) -> dict[str, list[dict[str, Any]]]:
         rows = await self._query_notifications(owner_id)
         return self._aggregate(rows)
 
+    async def list_notification_page(
+        self,
+        owner_id: int,
+        page: int,
+        page_size: int,
+    ) -> dict[str, Any]:
+        """分页查询当前用户的消息通知绑定。
+
+        Args:
+            owner_id: 当前用户ID。
+            page: 页码，从1开始。
+            page_size: 每页条数。
+        Returns:
+            包含列表、总数和页码信息的分页数据。
+        """
+        base_stmt = (
+            select(MessageNotification, NotificationChannel, XYAccount.account_id)
+            .join(NotificationChannel, NotificationChannel.id == MessageNotification.channel_id)
+            .join(XYAccount, XYAccount.id == MessageNotification.account_pk)
+            .where(
+                MessageNotification.owner_id == owner_id,
+                MessageNotification.is_deleted.is_(False),
+                NotificationChannel.is_deleted.is_(False),
+                NotificationChannel.owner_id == owner_id,
+                XYAccount.owner_id == owner_id,
+            )
+        )
+        total_stmt = select(func.count()).select_from(base_stmt.subquery())
+        total = int((await self.session.execute(total_stmt)).scalar_one())
+        pages = max(1, (total + page_size - 1) // page_size)
+        actual_page = min(page, pages)
+        rows = (
+            await self.session.execute(
+                base_stmt.order_by(XYAccount.account_id, MessageNotification.id)
+                .offset((actual_page - 1) * page_size)
+                .limit(page_size)
+            )
+        ).all()
+        items = [self._serialize_notification(*row) for row in rows]
+        return {
+            "items": items,
+            "total": total,
+            "page": actual_page,
+            "page_size": page_size,
+            "pages": pages,
+        }
+
     async def list_for_account(self, owner_id: int, account_identifier: str) -> list[dict[str, Any]]:
-        rows = await self._query_notifications(owner_id, account_identifier)
+        account = await self.account_service.get_account_for_user(owner_id, account_identifier)
+        if not account:
+            return []
+        rows = await self._query_notifications(owner_id, account.account_id)
         grouped = self._aggregate(rows)
-        return grouped.get(account_identifier, [])
+        return grouped.get(account.account_id, [])
 
     async def set_notification(
         self,
@@ -180,27 +137,62 @@ class MessageNotificationService:
         account_identifier: str,
         payload: MessageNotificationSet,
     ) -> bool:
+        notify_types = self.normalize_notify_types(payload.notify_types)
         account = await self.account_service.get_account_for_user(owner_id, account_identifier)
+        if not account:
+            return False
+        # 同一账号串行写入；锁定读可看到等待期间提交的绑定，无需中途提交事务。
+        account = (await self.session.execute(
+            select(XYAccount)
+            .where(XYAccount.id == account.id, XYAccount.owner_id == owner_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )).scalars().first()
         if not account:
             return False
         channel = await self._get_channel(owner_id, payload.channel_id)
         if not channel:
             return False
 
-        stmt = select(MessageNotification).where(
-            MessageNotification.owner_id == owner_id,
-            MessageNotification.account_pk == account.id,
-            MessageNotification.channel_id == channel.id,
+        stmt = (
+            select(MessageNotification)
+            .where(
+                MessageNotification.owner_id == owner_id,
+                MessageNotification.account_pk == account.id,
+                MessageNotification.channel_id == channel.id,
+            )
+            .order_by(
+                MessageNotification.is_deleted.asc(),
+                MessageNotification.enabled.desc(),
+                MessageNotification.id.desc(),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         result = await self.session.execute(stmt)
-        subscription = result.scalars().first()
+        subscriptions = list(result.scalars().all())
+        active_subscriptions = [item for item in subscriptions if not item.is_deleted]
+        subscription = (
+            active_subscriptions[0]
+            if active_subscriptions
+            else max(subscriptions, key=lambda item: item.id, default=None)
+        )
+        if payload.notification_id is not None:
+            subscription = next(
+                (item for item in active_subscriptions if item.id == payload.notification_id), None
+            )
+            if subscription is None:
+                return False
 
         if subscription:
+            was_deleted = subscription.is_deleted
             subscription.enabled = bool(payload.enabled)
+            subscription.is_deleted = False
             subscription.account_identifier = account.account_id
             # 只有显式传了才改：旧客户端只切启用/禁用时不会把已有订阅重置成全开
-            if payload.notify_types is not None:
-                subscription.notify_types = self.normalize_notify_types(payload.notify_types)
+            # 软删除后重新添加等同新建；旧客户端不传时仍恢复为默认全类型。
+            if payload.notify_types is not None or was_deleted:
+                subscription.notify_types = notify_types
         else:
             subscription = MessageNotification(
                 owner_id=owner_id,
@@ -208,9 +200,39 @@ class MessageNotificationService:
                 account_identifier=account.account_id,
                 channel_id=channel.id,
                 enabled=bool(payload.enabled),
-                notify_types=self.normalize_notify_types(payload.notify_types),
+                notify_types=notify_types,
             )
 
+        self.session.add(subscription)
+        await self.session.commit()
+        return True
+
+    async def update_subscription_enabled(
+        self,
+        owner_id: int,
+        notification_id: int,
+        enabled: bool,
+    ) -> bool:
+        """按绑定ID更新启停状态，兼容已有移动端调用。
+
+        Args:
+            owner_id: 当前用户ID。
+            notification_id: 消息通知绑定ID。
+            enabled: 是否启用该绑定。
+        Returns:
+            找到并更新返回True，否则返回False。
+        """
+        stmt = select(MessageNotification).where(
+            MessageNotification.owner_id == owner_id,
+            MessageNotification.id == notification_id,
+            MessageNotification.is_deleted.is_(False),
+        )
+        subscription = (await self.session.execute(
+            stmt.with_for_update().execution_options(populate_existing=True)
+        )).scalars().first()
+        if not subscription:
+            return False
+        subscription.enabled = bool(enabled)
         self.session.add(subscription)
         await self.session.commit()
         return True
@@ -219,12 +241,15 @@ class MessageNotificationService:
         stmt = select(MessageNotification).where(
             MessageNotification.owner_id == owner_id,
             MessageNotification.id == notification_id,
+            MessageNotification.is_deleted.is_(False),
         )
-        result = await self.session.execute(stmt)
+        result = await self.session.execute(stmt.with_for_update().execution_options(populate_existing=True))
         subscription = result.scalars().first()
         if not subscription:
             return False
-        await self.session.delete(subscription)
+        subscription.is_deleted = True
+        subscription.enabled = False
+        self.session.add(subscription)
         await self.session.commit()
         return True
 
@@ -232,16 +257,25 @@ class MessageNotificationService:
         account = await self.account_service.get_account_for_user(owner_id, account_identifier)
         if not account:
             return False
+        # 与添加绑定共用账号行锁，避免删除账号绑定时漏掉同时创建的记录。
+        account_pk = await self.session.scalar(
+            select(XYAccount.id).where(XYAccount.id == account.id, XYAccount.owner_id == owner_id).with_for_update()
+        )
+        if account_pk is None:
+            return False
         stmt = select(MessageNotification).where(
             MessageNotification.owner_id == owner_id,
             MessageNotification.account_pk == account.id,
+            MessageNotification.is_deleted.is_(False),
         )
-        result = await self.session.execute(stmt)
+        result = await self.session.execute(stmt.with_for_update().execution_options(populate_existing=True))
         subscriptions = result.scalars().all()
         if not subscriptions:
             return False
         for sub in subscriptions:
-            await self.session.delete(sub)
+            sub.is_deleted = True
+            sub.enabled = False
+            self.session.add(sub)
         await self.session.commit()
         return True
 
@@ -249,8 +283,9 @@ class MessageNotificationService:
         stmt = select(NotificationChannel).where(
             NotificationChannel.owner_id == owner_id,
             NotificationChannel.id == channel_id,
+            NotificationChannel.is_deleted.is_(False),
         )
-        result = await self.session.execute(stmt)
+        result = await self.session.execute(stmt.with_for_update())
         return result.scalars().first()
 
     async def _query_notifications(
@@ -264,7 +299,11 @@ class MessageNotificationService:
             .join(XYAccount, XYAccount.id == MessageNotification.account_pk)
             .where(
                 MessageNotification.owner_id == owner_id,
+                MessageNotification.is_deleted.is_(False),
                 NotificationChannel.enabled.is_(True),
+                NotificationChannel.is_deleted.is_(False),
+                NotificationChannel.owner_id == owner_id,
+                XYAccount.owner_id == owner_id,
             )
             .order_by(XYAccount.account_id, MessageNotification.id)
         )
@@ -279,15 +318,29 @@ class MessageNotificationService:
     ) -> dict[str, list[dict[str, Any]]]:
         aggregated: dict[str, list[dict[str, Any]]] = {}
         for subscription, channel, account_id in rows:
-            aggregated.setdefault(account_id, []).append(
-                {
-                    "id": subscription.id,
-                    "channel_id": channel.id,
-                    "enabled": subscription.enabled and channel.enabled,
-                    "channel_name": channel.name,
-                    "channel_type": channel.channel_type,
-                    "channel_config": channel.config_payload or {},
-                    "notify_types": (subscription.notify_types or self.DEFAULT_NOTIFY_TYPES).split(","),
-                }
-            )
+            item = self._serialize_notification(subscription, channel, account_id)
+            item.pop("cookie_id")
+            aggregated.setdefault(account_id, []).append(item)
         return aggregated
+
+    @staticmethod
+    def _serialize_notification(
+        subscription: MessageNotification,
+        channel: NotificationChannel,
+        account_id: str,
+    ) -> dict[str, Any]:
+        """序列化单条消息通知绑定，并兼容历史通知类型值。"""
+        notify_types, _ = resolve_stored_notification_types(subscription.notify_types)
+        return {
+            "id": subscription.id,
+            "cookie_id": account_id,
+            "channel_id": channel.id,
+            # enabled 保持旧接口的“最终是否生效”语义；新增字段用于管理端区分两级开关。
+            "enabled": subscription.enabled and channel.enabled,
+            "subscription_enabled": subscription.enabled,
+            "channel_enabled": channel.enabled,
+            "channel_name": channel.name,
+            "channel_type": channel.channel_type,
+            "channel_config": channel.config_payload or {},
+            "notify_types": list(notify_types),
+        }

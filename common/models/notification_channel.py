@@ -25,6 +25,9 @@ class NotificationChannel(TimestampMixin, Base):
     channel_type: Mapped[str] = mapped_column(String(32), nullable=False, comment="渠道类型")
     config_payload: Mapped[dict | None] = mapped_column("config", JSON, comment="渠道配置")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment="是否启用")
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0", comment="是否删除：0-正常，1-已删除"
+    )
 
     subscriptions: Mapped[list["MessageNotification"]] = relationship(
         "MessageNotification",

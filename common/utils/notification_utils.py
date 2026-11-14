@@ -5,202 +5,33 @@
 """
 from __future__ import annotations
 
-import json
-import hmac
-import hashlib
-import base64
-import time
+import asyncio
+import os
+import re
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.image import MIMEImage
+from email.mime.application import MIMEApplication
 from typing import Any, Dict, Optional
-from urllib.parse import quote
 
-import aiohttp
 from loguru import logger
+from pydantic import TypeAdapter, ValidationError
 
 from common.services.email_log_service import record_email_log
+from common.utils.notification_config import parse_notification_config
+# 保留公共导出路径，HTTP渠道独立维护，避免单个文件超过500行。
+from common.utils.notification_http import (
+    send_bark_notification,
+    send_dingtalk_notification,
+    send_feishu_notification,
+    send_pushplus_notification,
+    send_telegram_notification,
+    send_webhook_notification,
+    send_wechat_notification,
+)
 
-
-def parse_notification_config(config) -> Dict[str, Any]:
-    """解析通知配置数据
-    
-    Args:
-        config: 配置数据（可以是字典、JSON字符串或普通字符串）
-        
-    Returns:
-        配置字典
-    """
-    # 如果已经是字典，直接返回
-    if isinstance(config, dict):
-        return config
-    
-    # 尝试解析JSON字符串
-    try:
-        return json.loads(config)
-    except (json.JSONDecodeError, TypeError):
-        return {"config": config}
-
-
-async def send_dingtalk_notification(config_data: Dict[str, Any], message: str) -> bool:
-    """发送钉钉通知
-    
-    Args:
-        config_data: 配置数据，包含webhook_url和可选的secret
-        message: 通知消息
-        
-    Returns:
-        是否发送成功
-    """
-    try:
-        webhook_url = config_data.get('webhook_url') or config_data.get('config', '')
-        secret = config_data.get('secret', '')
-
-        webhook_url = webhook_url.strip() if webhook_url else ''
-        if not webhook_url:
-            logger.warning("📱 钉钉通知配置为空")
-            return False
-
-        # 如果有加签密钥，生成签名
-        if secret:
-            timestamp = str(round(time.time() * 1000))
-            secret_enc = secret.encode('utf-8')
-            string_to_sign = f'{timestamp}\n{secret}'
-            string_to_sign_enc = string_to_sign.encode('utf-8')
-            hmac_code = hmac.new(secret_enc, string_to_sign_enc, digestmod=hashlib.sha256).digest()
-            sign = base64.b64encode(hmac_code).decode('utf-8')
-            webhook_url += f'&timestamp={timestamp}&sign={sign}'
-
-        data = {
-            "msgtype": "markdown",
-            "markdown": {
-                "title": "闲鱼自动回复通知",
-                "text": message
-            }
-        }
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(webhook_url, json=data, timeout=10) as response:
-                if response.status == 200:
-                    logger.info("📱 钉钉通知发送成功")
-                    return True
-                else:
-                    logger.warning(f"📱 钉钉通知发送失败: {response.status}")
-                    return False
-
-    except Exception as e:
-        logger.error(f"📱 发送钉钉通知异常: {e}")
-        return False
-
-
-async def send_feishu_notification(config_data: Dict[str, Any], message: str) -> bool:
-    """发送飞书通知
-    
-    Args:
-        config_data: 配置数据，包含webhook_url和可选的secret
-        message: 通知消息
-        
-    Returns:
-        是否发送成功
-    """
-    try:
-        webhook_url = config_data.get('webhook_url', '')
-        secret = config_data.get('secret', '')
-
-        if not webhook_url:
-            logger.warning("📱 飞书通知 - Webhook URL配置为空")
-            return False
-
-        timestamp = str(int(time.time()))
-        sign = ""
-
-        if secret:
-            string_to_sign = f'{timestamp}\n{secret}'
-            hmac_code = hmac.new(
-                string_to_sign.encode('utf-8'),
-                ''.encode('utf-8'),
-                digestmod=hashlib.sha256
-            ).digest()
-            sign = base64.b64encode(hmac_code).decode('utf-8')
-
-        data = {
-            "msg_type": "text",
-            "content": {"text": message},
-            "timestamp": timestamp
-        }
-
-        if sign:
-            data["sign"] = sign
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(webhook_url, json=data, timeout=10) as response:
-                if response.status == 200:
-                    response_text = await response.text()
-                    try:
-                        response_json = json.loads(response_text)
-                        if response_json.get('code') == 0:
-                            logger.info("📱 飞书通知发送成功")
-                            return True
-                        else:
-                            logger.warning(f"📱 飞书通知发送失败: {response_json.get('msg')}")
-                            return False
-                    except json.JSONDecodeError:
-                        logger.info("📱 飞书通知发送成功")
-                        return True
-                else:
-                    logger.warning(f"📱 飞书通知发送失败: HTTP {response.status}")
-                    return False
-
-    except Exception as e:
-        logger.error(f"📱 发送飞书通知异常: {e}")
-        return False
-
-
-
-async def send_bark_notification(config_data: Dict[str, Any], message: str) -> bool:
-    """发送Bark通知"""
-    try:
-        server_url = config_data.get('server_url', 'https://api.day.app').rstrip('/')
-        device_key = config_data.get('device_key', '')
-        title = config_data.get('title', '闲鱼自动回复通知')
-        sound = config_data.get('sound', 'default')
-        icon = config_data.get('icon', '')
-        group = config_data.get('group', 'xianyu')
-        url = config_data.get('url', '')
-
-        if not device_key:
-            logger.warning("📱 Bark通知 - 设备密钥配置为空")
-            return False
-
-        api_url = f"{server_url}/push"
-        data = {
-            "device_key": device_key,
-            "title": title,
-            "body": message,
-            "sound": sound,
-            "group": group
-        }
-        if icon:
-            data["icon"] = icon
-        if url:
-            data["url"] = url
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(api_url, json=data, timeout=10) as response:
-                if response.status == 200:
-                    response_text = await response.text()
-                    try:
-                        response_json = json.loads(response_text)
-                        if response_json.get('code') == 200:
-                            logger.info("📱 Bark通知发送成功")
-                            return True
-                    except json.JSONDecodeError:
-                        if 'success' in response_text.lower() or 'ok' in response_text.lower():
-                            logger.info("📱 Bark通知发送成功")
-                            return True
-                logger.warning(f"📱 Bark通知发送失败: HTTP {response.status}")
-                return False
-
-    except Exception as e:
-        logger.error(f"📱 发送Bark通知异常: {e}")
-        return False
+_SMTP_TLS_VALUE = TypeAdapter(bool)
 
 
 def _send_smtp_message_blocking(
@@ -216,8 +47,6 @@ def _send_smtp_message_blocking(
     分步抛出更明确的异常上下文，便于上层日志定位失败步骤；
     statefully 关闭连接，避免 server.quit() 异常掩盖原始错误。
     """
-    import smtplib
-
     server = None
     step = "connect"
     try:
@@ -243,7 +72,10 @@ def _send_smtp_message_blocking(
 
         # 5) 发送
         step = "send"
-        server.send_message(msg)
+        refused = server.send_message(msg)
+        # smtplib在部分收件人被拒绝时返回字典而不抛异常，不能据此报告全部成功。
+        if refused:
+            raise smtplib.SMTPRecipientsRefused(refused)
     except Exception as exc:
         # 在异常对象上记录失败步骤，便于上层中文日志识别
         try:
@@ -288,15 +120,6 @@ async def send_email_notification(
     Returns:
         是否发送成功
     """
-    import asyncio
-    import os
-    import re
-    import smtplib
-    from email.mime.text import MIMEText
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.image import MIMEImage
-    from email.mime.application import MIMEApplication
-
     async def _record(success: bool, reason: str, email: Optional[str] = None) -> None:
         """记录一条邮件发送日志；email 缺省时取配置中的收件邮箱"""
         if not record_log or not trigger_operation:
@@ -327,7 +150,12 @@ async def send_email_notification(
         if raw_use_tls is None:
             smtp_use_tls = (smtp_port == 587)
         else:
-            smtp_use_tls = bool(raw_use_tls)
+            try:
+                # 兼容JSON布尔值与旧字符串false/0/off；未知值必须明确报错。
+                tls_value = raw_use_tls.strip() if isinstance(raw_use_tls, str) else raw_use_tls
+                smtp_use_tls = _SMTP_TLS_VALUE.validate_python(tls_value)
+            except ValidationError as error:
+                raise ValueError("邮件通知 smtp_use_tls 配置无效，请填写 true 或 false") from error
 
         if not all([smtp_server, email_user, email_password, recipient_email]):
             logger.warning("📱 邮件通知配置不完整")
@@ -423,6 +251,11 @@ async def send_email_notification(
                 )
                 await _record(False, f"邮件服务器连接失败: {exc}")
                 return False
+            except smtplib.SMTPRecipientsRefused as exc:
+                reason = f"邮件通知存在被拒绝的收件人，其他收件人可能已接收: {exc.recipients}"
+                logger.exception(reason)
+                await _record(False, reason)
+                return False
             except smtplib.SMTPException as exc:
                 step = getattr(exc, "_smtp_step", "unknown")
                 logger.error(f"📱 SMTP 协议错误[{step}]: {exc}")
@@ -442,160 +275,4 @@ async def send_email_notification(
     except Exception as e:
         logger.error(f"📱 发送邮件通知异常: {e}")
         await _record(False, f"发送邮件通知异常: {e}")
-        return False
-
-
-async def send_webhook_notification(config_data: Dict[str, Any], message: str) -> bool:
-    """发送Webhook通知"""
-    try:
-        webhook_url = config_data.get('webhook_url', '')
-        http_method = config_data.get('http_method', 'POST').upper()
-        headers_str = config_data.get('headers', '{}')
-
-        if not webhook_url:
-            logger.warning("📱 Webhook通知配置为空")
-            return False
-
-        try:
-            custom_headers = json.loads(headers_str) if headers_str else {}
-        except json.JSONDecodeError:
-            custom_headers = {}
-
-        headers = {'Content-Type': 'application/json'}
-        headers.update(custom_headers)
-
-        data = {
-            'message': message,
-            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-            'source': 'xianyu-auto-reply'
-        }
-
-        async with aiohttp.ClientSession() as session:
-            if http_method == 'POST':
-                async with session.post(webhook_url, json=data, headers=headers, timeout=10) as response:
-                    if response.status == 200:
-                        logger.info("📱 Webhook通知发送成功")
-                        return True
-            elif http_method == 'PUT':
-                async with session.put(webhook_url, json=data, headers=headers, timeout=10) as response:
-                    if response.status == 200:
-                        logger.info("📱 Webhook通知发送成功")
-                        return True
-        
-        logger.warning(f"📱 Webhook通知发送失败")
-        return False
-
-    except Exception as e:
-        logger.error(f"📱 发送Webhook通知异常: {e}")
-        return False
-
-
-async def send_wechat_notification(config_data: Dict[str, Any], message: str) -> bool:
-    """发送微信通知"""
-    try:
-        webhook_url = config_data.get('webhook_url', '')
-        if not webhook_url:
-            logger.warning("📱 微信通知配置为空")
-            return False
-
-        data = {
-            "msgtype": "text",
-            "text": {"content": message}
-        }
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(webhook_url, json=data, timeout=10) as response:
-                if response.status == 200:
-                    logger.info("📱 微信通知发送成功")
-                    return True
-                logger.warning(f"📱 微信通知发送失败: {response.status}")
-                return False
-
-    except Exception as e:
-        logger.error(f"📱 发送微信通知异常: {e}")
-        return False
-
-
-async def send_pushplus_notification(config_data: Dict[str, Any], message: str) -> bool:
-    """发送PushPlus通知
-
-    Args:
-        config_data: 配置数据，包含token，可选topic、template、title
-        message: 通知消息
-
-    Returns:
-        是否发送成功
-    """
-    try:
-        token = (config_data.get('token') or '').strip()
-        if not token:
-            logger.warning("📱 PushPlus通知 - token配置为空")
-            return False
-
-        title = config_data.get('title') or '闲鱼自动回复通知'
-        template = config_data.get('template') or 'txt'
-        topic = (config_data.get('topic') or '').strip()
-        server_url = (config_data.get('server_url') or 'https://www.pushplus.plus').rstrip('/')
-
-        api_url = f"{server_url}/send"
-        data = {
-            "token": token,
-            "title": title,
-            "content": message,
-            "template": template,
-        }
-        if topic:
-            data["topic"] = topic
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(api_url, json=data, timeout=10) as response:
-                if response.status == 200:
-                    response_text = await response.text()
-                    try:
-                        response_json = json.loads(response_text)
-                        if response_json.get('code') == 200:
-                            logger.info("📱 PushPlus通知发送成功")
-                            return True
-                        else:
-                            logger.warning(f"📱 PushPlus通知发送失败: {response_json.get('msg')}")
-                            return False
-                    except json.JSONDecodeError:
-                        logger.info("📱 PushPlus通知发送成功")
-                        return True
-                else:
-                    logger.warning(f"📱 PushPlus通知发送失败: HTTP {response.status}")
-                    return False
-
-    except Exception as e:
-        logger.error(f"📱 发送PushPlus通知异常: {e}")
-        return False
-
-
-async def send_telegram_notification(config_data: Dict[str, Any], message: str) -> bool:
-    """发送Telegram通知"""
-    try:
-        bot_token = config_data.get('bot_token', '')
-        chat_id = config_data.get('chat_id', '')
-
-        if not all([bot_token, chat_id]):
-            logger.warning("📱 Telegram通知配置不完整")
-            return False
-
-        api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        data = {
-            'chat_id': chat_id,
-            'text': message,
-            'parse_mode': 'HTML'
-        }
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(api_url, json=data, timeout=10) as response:
-                if response.status == 200:
-                    logger.info("📱 Telegram通知发送成功")
-                    return True
-                logger.warning(f"📱 Telegram通知发送失败: {response.status}")
-                return False
-
-    except Exception as e:
-        logger.error(f"📱 发送Telegram通知异常: {e}")
         return False

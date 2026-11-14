@@ -211,6 +211,8 @@ export interface NotificationChannel {
   channel_name?: string
   channel_config?: string
   config?: Record<string, unknown>
+  config_error?: string
+  raw_config?: string
   enabled: boolean
   created_at?: string
   updated_at?: string
@@ -225,6 +227,10 @@ export interface MessageNotification {
   cookie_id: string
   channel_id: number
   channel_name?: string
+  /** 绑定本身是否启用，与渠道总开关分开。 */
+  subscription_enabled?: boolean
+  /** 所属渠道是否启用。 */
+  channel_enabled?: boolean
   enabled: boolean
   /** 订阅哪几类通知，缺省视为全开 */
   notify_types?: NotifyType[]

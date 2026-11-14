@@ -1,289 +1,64 @@
 import { useState, useEffect } from 'react'
 import type { FormEvent } from 'react'
-import { motion } from 'framer-motion'
-import { Bell, RefreshCw, Plus, Edit2, Trash2, Send, Settings, MessageCircle, Mail, Link, Smartphone, X, Loader2 } from 'lucide-react'
-import { getNotificationChannels, deleteNotificationChannel, updateNotificationChannel, testNotificationChannel, addNotificationChannel } from '@/api/notifications'
+import { RefreshCw, X, Loader2 } from 'lucide-react'
+import { getNotificationChannelPage, deleteNotificationChannel, updateNotificationChannel, testNotificationChannel, addNotificationChannel } from '@/api/notifications'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
+import { Pager } from '@/components/common/Pager'
+import { getApiErrorMessage } from '@/utils/request'
+import { useNotificationTypeOptions } from './useNotificationTypeOptions'
+import { NotificationChannelList } from './NotificationChannelList'
+import { channelTypeLabels, channelTypes, defaultTemplates, getChannelConfigHint, getTemplateValidationError, notifyTypeHints, parseNotifyTypes, splitTemplateConfig, templateConfigKeys, templateVariables } from './notificationChannelConfig'
+import type { ChannelType } from './notificationChannelConfig'
 import type { NotificationChannel, NotifyType } from '@/types'
-
-// 所有支持的渠道类型配置
-const channelTypes = [
-  { 
-    type: 'dingtalk', 
-    label: '钉钉通知', 
-    desc: '钉钉机器人消息', 
-    icon: Bell, 
-    placeholder: '{"webhook_url": "https://oapi.dingtalk.com/robot/send?access_token=..."}',
-    defaultConfig: {
-      webhook_url: "https://oapi.dingtalk.com/robot/send?access_token=你的access_token",
-      secret: ""
-    }
-  },
-  { 
-    type: 'feishu', 
-    label: '飞书通知', 
-    desc: '飞书机器人消息', 
-    icon: Send, 
-    placeholder: '{"webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/..."}',
-    defaultConfig: {
-      webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/你的hook_id"
-    }
-  },
-  { 
-    type: 'bark', 
-    label: 'Bark通知', 
-    desc: 'iOS推送通知', 
-    icon: Smartphone, 
-    placeholder: '{"device_key": "xxx", "server_url": "https://api.day.app"}',
-    defaultConfig: {
-      device_key: "你的设备密钥",
-      server_url: "https://api.day.app"
-    }
-  },
-  { 
-    type: 'email', 
-    label: '邮件通知', 
-    desc: 'SMTP邮件发送', 
-    icon: Mail, 
-    placeholder: '{"smtp_server": "...", "smtp_port": 587, "email_user": "...", "email_password": "...", "recipient_email": "..."}',
-    defaultConfig: {
-      smtp_server: "smtp.qq.com",
-      smtp_port: 587,
-      email_user: "你的邮箱@qq.com",
-      email_password: "你的授权码",
-      recipient_email: "接收邮箱@example.com"
-    }
-  },
-  { 
-    type: 'webhook', 
-    label: 'Webhook', 
-    desc: '自定义HTTP请求', 
-    icon: Link, 
-    placeholder: '{"webhook_url": "https://..."}',
-    defaultConfig: {
-      webhook_url: "https://你的webhook地址",
-      method: "POST",
-      headers: {}
-    }
-  },
-  { 
-    type: 'wechat', 
-    label: '微信通知', 
-    desc: '企业微信机器人', 
-    icon: MessageCircle, 
-    placeholder: '{"webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."}',
-    defaultConfig: {
-      webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=你的key"
-    }
-  },
-  {
-    type: 'telegram',
-    label: 'Telegram',
-    desc: 'Telegram机器人',
-    icon: Send,
-    placeholder: '{"bot_token": "...", "chat_id": "..."}',
-    defaultConfig: {
-      bot_token: "你的Bot_Token",
-      chat_id: "你的Chat_ID"
-    }
-  },
-  {
-    type: 'pushplus',
-    label: 'PushPlus',
-    desc: '微信公众号推送',
-    icon: MessageCircle,
-    placeholder: '{"token": "...", "topic": "", "template": "txt"}',
-    defaultConfig: {
-      token: "你的token",
-      topic: "",
-      template: "txt"
-    }
-  },
-] as const
-
-type ChannelType = typeof channelTypes[number]['type']
-
-type NotificationTemplateType = 'chat' | 'delivery' | 'account'
-
-const templateConfigKeys: Record<NotificationTemplateType, string> = {
-  chat: 'chat_template',
-  delivery: 'delivery_template',
-  account: 'account_template',
-}
-
-const templateVariables: Record<NotificationTemplateType, Array<{ name: string; label: string }>> = {
-  chat: [
-    { name: 'account', label: '闲鱼账号' },
-    { name: 'account_id', label: '账号 ID' },
-    { name: 'account_remark', label: '账号备注' },
-    { name: 'buyer_nick', label: '买家昵称' },
-    { name: 'buyer_id', label: '买家 ID' },
-    { name: 'message', label: '消息内容' },
-    { name: 'item_id', label: '商品 ID' },
-    { name: 'chat_id', label: '聊天 ID' },
-    { name: 'time', label: '通知时间' },
-  ],
-  delivery: [
-    { name: 'account', label: '闲鱼账号' },
-    { name: 'account_id', label: '账号 ID' },
-    { name: 'account_remark', label: '账号备注' },
-    { name: 'buyer_nick', label: '买家昵称' },
-    { name: 'buyer_id', label: '买家 ID' },
-    { name: 'message', label: '消息内容' },
-    { name: 'item_id', label: '商品 ID' },
-    { name: 'chat_id', label: '聊天 ID' },
-    { name: 'time', label: '通知时间' },
-    { name: 'order_id', label: '订单 ID' },
-    { name: 'amount', label: '订单金额' },
-    { name: 'quantity', label: '购买数量' },
-    { name: 'result', label: '发货结果' },
-  ],
-  account: [
-    { name: 'account', label: '闲鱼账号' },
-    { name: 'account_id', label: '账号 ID' },
-    { name: 'account_remark', label: '账号备注' },
-    { name: 'title', label: '通知标题' },
-    { name: 'notification_type', label: '通知类型' },
-    { name: 'detail', label: '详细说明' },
-    { name: 'chat_id', label: '聊天 ID' },
-    { name: 'verification_url', label: '验证链接' },
-    { name: 'verification_info', label: '验证信息' },
-    { name: 'time', label: '通知时间' },
-  ],
-}
-
-const defaultTemplates: Record<NotificationTemplateType, string> = {
-  chat: `【闲鱼消息】
-闲鱼账号: {{account}}
-发送者: {{buyer_nick}}
-消息: {{message}}
-商品ID: {{item_id}}
-时间: {{time}}`,
-  delivery: `🚨 自动发货通知
-
-闲鱼账号: {{account}}
-买家: {{buyer_nick}} (ID: {{buyer_id}})
-订单金额: {{amount}}
-购买数量: {{quantity}}
-商品ID: {{item_id}}
-聊天ID: {{chat_id}}
-结果: {{result}}
-时间: {{time}}
-
-请及时处理！`,
-  account: `{{title}}
-
-闲鱼账号: {{account}}
-时间: {{time}}
-详情: {{detail}}
-
-请检查账号状态。`,
-}
-
-const templateDefinitions: Array<{ type: NotificationTemplateType; label: string }> = [
-  { type: 'chat', label: '聊天消息模板' },
-  { type: 'delivery', label: '自动发货模板' },
-  { type: 'account', label: '账号状态模板' },
-]
-
-// 渠道级开关：关掉哪一类，这个渠道就不接哪一类事件，正文模板留着不丢
-const ALL_NOTIFY_TYPES: NotifyType[] = ['chat', 'delivery', 'account']
-const NOTIFY_TYPE_HINTS: Record<NotifyType, string> = {
-  chat: '买家每发一条消息都推，最耗额度',
-  delivery: '每次自动发货推一次',
-  account: '账号掉线 / Cookie 到期 / Token 刷新失败',
-}
-
-const parseNotifyTypes = (raw: unknown): NotifyType[] => {
-  if (raw === undefined || raw === null) return [...ALL_NOTIFY_TYPES]
-  const items = Array.isArray(raw) ? raw : String(raw).split(',')
-  const picked = ALL_NOTIFY_TYPES.filter((t) => items.map((v) => String(v).trim()).includes(t))
-  // 全没勾等于永不触发，没意义，回落全开
-  return picked.length > 0 ? picked : [...ALL_NOTIFY_TYPES]
-}
-
-const getTemplateValidationError = (template: string, templateType: NotificationTemplateType): string | null => {
-  if (!template.trim()) return null
-
-  const placeholderPattern = /{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}/g
-  const placeholders = [...template.matchAll(placeholderPattern)]
-  const remaining = template.replace(placeholderPattern, '')
-  if (remaining.includes('{{') || remaining.includes('}}')) {
-    return '占位符必须使用 {{variable}} 格式'
-  }
-
-  const unknownVariables = [...new Set(placeholders.map((match) => match[1]).filter((name) => !templateVariables[templateType].some((variable) => variable.name === name)))]
-  if (unknownVariables.length > 0) {
-    return `不支持的占位符: ${unknownVariables.join(', ')}`
-  }
-  return null
-}
-
-const splitTemplateConfig = (config?: Record<string, unknown>) => {
-  const templates: Record<NotificationTemplateType, string> = { ...defaultTemplates }
-  const channelConfig: Record<string, unknown> = {}
-
-  for (const [key, value] of Object.entries(config || {})) {
-    // notify_types 由正文模板上方的开关控制，不放进「配置 (JSON)」输入框，避免两处重复
-    if (key === 'notify_types') continue
-    const templateType = templateDefinitions.find((definition) => templateConfigKeys[definition.type] === key)?.type
-    if (templateType) {
-      if (typeof value === 'string' && value.trim()) {
-        templates[templateType] = value
-      }
-    } else {
-      channelConfig[key] = value
-    }
-  }
-
-  return { templates, channelConfig }
-}
-
-const channelTypeLabels: Record<string, string> = Object.fromEntries(
-  channelTypes.map(c => [c.type, c.label])
-)
 
 export function NotificationChannels() {
   const { addToast } = useUIStore()
   const { isAuthenticated, token, _hasHydrated } = useAuthStore()
+  const canLoad = _hasHydrated && isAuthenticated && Boolean(token)
+  const { options: notifyTypeOptions, loading: notifyTypesLoading, error: notifyTypesError, reload: reloadNotifyTypes } = useNotificationTypeOptions(canLoad)
+  const allNotifyTypes = notifyTypeOptions.map((option) => option.value)
   const [loading, setLoading] = useState(true)
   const [channels, setChannels] = useState<NotificationChannel[]>([])
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+  const [total, setTotal] = useState(0)
+  const [typeCounts, setTypeCounts] = useState<Record<string, number>>({})
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingChannel, setEditingChannel] = useState<NotificationChannel | null>(null)
   const [selectedType, setSelectedType] = useState<ChannelType | null>(null)
   const [formName, setFormName] = useState('')
   const [formConfig, setFormConfig] = useState('')
-  const [formTemplates, setFormTemplates] = useState<Record<NotificationTemplateType, string>>({ ...defaultTemplates })
-  const [formNotifyTypes, setFormNotifyTypes] = useState<NotifyType[]>([...ALL_NOTIFY_TYPES])
+  const [formTemplates, setFormTemplates] = useState<Record<NotifyType, string>>({ ...defaultTemplates })
+  const [formNotifyTypes, setFormNotifyTypes] = useState<NotifyType[]>([])
   const [formEnabled, setFormEnabled] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [operatingChannelId, setOperatingChannelId] = useState<string | null>(null)
 
-  // 删除确认弹窗状态
   const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [deleting, setDeleting] = useState(false)
 
-  const loadChannels = async () => {
+  const loadChannels = async (targetPage = page, targetPageSize = pageSize) => {
     if (!_hasHydrated || !isAuthenticated || !token) {
       setLoading(false)
       return
     }
     try {
       setLoading(true)
-      const result = await getNotificationChannels()
-      if (result.success) {
-        setChannels(result.data || [])
+      const result = await getNotificationChannelPage(targetPage, targetPageSize)
+      if (!result.success || !result.data) {
+        addToast({ type: 'error', message: result.message || '加载通知渠道失败' })
+        return
       }
-    } catch (err) {
-      if (err && typeof err === 'object' && 'response' in err) {
-        const axiosErr = err as { response?: { status?: number } }
-        if (axiosErr.response?.status === 401) {
-          return
-        }
-      }
-      addToast({ type: 'error', message: '加载通知渠道失败' })
+      setChannels(result.data.items)
+      setPage(result.data.page)
+      setPageSize(result.data.page_size)
+      setTotal(result.data.total)
+      setTypeCounts(result.data.type_counts)
+    } catch (reason) {
+      addToast({ type: 'error', message: getApiErrorMessage(reason, '加载通知渠道失败') })
     } finally {
       setLoading(false)
     }
@@ -299,16 +74,10 @@ export function NotificationChannels() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [_hasHydrated, isAuthenticated, token])
 
-  // 统计某类型已配置的渠道数量
-  const getChannelCountByType = (type: string) => {
-    return channels.filter(c => c.type === type).length
-  }
-
   const handleToggleEnabled = async (channel: NotificationChannel) => {
+    setOperatingChannelId(channel.id)
     try {
       const result = await updateNotificationChannel(channel.id, {
-        name: channel.name,
-        config: channel.config,
         enabled: !channel.enabled,
       })
       if (!result.success) {
@@ -316,13 +85,16 @@ export function NotificationChannels() {
         return
       }
       addToast({ type: 'success', message: channel.enabled ? '渠道已禁用' : '渠道已启用' })
-      loadChannels()
-    } catch {
-      addToast({ type: 'error', message: '操作失败' })
+      void loadChannels()
+    } catch (reason) {
+      addToast({ type: 'error', message: getApiErrorMessage(reason, '操作失败') })
+    } finally {
+      setOperatingChannelId(null)
     }
   }
 
   const handleTest = async (id: string) => {
+    setOperatingChannelId(id)
     try {
       const result = await testNotificationChannel(id)
       if (result.success) {
@@ -330,32 +102,41 @@ export function NotificationChannels() {
       } else {
         addToast({ type: 'error', message: result.message || '测试失败' })
       }
-    } catch {
-      addToast({ type: 'error', message: '测试失败' })
+    } catch (reason) {
+      addToast({ type: 'error', message: getApiErrorMessage(reason, '测试失败') })
+    } finally {
+      setOperatingChannelId(null)
     }
   }
 
   const handleDelete = async (id: string) => {
     setDeleting(true)
     try {
-      await deleteNotificationChannel(id)
+      const result = await deleteNotificationChannel(id)
+      if (!result.success) {
+        addToast({ type: 'error', message: result.message || '删除失败' })
+        return
+      }
       addToast({ type: 'success', message: '删除成功' })
       setDeleteConfirm({ open: false, id: null })
-      loadChannels()
-    } catch {
-      addToast({ type: 'error', message: '删除失败' })
+      void loadChannels()
+    } catch (reason) {
+      addToast({ type: 'error', message: getApiErrorMessage(reason, '删除失败') })
     } finally {
       setDeleting(false)
     }
   }
 
-  // 打开配置弹窗（新建）
   const openConfigModal = (type: ChannelType) => {
+    if (notifyTypesError || allNotifyTypes.length === 0) {
+      addToast({ type: 'error', message: notifyTypesError || '通知类型尚未加载完成' })
+      return
+    }
     const typeConfig = channelTypes.find(c => c.type === type)
     setSelectedType(type)
     setEditingChannel(null)
     // 同类型已存在时，默认名称追加序号以便区分
-    const count = getChannelCountByType(type)
+    const count = typeCounts[type] || 0
     const baseName = typeConfig?.label || ''
     setFormName(count > 0 ? `${baseName} ${count + 1}` : baseName)
     // 新建时默认填充样例配置
@@ -365,36 +146,42 @@ export function NotificationChannels() {
       setFormConfig('')
     }
     setFormTemplates({ ...defaultTemplates })
-    setFormNotifyTypes([...ALL_NOTIFY_TYPES])
+    setFormNotifyTypes([...allNotifyTypes])
     setFormEnabled(true)
     setIsModalOpen(true)
   }
 
   const toggleFormNotifyType = (type: NotifyType) => {
     setFormNotifyTypes((prev) => {
+      if (prev.includes(type) && prev.length === 1) {
+        addToast({ type: 'warning', message: '请至少保留一种通知类型' })
+        return prev
+      }
       const next = prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]
-      // 三类全关等于这个渠道永不触发，回落全开
-      return next.length === 0 ? [...ALL_NOTIFY_TYPES] : next
+      return next
     })
   }
 
-  // 打开编辑弹窗
   const openEditModal = (channel: NotificationChannel) => {
-    const typeConfig = channelTypes.find(c => c.type === channel.type)
+    if (notifyTypesError || allNotifyTypes.length === 0) {
+      addToast({ type: 'error', message: notifyTypesError || '通知类型尚未加载完成' })
+      return
+    }
     setSelectedType(channel.type as ChannelType)
     setEditingChannel(channel)
     setFormName(channel.name)
-    // 编辑时如果配置为空，也填充默认样例
+    // 历史异常原文保留在编辑器中供用户修复，禁止用示例配置覆盖。
     const { templates, channelConfig } = splitTemplateConfig(channel.config)
-    if (Object.keys(channelConfig).length > 0) {
+    if (channel.config_error) {
+      setFormConfig(channel.raw_config || '')
+      addToast({ type: 'warning', message: channel.config_error })
+    } else if (Object.keys(channelConfig).length > 0) {
       setFormConfig(JSON.stringify(channelConfig, null, 2))
-    } else if (typeConfig?.defaultConfig) {
-      setFormConfig(JSON.stringify(typeConfig.defaultConfig, null, 2))
     } else {
-      setFormConfig('')
+      setFormConfig('{}')
     }
     setFormTemplates(templates)
-    setFormNotifyTypes(parseNotifyTypes(channel.config?.notify_types))
+    setFormNotifyTypes(parseNotifyTypes(channel.config?.notify_types, allNotifyTypes))
     setFormEnabled(channel.enabled)
     setIsModalOpen(true)
   }
@@ -412,6 +199,10 @@ export function NotificationChannels() {
       return
     }
     if (!selectedType) return
+    if (formNotifyTypes.length === 0) {
+      addToast({ type: 'warning', message: '请至少选择一种通知类型' })
+      return
+    }
 
     setSaving(true)
     try {
@@ -426,25 +217,26 @@ export function NotificationChannels() {
         }
       }
 
-      for (const definition of templateDefinitions) {
-        delete config[templateConfigKeys[definition.type]]
-        const template = formTemplates[definition.type]
-        const validationError = getTemplateValidationError(template, definition.type)
+      if (!config || typeof config !== 'object' || Array.isArray(config)) {
+        addToast({ type: 'error', message: '渠道配置必须为 JSON 对象' })
+        return
+      }
+
+      for (const definition of notifyTypeOptions) {
+        delete config[templateConfigKeys[definition.value]]
+        const template = formTemplates[definition.value]
+        const validationError = getTemplateValidationError(template, definition.value)
         if (validationError) {
           addToast({ type: 'error', message: `${definition.label}${validationError}` })
           return
         }
-        if (template.trim() && template !== defaultTemplates[definition.type]) {
-          config[templateConfigKeys[definition.type]] = template
+        if (template.trim() && template !== defaultTemplates[definition.value]) {
+          config[templateConfigKeys[definition.value]] = template
         }
       }
 
-      // 渠道级事件开关写进 config，发送端据此过滤；全开时不写，保持配置干净
-      if (formNotifyTypes.length === ALL_NOTIFY_TYPES.length) {
-        delete config.notify_types
-      } else {
-        config.notify_types = [...formNotifyTypes]
-      }
+      // 显式保存全选，区分“用户选择全类型”和“旧客户端未提交字段”。
+      config.notify_types = [...formNotifyTypes]
 
       const data = {
         name: formName.trim(),
@@ -463,26 +255,11 @@ export function NotificationChannels() {
       addToast({ type: 'success', message: editingChannel ? '渠道已更新' : '渠道已添加' })
 
       closeModal()
-      loadChannels()
-    } catch {
-      addToast({ type: 'error', message: '保存失败' })
+      void loadChannels(editingChannel ? page : 1)
+    } catch (reason) {
+      addToast({ type: 'error', message: getApiErrorMessage(reason, '保存失败') })
     } finally {
       setSaving(false)
-    }
-  }
-
-  // 获取当前类型的配置提示
-  const getConfigHint = (type: ChannelType) => {
-    switch (type) {
-      case 'bark': return 'Bark是iOS推送通知服务，需要填写设备密钥'
-      case 'dingtalk': return '请设置钉钉机器人Webhook URL，可选填加签密钥'
-      case 'feishu': return '请设置飞书机器人Webhook URL'
-      case 'email': return '需要填写SMTP服务器、端口、发送邮箱、密码和接收邮箱'
-      case 'wechat': return '请设置企业微信机器人Webhook URL'
-      case 'telegram': return '需要填写Bot Token和Chat ID'
-      case 'pushplus': return '需要填写PushPlus的token，topic为群组编码（可选）'
-      case 'webhook': return '填写自定义Webhook URL'
-      default: return ''
     }
   }
 
@@ -498,131 +275,35 @@ export function NotificationChannels() {
           <h1 className="page-title">通知渠道</h1>
           <p className="page-description">管理消息通知渠道，支持钉钉、飞书、邮件等多种方式</p>
         </div>
-        <button onClick={loadChannels} className="btn-ios-secondary">
+        <button onClick={() => void loadChannels()} className="btn-ios-secondary">
           <RefreshCw className="w-4 h-4" />
           刷新
         </button>
       </div>
 
-      {/* 渠道类型网格 */}
-      <div className="vben-card">
-        <div className="vben-card-header">
-          <h2 className="vben-card-title">
-            <Settings className="w-4 h-4" />
-            选择通知方式
-          </h2>
-        </div>
-        <div className="vben-card-body">
-          <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">点击下方按钮选择通知渠道类型新建，同一类型可创建多个</p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-            {channelTypes.map((ct, index) => {
-              const configuredCount = getChannelCountByType(ct.type)
-              const Icon = ct.icon
-              return (
-                <motion.div
-                  key={ct.type}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.03 }}
-                  className={`relative p-4 rounded-xl border-2 transition-all ${
-                    configuredCount > 0
-                      ? 'border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-900/20'
-                      : 'border-slate-200 dark:border-slate-700 hover:border-blue-300 dark:hover:border-blue-600'
-                  }`}
-                >
-                  {configuredCount > 0 && (
-                    <span className="absolute top-2 right-2 min-w-[1.25rem] h-5 px-1.5 inline-flex items-center justify-center text-xs font-medium rounded-full bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400">
-                      {configuredCount}
-                    </span>
-                  )}
-                  <div className="text-center">
-                    <div className={`w-10 h-10 mx-auto mb-2 rounded-lg flex items-center justify-center ${
-                      configuredCount > 0 ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400' : 'bg-slate-100 dark:bg-slate-700 text-slate-500'
-                    }`}>
-                      <Icon className="w-5 h-5" />
-                    </div>
-                    <h3 className="font-medium text-slate-900 dark:text-slate-100 text-sm">{ct.label}</h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{ct.desc}</p>
-
-                    <button
-                      onClick={() => openConfigModal(ct.type)}
-                      className="mt-3 text-xs px-3 py-1 rounded border border-blue-300 dark:border-blue-600 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30"
-                    >
-                      <Plus className="w-3 h-3 inline mr-1" />
-                      {configuredCount > 0 ? '新建' : '配置'}
-                    </button>
-                  </div>
-                </motion.div>
-              )
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* 已配置的渠道列表 */}
-      {channels.length > 0 && (
-        <div className="vben-card">
-          <div className="vben-card-header">
-            <h2 className="vben-card-title">
-              <Bell className="w-4 h-4" />
-              已配置渠道
-            </h2>
-          </div>
-          <div className="vben-card-body">
-            <div className="divide-y divide-slate-100 dark:divide-slate-700">
-              {channels.map(channel => (
-                <div key={channel.id} className="flex items-center justify-between py-3">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                      channel.enabled ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600' : 'bg-slate-100 dark:bg-slate-700 text-slate-500'
-                    }`}>
-                      <Bell className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <p className="font-medium text-slate-900 dark:text-slate-100">{channel.name}</p>
-                      <p className="text-xs text-slate-500">{channelTypeLabels[channel.type] || channel.type}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handleToggleEnabled(channel)}
-                      title={channel.enabled ? '点击禁用' : '点击启用'}
-                      className={`text-xs px-2 py-0.5 rounded transition-colors ${
-                        channel.enabled
-                          ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-800'
-                          : 'bg-slate-100 text-slate-500 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600'
-                      }`}
-                    >
-                      {channel.enabled ? '启用' : '禁用'}
-                    </button>
-                    <button
-                      onClick={() => handleTest(channel.id)}
-                      className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500"
-                      title="测试"
-                    >
-                      <Send className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => openEditModal(channel)}
-                      className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500"
-                      title="编辑"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => setDeleteConfirm({ open: true, id: channel.id })}
-                      className="p-1.5 rounded hover:bg-red-50 dark:hover:bg-red-900/30 text-red-500"
-                      title="删除"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+      {notifyTypesError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300 flex flex-wrap items-center justify-between gap-3">
+          <span>{notifyTypesError}</span>
+          <button type="button" onClick={() => void reloadNotifyTypes()} className="btn-ios-secondary">
+            重新加载
+          </button>
         </div>
       )}
+
+      <NotificationChannelList
+        channels={channels}
+        typeCounts={typeCounts}
+        notifyTypesUnavailable={notifyTypesLoading || Boolean(notifyTypesError)}
+        operatingChannelId={operatingChannelId}
+        onCreate={openConfigModal}
+        onToggle={handleToggleEnabled}
+        onTest={handleTest}
+        onEdit={openEditModal}
+        onDelete={(id) => setDeleteConfirm({ open: true, id })}
+      />
+      <Pager page={page} pageSize={pageSize} total={total} loading={loading}
+        onPageChange={(next) => void loadChannels(next)}
+        onPageSizeChange={(size) => void loadChannels(1, size)} />
 
       {/* 配置弹窗 */}
       {isModalOpen && selectedType && (
@@ -657,7 +338,7 @@ export function NotificationChannels() {
                     placeholder={channelTypes.find(c => c.type === selectedType)?.placeholder}
                   />
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                    {getConfigHint(selectedType)}
+                    {getChannelConfigHint(selectedType)}
                   </p>
                 </div>
                 <div className="border-t border-slate-200 dark:border-slate-700 pt-4 space-y-4">
@@ -667,10 +348,10 @@ export function NotificationChannels() {
                       预填为系统默认正文；修改后才会保存为自定义模板，留空可恢复系统默认正文。支持英文占位符，例如 {'{{buyer_nick}}'}。
                     </p>
                   </div>
-                  {templateDefinitions.map((definition) => {
-                    const typeOn = formNotifyTypes.includes(definition.type)
+                  {notifyTypeOptions.map((definition) => {
+                    const typeOn = formNotifyTypes.includes(definition.value)
                     return (
-                    <div key={definition.type}>
+                    <div key={definition.value}>
                       <div className="flex items-center justify-between gap-3">
                         <label className="input-label mb-0">{definition.label}</label>
                         <div className="flex items-center gap-2">
@@ -679,8 +360,8 @@ export function NotificationChannels() {
                           </span>
                           <button
                             type="button"
-                            onClick={() => toggleFormNotifyType(definition.type)}
-                            title={NOTIFY_TYPE_HINTS[definition.type]}
+                            onClick={() => toggleFormNotifyType(definition.value)}
+                            title={notifyTypeHints[definition.value]}
                             className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                               typeOn ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'
                             }`}
@@ -694,15 +375,15 @@ export function NotificationChannels() {
                         </div>
                       </div>
                       <textarea
-                        value={formTemplates[definition.type]}
+                        value={formTemplates[definition.value]}
                         onChange={(event) => setFormTemplates((templates) => ({
                           ...templates,
-                          [definition.type]: event.target.value,
+                          [definition.value]: event.target.value,
                         }))}
                         className="input-ios h-32 resize-y font-mono text-sm"
                       />
                       <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 break-words">
-                        可用变量：{templateVariables[definition.type].map(({ name, label }) => `{{${name}}}（${label}）`).join('、')}
+                        可用变量：{templateVariables[definition.value].map(({ name, label }) => `{{${name}}}（${label}）`).join('、')}
                       </p>
                     </div>
                     )
@@ -749,7 +430,7 @@ export function NotificationChannels() {
       <ConfirmModal
         isOpen={deleteConfirm.open}
         title="删除确认"
-        message="确定要删除这个通知渠道吗？删除后无法恢复。"
+        message="确定要删除这个通知渠道吗？删除后将停止推送，历史配置会保留。"
         confirmText="删除"
         cancelText="取消"
         type="danger"
