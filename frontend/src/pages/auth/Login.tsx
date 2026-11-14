@@ -1,17 +1,19 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { MessageSquare, User, Lock, Mail, KeyRound, Eye, EyeOff } from 'lucide-react'
+import { User, Lock, Mail, KeyRound, Eye, EyeOff } from 'lucide-react'
 import { AuthNavbar } from '@/components/common/AuthNavbar'
 import { SafeHtml } from '@/components/common/SafeHtml'
-import { getDefaultAuthFooterAdSettings, getDefaultLoginBrandingSettings } from '@/api/settings'
-import { login, verifyToken, getRegistrationStatus, getLoginInfoStatus, generateCaptcha, verifyCaptcha, sendVerificationCode, getLoginCaptchaStatus, getLoginBrandingSettings, getAuthFooterAdSettings } from '@/api/auth'
+import { login, generateCaptcha, verifyCaptcha, sendVerificationCode } from '@/api/auth'
 import { useAuthStore } from '@/store/authStore'
 import { useUIStore } from '@/store/uiStore'
 import { cn } from '@/utils/cn'
 import { ButtonLoading } from '@/components/common/Loading'
 import { GeetestCaptcha, type GeetestResult } from '@/components/common/GeetestCaptcha'
 import { POPUP_ANNOUNCEMENT_SHOWN_KEY } from '@/components/common/PopupAnnouncementModal'
+import { LoginBrandingPanel, LoginMobileBranding } from './LoginBranding'
+import { useLoginPageSettings } from './useLoginPageSettings'
+import { useRegistrationStatus } from './useRegistrationStatus'
 
 type LoginType = 'username' | 'email-password' | 'email-code'
 
@@ -23,11 +25,8 @@ export function Login() {
   const [loginType, setLoginType] = useState<LoginType>('username')
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
-  const [registrationEnabled, setRegistrationEnabled] = useState(true)
-  const [showDefaultLogin, setShowDefaultLogin] = useState(true)
-  const [loginCaptchaEnabled, setLoginCaptchaEnabled] = useState<boolean | null>(null)
-  const [loginBranding, setLoginBranding] = useState(() => getDefaultLoginBrandingSettings())
-  const [authFooterAd, setAuthFooterAd] = useState(() => getDefaultAuthFooterAdSettings())
+  const { enabled: registrationEnabled } = useRegistrationStatus()
+  const { showDefaultLogin, loginCaptchaEnabled, loginBranding, authFooterAd } = useLoginPageSettings(isAuthenticated)
 
   // Form states
   const [username, setUsername] = useState('')
@@ -54,50 +53,6 @@ export function Login() {
     setGeetestResult(null)
     setGeetestKey((k) => k + 1)
   }
-
-  // Check if already logged in
-  useEffect(() => {
-    if (isAuthenticated) {
-      navigate('/dashboard')
-      return
-    }
-
-    const token = localStorage.getItem('auth_token')
-    if (token) {
-      verifyToken()
-        .then((result) => {
-          if (result.authenticated) {
-            navigate('/dashboard')
-          }
-        })
-        .catch(() => {
-          localStorage.removeItem('auth_token')
-        })
-    }
-  }, [isAuthenticated, navigate])
-
-  // Load initial states
-  useEffect(() => {
-    getRegistrationStatus()
-      .then((result) => setRegistrationEnabled(result.enabled))
-      .catch(() => {})
-
-    getLoginInfoStatus()
-      .then((result) => setShowDefaultLogin(result.enabled))
-      .catch(() => {})
-
-    getLoginCaptchaStatus()
-      .then((result) => setLoginCaptchaEnabled(result.enabled))
-      .catch(() => {})
-
-    getLoginBrandingSettings()
-      .then((result) => setLoginBranding(result))
-      .catch(() => {})
-
-    getAuthFooterAdSettings()
-      .then((result) => setAuthFooterAd(result))
-      .catch(() => {})
-  }, [])
 
   // Load captcha when switching to email-code
   useEffect(() => {
@@ -286,48 +241,7 @@ export function Login() {
       <AuthNavbar systemName={loginBranding['login.system_name']} />
 
       <div className="flex-1 flex pt-14">
-      {/* Left side - Branding */}
-      <motion.div 
-        initial={{ opacity: 0, x: -20 }}
-        animate={{ opacity: 1, x: 0 }}
-        transition={{ duration: 0.5 }}
-        className="hidden lg:flex lg:w-1/2 bg-slate-900 dark:bg-slate-950 relative overflow-hidden"
-      >
-        <div className="absolute inset-0 bg-gradient-to-br from-blue-600/20 to-transparent" />
-        <div className="relative z-10 flex flex-col justify-center px-16">
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2, duration: 0.5 }}
-            className="flex items-center gap-3 mb-8"
-          >
-            <div className="w-12 h-12 rounded-xl bg-blue-500 flex items-center justify-center">
-              <MessageSquare className="w-6 h-6 text-white" />
-            </div>
-            <span className="text-2xl font-bold text-white">{loginBranding['login.system_name']}</span>
-          </motion.div>
-          <motion.h1 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3, duration: 0.5 }}
-            className="text-4xl font-bold text-white mb-4 leading-tight whitespace-pre-line"
-          >
-            {loginBranding['login.system_title']}
-          </motion.h1>
-          <motion.p 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.4, duration: 0.5 }}
-            className="text-slate-400 text-lg max-w-md"
-          >
-            {loginBranding['login.system_description']}
-          </motion.p>
-        </div>
-        {/* Decorative circles */}
-        <div className="absolute -bottom-32 -left-32 w-96 h-96 rounded-full bg-blue-600/10" />
-        <div className="absolute -top-32 -right-32 w-96 h-96 rounded-full bg-blue-600/5" />
-      </motion.div>
-
+      <LoginBrandingPanel settings={loginBranding} />
       {/* Right side - Login form */}
       <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
         <motion.div
@@ -336,19 +250,7 @@ export function Login() {
           transition={{ duration: 0.4 }}
           className="w-full max-w-md"
         >
-          {/* Mobile header */}
-          <motion.div 
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1, duration: 0.4 }}
-            className="lg:hidden text-center mb-8"
-          >
-            <div className="w-12 h-12 rounded-xl bg-blue-500 text-white mx-auto mb-4 flex items-center justify-center">
-              <MessageSquare className="w-6 h-6" />
-            </div>
-            <h1 className="text-xl font-bold text-slate-900 dark:text-white">{loginBranding['login.system_name']}</h1>
-          </motion.div>
-
+          <LoginMobileBranding settings={loginBranding} />
           {/* Login Card */}
           <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700 p-5 sm:p-8">
             <div className="mb-6">

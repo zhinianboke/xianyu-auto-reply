@@ -39,6 +39,18 @@ WITHDRAW_NOTIFY_EMAIL_KEY = 'withdraw.notify_email'
 WITHDRAW_MIN_AMOUNT_KEY = 'withdraw.min_amount'
 
 
+def serialize_settlement_record(record: SettlementRecord) -> dict[str, Any]:
+    """序列化结算记录，供个人查询与管理员查询/修改共用，时间保持北京时间。"""
+    return {
+        'id': record.id, 'alipay_id': record.alipay_id,
+        'payment_type': record.payment_type, 'payment_qrcode': record.payment_qrcode,
+        'amount': record.amount, 'status': record.status, 'remark': record.remark,
+        'reject_reason': record.reject_reason,
+        'created_at': safe_isoformat(record.created_at),
+        'updated_at': safe_isoformat(record.updated_at),
+    }
+
+
 class SettlementService:
     """结算服务"""
 
@@ -243,21 +255,7 @@ class SettlementService:
             page_size=page_size,
         )
 
-        items = [
-            {
-                'id': item.id,
-                'alipay_id': item.alipay_id,
-                'payment_type': item.payment_type,
-                'payment_qrcode': item.payment_qrcode,
-                'amount': item.amount,
-                'status': item.status,
-                'remark': item.remark,
-                'reject_reason': item.reject_reason,
-                'created_at': safe_isoformat(item.created_at),
-                'updated_at': safe_isoformat(item.updated_at),
-            }
-            for item in records
-        ]
+        items = [serialize_settlement_record(item) for item in records]
 
         return {
             'success': True,
@@ -340,8 +338,8 @@ async def review_withdraw_record(record_id: int, action: str, token: str, reject
         return {'success': False, 'message': '无效的审核动作'}
     
     async with async_session_maker() as session:
-        # 查询记录
-        stmt = select(SettlementRecord).where(SettlementRecord.id == record_id)
+        # 与用户管理修改共用行锁，等待后重新读取当前状态，避免覆盖另一管理员结果。
+        stmt = select(SettlementRecord).where(SettlementRecord.id == record_id).with_for_update().execution_options(populate_existing=True)
         result = await session.execute(stmt)
         record = result.scalar_one_or_none()
         

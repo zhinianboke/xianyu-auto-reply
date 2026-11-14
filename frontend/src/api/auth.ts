@@ -53,9 +53,20 @@ export const logout = (): Promise<ApiResponse> => {
 
 // 获取注册状态 - 从系统设置获取
 export const getRegistrationStatus = async (): Promise<{ enabled: boolean }> => {
-  const settings = await getPublicSettings()
-  // 处理多种可能的值类型：true, 'true', 1, '1'
+  // 注册开关实时读取，避免登录页的设置缓存保留管理员修改前的状态。
+  const response = await get<unknown>(`${SYSTEM_PREFIX}/public`)
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    throw new Error('注册状态响应格式异常，请稍后重试')
+  }
+  const settings = response as Record<string, unknown>
+  if (settings.success === false) {
+    throw new Error(typeof settings.message === 'string' && settings.message.trim() ? settings.message : '读取注册状态失败，请稍后重试')
+  }
+  // 后端统一返回 true/false，兼容旧客户端的布尔值与 0/1；缺失或非法值是读取错误。
   const value = settings.registration_enabled
+  if (![true, false, 'true', 'false', 1, 0, '1', '0'].includes(value as string | number | boolean)) {
+    throw new Error('注册状态响应缺失或取值异常，请稍后重试')
+  }
   return { enabled: value === true || value === 'true' || value === 1 || value === '1' }
 }
 

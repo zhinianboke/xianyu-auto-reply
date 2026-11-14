@@ -15,13 +15,6 @@ TEMPLATE_CONFIG_KEYS = {
     "monitor": "monitor_template",
 }
 
-NOTIFICATION_EVENT_KEYS = {
-    "chat": "chat",
-    "delivery": "delivery",
-    "account": "account",
-    "monitor": "monitor",
-}
-
 TEMPLATE_VARIABLES = {
     "chat": {
         "account",
@@ -148,26 +141,3 @@ def render_notification_template(
         return "未知" if value is None else str(value)
 
     return _PLACEHOLDER_RE.sub(replace_placeholder, template)
-
-
-def is_notification_event_enabled(
-    config_data: Mapping[str, Any] | None,
-    event_type: str,
-) -> bool:
-    """判断渠道是否允许发送指定事件。
-
-    旧渠道没有 ``notification_events`` 配置时默认开启，保证升级后行为兼容。
-    新配置中的值只接受布尔值；字符串形式同时兼容常见的 true/false 表达。
-    """
-    event_key = NOTIFICATION_EVENT_KEYS.get(event_type)
-    if not event_key:
-        return True
-
-    events = (config_data or {}).get("notification_events")
-    if not isinstance(events, Mapping) or event_key not in events:
-        return True
-
-    value = events[event_key]
-    if isinstance(value, str):
-        return value.strip().lower() not in {"0", "false", "no", "off", "disabled"}
-    return bool(value)

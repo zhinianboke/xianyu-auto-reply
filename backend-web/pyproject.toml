@@ -38,6 +38,8 @@ dependencies = [
     "qrcode[pil]>=7.4.0",
     "pillow>=10.0.0",
     "opencv-python-headless>=4.10.0",
+    "paramiko>=3.4.1,<5",
+    "cryptography>=3.3",
 ]
 
 [build-system]

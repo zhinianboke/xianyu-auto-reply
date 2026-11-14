@@ -7,6 +7,7 @@ import { PageLoading } from '@/components/common/Loading'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { UserFormModal } from './UserFormModal'
 import { UserRechargeModal } from './UserRechargeModal'
+import { UserSettlementsModal } from './UserSettlementsModal'
 import { getApiErrorMessage } from '@/utils/request'
 import type { User } from '@/types'
 
@@ -63,6 +64,7 @@ export function Users() {
   const [showFormModal, setShowFormModal] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
   const [rechargingUser, setRechargingUser] = useState<User | null>(null)
+  const [settlementUser, setSettlementUser] = useState<User | null>(null)
 
   const loadUsers = async () => {
     if (!_hasHydrated || !isAuthenticated || !token) return
@@ -218,7 +220,7 @@ export function Users() {
             <span className="badge-primary whitespace-nowrap">{total} 个用户</span>
           </div>
         </div>
-        <div className="flex-1 overflow-auto">
+        <div className="table-scroll">
           <table className="table-ios">
             <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
               <tr>
@@ -229,6 +231,7 @@ export function Users() {
                 <th>角色</th>
                 <th>可添加账号数</th>
                 <th>余额</th>
+                <th>结算记录</th>
                 <th>到期日</th>
                 <th>状态</th>
                 <th>操作</th>
@@ -237,7 +240,7 @@ export function Users() {
             <tbody>
               {users.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="text-center py-8 text-slate-500 dark:text-slate-400">
+                  <td colSpan={11} className="text-center py-8 text-slate-500 dark:text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <UsersIcon className="w-12 h-12 text-slate-300 dark:text-slate-600" />
                       <p>{appliedUsername ? `未找到用户名包含「${appliedUsername}」的用户` : '暂无用户数据'}</p>
@@ -258,6 +261,7 @@ export function Users() {
                     </td>
                     <td className="text-slate-500 dark:text-slate-400">{user.account_limit ?? '-'}</td>
                     <td className="font-medium text-slate-700 dark:text-slate-300 tabular-nums">¥{user.balance ?? '0.00'}</td>
+                    <td><button type="button" className="btn-ios-secondary btn-sm whitespace-nowrap" onClick={() => setSettlementUser(user)}>结算记录</button></td>
                     <td className={`whitespace-nowrap text-sm ${isExpired(user.expire_at) ? 'text-red-500 font-medium' : 'text-slate-500 dark:text-slate-400'}`}>
                       {formatExpireAt(user.expire_at)}
                       {isExpired(user.expire_at) && <span className="ml-1">(已到期)</span>}
@@ -402,6 +406,7 @@ export function Users() {
           }}
         />
       )}
+      {settlementUser && <UserSettlementsModal key={settlementUser.user_id} user={settlementUser} onClose={() => setSettlementUser(null)} />}
     </div>
   )
 }

@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_user, get_current_admin_user, get_db_session
-from app.services.amap_inputtips_service import AmapInputTipsError, AmapInputTipsService
+from common.services.amap_inputtips_service import AmapInputTipsError, AmapInputTipsService
 from app.services.publish_address_service import PublishAddressService, _address_to_dict
 from common.models.user import User
 from common.schemas.common import ApiResponse

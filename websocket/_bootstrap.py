@@ -31,6 +31,8 @@ from app.api.routes import cookies_refresh, internal, password_login
 from app.services.account_startup import AccountStartup
 from app.services.service_health import check_database_connection
 from app.services.xianyu.cookie_manager import get_manager
+from common.db.init_database import ddl_connection, init_advisory_lock
+from common.db.notification_schema import ensure_notification_schema
 from common.db.redis_client import close_redis_client, initialize_redis_client
 from common.services.cookie_renew_browser_service import enable_local_browser_renew
 from common.services.order_service import close_goofish_connector
@@ -68,6 +70,15 @@ async def lifespan(app: FastAPI):
         logger.error("数据库连接失败，服务退出")
         sys.exit(1)
     logger.info("数据库连接成功")
+
+    # 本服务直接发送通知，关键字段缺失时必须停止启动，禁止把查询异常伪装成“未配置通知”。
+    try:
+        async with init_advisory_lock():
+            async with ddl_connection() as conn:
+                await ensure_notification_schema(conn)
+    except Exception:
+        logger.exception("通知模块数据库结构自检失败，WebSocket服务退出")
+        raise
 
     # 初始化 Redis 健康连接池；失败时按指数退避重试，最终失败则停止启动。
     try:

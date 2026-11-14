@@ -16,10 +16,8 @@ export function Home() {
       <AuthNavbar />
       <main className="mx-auto max-w-[90rem] px-3 pb-10 pt-20 sm:px-6">
         <PublicAdvertisements placement="home" {...advertisements} />
-        <div className="mx-auto max-w-7xl">
-          <HomeContacts />
-          <PublicPageFooter />
-        </div>
+        <HomeContacts />
+        <PublicPageFooter />
       </main>
     </div>
   )

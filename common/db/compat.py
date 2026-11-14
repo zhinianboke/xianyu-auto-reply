@@ -29,6 +29,8 @@ from common.models.confirm_receipt_message import ConfirmReceiptMessage
 from common.models.user_setting import UserSetting
 from common.models.system_setting import SystemSetting
 from common.utils.time_utils import get_beijing_now, get_beijing_now_naive
+from common.services.notification_types import resolve_stored_notification_types
+from common.utils.notification_config import parse_notification_config
 
 
 # 线程本地存储，用于缓存每个线程的数据库引擎和会话工厂
@@ -984,7 +986,10 @@ class DBManagerCompat:
                 ).where(
                     MessageNotification.account_identifier == cookie_id,
                     MessageNotification.enabled == True,
-                    NotificationChannel.enabled == True
+                    MessageNotification.is_deleted == False,
+                    MessageNotification.owner_id == NotificationChannel.owner_id,
+                    NotificationChannel.enabled == True,
+                    NotificationChannel.is_deleted == False,
                 ).limit(1)
                 
                 result = await session.execute(stmt)
@@ -1061,11 +1066,13 @@ class DBManagerCompat:
                 'total_cleaned': 0
             }
     
-    def get_account_notifications(self, cookie_id: str) -> List[Dict[str, Any]]:
+    def get_account_notifications(self, cookie_id: str, notify_type: str = None) -> List[Dict[str, Any]]:
         """获取账号的通知配置
         
         Args:
             cookie_id: Cookie ID
+            notify_type: 通知类型 chat/delivery/account。给定值时只返回订阅了该类型的渠道，
+                         为空时返回全部绑定（兼容旧调用）
             
         Returns:
             通知配置列表
@@ -1082,18 +1089,62 @@ class DBManagerCompat:
                     MessageNotification.channel_id == NotificationChannel.id
                 ).where(
                     MessageNotification.account_identifier == cookie_id,
-                    NotificationChannel.enabled == True
-                ).order_by(MessageNotification.id)
+                    MessageNotification.is_deleted == False,
+                    MessageNotification.owner_id == NotificationChannel.owner_id,
+                    NotificationChannel.enabled == True,
+                    NotificationChannel.is_deleted == False,
+                ).order_by(
+                    MessageNotification.channel_id,
+                    MessageNotification.enabled.desc(),
+                    MessageNotification.id.desc(),
+                )
                 
                 result = await session.execute(stmt)
                 rows = result.all()
                 
                 notifications = []
+                seen_binding_keys = set()
                 for notification, channel in rows:
+                    binding_key = (notification.owner_id, notification.account_pk, channel.id)
+                    if notify_type and not notification.enabled:
+                        continue
+                    # 绑定级订阅（账号+渠道），空值视为全开，兼容历史数据
+                    subscribed = getattr(notification, "notify_types", None)
+                    allowed_types, subscription_fallback = resolve_stored_notification_types(subscribed)
+                    if subscription_fallback:
+                        logger.warning(
+                            "通知绑定类型配置异常，已按全类型兼容：notification_id={}, raw={}",
+                            notification.id,
+                            subscribed,
+                        )
+                    if notify_type:
+                        if notify_type not in allowed_types:
+                            continue
+                        # 渠道级开关（存在渠道 config 的 notify_types 里）：两级都允许才推
+                        try:
+                            cfg = parse_notification_config(channel.config_payload)
+                        except ValueError:
+                            logger.exception("通知渠道配置格式错误，跳过该渠道：channel_id={}", channel.id)
+                            continue
+                        raw = cfg.get("notify_types")
+                        channel_types, channel_fallback = resolve_stored_notification_types(raw)
+                        if channel_fallback:
+                            logger.warning(
+                                "通知渠道类型配置异常，已按全类型兼容：channel_id={}, raw={}",
+                                channel.id,
+                                raw,
+                            )
+                        if notify_type not in channel_types:
+                            continue
+                        # 先匹配事件，再按渠道去重；不同历史绑定的类型均可继续触发。
+                        if binding_key in seen_binding_keys:
+                            continue
+                        seen_binding_keys.add(binding_key)
                     notifications.append({
                         'id': notification.id,
                         'channel_id': channel.id,
                         'enabled': notification.enabled,
+                        'notify_types': ",".join(allowed_types),
                         'channel_name': channel.name,
                         'channel_type': channel.channel_type,
                         'channel_config': channel.config_payload
@@ -1102,10 +1153,13 @@ class DBManagerCompat:
                 return notifications
         
         try:
-            return self._run_async(_query) or []
+            notifications = self._run_async(_query)
+            if notifications is None:
+                raise RuntimeError(f"账号{cookie_id}通知配置查询失败或超时，请检查数据库连接")
+            return notifications
         except Exception as e:
-            logger.error(f"获取账号通知配置失败: {e}")
-            return []
+            logger.exception(f"获取账号通知配置失败，禁止按未配置通知继续处理: {e}")
+            raise
     
     def get_notification_channels(self, user_id: int = None) -> List[Dict[str, Any]]:
         """获取所有通知渠道
@@ -1123,7 +1177,10 @@ class DBManagerCompat:
                 stmt = select(NotificationChannel)
                 if user_id:
                     stmt = stmt.where(NotificationChannel.owner_id == user_id)
-                stmt = stmt.where(NotificationChannel.enabled == True)
+                stmt = stmt.where(
+                    NotificationChannel.enabled == True,
+                    NotificationChannel.is_deleted == False,
+                )
                 
                 result = await session.execute(stmt)
                 channels = result.scalars().all()
@@ -1159,10 +1216,15 @@ class DBManagerCompat:
                     NotificationChannel,
                     MessageNotification.channel_id == NotificationChannel.id
                 ).where(
-                    NotificationChannel.enabled == True
+                    MessageNotification.is_deleted == False,
+                    MessageNotification.owner_id == NotificationChannel.owner_id,
+                    NotificationChannel.enabled == True,
+                    NotificationChannel.is_deleted == False,
                 ).order_by(
                     MessageNotification.account_identifier,
-                    MessageNotification.id
+                    MessageNotification.channel_id,
+                    MessageNotification.enabled.desc(),
+                    MessageNotification.id.desc(),
                 )
                 
                 result = await session.execute(stmt)

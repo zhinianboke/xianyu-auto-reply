@@ -6,10 +6,8 @@ from typing import Any
 from loguru import logger
 
 from common.models.notification_channel import NotificationChannel
-from common.utils.notification_template import (
-    is_notification_event_enabled,
-    render_notification_template,
-)
+from common.services.notification_types import resolve_stored_notification_types
+from common.utils.notification_template import render_notification_template
 from common.utils.notification_utils import (
     parse_notification_config,
     send_bark_notification,
@@ -62,8 +60,15 @@ async def send_monitor_item_notification(
     owner_id: int | None = None,
 ) -> bool:
     """渲染商品监控模板并发送。"""
-    config = channel.config_payload or {}
-    if not is_notification_event_enabled(config, "monitor"):
+    config = parse_notification_config(channel.config_payload or {})
+    notify_types, fallback = resolve_stored_notification_types(config.get("notify_types"))
+    if fallback:
+        logger.warning(
+            "渠道 {}({}) 的通知类型配置异常，已按全类型兼容",
+            channel.name,
+            channel.id,
+        )
+    if "monitor" not in notify_types:
         logger.info("渠道 {}({}) 已关闭上新监控通知", channel.name, channel.id)
         return False
 

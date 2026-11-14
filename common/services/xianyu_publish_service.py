@@ -2,12 +2,13 @@
 公共闲鱼发布服务
 
 功能：
-1. 统一加载闲鱼发布器实现
-2. 保留鱼小铺卖家工作台发布逻辑
+1. 从 common 公共模块加载单品发布器与账号能力检测
+2. 保留旧版浏览器发布器的兼容入口
 3. 提供普通卖家能力检测与独立发布入口
 """
 from __future__ import annotations
 
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -30,30 +31,18 @@ def create_xianyu_publisher(static_root: str | Path | None = None) -> Any:
 
 
 def get_xianyu_direct_publisher_class() -> type[Any]:
-    """动态加载单品接口发布器，避免批量浏览器模块被接口流程引入。"""
-    return load_backend_web_class(
-        module_name="common.services._shared_xianyu_direct_publisher",
-        relative_path="backend-web/app/services/xianyu_direct_publisher.py",
-        class_name="XianyuDirectPublisher",
-    )
+    """按公共模块名延迟导入鱼小铺单品发布器，避免其他服务提前加载媒体依赖。"""
+    return import_module("common.services.xianyu_direct_publisher").XianyuDirectPublisher
 
 
 def get_xianyu_personal_publisher_class() -> type[Any]:
-    """动态加载普通卖家单品发布器。"""
-    return load_backend_web_class(
-        module_name="common.services._shared_xianyu_personal_publisher",
-        relative_path="backend-web/app/services/xianyu_personal_publisher.py",
-        class_name="XianyuPersonalPublisher",
-    )
+    """按公共模块名延迟导入普通卖家单品发布器，不依赖 backend-web 源码目录。"""
+    return import_module("common.services.xianyu_personal_publisher").XianyuPersonalPublisher
 
 
 def get_publish_account_capability_service_class() -> type[Any]:
-    """动态加载发布账号能力检测服务。"""
-    return load_backend_web_class(
-        module_name="common.services._shared_publish_account_capability_service",
-        relative_path="backend-web/app/services/publish_account_capability_service.py",
-        class_name="PublishAccountCapabilityService",
-    )
+    """按公共模块名延迟导入账号能力检测服务，不修改调用方的 app 包搜索路径。"""
+    return import_module("common.services.publish_account_capability_service").PublishAccountCapabilityService
 
 
 async def publish_single_item(

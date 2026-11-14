@@ -8,15 +8,15 @@
 from __future__ import annotations
 
 from loguru import logger
-from sqlalchemy import select, func, and_
+from sqlalchemy import and_, func, select
 
-from common.db.session import async_session_maker
-from common.models.xy_order import XYOrder
 from app.services.xianyu.delivery_rules.base_rule import (
     BaseDeliveryRule,
     RuleCheckResult,
 )
 from app.services.xianyu.delivery_rules.context import DeliveryCheckContext
+from common.db.session import async_session_maker
+from common.models.xy_order import XYOrder
 
 # 未确认收货的订单状态列表（已发货但买家未确认收货）
 UNCONFIRMED_STATUSES = ("shipped",)
@@ -57,6 +57,9 @@ class BuyerUnconfirmedRule(BaseDeliveryRule):
                 item_id=context.item_id if same_item_only else None,
             )
         except Exception as e:
+            if context.strict:
+                logger.exception("{}未确认收货订单检查失败", pf)
+                raise ValueError("未确认收货订单检查失败，已停止API同步发货") from e
             logger.error(f"{pf}[未确认收货规则] 查询异常: {e}")
             # 查询异常不拦截，放行
             return RuleCheckResult(

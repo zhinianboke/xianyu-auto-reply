@@ -10,11 +10,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import BigInteger, DateTime, Index, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from common.db.base_class import Base
+
+if TYPE_CHECKING:
+    from common.models.xy_account import XYAccount
 
 
 class XYCatalogItem(Base):
@@ -26,6 +30,11 @@ class XYCatalogItem(Base):
         Index("idx_cat_account_item", "account_id", "item_id"),
         # 复合索引：加速商品管理列表分页查询（owner_id 过滤 + created_at 倒序）
         Index("idx_cat_owner_created", "owner_id", "created_at"),
+        # 管理员全量列表与按账号列表按时间、主键稳定分页。
+        Index("idx_cat_created_id", "created_at", "id"),
+        Index("idx_cat_account_created_id", "account_id", "created_at", "id"),
+        # 与卡券关联表按商品标识查询，模型建表与存量自检保持一致。
+        Index("idx_item_id", "item_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="商品ID")

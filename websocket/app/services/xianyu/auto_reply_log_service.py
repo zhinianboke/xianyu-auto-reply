@@ -21,6 +21,7 @@ from common.models.auto_reply_message_log import XYAutoReplyMessageLog
 from common.models.user import User
 from common.models.xy_account import XYAccount
 from common.models.xy_catalog_item import XYCatalogItem
+from common.utils.time_utils import get_beijing_now_naive
 
 
 class AutoReplyLogService:
@@ -41,6 +42,10 @@ class AutoReplyLogService:
             写入成功返回日志主键ID（供异步回写发送状态使用），失败返回 None
         """
         try:
+            context = payload.get("context_snapshot") or {}
+            if context.get("api_keyword_trigger_id"):
+                # 保留首次写入时刻，延迟补记不得把历史成功消息计入后续新订单。
+                context.setdefault("api_keyword_log_created_at", get_beijing_now_naive().isoformat())
             return await self._persist_message_record(payload)
         except Exception as e:
             logger.error(f"【{self.cookie_id}】写入自动回复消息日志失败（已重试）: {e}")
@@ -62,6 +67,20 @@ class AutoReplyLogService:
         """
         async with async_session_maker() as session:
             account_context = await self._load_account_context(session, payload.get("item_id"))
+            record_times = {}
+            trigger_id = (payload.get("context_snapshot") or {}).get("api_keyword_trigger_id")
+            if trigger_id:
+                # 触发锁保证同范围串行；提交响应丢失或暂存日志重试时复用原日志，避免多计次数。
+                existing_id = (await session.execute(select(XYAutoReplyMessageLog.id).where(
+                    XYAutoReplyMessageLog.owner_id == account_context.get("owner_id"),
+                    XYAutoReplyMessageLog.account_id == self.cookie_id,
+                    XYAutoReplyMessageLog.sender_user_id == str(payload.get("sender_user_id") or "unknown"),
+                    XYAutoReplyMessageLog.item_id == self._normalize_optional_str(payload.get("item_id")),
+                    XYAutoReplyMessageLog.context_snapshot["api_keyword_trigger_id"].as_string() == trigger_id,
+                ).limit(1))).scalar_one_or_none()
+                if existing_id is not None:
+                    return existing_id
+                record_times["created_at"] = datetime.fromisoformat(payload["context_snapshot"]["api_keyword_log_created_at"])
             record = XYAutoReplyMessageLog(
                 owner_id=account_context.get("owner_id"),
                 owner_username=account_context.get("owner_username"),
@@ -75,7 +94,8 @@ class AutoReplyLogService:
                 source_message_id=self._normalize_optional_str(payload.get("source_message_id")),
                 sender_user_id=str(payload.get("sender_user_id") or "unknown"),
                 sender_user_name=self._normalize_optional_str(payload.get("sender_user_name")),
-                source_message=self._normalize_optional_str(payload.get("source_message")),
+                # 原消息保留首尾空格，用于API关键词的完整消息去重，禁止规范化改变比较内容。
+                source_message=str(payload["source_message"]) if payload.get("source_message") is not None else None,
                 source_message_time=self._parse_message_time(payload.get("msg_time")),
                 process_status=str(payload.get("process_status") or "processing"),
                 decision_reason=str(payload.get("decision_reason") or "processing"),
@@ -96,6 +116,7 @@ class AutoReplyLogService:
                 raw_message_json=self._normalize_json_value(payload.get("raw_message_json")),
                 context_snapshot=self._normalize_json_value(payload.get("context_snapshot")),
                 send_result_json=self._normalize_json_value(payload.get("send_result_json")),
+                **record_times,
             )
             session.add(record)
             await session.commit()

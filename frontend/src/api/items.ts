@@ -97,10 +97,30 @@ export interface SelectableItem {
   price?: string | null
 }
 
+export interface SelectableItemsPage {
+  list: SelectableItem[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+  has_more: boolean
+}
+
+// 待选商品专用轻量分页，不获取商品详情、默认回复和卡券状态。
+export const getSelectableItemsPaginated = (
+  page: number = 1,
+  pageSize: number = 20,
+  keyword: string = '',
+): Promise<ApiResponse<SelectableItemsPage>> => {
+  return get(`${ITEM_PREFIX}/selectable/paginated`, {
+    params: { page, page_size: pageSize, keyword: keyword.trim() },
+  })
+}
+
 // 获取全部匹配的可选商品轻量项（供「全选当前筛选结果」）
 export const getAllSelectableItemKeys = (
   keyword: string = ''
-): Promise<{ list: SelectableItem[]; total: number }> => {
+): Promise<{ list: SelectableItem[]; total: number; success?: boolean; message?: string }> => {
   const params = new URLSearchParams()
   if (keyword && keyword.trim()) params.append('keyword', keyword.trim())
   const qs = params.toString()
@@ -110,7 +130,7 @@ export const getAllSelectableItemKeys = (
 // 获取卡券已关联商品的轻量详情（弹窗右侧「已选商品」展示用）
 export const getItemsByCardId = (
   cardId: number
-): Promise<{ list: SelectableItem[]; total: number }> => {
+): Promise<{ list: SelectableItem[]; total: number; success?: boolean; message?: string }> => {
   return get(`${ITEM_PREFIX}/by-card/${cardId}`)
 }
 

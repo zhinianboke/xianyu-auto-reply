@@ -8,15 +8,15 @@
 from __future__ import annotations
 
 from loguru import logger
-from sqlalchemy import select, func, and_
+from sqlalchemy import and_, func, select
 
-from common.db.session import async_session_maker
-from common.models.xy_order import XYOrder
 from app.services.xianyu.delivery_rules.base_rule import (
     BaseDeliveryRule,
     RuleCheckResult,
 )
 from app.services.xianyu.delivery_rules.context import DeliveryCheckContext
+from common.db.session import async_session_maker
+from common.models.xy_order import XYOrder
 
 
 class BuyerHasOrderGlobalRule(BaseDeliveryRule):
@@ -47,6 +47,8 @@ class BuyerHasOrderGlobalRule(BaseDeliveryRule):
         # owner_id / buyer_id 缺失保护：无所属用户或买家ID时直接放行
         # （owner 维度跨账号查询，空值会误拦该用户名下大量订单，必须防护）
         if context.owner_id is None or not context.buyer_id:
+            if context.strict:
+                raise ValueError("缺少所属用户或买家信息，无法执行同用户订单检查")
             logger.warning(
                 f"{pf}[同用户已有订单规则] owner_id 或 buyer_id 缺失，放行不拦截"
             )
@@ -64,6 +66,9 @@ class BuyerHasOrderGlobalRule(BaseDeliveryRule):
                 item_id=context.item_id if same_item_only else None,
             )
         except Exception as e:
+            if context.strict:
+                logger.exception("{}同用户已有订单检查失败", pf)
+                raise ValueError("同用户已有订单检查失败，已停止API同步发货") from e
             logger.error(f"{pf}[同用户已有订单规则] 查询异常: {e}")
             # 查询异常不拦截，放行
             return RuleCheckResult(

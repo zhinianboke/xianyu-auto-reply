@@ -8,23 +8,25 @@
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from loguru import logger
-from sqlalchemy import select, and_
+from sqlalchemy import and_, select
 
-from common.db.session import async_session_maker
-from common.models.xy_delivery_block_rule import XYDeliveryBlockRule
 from app.services.xianyu.delivery_rules.base_rule import RuleCheckResult
 from app.services.xianyu.delivery_rules.context import DeliveryCheckContext
 from app.services.xianyu.delivery_rules.rule_registry import get_rule_instance
+from common.db.session import async_session_maker
+from common.models.xy_delivery_block_rule import XYDeliveryBlockRule
 
 
-async def load_enabled_rules(account_id: str) -> list[dict[str, Any]]:
+async def load_enabled_rules(account_id: str, *, strict: bool = False) -> list[dict[str, Any]]:
     """从数据库加载该账号所有已启用的规则配置（按 priority 排序）
 
     Args:
         account_id: 账号标识（xy_accounts.account_id）
+        strict: 严格检查时读取或解析失败抛出异常，禁止把失败当作无规则。
 
     Returns:
         规则配置列表，每项包含：
@@ -62,10 +64,13 @@ async def load_enabled_rules(account_id: str) -> list[dict[str, Any]]:
                 if excluded_raw:
                     if isinstance(excluded_raw, str):
                         try:
-                            import json
                             excluded_raw = json.loads(excluded_raw)
-                        except Exception:
+                        except Exception as exc:
+                            if strict:
+                                raise ValueError("禁止发货规则排除商品配置格式异常") from exc
                             excluded_raw = []
+                    if strict and not isinstance(excluded_raw, list):
+                        raise ValueError("禁止发货规则排除商品配置必须为数组")
                     if isinstance(excluded_raw, list):
                         for item in excluded_raw:
                             if item is not None:
@@ -77,10 +82,13 @@ async def load_enabled_rules(account_id: str) -> list[dict[str, Any]]:
                 config = rule.config or {}
                 if isinstance(config, str):
                     try:
-                        import json
                         config = json.loads(config)
-                    except Exception:
+                    except Exception as exc:
+                        if strict:
+                            raise ValueError("禁止发货规则参数配置格式异常") from exc
                         config = {}
+                if strict and not isinstance(config, dict):
+                    raise ValueError("禁止发货规则参数配置必须为对象")
 
                 rule_list.append({
                     "rule_code": rule.rule_code,
@@ -94,6 +102,9 @@ async def load_enabled_rules(account_id: str) -> list[dict[str, Any]]:
                 })
             return rule_list
     except Exception as e:
+        if strict:
+            logger.exception("加载禁止发货规则失败: account_id={}", account_id)
+            raise ValueError("禁止发货规则读取失败，已停止API同步发货") from e
         logger.error(f"加载禁止发货规则失败: account_id={account_id}, error={e}")
         return []
 
@@ -108,6 +119,7 @@ async def execute_rules(
     log_prefix: str = "",
     account_pk: int | None = None,
     owner_id: int | None = None,
+    *, strict: bool = False,
 ) -> dict[str, Any]:
     """执行禁止发货规则引擎
 
@@ -123,6 +135,7 @@ async def execute_rules(
         log_prefix: 日志前缀
         account_pk: 账号主键
         owner_id: 所属用户ID
+        strict: API关键词使用严格检查；异常或未知规则编码不放行。
 
     Returns:
         {
@@ -139,7 +152,7 @@ async def execute_rules(
     pf = log_prefix or f"【{cookie_id}】"
 
     # 1. 加载已启用规则
-    rule_configs = await load_enabled_rules(cookie_id)
+    rule_configs = await load_enabled_rules(cookie_id, strict=strict)
 
     if not rule_configs:
         # 没有任何已启用的规则 → 直接放行
@@ -161,6 +174,8 @@ async def execute_rules(
         # 2.1 获取规则实例
         rule_instance = get_rule_instance(rule_code)
         if rule_instance is None:
+            if strict:
+                raise ValueError(f"禁止发货规则未注册：{rule_code}，已停止API同步发货")
             logger.warning(f"{pf}[规则引擎] 未注册的规则编码: {rule_code}，跳过")
             continue
 
@@ -186,11 +201,15 @@ async def execute_rules(
             rule_config=rule_cfg.get("config") or {},
             account_pk=account_pk,
             owner_id=owner_id,
+            strict=strict,
         )
 
         try:
             check_result: RuleCheckResult = await rule_instance.check(context)
         except Exception as e:
+            if strict:
+                logger.exception("{}禁止发货规则执行失败: rule_code={}", pf, rule_code)
+                raise ValueError(f"禁止发货规则执行失败：{rule_code}，已停止API同步发货") from e
             logger.error(
                 f"{pf}[规则引擎] 规则 {rule_code} 执行异常: {e}，跳过本规则"
             )

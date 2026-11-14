@@ -12,6 +12,7 @@ from fastapi import APIRouter
 from . import (
     activation,
     admin,
+    admin_settlements,
     advertisements,
     ai,
     ai_listing,
@@ -46,10 +47,13 @@ from . import (
     goofish_crawler,
     health,
     items,
+    selectable_items,
     keywords,
+    api_keywords,
     message,
     message_filters,
     notifications,
+    online_install,
     orders,
     password_login,
     product_publish,
@@ -114,6 +118,7 @@ api_router.include_router(user_settings.router, prefix="/user-settings", tags=["
 api_router.include_router(cookies.router, prefix="/cookies", tags=["账号管理"])
 
 # 商品和订单
+api_router.include_router(selectable_items.router)  # 静态选择路由必须在商品动态路由之前挂载
 api_router.include_router(items.items_router, tags=["商品管理"])  # items.py已定义prefix="/items"
 api_router.include_router(orders.router, prefix="/orders", tags=["订单管理"])
 api_router.include_router(product_publish.router, tags=["商品发布"])  # 已定义prefix="/product-publish"
@@ -133,6 +138,7 @@ api_router.include_router(external_message_logs.router, tags=["公开消息日�
 api_router.include_router(external_orders.router, tags=["公开订单查询"])  # 已定义prefix="/external/orders"
 api_router.include_router(external_publish.router, tags=["公开商品发布"])  # 已定义prefix="/external/publish"
 api_router.include_router(keywords.router, prefix="/keywords-with-item-id", tags=["关键词管理"])
+api_router.include_router(api_keywords.router)
 api_router.include_router(cards.router, prefix="/cards", tags=["卡券管理"])
 api_router.include_router(distribution.router, prefix="/distribution", tags=["分销管理"])
 api_router.include_router(card_dock.router, tags=["分销卡券"])  # 已定义prefix="/card-dock"
@@ -171,6 +177,7 @@ api_router.include_router(risk_control_logs.router, tags=["风控日志"])
 
 # 管理员功能
 api_router.include_router(admin.router, prefix="/admin", tags=["管理员功能"])
+api_router.include_router(admin_settlements.router, prefix="/admin", tags=["管理员功能"])
 api_router.include_router(cookies_refresh_logs.router, prefix="/admin", tags=["COOKIES刷新日志"])
 api_router.include_router(api_cookie_renew_logs.router, prefix="/admin", tags=["接口续期Cookies日志"])
 api_router.include_router(token_renewal_logs.router, prefix="/admin", tags=["Token续期日志"])
@@ -214,6 +221,9 @@ api_router.include_router(chat_quick_phrase.router, tags=["在线聊天(新)快�
 api_router.include_router(chat_customer_order.router, tags=["在线聊天(新)客户订单"])  # 已定义prefix="/chat-new"
 # 版本检测（公开接口，无需登录即可查询版本信息）
 api_router.include_router(version.router, tags=["版本检测"])  # 已定义prefix="/version"
+
+# 在线安装（公开入口，无需登录，按访客会话隔离安装任务和日志）
+api_router.include_router(online_install.router, tags=["在线安装"])
 
 
 __all__ = ["api_router"]
