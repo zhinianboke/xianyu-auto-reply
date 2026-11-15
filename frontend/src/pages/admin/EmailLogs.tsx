@@ -3,7 +3,7 @@
  *
  * 功能：
  * 1. 展示系统每一次触发邮件发送的尝试（成功 / 失败 / 被限流或配置缺失都会有一条记录）
- * 2. 支持按收件邮箱关键字、触发操作、发送结果、时间区间筛选与后端分页
+ * 2. 支持按收件邮箱关键字、客户端 IP、触发操作、发送结果、时间区间筛选与后端分页
  * 3. 仅管理员可访问，菜单权限仅管理员（后端同样按管理员权限限制）
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -14,21 +14,16 @@ import {
   getEmailLogs,
   type EmailLog,
   type EmailLogOption,
+  type EmailLogQuery,
 } from '@/api/emailLogs'
-import { PageLoading } from '@/components/common/Loading'
+import { Loading, PageLoading } from '@/components/common/Loading'
 import { Pager } from '@/components/common/Pager'
 import { useAuthStore } from '@/store/authStore'
 import { useUIStore } from '@/store/uiStore'
 import { formatDateTime } from '@/utils/date'
 import { getApiErrorMessage } from '@/utils/request'
 
-interface LogFilters {
-  recipient_email?: string
-  trigger_operation?: string
-  send_result?: string
-  start_date?: string
-  end_date?: string
-}
+type LogFilters = Omit<EmailLogQuery, 'page' | 'page_size'>
 
 export function EmailLogs() {
   const { addToast } = useUIStore()
@@ -39,6 +34,7 @@ export function EmailLogs() {
 
   // 查询条件
   const [recipientEmail, setRecipientEmail] = useState('')
+  const [clientIp, setClientIp] = useState('')
   const [triggerOperation, setTriggerOperation] = useState('')
   const [sendResult, setSendResult] = useState('')
   const [startDate, setStartDate] = useState('')
@@ -125,8 +121,10 @@ export function EmailLogs() {
   }, [_hasHydrated, isAuthenticated, token])
 
   const handleSearch = () => {
+    if (loading) return
     const filters = {
       recipient_email: recipientEmail.trim() || undefined,
+      client_ip: clientIp.trim() || undefined,
       trigger_operation: triggerOperation || undefined,
       send_result: sendResult || undefined,
       start_date: startDate || undefined,
@@ -138,6 +136,7 @@ export function EmailLogs() {
 
   const handleReset = () => {
     setRecipientEmail('')
+    setClientIp('')
     setTriggerOperation('')
     setSendResult('')
     setStartDate('')
@@ -201,7 +200,13 @@ export function EmailLogs() {
       {/* 查询条件 */}
       <div className="vben-card">
         <div className="vben-card-body">
-          <div className="flex flex-wrap items-end gap-4">
+          <form
+            className="flex flex-wrap items-end gap-4"
+            onSubmit={(event) => {
+              event.preventDefault()
+              handleSearch()
+            }}
+          >
             <div className="input-group min-w-[200px]">
               <label className="input-label">收件邮箱</label>
               <input
@@ -209,6 +214,17 @@ export function EmailLogs() {
                 value={recipientEmail}
                 onChange={(event) => setRecipientEmail(event.target.value)}
                 placeholder="邮箱关键字"
+                className="input-ios"
+              />
+            </div>
+            <div className="input-group min-w-[200px]">
+              <label htmlFor="email-log-client-ip" className="input-label">客户端 IP</label>
+              <input
+                id="email-log-client-ip"
+                type="text"
+                value={clientIp}
+                onChange={(event) => setClientIp(event.target.value)}
+                placeholder="完整 IP 或地址片段"
                 className="input-ios"
               />
             </div>
@@ -260,20 +276,29 @@ export function EmailLogs() {
                 className="input-ios"
               />
             </div>
-            <button onClick={handleSearch} disabled={loading} className="btn-ios-primary">
-              <Search className="w-4 h-4" />
-              查询
-            </button>
-            <button onClick={handleReset} disabled={loading} className="btn-ios-secondary">
-              <RotateCcw className="w-4 h-4" />
-              重置
-            </button>
-          </div>
+            <div className="ml-auto flex gap-3">
+              <button type="submit" disabled={loading} className="btn-ios-primary">
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                查询
+              </button>
+              {Object.values(appliedFilters).some(Boolean) && (
+                <button type="button" onClick={handleReset} disabled={loading} className="btn-ios-secondary">
+                  <RotateCcw className="w-4 h-4" />
+                  重置
+                </button>
+              )}
+            </div>
+          </form>
         </div>
       </div>
 
       {/* 日志列表 */}
-      <div className="vben-card flex flex-col" style={{ height: 'calc(100vh - 340px)', minHeight: '400px' }}>
+      <div className="vben-card relative flex flex-col" style={{ height: 'calc(100vh - 340px)', minHeight: '400px' }}>
+        {loading && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg bg-white/80 dark:bg-slate-900/80">
+            <Loading text="加载中..." />
+          </div>
+        )}
         <div className="vben-card-header flex-shrink-0">
           <h2 className="vben-card-title">
             <Mail className="w-4 h-4 text-blue-500" />

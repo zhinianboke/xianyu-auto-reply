@@ -3,7 +3,7 @@
  *
  * 后端路由：GET /api/v1/user-login-logs
  * 仅管理员可访问，返回全部用户的登录记录；
- * 支持关键字、登录方式、时间区间筛选与后端分页（limit/offset）。
+ * 支持关键字、客户端 IP、登录方式、时间区间筛选与后端分页（limit/offset）。
  */
 import { get } from '@/utils/request'
 
@@ -36,6 +36,7 @@ export interface UserLoginLogQuery {
   page?: number
   pageSize?: number
   keyword?: string
+  client_ip?: string
   login_method?: string
   start_date?: string
   end_date?: string
@@ -56,6 +57,7 @@ export const getUserLoginLogs = async (params?: UserLoginLogQuery): Promise<User
   query.set('limit', String(pageSize))
   query.set('offset', String((page - 1) * pageSize))
   if (params?.keyword) query.set('keyword', params.keyword)
+  if (params?.client_ip?.trim()) query.set('client_ip', params.client_ip.trim())
   if (params?.login_method) query.set('login_method', params.login_method)
   if (params?.start_date) query.set('start_date', params.start_date)
   if (params?.end_date) query.set('end_date', params.end_date)

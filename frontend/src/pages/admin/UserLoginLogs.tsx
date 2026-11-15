@@ -3,20 +3,22 @@
  *
  * 功能：
  * 1. 展示系统用户登录本系统的每一次尝试（成功 / 失败都会有一条记录）
- * 2. 支持按关键字（登录账号）、登录方式、时间区间筛选与后端分页
+ * 2. 支持按关键字（登录账号）、客户端 IP、登录方式、时间区间筛选与后端分页
  * 3. 仅管理员可访问，可查看全部用户的登录记录（由后端按权限限制）
  */
 import { useEffect, useState } from 'react'
 import { ChevronLeft, ChevronRight, Loader2, LogIn, RefreshCw, RotateCcw, Search } from 'lucide-react'
 
-import { getUserLoginLogs, LOGIN_METHOD_LABELS, type UserLoginLog } from '@/api/userLoginLogs'
-import { PageLoading } from '@/components/common/Loading'
+import { getUserLoginLogs, LOGIN_METHOD_LABELS, type UserLoginLog, type UserLoginLogQuery } from '@/api/userLoginLogs'
+import { Loading, PageLoading } from '@/components/common/Loading'
 import { useAuthStore } from '@/store/authStore'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/request'
 
 // 登录方式下拉选项（中文名称统一来自 api 模块，避免页面硬编码）
 const LOGIN_METHOD_OPTIONS = Object.entries(LOGIN_METHOD_LABELS).map(([value, label]) => ({ value, label }))
+
+type LogFilters = Omit<UserLoginLogQuery, 'page' | 'pageSize'>
 
 export function UserLoginLogs() {
   const { addToast } = useUIStore()
@@ -27,9 +29,11 @@ export function UserLoginLogs() {
 
   // 查询条件
   const [keyword, setKeyword] = useState('')
+  const [clientIp, setClientIp] = useState('')
   const [loginMethod, setLoginMethod] = useState('')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
+  const [appliedFilters, setAppliedFilters] = useState<LogFilters>({})
 
   // 分页
   const [currentPage, setCurrentPage] = useState(1)
@@ -39,16 +43,10 @@ export function UserLoginLogs() {
   const loadLogs = async (
     nextPage: number = currentPage,
     nextPageSize: number = pageSize,
-    // 支持显式传入筛选条件（重置时传空对象），避免用到闭包里的旧状态
-    overrideFilters?: { keyword?: string; login_method?: string; start_date?: string; end_date?: string },
+    // 翻页、切换每页条数和刷新沿用已提交条件，输入中的修改只在查询时生效。
+    filters: LogFilters = appliedFilters,
   ) => {
     if (!_hasHydrated || !isAuthenticated || !token) return
-    const filters = overrideFilters ?? {
-      keyword: keyword.trim() || undefined,
-      login_method: loginMethod || undefined,
-      start_date: startDate || undefined,
-      end_date: endDate || undefined,
-    }
     try {
       setLoading(true)
       const result = await getUserLoginLogs({
@@ -84,15 +82,26 @@ export function UserLoginLogs() {
 
   // 查询按钮
   const handleSearch = () => {
-    loadLogs(1, pageSize)
+    if (loading) return
+    const filters: LogFilters = {
+      keyword: keyword.trim() || undefined,
+      client_ip: clientIp.trim() || undefined,
+      login_method: loginMethod || undefined,
+      start_date: startDate || undefined,
+      end_date: endDate || undefined,
+    }
+    setAppliedFilters(filters)
+    loadLogs(1, pageSize, filters)
   }
 
   // 重置按钮
   const handleReset = () => {
     setKeyword('')
+    setClientIp('')
     setLoginMethod('')
     setStartDate('')
     setEndDate('')
+    setAppliedFilters({})
     // 重置后按空条件重新查询（显式传空筛选，避免用到闭包里的旧状态）
     loadLogs(1, pageSize, {})
   }
@@ -150,7 +159,13 @@ export function UserLoginLogs() {
       {/* 查询条件 */}
       <div className="vben-card">
         <div className="vben-card-body">
-          <div className="flex flex-wrap items-end gap-4">
+          <form
+            className="flex flex-wrap items-end gap-4"
+            onSubmit={(event) => {
+              event.preventDefault()
+              handleSearch()
+            }}
+          >
             <div className="input-group min-w-[200px]">
               <label className="input-label">关键字</label>
               <input
@@ -158,6 +173,17 @@ export function UserLoginLogs() {
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
                 placeholder="登录账号 / 用户ID"
+                className="input-ios"
+              />
+            </div>
+            <div className="input-group min-w-[200px]">
+              <label htmlFor="user-login-client-ip" className="input-label">客户端 IP</label>
+              <input
+                id="user-login-client-ip"
+                type="text"
+                value={clientIp}
+                onChange={(e) => setClientIp(e.target.value)}
+                placeholder="完整 IP 或地址片段"
                 className="input-ios"
               />
             </div>
@@ -194,20 +220,29 @@ export function UserLoginLogs() {
                 className="input-ios"
               />
             </div>
-            <button onClick={handleSearch} className="btn-ios-primary">
-              <Search className="w-4 h-4" />
-              查询
-            </button>
-            <button onClick={handleReset} className="btn-ios-secondary">
-              <RotateCcw className="w-4 h-4" />
-              重置
-            </button>
-          </div>
+            <div className="ml-auto flex gap-3">
+              <button type="submit" disabled={loading} className="btn-ios-primary">
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                查询
+              </button>
+              {Object.values(appliedFilters).some(Boolean) && (
+                <button type="button" onClick={handleReset} disabled={loading} className="btn-ios-secondary">
+                  <RotateCcw className="w-4 h-4" />
+                  重置
+                </button>
+              )}
+            </div>
+          </form>
         </div>
       </div>
 
       {/* 日志列表 */}
-      <div className="vben-card flex flex-col" style={{ height: 'calc(100vh - 340px)', minHeight: '400px' }}>
+      <div className="vben-card relative flex flex-col" style={{ height: 'calc(100vh - 340px)', minHeight: '400px' }}>
+        {loading && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg bg-white/80 dark:bg-slate-900/80">
+            <Loading text="加载中..." />
+          </div>
+        )}
         <div className="vben-card-header flex-shrink-0">
           <h2 className="vben-card-title">
             <LogIn className="w-4 h-4 text-blue-500" />
@@ -270,6 +305,7 @@ export function UserLoginLogs() {
               <span>每页</span>
               <select
                 value={pageSize}
+                disabled={loading}
                 onChange={(e) => handlePageSizeChange(Number(e.target.value))}
                 className="px-2 py-1 border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300"
               >
@@ -286,7 +322,7 @@ export function UserLoginLogs() {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => handlePageChange(currentPage - 1)}
-                disabled={currentPage === 1}
+                disabled={loading || currentPage === 1}
                 className="p-2 rounded border border-slate-300 dark:border-slate-600 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-100 dark:hover:bg-slate-700"
               >
                 <ChevronLeft className="w-4 h-4" />
@@ -296,7 +332,7 @@ export function UserLoginLogs() {
               </span>
               <button
                 onClick={() => handlePageChange(currentPage + 1)}
-                disabled={currentPage >= totalPages}
+                disabled={loading || currentPage >= totalPages}
                 className="p-2 rounded border border-slate-300 dark:border-slate-600 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-100 dark:hover:bg-slate-700"
               >
                 <ChevronRight className="w-4 h-4" />

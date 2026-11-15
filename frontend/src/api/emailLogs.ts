@@ -26,6 +26,7 @@ export interface EmailLogQuery {
   page?: number
   page_size?: number
   recipient_email?: string
+  client_ip?: string
   trigger_operation?: string
   send_result?: string
   start_date?: string
@@ -64,12 +65,13 @@ export interface EmailLogOptionsResult {
   data?: EmailLogOptions
 }
 
-/** 获取邮件发送日志（后端分页，支持指定页码 page） */
+/** 获取邮件发送日志（支持客户端 IP 模糊筛选、后端分页及指定页码 page） */
 export const getEmailLogs = async (params?: EmailLogQuery): Promise<EmailLogListResult> => {
   const query = new URLSearchParams()
   query.set('page', String(params?.page || 1))
   query.set('page_size', String(params?.page_size || 20))
   if (params?.recipient_email) query.set('recipient_email', params.recipient_email)
+  if (params?.client_ip?.trim()) query.set('client_ip', params.client_ip.trim())
   if (params?.trigger_operation) query.set('trigger_operation', params.trigger_operation)
   if (params?.send_result) query.set('send_result', params.send_result)
   if (params?.start_date) query.set('start_date', params.start_date)

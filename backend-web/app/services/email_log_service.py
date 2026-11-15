@@ -3,7 +3,7 @@
 
 功能：
 1. 管理员分页查询全部邮件发送日志
-2. 支持按收件邮箱关键字、触发操作、发送结果、时间区间筛选
+2. 支持按收件邮箱关键字、客户端 IP、触发操作、发送结果、时间区间筛选
 3. 从数据字典读取触发操作和发送结果的中文名称
 """
 from __future__ import annotations
@@ -34,6 +34,7 @@ class EmailLogService:
         self,
         *,
         recipient_email: str | None = None,
+        client_ip: str | None = None,
         trigger_operation: str | None = None,
         send_result: str | None = None,
         start_date: str | None = None,
@@ -45,6 +46,7 @@ class EmailLogService:
 
         Args:
             recipient_email: 收件邮箱关键字。
+            client_ip: 客户端 IP 或地址片段（去除首尾空格后按字面包含匹配）。
             trigger_operation: 触发操作枚举值。
             send_result: 发送结果，success 或 failure。
             start_date: 开始日期 YYYY-MM-DD。
@@ -59,6 +61,10 @@ class EmailLogService:
             keyword = recipient_email.strip()
             if keyword:
                 filters.append(XYEmailLog.recipient_email.ilike(f"%{keyword}%"))
+        ip_keyword = (client_ip or "").strip()
+        if ip_keyword:
+            # 参数化查询并转义 %/_，防止输入中的通配符扩大匹配范围。
+            filters.append(XYEmailLog.client_ip.icontains(ip_keyword, autoescape=True))
         if trigger_operation:
             filters.append(XYEmailLog.trigger_operation == trigger_operation.strip())
         if send_result in (EMAIL_SEND_RESULT_SUCCESS, EMAIL_SEND_RESULT_FAILURE):

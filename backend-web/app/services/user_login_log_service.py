@@ -4,7 +4,7 @@
 功能：
 1. 记录系统用户登录本系统的每一次尝试与结果（成功 / 失败都写入），供登录接口调用
 2. 用户登录日志分页查询（仅管理员使用，返回全部用户的登录记录）
-3. 支持按关键字、登录方式、时间范围筛选
+3. 支持按关键字、客户端 IP、登录方式、时间范围筛选
 
 说明：
 - 本服务只做追加与查询，不提供 UPDATE / DELETE
@@ -84,6 +84,7 @@ class UserLoginLogService:
         self,
         *,
         keyword: Optional[str] = None,
+        client_ip: Optional[str] = None,
         login_method: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
@@ -94,6 +95,7 @@ class UserLoginLogService:
 
         Args:
             keyword: 关键字（匹配登录账号，或数字时匹配用户ID）
+            client_ip: 客户端 IP 或地址片段（去除首尾空格后按字面包含匹配）
             login_method: 登录方式筛选
             start_date: 开始日期（YYYY-MM-DD，含当天 00:00:00）
             end_date: 结束日期（YYYY-MM-DD，含当天 23:59:59）
@@ -113,6 +115,11 @@ class UserLoginLogService:
                 if kw.isdigit():
                     conditions.append(XYUserLoginLog.owner_id == int(kw))
                 filters.append(or_(*conditions))
+
+        ip_keyword = (client_ip or "").strip()
+        if ip_keyword:
+            # 参数化查询并转义 %/_，防止输入中的通配符扩大匹配范围。
+            filters.append(XYUserLoginLog.client_ip.icontains(ip_keyword, autoescape=True))
 
         if login_method:
             filters.append(XYUserLoginLog.login_method == login_method)

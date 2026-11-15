@@ -3,7 +3,7 @@
 
 功能：
 1. 仅管理员可查询「用户登录日志」（返回全部用户的登录记录）
-2. 支持按关键字、登录方式、时间范围筛选，后端分页
+2. 支持按关键字、客户端 IP、登录方式、时间范围筛选，后端分页
 3. 与前端「日志管理 / 用户登录日志」页面对接
 """
 from __future__ import annotations
@@ -23,6 +23,7 @@ async def list_user_login_logs(
     limit: int = Query(20, ge=1, le=100, description="每页数量"),
     offset: int = Query(0, ge=0, description="偏移量"),
     keyword: str | None = Query(default=None, description="关键字（登录账号，或数字时按用户ID匹配）"),
+    client_ip: str | None = Query(default=None, description="客户端 IP（支持完整 IPv4/IPv6 或地址片段模糊查询）"),
     login_method: str | None = Query(
         default=None,
         description="登录方式 username_password/email_password/email_code",
@@ -39,6 +40,7 @@ async def list_user_login_logs(
     try:
         items, total = await service.list_logs(
             keyword=keyword,
+            client_ip=client_ip,
             login_method=login_method,
             start_date=start_date,
             end_date=end_date,
@@ -49,7 +51,7 @@ async def list_user_login_logs(
     except Exception as exc:
         logger.error(
             "加载用户登录日志失败: "
-            f"keyword={keyword}, login_method={login_method}, start_date={start_date}, "
+            f"keyword={keyword}, client_ip={client_ip}, login_method={login_method}, start_date={start_date}, "
             f"end_date={end_date}, limit={limit}, offset={offset}, "
             f"error={type(exc).__name__}: {exc}"
         )

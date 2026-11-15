@@ -3,7 +3,7 @@
 
 功能：
 1. 仅管理员可查询邮件发送日志
-2. 支持邮箱关键字、触发操作、发送结果、时间区间筛选
+2. 支持邮箱关键字、客户端 IP、触发操作、发送结果、时间区间筛选
 3. 后端分页，前端支持指定页跳转
 """
 from __future__ import annotations
@@ -24,6 +24,7 @@ async def list_email_logs(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     recipient_email: str | None = Query(default=None, description="收件邮箱关键字"),
+    client_ip: str | None = Query(default=None, description="客户端 IP（支持完整 IPv4/IPv6 或地址片段模糊查询）"),
     trigger_operation: str | None = Query(default=None, description="触发操作"),
     send_result: str | None = Query(default=None, description="发送结果：success/failure"),
     start_date: str | None = Query(default=None, description="开始日期 YYYY-MM-DD"),
@@ -35,6 +36,7 @@ async def list_email_logs(
     try:
         data = await service.list_logs(
             recipient_email=recipient_email,
+            client_ip=client_ip,
             trigger_operation=trigger_operation,
             send_result=send_result,
             start_date=start_date,
@@ -46,7 +48,7 @@ async def list_email_logs(
     except Exception as exc:
         logger.error(
             "加载邮件发送日志失败: "
-            f"recipient_email={recipient_email}, trigger_operation={trigger_operation}, "
+            f"recipient_email={recipient_email}, client_ip={client_ip}, trigger_operation={trigger_operation}, "
             f"send_result={send_result}, start_date={start_date}, end_date={end_date}, "
             f"page={page}, page_size={page_size}, error={type(exc).__name__}: {exc}",
             exc_info=True,
