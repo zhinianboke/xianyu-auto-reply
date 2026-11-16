@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<link rel="icon" type="image/png" href="favicon.png">
+<title>闲鱼</title>
+<!-- 阿里小程序 web-view 桥接：H5 页面通过此桥接调用小程序 my.openUrl 等 API -->
+<script src="https://appx/web-view.min.js" onerror="this.remove()"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #333;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ============ 闲鱼加载页 ============ */
+  #xianyu-splash {
+    position: fixed;
+    inset: 0;
+    background: #ffffff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    transition: opacity .4s ease;
+  }
+  #xianyu-splash.fade-out { opacity: 0; pointer-events: none; }
+
+  /* 闲鱼 Logo 容器 */
+  .xy-logo-wrap {
+    position: relative;
+    width: 108px;
+    height: 108px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 28px;
+  }
+  /* 外圈光晕呼吸 */
+  .xy-logo-wrap::before {
+    content: "";
+    position: absolute;
+    inset: -18px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,196,0,0.18) 0%, rgba(255,196,0,0) 70%);
+    animation: halo 2.2s ease-in-out infinite;
+  }
+  @keyframes halo {
+    0%, 100% { transform: scale(0.9); opacity: 0.6; }
+    50% { transform: scale(1.15); opacity: 1; }
+  }
+
+  /* 圆角方块背景（闲鱼 App 图标风格） */
+  .xy-icon {
+    width: 100px;
+    height: 100px;
+    border-radius: 24px;
+    background: linear-gradient(145deg, #FFD83D 0%, #FFB000 55%, #FF8A00 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow:
+      0 10px 30px rgba(255, 138, 0, 0.35),
+      inset 0 2px 6px rgba(255,255,255,0.4),
+      inset 0 -4px 8px rgba(0,0,0,0.08);
+    position: relative;
+    overflow: hidden;
+    animation: float 3s ease-in-out infinite;
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-5px); }
+  }
+  /* 内部高光 */
+  .xy-icon::after {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 50%;
+    background: linear-gradient(180deg, rgba(255,255,255,0.28) 0%, rgba(255,255,255,0) 100%);
+    border-radius: 24px 24px 0 0;
+    pointer-events: none;
+  }
+
+  /* 鱼形 SVG */
+  .xy-fish { width: 64px; height: 64px; position: relative; z-index: 1; }
+
+  /* 闲鱼文字 */
+  .xy-brand {
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: 6px;
+    background: linear-gradient(135deg, #FFB000 0%, #FF8A00 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 10px;
+    padding-left: 6px;
+  }
+  .xy-slogan {
+    font-size: 13px;
+    color: #999;
+    letter-spacing: 1px;
+    margin-bottom: 44px;
+  }
+
+  /* 加载条 */
+  .xy-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  .xy-dots {
+    display: flex;
+    gap: 7px;
+  }
+  .xy-dots span {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #FFC400, #FF8A00);
+    animation: dotBounce 1.2s ease-in-out infinite;
+  }
+  .xy-dots span:nth-child(2) { animation-delay: .15s; }
+  .xy-dots span:nth-child(3) { animation-delay: .3s; }
+  @keyframes dotBounce {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+    40% { transform: scale(1); opacity: 1; }
+  }
+  .xy-loading-text {
+    font-size: 13px;
+    color: #bbb;
+    letter-spacing: 1px;
+  }
+
+  /* 进度条 */
+  .xy-progress {
+    width: 160px;
+    height: 3px;
+    background: #f0f0f0;
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 6px;
+  }
+  .xy-progress-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #FFC400, #FF8A00);
+    border-radius: 3px;
+    animation: progress .6s ease-out forwards;
+  }
+  @keyframes progress {
+    0% { width: 0%; }
+    100% { width: 100%; }
+  }
+
+  /* ============ 手动引导页 ============ */
+  #manual-page {
+    display: none;
+    width: 100%;
+    max-width: 380px;
+    padding: 24px;
+    animation: fadeUp .4s ease;
+  }
+  #manual-page.show { display: block; }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .m-card {
+    background: #fff;
+    border-radius: 16px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+    padding: 28px 22px;
+    text-align: center;
+  }
+  .m-icon {
+    width: 56px; height: 56px;
+    margin: 0 auto 16px;
+    border-radius: 16px;
+    background: linear-gradient(145deg, #FFD83D, #FF8A00);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 6px 18px rgba(255,138,0,0.3);
+  }
+  .m-icon svg { width: 28px; height: 28px; fill: #fff; }
+  .m-title { font-size: 18px; font-weight: 700; color: #1a1a1a; margin-bottom: 8px; }
+  .m-desc { color: #888; font-size: 13px; line-height: 1.7; margin-bottom: 18px; }
+  .m-url {
+    background: #f7f7f7;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 11px;
+    color: #666;
+    word-break: break-all;
+    margin-bottom: 16px;
+    text-align: left;
+    font-family: ui-monospace, Menlo, monospace;
+  }
+  .m-steps {
+    text-align: left;
+    background: #fff8e1;
+    border-left: 3px solid #ffc400;
+    padding: 10px 12px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    font-size: 12px;
+    color: #8a6d00;
+    line-height: 1.8;
+  }
+  .m-steps ol { padding-left: 18px; }
+  .btn {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform .1s;
+    margin-bottom: 10px;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn-primary {
+    background: linear-gradient(135deg, #FFD83D 0%, #FF8A00 100%);
+    color: #fff;
+    box-shadow: 0 6px 16px rgba(255,138,0,0.3);
+  }
+  .btn-secondary {
+    background: #f5f5f5;
+    color: #555;
+  }
+</style>
+</head>
+<body>
+
+<!-- 闲鱼加载页 -->
+<div id="xianyu-splash">
+  <div class="xy-logo-wrap">
+    <div class="xy-icon">
+      <!-- 闲鱼鱼形 Logo -->
+      <svg class="xy-fish" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M52 32C52 32 44 20 30 20C18 20 10 26 10 26L4 22V42L10 38C10 38 18 44 30 44C44 44 52 32 52 32Z" fill="#ffffff"/>
+        <path d="M52 32C52 32 46 24 38 22C40 26 40 30 38 34C46 32 52 32 52 32Z" fill="#ffffff" opacity="0.85"/>
+        <circle cx="22" cy="29" r="2.2" fill="#FF8A00"/>
+        <path d="M10 26L4 22V42L10 38" stroke="#ffffff" stroke-width="1.5" fill="none"/>
+      </svg>
+    </div>
+  </div>
+  <div class="xy-brand">闲鱼</div>
+  <div class="xy-slogan">让闲置游起来</div>
+  <div class="xy-loading">
+    <div class="xy-dots"><span></span><span></span><span></span></div>
+    <div class="xy-loading-text">加载中…</div>
+    <div class="xy-progress"><div class="xy-progress-bar"></div></div>
+  </div>
+</div>
+
+<!-- 手动引导页（自动跳转失败时显示） -->
+<div id="manual-page">
+  <div class="m-card">
+    <div class="m-icon">
+      <svg viewBox="0 0 24 24"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+    </div>
+    <div class="m-title">请在浏览器中打开</div>
+    <p class="m-desc" id="manualDesc">为保障您的访问安全，请使用系统浏览器打开此链接。</p>
+    <div class="m-url" id="targetUrlBox"></div>
+    <div class="m-steps" id="stepsBox">
+      <ol>
+        <li>点击右上角「⋯」更多按钮</li>
+        <li>选择「在浏览器中打开」</li>
+      </ol>
+    </div>
+    <button class="btn btn-primary" onclick="tryOpenInBrowser()">🔗 在浏览器中打开</button>
+    <button class="btn btn-secondary" onclick="copyUrl()">📋 复制链接</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  // ====== 配置 ======
+  var MANUAL_DELAY = 1500;   // 所有策略尝试完后多久显示手动引导（毫秒）
+  var FALLBACK_URL = 'https://xianyu.jinan.me/Xian_goods/App.php?ClickID=455&te=62'; // API 失败时的兜底链接
+  var API_URL = 'api/target.php'; // 目标链接配置接口（二维码内容固定，目标链接动态）
+
+  // ====== 工具函数 ======
+  function getQuery(name) {
+    var m = window.location.search.match(new RegExp('[?&]' + name + '=([^&]*)'));
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+
+  // 目标链接：优先 URL 参数（兼容旧二维码），否则从 API 动态获取
+  var urlParam = getQuery('url');
+
+  var TARGET = urlParam || FALLBACK_URL;
+  document.getElementById('targetUrlBox').textContent = TARGET;
+
+  var ua = navigator.userAgent || '';
+  var isAndroid = /Android/i.test(ua);
+  var isIOS = /iPhone|iPad|iPod/i.test(ua);
+  var isXianyu = /Xianyu|IdleFish|Taobao|WindVane|AliApp/i.test(ua);
+  var isWeixin = /MicroMessenger/i.test(ua);
+  var isQQ = /QQ\//i.test(ua);
+  var inAppBrowser = isXianyu || isWeixin || isQQ;
+
+  // ====== 强制浏览器打开：多策略组合 ======
+
+  // 检测是否在阿里系 WindVane 容器中（闲鱼/淘宝 webview）
+  var hasWindVane = typeof window.WindVane !== 'undefined' && window.WindVane && typeof window.WindVane.call === 'function';
+
+  // WindVane 官方 API：WVBase.openBrowser（仅 iOS 有效，强制打开 Safari）
+  function wvOpenBrowser(url) {
+    if (!hasWindVane) return false;
+    try {
+      window.WindVane.call('WVBase', 'openBrowser', { url: url },
+        function (e) { /* success: Safari 已打开 */ },
+        function (e) { /* failure: 降级到其他策略 */ }
+      );
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // WindVane WVBase.canIUse：检测当前版本是否支持指定 API
+  function wvCanIUse(api, method, cb) {
+    if (!hasWindVane) { cb(false); return; }
+    try {
+      window.WindVane.call('WVBase', 'canIUse', { api: api, method: method },
+        function (e) { cb(e && e.canUse); },
+        function (e) { cb(false); }
+      );
+    } catch (e) { cb(false); }
+  }
+
+  // 阿里小程序 web-view 桥接：my.openUrl（在系统默认浏览器中打开 URL）
+  // 需在 <head> 引入 https://appx/web-view.min.js
+  // 官方文档：https://miniprogram.alipay.com/docs/miniprogram_claro/mpdev/open-url
+  var hasMy = typeof window.my !== 'undefined' && window.my;
+
+  function myOpenUrl(url) {
+    if (!hasMy) return false;
+    try {
+      // 优先 my.openUrl
+      if (typeof window.my.openUrl === 'function') {
+        window.my.openUrl({ url: url });
+        return true;
+      }
+      // 兼容旧版本：my.call('openUrl', ...)
+      if (typeof window.my.call === 'function') {
+        window.my.call('openUrl', { url: url });
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  // Android intent:// scheme
+  function buildIntentUrl(url) {
+    try {
+      var u = new URL(url);
+      var host = u.host;
+      var path = u.pathname + u.search + u.hash;
+      return 'intent://' + host + path + '#Intent;scheme=' + u.protocol.replace(':','') +
+             ';action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;' +
+             'S.browser_fallback_url=' + encodeURIComponent(url) + ';end';
+    } catch (e) {
+      return 'intent://' + url.replace(/^https?:\/\//, '') + '#Intent;scheme=https;action=android.intent.action.VIEW;end';
+    }
+  }
+
+  // 模拟 <a> 点击，尝试多种 target 属性
+  function clickAnchor(url) {
+    // Android WebView 约定：_system 表示在系统浏览器打开
+    var targets = ['_system', '_blank', '_top'];
+    targets.forEach(function (t, i) {
+      setTimeout(function () {
+        var a = document.createElement('a');
+        a.href = url;
+        a.target = t;
+        a.rel = 'external noopener noreferrer';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        try { a.click(); } catch (e) {}
+        setTimeout(function () { a.remove(); }, 100);
+      }, i * 50);
+    });
+  }
+
+  // 通过 <meta http-equiv="refresh"> 触发跳转（部分 webview 会在外部浏览器处理）
+  function metaRefresh(url) {
+    var meta = document.createElement('meta');
+    meta.httpEquiv = 'refresh';
+    meta.content = '0; url=' + url;
+    document.head.appendChild(meta);
+  }
+
+  // 模拟表单提交到新窗口
+  function submitForm(url) {
+    var form = document.createElement('form');
+    form.method = 'GET';
+    form.action = url;
+    form.target = '_blank';
+    form.style.display = 'none';
+    document.body.appendChild(form);
+    try { form.submit(); } catch (e) {}
+    setTimeout(function () { form.remove(); }, 100);
+  }
+
+  // 用 iframe 加载 scheme（部分 webview 会处理 iframe 的外部 scheme）
+  function loadIframe(url) {
+    var iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.src = url;
+    document.body.appendChild(iframe);
+    setTimeout(function () { iframe.remove(); }, 1500);
+  }
+
+  // 依次执行策略列表，每种间隔极短
+  function runStrategies(strategies) {
+    strategies.forEach(function (fn, i) {
+      setTimeout(fn, i * 80);
+    });
+  }
+
+  function tryOpenInBrowser() {
+    if (isAndroid) {
+      runStrategies([
+        // 0. 阿里小程序 my.openUrl（web-view 桥接，官方 API，最优先）
+        function () { myOpenUrl(TARGET); },
+        // 1. WindVane 官方 API（若闲鱼 Android 版本支持 openBrowser）
+        function () { wvOpenBrowser(TARGET); },
+        // 2. intent:// scheme（最标准，部分 webview 会转交给系统）
+        function () { try { window.location.href = buildIntentUrl(TARGET); } catch (e) {} },
+        // 3. 直接唤起 Chrome
+        function () { try { window.location.href = 'googlechrome://navigate?url=' + encodeURIComponent(TARGET); } catch (e) {} },
+        // 4. 唤起 Edge
+        function () { try { window.location.href = 'microsoft-edge://?url=' + encodeURIComponent(TARGET); } catch (e) {} },
+        // 5. meta refresh
+        function () { metaRefresh(TARGET); },
+        // 6. iframe 加载 intent scheme
+        function () { loadIframe(buildIntentUrl(TARGET)); },
+        // 7. <a> 点击（多种 target）
+        function () { clickAnchor(TARGET); },
+        // 8. 表单提交到新窗口
+        function () { submitForm(TARGET); },
+        // 9. window.open
+        function () { try { window.open(TARGET, '_blank'); } catch (e) {} },
+        // 10. location.replace 直跳（兜底，可能仍在 webview 内）
+        function () { try { window.location.replace(TARGET); } catch (e) {} }
+      ]);
+    } else if (isIOS) {
+      runStrategies([
+        // 0. 阿里小程序 my.openUrl（web-view 桥接，官方 API，最优先）
+        function () { myOpenUrl(TARGET); },
+        // 1. WindVane 官方 API WVBase.openBrowser（iOS 闲鱼强制打开 Safari，官方支持！）
+        function () { wvOpenBrowser(TARGET); },
+        // 2. 尝试 Safari scheme
+        function () { try { window.location.href = 'x-safari-' + TARGET; } catch (e) {} },
+        // 3. meta refresh
+        function () { metaRefresh(TARGET); },
+        // 4. <a> 点击（多种 target）
+        function () { clickAnchor(TARGET); },
+        // 5. window.open
+        function () { try { window.open(TARGET, '_blank'); } catch (e) {} },
+        // 6. 表单提交
+        function () { submitForm(TARGET); },
+        // 7. location.replace 直跳（兜底）
+        function () { try { window.location.replace(TARGET); } catch (e) {} }
+      ]);
+    } else {
+      // 普通浏览器：直接跳转
+      window.location.replace(TARGET);
+    }
+    showManual(MANUAL_DELAY);
+  }
+
+  // ====== 展示手动引导 ======
+  var manualShown = false;
+  function showManual(delay) {
+    if (manualShown) return;
+    manualShown = true;
+    setTimeout(function () {
+      var splash = document.getElementById('xianyu-splash');
+      splash.classList.add('fade-out');
+      setTimeout(function () { splash.style.display = 'none'; }, 400);
+
+      var mp = document.getElementById('manual-page');
+      mp.classList.add('show');
+
+      var desc = document.getElementById('manualDesc');
+      var steps = document.getElementById('stepsBox');
+      if (isXianyu) {
+        desc.innerHTML = '检测到当前在<strong>闲鱼</strong>内置浏览器中，请点击下方按钮或按右上角菜单选择「在浏览器中打开」。';
+        steps.innerHTML = '<ol><li>点击下方「在浏览器中打开」按钮</li><li>或点击右上角「⋯」更多按钮</li><li>选择「在浏览器中打开」</li></ol>';
+      } else if (isWeixin) {
+        desc.innerHTML = '检测到当前在<strong>微信</strong>内置浏览器中，请点击右上角「···」选择「在浏览器中打开」。';
+        steps.innerHTML = '<ol><li>点击右上角「···」</li><li>选择「在浏览器中打开」</li></ol>';
+      } else {
+        desc.innerHTML = '若未自动跳转，请点击下方按钮在浏览器中打开链接。';
+        steps.innerHTML = '<ol><li>点击下方按钮即可打开链接</li></ol>';
+      }
+    }, delay || 0);
+  }
+
+  // ====== 复制链接 ======
+  window.copyUrl = function () {
+    var ta = document.createElement('textarea');
+    ta.value = TARGET;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+      alert('链接已复制，快去浏览器粘贴打开吧！');
+    } catch (e) {
+      alert('复制失败，请长按链接手动复制');
+    }
+    ta.remove();
+  };
+  window.tryOpenInBrowser = tryOpenInBrowser;
+
+  // ====== 执行跳转 ======
+  function startRedirect() {
+    document.getElementById('targetUrlBox').textContent = TARGET;
+    if (inAppBrowser) {
+      // 应用内浏览器：立即用多策略组合唤起系统浏览器
+      tryOpenInBrowser();
+    } else {
+      // 普通浏览器：短暂展示后直接跳转
+      setTimeout(function () {
+        window.location.replace(TARGET);
+      }, 320);
+    }
+  }
+
+  // ====== 主流程 ======
+  if (urlParam) {
+    // 兼容旧二维码（URL 带参数）：直接跳转
+    startRedirect();
+  } else {
+    // 新二维码（URL 不带参数）：从 API 动态获取目标链接
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', API_URL, true);
+      xhr.timeout = 2000;
+      xhr.onreadystatechange = function () {
+        if (xhr.readyState === 4) {
+          if (xhr.status === 200) {
+            try {
+              var data = JSON.parse(xhr.responseText);
+              if (data && data.success && data.url) {
+                TARGET = data.url;
+              }
+            } catch (e) {}
+          }
+          // 获取成功或失败都执行跳转（失败用兜底链接）
+          startRedirect();
+        }
+      };
+      xhr.ontimeout = function () { startRedirect(); };
+      xhr.onerror = function () { startRedirect(); };
+      xhr.send();
+    } catch (e) {
+      // 不支持 XHR，直接用兜底链接跳转
+      startRedirect();
+    }
+  }
+})();
+</script>
+</body>
+</html>

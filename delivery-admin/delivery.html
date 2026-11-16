@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>发货内容</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .card {
+    background: #fff;
+    border-radius: 16px;
+    padding: 32px;
+    max-width: 500px;
+    width: 100%;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  }
+  .success-icon {
+    text-align: center;
+    font-size: 48px;
+    margin-bottom: 12px;
+  }
+  h1 {
+    text-align: center;
+    font-size: 22px;
+    color: #1a1a2e;
+    margin-bottom: 8px;
+  }
+  .subtitle {
+    text-align: center;
+    color: #888;
+    font-size: 14px;
+    margin-bottom: 24px;
+  }
+  .info-block {
+    background: #f8f9fc;
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .info-label {
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 6px;
+  }
+  .info-value {
+    font-size: 15px;
+    color: #1a1a2e;
+    word-break: break-all;
+    line-height: 1.5;
+  }
+  .info-value.code {
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: 4px;
+    color: #667eea;
+    text-align: center;
+  }
+  .copy-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: #eef1ff;
+    color: #667eea;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    margin-top: 8px;
+    transition: background 0.2s;
+  }
+  .copy-btn:hover { background: #dfe4ff; }
+  .copy-btn.copied { background: #e8f5e9; color: #4caf50; }
+  .btn-open {
+    width: 100%;
+    padding: 14px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 8px;
+    transition: transform 0.1s;
+  }
+  .btn-open:active { transform: scale(0.98); }
+  .desc {
+    font-size: 14px;
+    color: #555;
+    line-height: 1.6;
+    margin-bottom: 16px;
+    padding: 12px;
+    background: #fff8e1;
+    border-radius: 8px;
+    border-left: 3px solid #ffc107;
+  }
+  .error {
+    text-align: center;
+    color: #ff4d4f;
+    padding: 40px 20px;
+  }
+  .error-icon { font-size: 48px; margin-bottom: 12px; }
+  .tip {
+    text-align: center;
+    font-size: 12px;
+    color: #aaa;
+    margin-top: 20px;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+<div class="card" id="content"></div>
+
+<script>
+function getQueryParam(name) {
+  const params = new URLSearchParams(window.location.search);
+  return params.get(name);
+}
+
+function decodeGoodsData() {
+  const encoded = getQueryParam('data');
+  if (!encoded) return null;
+  try {
+    const json = decodeURIComponent(escape(atob(encoded)));
+    return JSON.parse(json);
+  } catch (e) {
+    console.error('解码失败', e);
+    return null;
+  }
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function copyToClipboard(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    const original = btn.innerHTML;
+    btn.innerHTML = '✅ 已复制';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.innerHTML = original;
+      btn.classList.remove('copied');
+    }, 2000);
+  }).catch(() => {
+    // 降级方案
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    btn.innerHTML = '✅ 已复制';
+    setTimeout(() => { btn.innerHTML = '📋 复制'; }, 2000);
+  });
+}
+
+function render() {
+  const goods = decodeGoodsData();
+  const content = document.getElementById('content');
+
+  if (!goods || !goods.link) {
+    content.innerHTML = `
+      <div class="error">
+        <div class="error-icon">⚠️</div>
+        <h2>链接已失效</h2>
+        <p style="color:#888;margin-top:12px;">请联系卖家重新获取发货链接</p>
+      </div>
+    `;
+    return;
+  }
+
+  const name = escapeHtml(goods.name || '商品');
+  const link = escapeHtml(goods.link);
+  const code = escapeHtml(goods.code || '');
+  const desc = escapeHtml(goods.desc || '');
+
+  let html = `
+    <div class="success-icon">📦</div>
+    <h1>${name}</h1>
+    <p class="subtitle">您的发货内容已就绪</p>
+  `;
+
+  if (desc) {
+    html += `<div class="desc">${desc}</div>`;
+  }
+
+  html += `
+    <div class="info-block">
+      <div class="info-label">网盘链接</div>
+      <div class="info-value">${link}</div>
+      <button class="copy-btn" onclick="copyToClipboard('${goods.link.replace(/'/g, "\\'")}', this)">📋 复制链接</button>
+    </div>
+  `;
+
+  if (code) {
+    html += `
+      <div class="info-block">
+        <div class="info-label" style="text-align:center;">提取码</div>
+        <div class="info-value code">${code}</div>
+        <div style="text-align:center;">
+          <button class="copy-btn" onclick="copyToClipboard('${goods.code.replace(/'/g, "\\'")}', this)">📋 复制提取码</button>
+        </div>
+      </div>
+    `;
+  }
+
+  html += `
+    <button class="btn-open" onclick="window.open('${goods.link.replace(/'/g, "\\'")}', '_blank')">🚀 打开网盘链接</button>
+    <p class="tip">如链接无法打开，请复制链接到浏览器中访问<br>提取码请妥善保管，请勿泄露给他人</p>
+  `;
+
+  content.innerHTML = html;
+}
+
+render();
+</script>
+</body>
+</html>

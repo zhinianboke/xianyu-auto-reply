@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>在浏览器中打开（尝试通过淘宝唤起）</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;margin:0;padding:24px;background:#f6f7fb;color:#222}
+  .box{max-width:720px;margin:48px auto;background:#fff;padding:20px;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.06);text-align:center}
+  h1{font-size:18px;margin-bottom:12px}
+  .desc{color:#666;font-size:14px;margin-bottom:18px}
+  .btn{display:inline-block;padding:12px 18px;border-radius:8px;font-size:16px;color:#fff;background:#1677ff;text-decoration:none}
+  .btn.alt{background:#f5f5f5;color:#333;margin-left:8px}
+  .link{word-break:break-all;color:#888;font-size:13px;margin-top:12px}
+  .hint{margin-top:12px;color:#999;font-size:13px}
+  .small{font-size:12px;color:#999;margin-top:8px}
+</style>
+</head>
+<body>
+  <div class="box">
+    <h1 id="title">正在尝试在浏览器中打开</h1>
+    <p class="desc" id="desc">如果页面没有自动跳转，请点击下面按钮或复制链接在浏览器中打开。</p>
+
+    <div id="controls" style="display:none">
+      <a id="openBtn" class="btn" href="javascript:;">在浏览器中打开</a>
+      <a id="fallbackBtn" class="btn alt" href="#" target="_blank">在新标签打开 / 复制链接</a>
+      <div class="link" id="rawLink"></div>
+      <div class="hint">若点击无效，请长按链接复制并在浏览器粘贴打开。</div>
+      <div class="small" id="note"></div>
+    </div>
+  </div>
+
+<script>
+function isAndroid(){ return /Android/i.test(navigator.userAgent); }
+function isiOS(){ return /iPhone|iPad|iPod/i.test(navigator.userAgent); }
+function isLikelyInAppWebView(){ var ua = navigator.userAgent || ''; return /AliApp|AlipayClient|Taobao|TUnionSdk|Xianyu|XianYu/i.test(ua); }
+
+function buildIntentForPackage(url, pkg){
+  try {
+    var tmp = url.replace(/^https?:\/\//i, '');
+    return 'intent://' + tmp + '#Intent;scheme=https;package=' + pkg + ';S.browser_fallback_url=' + encodeURIComponent(url) + ';end';
+  } catch(e){ return null; }
+}
+
+function tryOpenWithWindow(url){
+  try {
+    // For iOS WKWebView, window.open with _blank often triggers "在 Safari 中打开"
+    var w = window.open(url, '_blank');
+    if (w) return true;
+  } catch(e){}
+  return false;
+}
+
+function tryOpenDirect(url){
+  try { location.href = url; return true; } catch(e){}
+  return false;
+}
+
+function tryIntentSequence(url, packages){
+  // Try each package quickly. If one succeeds the page will be hidden/visibilitychange will fire.
+  for (var i=0;i<packages.length;i++){
+    try{
+      var it = buildIntentForPackage(url, packages[i]);
+      if (it){
+        // Slight spacing between attempts to give system time
+        (function(intent){ setTimeout(function(){ try { location.href = intent; } catch(e){} }, 200 * (i+1)); })(it);
+      }
+    }catch(e){}
+  }
+}
+
+function tryOpenTaobao(target){
+  try {
+    if (isAndroid()){
+      // Prefer taobao intent first
+      var taobaoIntent = buildIntentForPackage(target, 'com.taobao.taobao');
+      if (taobaoIntent){ location.href = taobaoIntent; return true; }
+      // fallback: try taobao scheme
+      try { location.href = 'taobao://' + encodeURIComponent(target); return true; } catch(e){}
+    }
+    if (isiOS()){
+      // iOS: taobao://somepath (best-effort)
+      try { location.href = 'taobao://' + encodeURIComponent(target); return true; } catch(e){}
+    }
+  } catch(e){}
+  return false;
+}
+
+// 主尝试逻辑：更有策略的自动外跳
+function attemptAutoOpen(target, opts){
+  opts = opts || {};
+  var tried = false;
+
+  // For iOS: try window.open('_blank') first (may trigger Safari prompt)
+  if (isiOS()){
+    tryOpenWithWindow(target);
+    tried = true;
+    return;
+  }
+
+  if (isAndroid()){
+    // Try window.open first
+    tryOpenWithWindow(target);
+    // Then try browser intents (Chrome, UC, QQ) as fallback sequence
+    var pkgs = ['com.android.chrome','com.UCMobile','com.tencent.mtt','com.baidu.browser_app'];
+    tryIntentSequence(target, pkgs);
+    tried = true;
+    return;
+  }
+
+  // Fallback for other platforms
+  tryOpenWithWindow(target) || tryOpenDirect(target);
+}
+
+// Visibility detection helper
+function detectSwitchAndFallback(fallbackFn, timeout){
+  timeout = timeout || 1200;
+  var hidden = false;
+  function onVis(){ hidden = document.hidden || document.visibilityState === 'hidden'; }
+  document.addEventListener('visibilitychange', onVis);
+  var t0 = Date.now();
+  setTimeout(function(){ document.removeEventListener('visibilitychange', onVis);
+    // If we never became hidden, assume the app didn't open the external app/browser
+    if (!hidden && Date.now() - t0 >= timeout){ fallbackFn(); }
+  }, timeout + 60);
+}
+
+// Statistics: send one-off event if statUrl provided
+function sendStat(eventType, detail){
+  try {
+    var params = new URLSearchParams(location.search);
+    var statUrl = params.get('stat') || params.get('stats') || '';
+    if (!statUrl) return;
+    var payload = { event: eventType, target: params.get('url') || params.get('u') || '', via: (params.get('via')||''), ua: navigator.userAgent, ts: Date.now(), detail: detail||null };
+    var body = JSON.stringify(payload);
+    // prefer sendBeacon
+    if (navigator.sendBeacon){
+      try { navigator.sendBeacon(statUrl, body); return; } catch(e){}
+    }
+    // fallback fetch keepalive
+    fetch(statUrl, { method: 'POST', body: body, headers: { 'Content-Type': 'application/json' }, keepalive: true }).catch(function(){});
+  } catch(e){}
+}
+
+(function(){
+  var params = new URLSearchParams(location.search);
+  var target = params.get('url') || params.get('u') || '';
+  var via = (params.get('via') || '').toLowerCase();
+  var timeout = parseInt(params.get('timeout')||params.get('t')||1200,10) || 1200;
+
+  // expose config note
+  document.getElementById('note').textContent = '提示：如果在应用内无法自动打开，请点击按钮或长按复制链接；超时(' + timeout + 'ms)后显示回退操作。';
+
+  if (!target){
+    document.getElementById('title').textContent = '无效链接';
+    document.getElementById('desc').textContent = '请在 ?url= 中传入目标链接';
+    sendStat('invalid', null);
+    return;
+  }
+
+  document.getElementById('rawLink').textContent = target;
+  document.getElementById('fallbackBtn').href = target;
+  document.getElementById('openBtn').addEventListener('click', function(){ sendStat('manual_open_click'); attemptAutoOpen(target); });
+
+  // If via=taobao and in-app, try taobao first (best-effort) then fallback
+  if (via === 'taobao' && isLikelyInAppWebView()){
+    document.getElementById('desc').textContent = '正在尝试通过淘宝打开…若未生效，将在短时间后打开浏览器。';
+    sendStat('try_taobao');
+    tryOpenTaobao(target);
+
+    // After attempting taobao, also queue browser intent attempts (Android) after small delay
+    if (isAndroid()){
+      setTimeout(function(){ tryIntentSequence(target, ['com.android.chrome','com.UCMobile','com.tencent.mtt']); }, 600);
+    }
+
+    // detect visibility and fallback to browser open if not switched
+    detectSwitchAndFallback(function(){
+      document.getElementById('desc').textContent = '未能通过淘宝自动跳转，已尝试打开浏览器，请手动点击按钮：';
+      document.getElementById('controls').style.display = 'block';
+      sendStat('fallback_after_taobao');
+      attemptAutoOpen(target);
+    }, timeout);
+
+    // show controls after half timeout to allow manual action
+    setTimeout(function(){ document.getElementById('controls').style.display = 'block'; }, Math.max(600, Math.min(800, timeout/2)));
+    return;
+  }
+
+  // General in-app behavior: try opening (Android: intents + window.open; iOS: window.open), then fallback
+  if (isLikelyInAppWebView()){
+    document.getElementById('desc').textContent = '正在尝试自动打开浏览器，如未成功将显示操作按钮。';
+    sendStat('try_auto');
+    attemptAutoOpen(target);
+    detectSwitchAndFallback(function(){
+      document.getElementById('desc').textContent = '未能自动跳出，请手动点击按钮在浏览器中打开：';
+      document.getElementById('controls').style.display = 'block';
+      sendStat('fallback_after_auto');
+      attemptAutoOpen(target);
+    }, timeout);
+    setTimeout(function(){ document.getElementById('controls').style.display = 'block'; }, Math.max(600, Math.min(800, timeout/2)));
+    return;
+  }
+
+  // Not in-app: just open normally
+  document.getElementById('desc').textContent = '正在为您打开浏览器…';
+  sendStat('try_open_direct');
+  setTimeout(function(){ attemptAutoOpen(target); }, 200);
+})();
+</script>
+</body>
+</html>

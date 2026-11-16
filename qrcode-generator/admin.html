@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="favicon.png">
+<title>闲鱼跳转二维码生成器</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f5f7;
+    min-height: 100vh;
+    padding: 30px 20px;
+    color: #333;
+  }
+  .container {
+    max-width: 960px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+  @media (max-width: 768px) {
+    .container { grid-template-columns: 1fr; }
+  }
+  .card {
+    background: #fff;
+    border-radius: 16px;
+    padding: 28px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  }
+  h1 {
+    font-size: 22px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h1 .logo {
+    width: 36px; height: 36px;
+    background: linear-gradient(145deg, #FFD83D 0%, #FF8A00 100%);
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+  }
+  label {
+    display: block;
+    font-size: 14px;
+    color: #555;
+    margin-bottom: 8px;
+    font-weight: 500;
+  }
+  input[type="text"], input[type="password"] {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    font-size: 14px;
+    margin-bottom: 16px;
+    transition: border-color 0.2s;
+  }
+  input:focus {
+    outline: none;
+    border-color: #FF8A00;
+  }
+  .current-url {
+    background: #f7f7f7;
+    border: 1px solid #eee;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 13px;
+    color: #666;
+    word-break: break-all;
+    margin-bottom: 16px;
+    min-height: 44px;
+  }
+  .updated-at {
+    font-size: 12px;
+    color: #999;
+    margin-bottom: 16px;
+  }
+  button {
+    width: 100%;
+    padding: 13px;
+    border: none;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+  button:hover { opacity: 0.9; }
+  .btn-primary {
+    background: linear-gradient(135deg, #FFD83D 0%, #FF8A00 100%);
+    color: #fff;
+  }
+  .btn-secondary {
+    background: #f0f0f0;
+    color: #555;
+    margin-top: 10px;
+  }
+  .msg {
+    margin-top: 14px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    display: none;
+  }
+  .msg.success { background: #e8f5e9; color: #2e7d32; display: block; }
+  .msg.error { background: #ffebee; color: #c62828; display: block; }
+  .qrcode-box {
+    text-align: center;
+  }
+  #qrcode {
+    display: inline-block;
+    padding: 16px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    min-height: 288px;
+    min-width: 288px;
+  }
+  .qrcode-info {
+    margin-top: 14px;
+    font-size: 13px;
+    color: #888;
+  }
+  .qrcode-url {
+    background: #f7f7f7;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    color: #666;
+    word-break: break-all;
+    margin-top: 8px;
+    text-align: left;
+  }
+  .tip {
+    margin-top: 16px;
+    padding: 12px 14px;
+    background: #fff8e1;
+    border-left: 4px solid #ffc400;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #8a6d00;
+    line-height: 1.6;
+  }
+  .section-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #333;
+    margin: 20px 0 12px;
+    padding-top: 16px;
+    border-top: 1px solid #eee;
+  }
+  .section-title:first-child {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <!-- 左侧：生成二维码 -->
+  <div class="card">
+    <h1><span class="logo">🐟</span> 生成二维码</h1>
+
+    <div class="section-title">1. 输入目标链接</div>
+    <input type="text" id="targetUrl" placeholder="请输入要跳转的目标链接，例如 https://..." value="https://xianyu.jinan.me/Xian_goods/App.php?ClickID=455&te=62" oninput="onTargetInput()">
+
+    <button class="btn-primary" onclick="generateQR()">🔳 生成二维码</button>
+
+    <div class="section-title">2. 二维码内容（可变）</div>
+    <div class="qrcode-url" id="qrcodeUrl">点击「生成二维码」后显示</div>
+
+    <div class="tip">
+      💡 <strong>二维码内容可变</strong>：每次输入不同的目标链接，生成的二维码内容也不同。<br>
+      二维码内容格式：<code>https://xianyu.jinan.me/redirect.html?url=目标链接</code><br>
+      扫码后闲鱼会加载 redirect.html，再自动跳转到你输入的目标链接。
+    </div>
+  </div>
+
+  <!-- 右侧：二维码预览 -->
+  <div class="card qrcode-box">
+    <h1><span class="logo">🐟</span> 二维码预览</h1>
+    <div id="qrcode"></div>
+    <div class="qrcode-info">
+      用闲鱼 APP 扫描此二维码<br>自动跳转系统浏览器打开目标链接
+    </div>
+    <button class="btn-secondary" style="margin-top:14px" onclick="downloadQR()">📥 下载二维码图片</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script>
+  // 跳转页地址（二维码内容 = 跳转页 + ?url=目标链接）
+  var REDIRECT_URL = 'https://xianyu.jinan.me/redirect.html';
+
+  // 生成二维码
+  function generateQR() {
+    // 1. 检查 qrcodejs 库是否已加载
+    if (typeof QRCode === 'undefined') {
+      alert('二维码库未加载，请刷新页面重试');
+      return;
+    }
+
+    // 2. 从输入框读取最新目标链接（每次都重新读取，确保是最新值）
+    var input = document.getElementById('targetUrl');
+    var target = input ? input.value.trim() : '';
+    if (!target) {
+      alert('请输入目标链接');
+      return;
+    }
+
+    // 3. 构建二维码内容 = 跳转页 + ?url=目标链接（URL 编码）
+    var qrContent = REDIRECT_URL + '?url=' + encodeURIComponent(target);
+    var urlDisplay = document.getElementById('qrcodeUrl');
+    if (urlDisplay) urlDisplay.textContent = qrContent;
+
+    // 4. 获取二维码容器并彻底清空（最可靠的清除方式）
+    var qrDiv = document.getElementById('qrcode');
+    if (!qrDiv) return;
+    qrDiv.innerHTML = '';
+
+    // 5. 创建新的二维码实例（无 logo，纯二维码）
+    try {
+      new QRCode(qrDiv, {
+        text: qrContent,
+        width: 256,
+        height: 256,
+        colorDark: '#1a1a1a',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.H
+      });
+    } catch (e) {
+      console.error('二维码生成失败：', e);
+      return;
+    }
+  }
+
+  // 实时预览：输入框变化时自动更新二维码（防抖 300ms）
+  var inputTimer = null;
+  function onTargetInput() {
+    clearTimeout(inputTimer);
+    inputTimer = setTimeout(generateQR, 300);
+  }
+
+  // 在二维码中心叠加闲鱼 logo
+  function addLogoToCanvas(canvas) {
+    var ctx = canvas.getContext('2d');
+    var size = canvas.width;
+    var logoSize = size * 0.22;
+    var x = (size - logoSize) / 2;
+    var y = (size - logoSize) / 2;
+
+    // 白色圆角背景
+    var radius = logoSize * 0.25;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + logoSize - radius, y);
+    ctx.quadraticCurveTo(x + logoSize, y, x + logoSize, y + radius);
+    ctx.lineTo(x + logoSize, y + logoSize - radius);
+    ctx.quadraticCurveTo(x + logoSize, y + logoSize, x + logoSize - radius, y + logoSize);
+    ctx.lineTo(x + radius, y + logoSize);
+    ctx.quadraticCurveTo(x, y + logoSize, x, y + logoSize - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+    ctx.fill();
+
+    // 黄橙渐变背景
+    var gradient = ctx.createLinearGradient(x, y, x + logoSize, y + logoSize);
+    gradient.addColorStop(0, '#FFD83D');
+    gradient.addColorStop(1, '#FF8A00');
+    ctx.fillStyle = gradient;
+    var pad = logoSize * 0.12;
+    roundRect(ctx, x + pad, y + pad, logoSize - pad * 2, logoSize - pad * 2, logoSize * 0.18);
+    ctx.fill();
+
+    // 鱼形图标
+    ctx.font = (logoSize * 0.5) + 'px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🐟', x + logoSize / 2, y + logoSize / 2);
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  // 获取当前服务器链接
+  function loadCurrentUrl() {
+    fetch('api/target.php')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.success) {
+          document.getElementById('currentUrl').textContent = data.url;
+          document.getElementById('updatedAt').textContent = '更新时间：' + (data.updated_at || '未知');
+        }
+      })
+      .catch(function () {});
+  }
+
+  // 保存当前链接到服务器
+  function saveToServer() {
+    var url = document.getElementById('targetUrl').value.trim();
+    var user = document.getElementById('username').value.trim();
+    var pwd = document.getElementById('password').value;
+    var msgEl = document.getElementById('msg');
+
+    if (!url) {
+      showMsg('请输入目标链接', 'error');
+      return;
+    }
+    if (!user) {
+      showMsg('请输入管理账号', 'error');
+      return;
+    }
+    if (!pwd) {
+      showMsg('请输入管理密码', 'error');
+      return;
+    }
+
+    fetch('api/target.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url, username: user, password: pwd })
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (data.success) {
+        showMsg('✅ 已保存到服务器！固定二维码（redirect.html）扫码后将跳转到该链接', 'success');
+        document.getElementById('password').value = '';
+        loadCurrentUrl();
+      } else {
+        showMsg('❌ ' + (data.message || '保存失败'), 'error');
+      }
+    })
+    .catch(function () {
+      showMsg('❌ 网络错误，请重试', 'error');
+    });
+  }
+
+  function showMsg(text, type) {
+    var msgEl = document.getElementById('msg');
+    msgEl.textContent = text;
+    msgEl.className = 'msg ' + type;
+  }
+
+  // 下载二维码
+  function downloadQR() {
+    var canvas = document.querySelector('#qrcode canvas');
+    if (!canvas) {
+      alert('请先生成二维码');
+      return;
+    }
+    var link = document.createElement('a');
+    link.download = 'xianyu_qrcode_' + Date.now() + '.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  }
+
+  // 初始化：加载服务器链接并自动生成默认二维码
+  loadCurrentUrl();
+  generateQR();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,43 @@
+<!-- 闲鱼小程序 - 跳转外部浏览器页面模板 -->
+<view class="container">
+
+  <!-- 加载中 -->
+  <view a:if="{{status === 'loading'}}" class="state-box">
+    <view class="icon-loading">
+      <view class="fish-icon">🐟</view>
+    </view>
+    <view class="title">闲鱼</view>
+    <view class="subtitle">正在打开浏览器…</view>
+    <view class="loading-dots">
+      <view class="dot"></view>
+      <view class="dot"></view>
+      <view class="dot"></view>
+    </view>
+  </view>
+
+  <!-- 成功 -->
+  <view a:if="{{status === 'success'}}" class="state-box">
+    <view class="icon-success">✓</view>
+    <view class="title">已在浏览器中打开</view>
+    <view class="subtitle">请查看系统浏览器</view>
+  </view>
+
+  <!-- 手动引导 -->
+  <view a:if="{{status === 'manual' || status === 'fail'}}" class="state-box">
+    <view class="icon-manual">🔗</view>
+    <view class="title">请在浏览器中打开</view>
+    <view class="subtitle">{{errorMsg}}</view>
+
+    <view class="url-box">{{targetUrl}}</view>
+
+    <view class="steps">
+      <view class="step-title">操作步骤：</view>
+      <view class="step-item">1. 点击下方「在浏览器中打开」按钮</view>
+      <view class="step-item">2. 或复制链接后在浏览器粘贴打开</view>
+    </view>
+
+    <button class="btn-primary" onTap="onRetry">🔗 在浏览器中打开</button>
+    <button class="btn-secondary" onTap="copyUrl">📋 复制链接</button>
+  </view>
+
+</view>
