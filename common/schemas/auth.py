@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from common.schemas.common import ApiResponse
 
 
 class Token(BaseModel):
@@ -45,7 +46,7 @@ class LoginRequest(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class LoginResponse(BaseModel):
+class LoginResponse(ApiResponse):
     success: bool
     message: str
     token: Optional[str] = None

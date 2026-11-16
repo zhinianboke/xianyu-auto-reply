@@ -303,6 +303,9 @@ export interface SystemSettings {
   smtp_user?: string
   smtp_password?: string
   smtp_from?: string
+  'auth.email_allowed_suffixes'?: string
+  'auth.email_denied_suffixes'?: string
+  'auth.email_denied_message'?: string
   smtp_use_tls?: boolean
   smtp_use_ssl?: boolean
   // 模块设置

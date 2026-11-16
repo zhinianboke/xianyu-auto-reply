@@ -26,6 +26,7 @@ from common.services.token_api_mode import (
     normalize_token_api_mode,
 )
 from common.services.registration_policy import REGISTRATION_ENABLED_KEY
+from common.services.email_domain_policy import EMAIL_DOMAIN_DEFAULTS
 from common.services.system_setting_validation import parse_boolean_setting
 from common.utils.text_utils import escape_xss
 
@@ -57,6 +58,7 @@ DEFAULT_LOGIN_SYSTEM_DESCRIPTION = "自动回复、智能客服、订单管理�
 DEFAULT_AUTH_FOOTER_AD_HTML = "© 2026 划算云服务器 ·<a href=\"http://www.hsykj.com\" target=\"_BLANK\">www.hsykj.com</a>"
 
 DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
+    **EMAIL_DOMAIN_DEFAULTS,
     **AD_PRICE_DEFAULTS,
     **PAYMENT_SETTING_DEFAULTS,
     "disclaimer.title": ("免责声明", "系统免责声明标题"),
@@ -107,6 +109,7 @@ DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
 
 # 不需要XSS转义的键（布尔值、数字等）
 NO_ESCAPE_KEYS = {
+    *EMAIL_DOMAIN_DEFAULTS,
     REGISTRATION_ENABLED_KEY,
     "show_default_login_info",
     "login_captcha_enabled",

@@ -19,6 +19,8 @@ from loguru import logger
 from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from common.db.session import async_session_maker
+from common.db.session_recovery import rollback_session
 from common.models.user_login_log import XYUserLoginLog
 from common.utils.pagination import execute_paginated_with_filters
 from common.utils.time_utils import safe_isoformat
@@ -44,22 +46,34 @@ class UserLoginLogService:
         login_account: Optional[str] = None,
         client_ip: Optional[str] = None,
         result_message: Optional[str] = None,
+        strict: bool = False,
+        isolated: bool = False,
     ) -> None:
         """写入一条用户登录日志（成功 / 失败都写）。
 
-        该方法处于登录主流程中，写日志失败不应阻断登录，因此内部捕获异常、
-        回滚本次写入并打印完整错误日志（不做静默失败）。
+        写入失败时回滚并记录完整异常；认证入口使用 strict=True，
+        由调用方明确提示审计失败，避免未写入日志却返回登录成功。
 
         Args:
             login_method: 登录方式（username_password/email_password/email_code）
             success: 是否登录成功
-            owner_id: 登录用户ID（所属用户），失败时为 None
+            owner_id: 对应用户 ID，无法找到用户时为 None
             login_account: 登录账号（用户名或邮箱）
             client_ip: 客户端 IP
             result_message: 结果说明（成功提示或失败原因）
+            strict: 为 True 时记录失败继续抛出异常，认证入口不得返回虚假成功。
+            isolated: 当前请求会话无法恢复时，从全局工厂获取独立会话写入审计。
         Returns:
             None
         """
+        if isolated:
+            async with async_session_maker() as audit_session:
+                await UserLoginLogService(audit_session).record(
+                    login_method=login_method, success=success, owner_id=owner_id,
+                    login_account=login_account, client_ip=client_ip,
+                    result_message=result_message, strict=strict,
+                )
+            return
         log = XYUserLoginLog(
             owner_id=owner_id,
             login_account=login_account,
@@ -71,14 +85,16 @@ class UserLoginLogService:
         try:
             self.session.add(log)
             await self.session.commit()
-        except Exception as exc:  # noqa: BLE001 - 登录日志写入失败不能影响登录流程
-            await self.session.rollback()
-            logger.error(
+        except Exception as exc:  # noqa: BLE001 - 回滚后记录完整异常，严格模式继续抛出
+            logger.opt(exception=exc).error(
                 "写入用户登录日志失败: "
                 f"login_method={login_method}, success={success}, owner_id={owner_id}, "
                 f"login_account={login_account}, client_ip={client_ip}, "
                 f"result_message={result_message}, error={type(exc).__name__}: {exc}"
             )
+            await rollback_session(self.session, operation="登录日志写入")
+            if strict:
+                raise
 
     async def list_logs(
         self,

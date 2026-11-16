@@ -12,23 +12,22 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
-from app.api.routes.geetest import check_geetest_verified
+from loguru import logger
+from app.services.login_flow_service import perform_login
+from common.services.auth_rate_limit_service import AuthRateLimitRejected, check_registration_limit
+from common.db.session_recovery import rollback_session
+from common.services.email_domain_policy import EmailDomainRejected, enforce_email_domain
 from common.services.email_verification_code_service import check_email_code
 from common.services.registration_policy import get_registration_rejection_message
 from app.core.security import decode_token, get_password_hash
 from common.models.user import User, UserRole, UserStatus
 from common.schemas.auth import LoginRequest, LoginResponse, VerifyResponse
 from common.schemas.common import ApiResponse
-from common.schemas.user import UserCreate, UserPublic
+from common.schemas.user import UserCreate
 from app.services.auth import AuthService
 from app.services.system_setting_service import SystemSettingService
 from app.services.user_service import UserService
-from app.services.user_login_log_service import (
-    LOGIN_METHOD_EMAIL_CODE,
-    LOGIN_METHOD_EMAIL_PASSWORD,
-    LOGIN_METHOD_USERNAME_PASSWORD,
-    UserLoginLogService,
-)
+from app.services.user_login_log_service import UserLoginLogService
 from common.utils.http_utils import get_client_ip
 
 router = APIRouter(tags=["auth"])
@@ -48,104 +47,8 @@ async def login_user(
     session: AsyncSession = Depends(deps.get_db_session),
     login_log_service: UserLoginLogService = Depends(deps.get_user_login_log_service),
 ) -> LoginResponse:
-    user: User | None = None
-    error_message: str | None = None
-
-    client_ip = get_client_ip(request)
-
-    # 解析登录方式与登录账号（用于写入用户登录日志）
-    if payload.username and payload.password:
-        login_method = LOGIN_METHOD_USERNAME_PASSWORD
-    elif payload.email and payload.password:
-        login_method = LOGIN_METHOD_EMAIL_PASSWORD
-    elif payload.email and payload.verification_code:
-        login_method = LOGIN_METHOD_EMAIL_CODE
-    else:
-        login_method = LOGIN_METHOD_USERNAME_PASSWORD
-    login_account = payload.username or payload.email
-
-    async def fail_login(message: str) -> LoginResponse:
-        """记录失败登录日志（成功/失败都必须落库）并返回统一失败响应。"""
-        await login_log_service.record(
-            login_method=login_method,
-            success=False,
-            owner_id=None,
-            login_account=login_account,
-            client_ip=client_ip,
-            result_message=message,
-        )
-        return LoginResponse(success=False, message=message)
-
-    # 检查是否启用了登录滑动验证码
-    setting_service = SystemSettingService(session)
-    all_settings = await setting_service.list_settings()
-    captcha_enabled_str = all_settings.get("login_captcha_enabled")
-    captcha_enabled = captcha_enabled_str in (None, "true", "1")  # 默认开启
-
-    # 账号密码登录和邮箱密码登录需要验证滑动验证码
-    if payload.username and payload.password:
-        # 账号密码登录 - 需要滑动验证（如果开启）
-        if captcha_enabled:
-            if not payload.geetest_challenge:
-                return await fail_login("请完成滑动验证")
-
-            geetest_ok, geetest_msg = check_geetest_verified(payload.geetest_challenge)
-            if not geetest_ok:
-                return await fail_login(geetest_msg)
-
-        user, error_message = await auth_service.authenticate_by_username(payload.username, payload.password)
-    elif payload.email and payload.password:
-        # 邮箱密码登录 - 需要滑动验证（如果开启）
-        if captcha_enabled:
-            if not payload.geetest_challenge:
-                return await fail_login("请完成滑动验证")
-
-            geetest_ok, geetest_msg = check_geetest_verified(payload.geetest_challenge)
-            if not geetest_ok:
-                return await fail_login(geetest_msg)
-
-        user, error_message = await auth_service.authenticate_by_email(payload.email, payload.password)
-    elif payload.email and payload.verification_code:
-        # 邮箱验证码登录
-        # 验证验证码
-        code_valid, code_msg = check_email_code(payload.email, payload.verification_code, "login")
-        if not code_valid:
-            return await fail_login(code_msg)
-
-        # 根据邮箱查找用户
-        user_service = UserService(session)
-        user = await user_service.get_by_email(payload.email)
-        if not user:
-            return await fail_login("该邮箱未注册")
-    else:
-        return await fail_login("请提供有效的登录信息")
-
-    if not user:
-        return await fail_login(error_message or "登录失败")
-
-    if user.status != UserStatus.ACTIVE:
-        return await fail_login("账号已禁用，请联系管理员")
-
-    await auth_service.mark_login(user)
-    # 记录成功登录日志
-    await login_log_service.record(
-        login_method=login_method,
-        success=True,
-        owner_id=user.id,
-        login_account=user.username or login_account,
-        client_ip=client_ip,
-        result_message="登录成功",
-    )
-    return LoginResponse(
-        success=True,
-        message="登录成功",
-        token=auth_service.create_access_token(user),
-        refresh_token=auth_service.create_refresh_token(user),
-        user_id=user.id,
-        username=user.username,
-        is_admin=user.role == UserRole.ADMIN,
-        account_limit=user.account_limit,
-    )
+    """调用统一登录流程，先校验后缀与限流，再认证并提交审计日志。"""
+    return await perform_login(payload, get_client_ip(request), auth_service, session, login_log_service)
 
 
 @router.get("/verify", response_model=VerifyResponse)
@@ -247,6 +150,7 @@ async def check_default_password(
 @router.post("/register", response_model=ApiResponse)
 async def register_user(
     payload: UserCreate,
+    request: Request,
     user_service: UserService = Depends(deps.get_user_service),
     setting_service: SystemSettingService = Depends(deps.get_system_setting_service),
 ) -> ApiResponse:
@@ -254,11 +158,23 @@ async def register_user(
 
     Args:
         payload: 用户注册资料与邮箱验证码。
+        request: 请求对象，用于公共客户端 IP 获取与注册限流。
         user_service: 用户查询与创建服务。
         setting_service: 读取当前注册开关的设置服务。
     Returns:
         统一业务响应，关闭注册时不消费验证码或创建账号。
     """
+    # 注册尝试先计数；后缀或开关拒绝也占用额度，且不能消费旧验证码。
+    try:
+        await check_registration_limit(get_client_ip(request), payload.email)
+        await enforce_email_domain(setting_service.session, payload.email)
+    except (EmailDomainRejected, AuthRateLimitRejected) as exc:
+        return ApiResponse(success=False, code=exc.code, message=str(exc))
+    except Exception as exc:
+        logger.opt(exception=exc).error("注册策略检查失败：email={}", payload.email)
+        await rollback_session(setting_service.session, operation="注册策略检查")
+        return ApiResponse(success=False, code=50001, message="注册校验暂不可用，请稍后重试")
+
     # 在消费验证码和创建账号前重新读取开关，旧验证码不能绕过已关闭的注册。
     settings = await setting_service.list_settings()
     rejection_message = get_registration_rejection_message(settings)

@@ -33,6 +33,7 @@ from common.services.system_setting_validation import (
     validate_business_setting,
 )
 from common.services.registration_policy import REGISTRATION_ENABLED_KEY
+from common.services.email_domain_policy import EMAIL_DOMAIN_DEFAULTS, normalize_policy_setting
 from common.services.token_api_mode import (
     TOKEN_API_MODE_REMOTE,
     TOKEN_API_MODE_SETTING_KEY,
@@ -102,6 +103,11 @@ def _normalize_email_setting(key: str, value: str) -> tuple[str, str | None]:
 def _normalize_setting_value(key: str, raw_value: str) -> tuple[str, str | None]:
     """规范化并校验单个设置值，不处理需要完整目标状态的跨字段约束。"""
     value = str(raw_value or "")
+    if key in EMAIL_DOMAIN_DEFAULTS:
+        try:
+            return normalize_policy_setting(key, value), None
+        except ValueError as exc:
+            return value, str(exc)
     if key == REGISTRATION_ENABLED_KEY:
         value = "true" if parse_boolean_setting(raw_value) else "false"
     if key in _TRIMMED_SETTING_KEYS:

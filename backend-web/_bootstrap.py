@@ -29,6 +29,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
 from app.services.db_backup_log_service import DbBackupLogService
+from app.services.system_setting_service import SystemSettingService
 from common.db.error_messages import get_public_database_error_message
 from common.db.init_database import init_database
 from common.db.redis_client import close_redis_client, initialize_redis_client
@@ -92,6 +93,8 @@ async def lifespan(app: FastAPI):
     # 初始化数据库（创建表、默认数据等）
     try:
         await init_database()
+        async with async_session_maker() as session:
+            await SystemSettingService(session).ensure_default_settings()
     except Exception:
         logger.exception("数据库初始化失败，服务退出")
         try:

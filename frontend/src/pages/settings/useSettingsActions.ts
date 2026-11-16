@@ -98,7 +98,16 @@ export function useSettingsActions(getSettings: SettingsGetter) {
       return
     }
     await run('smtp', async () => {
-      await persist({ smtp_server: String(settings.smtp_server || ''), smtp_port: port, smtp_user: smtpUser, smtp_password: String(settings.smtp_password || ''), smtp_from: String(settings.smtp_from || '') }, 'SMTP邮件配置保存成功', 'SMTP邮件配置保存失败')
+      await persist({
+        smtp_server: String(settings.smtp_server || ''),
+        smtp_port: port,
+        smtp_user: smtpUser,
+        smtp_password: String(settings.smtp_password || ''),
+        smtp_from: String(settings.smtp_from || ''),
+        'auth.email_allowed_suffixes': String(settings['auth.email_allowed_suffixes'] ?? ''),
+        'auth.email_denied_suffixes': String(settings['auth.email_denied_suffixes'] ?? ''),
+        'auth.email_denied_message': String(settings['auth.email_denied_message'] ?? ''),
+      }, '发件人设置保存成功', '发件人设置保存失败')
     })
   }, [addToast, getSettings, persist, run])
 

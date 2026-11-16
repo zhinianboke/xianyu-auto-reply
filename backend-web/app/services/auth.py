@@ -144,6 +144,12 @@ class AuthService:
             return sha256(password.encode("utf-8")).hexdigest() == stored_hash.lower()
         return security.verify_password(password, stored_hash)
 
+    async def find_login_user(self, account: str, *, by_email: bool = False) -> Optional[User]:
+        """按认证同一大小写规则查询账号，供后缀检查、限流和失败审计读取绑定邮箱。"""
+        column = User.email if by_email else User.username
+        result = await self.session.execute(select(User).where(func.lower(column) == account.lower()))
+        return result.scalar_one_or_none()
+
     async def mark_login(self, user: User) -> None:
         user.last_login_at = get_beijing_now()
         await self.session.flush()
