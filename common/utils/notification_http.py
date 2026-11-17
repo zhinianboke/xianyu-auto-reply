@@ -67,11 +67,18 @@ async def send_dingtalk_notification(config_data: Dict[str, Any], message: str) 
             separator = '&' if '?' in webhook_url else '?'
             webhook_url += f'{separator}timestamp={timestamp}&sign={sign}'
 
+        # 钉钉 Markdown 会合并普通单换行；补两个尾随空格以保留模板排版。
+        normalized_message = str(message or "").replace("\r\n", "\n").replace("\r", "\n")
+        markdown_message = "\n".join(
+            line if not line or line.endswith("  ") else f"{line}  "
+            for line in normalized_message.split("\n")
+        )
+
         data = {
             "msgtype": "markdown",
             "markdown": {
                 "title": "闲鱼自动回复通知",
-                "text": message
+                "text": markdown_message
             }
         }
 

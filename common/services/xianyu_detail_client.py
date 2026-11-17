@@ -49,6 +49,7 @@ class XianyuItemDetailClient:
             self.cookie_id, self.cookies_str, DETAIL_API, DETAIL_VERSION, {"itemId": str(item_id)},
             owner_id=self.owner_id,
             extra_params={"spm_cnt": "a21ybx.item.0.0"},
+            proxy=self.proxy,
         )
         # 令牌刷新后回写实例 Cookie
         self.cookies_str = result.get("cookies_str", self.cookies_str)

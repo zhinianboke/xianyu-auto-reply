@@ -12,6 +12,7 @@ TEMPLATE_CONFIG_KEYS = {
     "chat": "chat_template",
     "delivery": "delivery_template",
     "account": "account_template",
+    "monitor": "monitor_template",
 }
 
 TEMPLATE_VARIABLES = {
@@ -53,6 +54,21 @@ TEMPLATE_VARIABLES = {
         "verification_info",
         "time",
     },
+    "monitor": {
+        "task_name",
+        "task_id",
+        "keyword",
+        "item_id",
+        "title",
+        "price",
+        "area",
+        "seller_nick",
+        "seller_credit",
+        "free_shipping",
+        "tags",
+        "item_url",
+        "time",
+    },
 }
 
 _PLACEHOLDER_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
@@ -86,6 +102,7 @@ def validate_notification_templates(config_data: Mapping[str, Any] | None) -> st
         "chat": "聊天消息",
         "delivery": "自动发货",
         "account": "账号异常",
+        "monitor": "商品监控",
     }
     for template_type, config_key in TEMPLATE_CONFIG_KEYS.items():
         if config_key not in config_data or config_data[config_key] is None:

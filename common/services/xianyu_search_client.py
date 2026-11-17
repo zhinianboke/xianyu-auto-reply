@@ -4,7 +4,7 @@
 功能：
 1. 使用账号 Cookie 调用闲鱼网页版商品搜索接口 mtop.taobao.idlemtopsearch.pc.search
 2. 复用 xianyu_utils 的签名与 Cookie 解析（仅需 sign + cookie，无需风控参数 bx-ua）
-3. 支持按排序字段（上新/降价）与价格区间筛选搜索
+3. 支持闲鱼官网的个人卖家、包邮、地区、排序、发布时间与价格筛选
 
 说明：
 - 经实测，该搜索接口在仅携带 sign + 登录 Cookie 的情况下即可正常返回，无需 bx-ua/bx-umidtoken。
@@ -22,6 +22,7 @@ from common.services.xianyu_mtop import mtop_call
 
 SEARCH_API = "mtop.taobao.idlemtopsearch.pc.search"
 SEARCH_VERSION = "1.0"
+DIRECT_MUNICIPALITIES = {"北京", "天津", "上海", "重庆"}
 
 
 class XianyuSearchClient:
@@ -38,10 +39,18 @@ class XianyuSearchClient:
         price_min: Optional[float],
         price_max: Optional[float],
         publish_days: Optional[int] = None,
+        personal_only: bool = True,
+        free_shipping_only: bool = False,
     ) -> str:
-        """构造 searchFilter（个人闲置 + 上新天数 + 价格区间），多个条件以分号拼接。"""
-        # 固定只采集个人卖家闲置（quickFilter:filterPersonal;）
-        parts: List[str] = ["quickFilter:filterPersonal;"]
+        """构造闲鱼 PC 搜索页实际使用的 ``searchFilter``。"""
+        parts: List[str] = []
+        quick_filters: List[str] = []
+        if personal_only:
+            quick_filters.append("filterPersonal")
+        if free_shipping_only:
+            quick_filters.append("filterFreePostage")
+        if quick_filters:
+            parts.append(f"quickFilter:{','.join(quick_filters)};")
         # 上新天数筛选：publishDays:N;
         if publish_days:
             try:
@@ -57,6 +66,59 @@ class XianyuSearchClient:
             parts.append(f"priceRange:{lo},{hi};")
         return "".join(parts)
 
+    @staticmethod
+    def _build_extra_filter_value(
+        region_province: Optional[str] = None,
+        region_city: Optional[str] = None,
+        region_district: Optional[str] = None,
+    ) -> str:
+        """构造闲鱼官网区域选择器提交的 ``extraFilterValue``。
+
+        真实网页请求仅提交已选到的层级；“全广东 / 全深圳”一类选项表示
+        停留在上一级，不作为 city/area 字段发送。
+        """
+        province = str(region_province or "").strip()
+        city = str(region_city or "").strip()
+        district = str(region_district or "").strip()
+        if not province:
+            return "{}"
+
+        # 闲鱼“全国”列还包含珠三角、江浙沪、京津冀、东三省等区域组，
+        # 官网将它们写入 extraDivision，而不是 divisionList。
+        if province == "全国":
+            extra_division = city if city and city not in {"全国", "全全国"} else ""
+            if not extra_division:
+                return "{}"
+            return json.dumps(
+                {
+                    "divisionList": [],
+                    "excludeMultiPlacesSellers": "0",
+                    "extraDivision": extra_division,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+
+        division: Dict[str, str] = {"province": province}
+        if city and not city.startswith("全"):
+            # 直辖市官网第二列直接是区县，对应请求字段 area。
+            if province in DIRECT_MUNICIPALITIES and not district:
+                division["area"] = city
+            else:
+                division["city"] = city
+                if district and not district.startswith("全"):
+                    division["area"] = district
+
+        return json.dumps(
+            {
+                "divisionList": [division],
+                "excludeMultiPlacesSellers": "0",
+                "extraDivision": "",
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
     async def search(
         self,
         keyword: str,
@@ -67,6 +129,11 @@ class XianyuSearchClient:
         price_min: Optional[float] = None,
         price_max: Optional[float] = None,
         publish_days: Optional[int] = None,
+        personal_only: bool = True,
+        free_shipping_only: bool = False,
+        region_province: Optional[str] = None,
+        region_city: Optional[str] = None,
+        region_district: Optional[str] = None,
     ) -> Dict[str, Any]:
         """调用搜索接口（令牌过期自动刷新重试、Session/风控切换账号）。
 
@@ -75,11 +142,22 @@ class XianyuSearchClient:
              account_invalid: bool, error: str, punish_url: str}
             punish_url 仅在触发验证类风控时有值，调用方可据此走远程过风控后重试。
         """
-        search_filter = self._build_search_filter(price_min, price_max, publish_days)
+        search_filter = self._build_search_filter(
+            price_min,
+            price_max,
+            publish_days,
+            personal_only,
+            free_shipping_only,
+        )
+        extra_filter_value = self._build_extra_filter_value(
+            region_province,
+            region_city,
+            region_district,
+        )
         data = {
             "pageNumber": page_number,
             "keyword": keyword,
-            "fromFilter": bool(sort_field or search_filter),
+            "fromFilter": bool(sort_field or search_filter or extra_filter_value != "{}"),
             "rowsPerPage": rows_per_page,
             "sortValue": sort_value or "",
             "sortField": sort_field or "",
@@ -88,7 +166,7 @@ class XianyuSearchClient:
             "propValueStr": {"searchFilter": search_filter},
             "customGps": "",
             "searchReqFromPage": "pcSearch",
-            "extraFilterValue": "{}",
+            "extraFilterValue": extra_filter_value,
             "userPositionJson": "{}",
         }
 

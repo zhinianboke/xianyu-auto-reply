@@ -109,6 +109,7 @@ export const templateConfigKeys: Record<NotifyType, string> = {
   chat: 'chat_template',
   delivery: 'delivery_template',
   account: 'account_template',
+  monitor: 'monitor_template',
 }
 
 export const templateVariables: Record<NotifyType, Array<{ name: string; label: string }>> = {
@@ -150,6 +151,21 @@ export const templateVariables: Record<NotifyType, Array<{ name: string; label: 
     { name: 'verification_info', label: '验证信息' },
     { name: 'time', label: '通知时间' },
   ],
+  monitor: [
+    { name: 'task_name', label: '监控任务名称' },
+    { name: 'task_id', label: '监控任务 ID' },
+    { name: 'keyword', label: '搜索关键词' },
+    { name: 'item_id', label: '商品 ID' },
+    { name: 'title', label: '商品标题' },
+    { name: 'price', label: '商品价格' },
+    { name: 'area', label: '商品地区' },
+    { name: 'seller_nick', label: '卖家昵称' },
+    { name: 'seller_credit', label: '卖家信用' },
+    { name: 'free_shipping', label: '是否包邮' },
+    { name: 'tags', label: '商品标签' },
+    { name: 'item_url', label: '商品链接' },
+    { name: 'time', label: '通知时间' },
+  ],
 }
 
 export const defaultTemplates: Record<NotifyType, string> = {
@@ -178,12 +194,25 @@ export const defaultTemplates: Record<NotifyType, string> = {
 详情: {{detail}}
 
 请检查账号状态。`,
+  monitor: `【闲鱼商品监控】
+任务: {{task_name}}
+
+商品: {{title}}
+价格: {{price}}
+地区: {{area}}
+卖家: {{seller_nick}}
+卖家信用: {{seller_credit}}
+包邮: {{free_shipping}}
+标签: {{tags}}
+链接: {{item_url}}
+时间: {{time}}`,
 }
 
 export const notifyTypeHints: Record<NotifyType, string> = {
   chat: '买家每发一条消息都推送，使用频率较高',
   delivery: '每次自动发货结果推送一次',
   account: '账号掉线、Cookie 到期或 Token 刷新失败时推送',
+  monitor: '监控任务首次采集到符合筛选条件的商品时推送',
 }
 
 export const channelTypeLabels: Record<string, string> = Object.fromEntries(

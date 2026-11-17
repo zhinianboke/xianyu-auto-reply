@@ -30,7 +30,7 @@ export function useNotificationTypeOptions(enabled: boolean) {
         return
       }
       const values = result.data?.notify_types || []
-      if (!['chat', 'delivery', 'account'].every((type) => values.some((item) => item.value === type && item.label))) {
+      if (!['chat', 'delivery', 'account', 'monitor'].every((type) => values.some((item) => item.value === type && item.label))) {
         setOptions([])
         setError('通知类型数据字典不完整，请联系管理员检查数据库初始化')
         return

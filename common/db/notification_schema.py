@@ -23,7 +23,7 @@ NOTIFICATION_COLUMNS = (
     (
         "xy_message_notifications",
         "notify_types",
-        "VARCHAR(64) NOT NULL DEFAULT 'chat,delivery,account' COMMENT '订阅的通知类型，逗号分隔'",
+        "VARCHAR(64) NOT NULL DEFAULT 'chat,delivery,account,monitor' COMMENT '订阅的通知类型，逗号分隔'",
     ),
     (
         "xy_message_notifications",

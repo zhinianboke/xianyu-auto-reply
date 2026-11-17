@@ -40,6 +40,15 @@ class ListingMonitorCreateRequest(BaseModel):
     price_min: Optional[float] = Field(None, ge=0, description="商品价格区间最低值")
     price_max: Optional[float] = Field(None, ge=0, description="商品价格区间最高值")
     publish_days: Optional[int] = Field(None, ge=1, le=365, description="上新天数筛选（publishDays，单位天，留空=不限）")
+    personal_only: bool = Field(True, description="是否仅采集个人卖家")
+    free_shipping_only: bool = Field(False, description="是否仅采集包邮商品")
+    region_province: Optional[str] = Field(None, max_length=50, description="地区筛选：省份")
+    region_city: Optional[str] = Field(None, max_length=50, description="地区筛选：城市")
+    region_district: Optional[str] = Field(None, max_length=50, description="地区筛选：区县")
+    include_keywords: List[str] = Field(default_factory=list, description="必须包含的关键词（全部匹配）")
+    exclude_keywords: List[str] = Field(default_factory=list, description="需排除的关键词（任一匹配即排除）")
+    min_seller_credit_level: Optional[int] = Field(None, ge=1, le=5, description="最低卖家信用等级")
+    notification_channel_ids: List[int] = Field(default_factory=list, description="匹配新商品时推送的通知渠道ID")
     interval_minutes: int = Field(..., ge=1, description="任务执行间隔（分钟）")
     collect_pages: int = Field(1, ge=1, description="每次采集页数")
     proxy_url: Optional[str] = Field(None, max_length=255, description="代理API地址（GET返回IP:PORT列表，空=不使用代理）")
@@ -62,6 +71,15 @@ class ListingMonitorUpdateRequest(BaseModel):
     price_min: Optional[float] = Field(None, ge=0)
     price_max: Optional[float] = Field(None, ge=0)
     publish_days: Optional[int] = Field(None, ge=1, le=365, description="上新天数筛选（publishDays，单位天，留空=不限）")
+    personal_only: Optional[bool] = None
+    free_shipping_only: Optional[bool] = None
+    region_province: Optional[str] = Field(None, max_length=50)
+    region_city: Optional[str] = Field(None, max_length=50)
+    region_district: Optional[str] = Field(None, max_length=50)
+    include_keywords: Optional[List[str]] = None
+    exclude_keywords: Optional[List[str]] = None
+    min_seller_credit_level: Optional[int] = Field(None, ge=1, le=5)
+    notification_channel_ids: Optional[List[int]] = None
     interval_minutes: Optional[int] = Field(None, ge=1)
     collect_pages: Optional[int] = Field(None, ge=1)
     proxy_url: Optional[str] = Field(None, max_length=255, description="代理API地址（GET返回IP:PORT列表，空=不使用代理）")

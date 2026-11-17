@@ -19,6 +19,7 @@ import { getAccountDetails } from '@/api/accounts'
 import { getListingMonitorCategories } from '@/api/listingMonitorCategory'
 import { Loading } from '@/components/common/Loading'
 import { Select } from '@/components/common/Select'
+import { RegionSelector } from '@/components/product-monitor/RegionSelector'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/apiError'
 
@@ -41,6 +42,15 @@ interface ListingMonitorFormState {
   priceMin: string
   priceMax: string
   publishDays: string
+  personalOnly: boolean
+  freeShippingOnly: boolean
+  regionProvince: string
+  regionCity: string
+  regionDistrict: string
+  includeKeywordsText: string
+  excludeKeywordsText: string
+  minSellerCreditLevel: string
+  notificationChannelIds: string[]
   intervalMinutes: string
   collectPages: string
   proxyUrl: string
@@ -59,6 +69,15 @@ const buildInitialState = (initial?: ListingMonitorTask | null): ListingMonitorF
   priceMin: initial?.price_min != null ? String(initial.price_min) : '',
   priceMax: initial?.price_max != null ? String(initial.price_max) : '',
   publishDays: initial?.publish_days != null ? String(initial.publish_days) : '',
+  personalOnly: initial?.personal_only ?? true,
+  freeShippingOnly: initial?.free_shipping_only ?? false,
+  regionProvince: initial?.region_province ?? '',
+  regionCity: initial?.region_city ?? '',
+  regionDistrict: initial?.region_district ?? '',
+  includeKeywordsText: (initial?.include_keywords ?? []).join('，'),
+  excludeKeywordsText: (initial?.exclude_keywords ?? []).join('，'),
+  minSellerCreditLevel: initial?.min_seller_credit_level != null ? String(initial.min_seller_credit_level) : '',
+  notificationChannelIds: (initial?.notification_channel_ids ?? []).map(String),
   intervalMinutes: initial?.interval_minutes != null ? String(initial.interval_minutes) : '5',
   collectPages: initial?.collect_pages != null ? String(initial.collect_pages) : '1',
   proxyUrl: initial?.proxy_url ?? '',
@@ -240,6 +259,9 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
 
     setSaving(true)
     try {
+      const parseKeywords = (value: string) => [...new Set(
+        value.split(/[，,\n]/).map((item) => item.trim()).filter(Boolean)
+      )]
       const payload = {
         monitor_type: form.monitorType,
         category_id: Number(form.categoryId),
@@ -249,6 +271,15 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
         publish_days: form.monitorType === 'listing'
           ? (form.publishDays === '' ? null : Number(form.publishDays))
           : null,
+        personal_only: form.personalOnly,
+        free_shipping_only: form.freeShippingOnly,
+        region_province: form.regionProvince.trim() || null,
+        region_city: form.regionCity.trim() || null,
+        region_district: form.regionDistrict.trim() || null,
+        include_keywords: parseKeywords(form.includeKeywordsText),
+        exclude_keywords: parseKeywords(form.excludeKeywordsText),
+        min_seller_credit_level: form.minSellerCreditLevel ? Number(form.minSellerCreditLevel) : null,
+        notification_channel_ids: form.notificationChannelIds.map(Number),
         interval_minutes: intervalMinutes,
         collect_pages: collectPages,
         proxy_url: form.proxyUrl.trim() || null,
@@ -283,7 +314,19 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
   return (
     <div className="modal-overlay">
       {saving && <Loading fullScreen text={isEditMode ? '正在保存监控任务...' : '正在创建监控任务...'} />}
-      <div className="modal-content max-w-2xl">
+      <div
+        className="modal-content relative"
+        style={{
+          width: 'min(42rem, calc(100vw - 2rem))',
+          height: 'min(85vh, calc(100vh - 2rem))',
+          minWidth: 'min(36rem, calc(100vw - 2rem))',
+          minHeight: 'min(32rem, calc(100vh - 2rem))',
+          maxWidth: 'calc(100vw - 2rem)',
+          maxHeight: 'calc(100vh - 2rem)',
+          overflow: 'hidden',
+          resize: 'both',
+        }}
+      >
         <div className="modal-header">
           <h2 className="modal-title">{isEditMode ? '编辑上新监控任务' : '新建上新监控任务'}</h2>
           <button className="modal-close" onClick={onClose} disabled={saving}>
@@ -372,6 +415,71 @@ export function ListingMonitorFormModal({ initial, onClose, onSaved }: ListingMo
                 />
               </div>
             )}
+
+            <div className="input-group">
+              <label className="input-label">商品筛选条件</label>
+              <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    checked={form.personalOnly}
+                    onChange={(e) => setForm((prev) => ({ ...prev, personalOnly: e.target.checked }))}
+                  />
+                  <span className="input-label mb-0">仅个人卖家</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    checked={form.freeShippingOnly}
+                    onChange={(e) => setForm((prev) => ({ ...prev, freeShippingOnly: e.target.checked }))}
+                  />
+                  <span className="input-label mb-0">仅包邮商品</span>
+                </label>
+                </div>
+
+                <RegionSelector
+                  province={form.regionProvince}
+                  city={form.regionCity}
+                  district={form.regionDistrict}
+                  onChange={({ province, city, district }) => setForm((prev) => ({
+                    ...prev,
+                    regionProvince: province,
+                    regionCity: city,
+                    regionDistrict: district,
+                  }))}
+                />
+
+                <div className="input-group">
+                  <label className="input-label">必须包含关键词</label>
+                  <textarea className="input-ios" rows={2} placeholder="如：国行，全新（逗号或换行分隔）" value={form.includeKeywordsText} onChange={(e) => setForm((prev) => ({ ...prev, includeKeywordsText: e.target.value }))} />
+                </div>
+                <div className="input-group">
+                  <label className="input-label">排除关键词</label>
+                  <textarea className="input-ios" rows={2} placeholder="如：维修，换屏，仅展示（逗号或换行分隔）" value={form.excludeKeywordsText} onChange={(e) => setForm((prev) => ({ ...prev, excludeKeywordsText: e.target.value }))} />
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">卖家信用</label>
+                  <Select
+                    value={form.minSellerCreditLevel}
+                    onChange={(value) => setForm((prev) => ({ ...prev, minSellerCreditLevel: value }))}
+                    options={[
+                      { value: '', label: '不限' },
+                      { value: '1', label: '信用较差及以上（1级）' },
+                      { value: '2', label: '信用中等及以上（2级）' },
+                      { value: '3', label: '信用良好及以上（3级）' },
+                      { value: '4', label: '信用优秀及以上（4级）' },
+                      { value: '5', label: '仅信用极好（5级）' },
+                    ]}
+                    placeholder="不限"
+                  />
+                  <p className="text-xs text-slate-400 mt-1">卖家信用读取闲鱼商品详情的官方信用等级；无法确认的商品按不匹配处理。</p>
+                </div>
+              </div>
+            </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="input-group">

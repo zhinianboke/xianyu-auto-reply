@@ -12,7 +12,7 @@ from collections.abc import Iterable
 
 
 NOTIFICATION_TYPE_DICTIONARY = "notification_type"
-DEFAULT_NOTIFICATION_TYPES = ("chat", "delivery", "account")
+DEFAULT_NOTIFICATION_TYPES = ("chat", "delivery", "account", "monitor")
 
 
 class NotificationTypeValueError(ValueError):

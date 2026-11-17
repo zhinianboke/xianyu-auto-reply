@@ -15,6 +15,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+from urllib.parse import quote
 
 from loguru import logger
 from sqlalchemy import delete, select
@@ -23,9 +24,15 @@ from common.db.session import async_session_maker
 from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_log import ListingMonitorLog
 from common.models.listing_monitor_task import ListingMonitorTask
+from common.models.notification_channel import NotificationChannel
 from common.models.xy_account import XYAccount
 from common.services.account_cooldown import DEFAULT_COOLDOWN_SECONDS, account_cooldown_manager
 from common.services.listing_monitor_dedup import has_owner_ordered_item
+from common.services.listing_monitor_filters import (
+    enrich_from_detail,
+    matches_text_filters,
+)
+from common.services.notification_dispatcher import send_monitor_item_notification
 from common.services.collect_account_loader import merge_task_and_fallback_account_ids
 from common.services.monitor_remote_risk_client import solve_remote_risk
 from common.services.monitor_remote_risk_config import (
@@ -35,6 +42,7 @@ from common.services.monitor_remote_risk_config import (
 from common.services.order_account_loader import load_fallback_accounts
 from common.services.xianyu_mtop import fetch_proxy_from_api
 from common.services.xianyu_order_client import XianyuOrderClient
+from common.services.xianyu_detail_client import XianyuItemDetailClient
 from common.services.xianyu_search_client import XianyuSearchClient, parse_search_item
 from common.utils.cookie_refresh import merge_cookies, update_account_cookies_in_db
 from common.utils.time_utils import BEIJING_TZ, get_beijing_now_naive
@@ -405,6 +413,7 @@ class ListingMonitorTaskService:
         remote_risk_failed = 0
         # 是否有账号因达到远程调用上限而未调用远程（用于日志说明）
         remote_risk_limited = False
+        task_proxy: Optional[str] = None
 
         if not accounts:
             status = "failed"
@@ -427,6 +436,11 @@ class ListingMonitorTaskService:
                 "price_min": price_min,
                 "price_max": price_max,
                 "publish_days": task.publish_days,
+                "personal_only": bool(task.personal_only),
+                "free_shipping_only": bool(task.free_shipping_only),
+                "region_province": task.region_province,
+                "region_city": task.region_city,
+                "region_district": task.region_district,
             }
             working_idx = 0
             page_failed = False
@@ -516,10 +530,16 @@ class ListingMonitorTaskService:
                 status = "partial" if pages_collected > 0 else "failed"
 
         fetched_count = len(all_items)
-        inserted_count, updated_count = await self._upsert_items(task, all_items)
+        all_items = await self._filter_items(task, all_items, accounts, task_proxy)
+        matched_count = len(all_items)
+        inserted_count, updated_count, new_items = await self._upsert_items(task, all_items)
+        notified_count = await self._notify_new_items(task, new_items)
 
         if status == "success" and not message:
-            message = f"采集{pages_collected}页，获取{fetched_count}，新增{inserted_count}，更新{updated_count}"
+            message = (
+                f"采集{pages_collected}页，获取{fetched_count}，筛选匹配{matched_count}，"
+                f"新增{inserted_count}，更新{updated_count}，通知成功{notified_count}次"
+            )
 
         # 本次用过远程过风控则在日志说明中体现，便于在监控日志页直接看到效果
         if remote_risk_passed or remote_risk_failed or remote_risk_limited:
@@ -546,10 +566,63 @@ class ListingMonitorTaskService:
             f"账号={used_account_id}，页数={pages_collected}，获取={fetched_count}，新增={inserted_count}，更新={updated_count}，状态={status}"
         )
 
-    async def _upsert_items(self, task: ListingMonitorTask, items: List[dict]) -> tuple[int, int]:
-        """将采集商品 upsert 到采集商品表，返回 (新增数, 更新数)。"""
+    async def _filter_items(
+        self,
+        task: ListingMonitorTask,
+        items: List[dict],
+        accounts: List[XYAccount],
+        proxy: Optional[str],
+    ) -> List[dict]:
+        """标题词本地筛选；地区/包邮/个人卖家已由闲鱼官方搜索请求筛选。"""
+        cheap_matches = [
+            item
+            for item in items
+            if matches_text_filters(item, task.include_keywords or [], task.exclude_keywords or [])
+        ]
+        # 包邮由 searchFilter:filterFreePostage 在搜索阶段完成；信用没有稳定的
+        # PC 搜索参数，因此读取闲鱼官方详情字段进行二次确认。
+        if task.free_shipping_only:
+            for item in cheap_matches:
+                item["is_free_shipping"] = True
+        needs_detail = bool(task.min_seller_credit_level)
+        if not needs_detail:
+            return cheap_matches
+        if not accounts:
+            logger.warning("【{}】任务 {} 需要详情筛选但无可用账号，结果按不匹配处理", self.task_name, task.id)
+            return []
+
+        matched: List[dict] = []
+        for item in cheap_matches:
+            enriched: Optional[dict] = None
+            for account in accounts:
+                client = XianyuItemDetailClient(
+                    account.account_id,
+                    account.cookie,
+                    owner_id=account.owner_id,
+                    proxy=proxy,
+                )
+                result = await client.get_detail(str(item["item_id"]))
+                account.cookie = client.cookies_str
+                if result.get("success"):
+                    enriched = enrich_from_detail(item, result.get("detail"))
+                    break
+                if not result.get("account_invalid"):
+                    break
+            if enriched is None:
+                continue
+            if task.min_seller_credit_level and (
+                enriched.get("seller_credit_level") is None
+                or int(enriched["seller_credit_level"]) < int(task.min_seller_credit_level)
+            ):
+                continue
+            matched.append(enriched)
+            await asyncio.sleep(0.15)
+        return matched
+
+    async def _upsert_items(self, task: ListingMonitorTask, items: List[dict]) -> tuple[int, int, List[dict]]:
+        """将采集商品 upsert 到采集商品表，返回新增数、更新数及新增商品。"""
         if not items:
-            return 0, 0
+            return 0, 0, []
 
         # 按 item_id 去重（同一次采集多页可能重复），保留最后一次出现的数据
         dedup: Dict[str, dict] = {}
@@ -559,6 +632,7 @@ class ListingMonitorTaskService:
         now = get_beijing_now_naive()
         inserted = 0
         updated = 0
+        new_items: List[dict] = []
 
         # 采集后直接下单：预加载下单账号（order_account_ids），新商品入库前先下单
         direct_order = bool(task.direct_order)
@@ -585,6 +659,7 @@ class ListingMonitorTaskService:
             for item_id, parsed in dedup.items():
                 publish_time = _ms_to_beijing_naive(parsed.get("publish_time_ms"))
                 raw_json = self._dump_raw(parsed.get("raw_main"))
+                detail_json = self._dump_raw(parsed.get("detail"))
                 fields = _normalize_item_fields(parsed)
                 row = existing_map.get(item_id)
                 if row:
@@ -604,6 +679,13 @@ class ListingMonitorTaskService:
                         row.publish_time = publish_time
                     row.target_url = fields["target_url"]
                     row.raw_json = raw_json
+                    if detail_json:
+                        row.detail_json = detail_json
+                    if "is_free_shipping" in parsed:
+                        row.is_free_shipping = parsed.get("is_free_shipping")
+                    if "seller_credit_level" in parsed:
+                        row.seller_credit_level = parsed.get("seller_credit_level")
+                        row.seller_credit_label = _truncate(parsed.get("seller_credit_label"), 50)
                     row.last_seen_at = now
                     updated += 1
                 else:
@@ -622,9 +704,13 @@ class ListingMonitorTaskService:
                         seller_avatar=fields["seller_avatar"],
                         want_count=fields["want_count"],
                         tags=fields["tags"],
+                        is_free_shipping=parsed.get("is_free_shipping"),
+                        seller_credit_level=parsed.get("seller_credit_level"),
+                        seller_credit_label=_truncate(parsed.get("seller_credit_label"), 50),
                         publish_time=publish_time,
                         target_url=fields["target_url"],
                         raw_json=raw_json,
+                        detail_json=detail_json,
                         last_seen_at=now,
                     )
                     # 开启直接下单：先下单再入库（入库即终态，避免与定时下单并发）
@@ -667,9 +753,69 @@ class ListingMonitorTaskService:
                                 new_item.order_attempts = 1
                     session.add(new_item)
                     inserted += 1
+                    new_items.append(parsed)
 
             await session.commit()
-        return inserted, updated
+        return inserted, updated, new_items
+
+    async def _notify_new_items(self, task: ListingMonitorTask, items: List[dict]) -> int:
+        """仅对本次首次入库的匹配商品推送已启用渠道。
+
+        历史任务若保存了渠道 ID，继续只向这些渠道推送；新任务未指定渠道时，
+        默认使用任务所属用户的全部已启用渠道。这样即使前端不再展示任务级
+        渠道选择器，商品监控通知仍能复用“通知渠道”页面的现有配置。
+        """
+        channel_ids = [int(value) for value in (task.notification_channel_ids or []) if str(value).isdigit()]
+        if not items:
+            return 0
+        if not channel_ids and task.owner_id is None:
+            logger.warning("【{}】任务没有所属用户，无法安全选择默认通知渠道", task.keyword)
+            return 0
+        async with async_session_maker() as session:
+            stmt = select(NotificationChannel).where(NotificationChannel.enabled.is_(True))
+            if channel_ids:
+                stmt = stmt.where(NotificationChannel.id.in_(channel_ids))
+            if task.owner_id is not None:
+                stmt = stmt.where(NotificationChannel.owner_id == task.owner_id)
+            channels = list((await session.execute(stmt)).scalars().all())
+            # 历史任务可能仍引用已经删除或停用的渠道。任务级渠道选择器已从
+            # 前端移除，此时回退到该用户当前启用的渠道，避免任务永久静默。
+            if not channels and channel_ids and task.owner_id is not None:
+                fallback_stmt = select(NotificationChannel).where(
+                    NotificationChannel.enabled.is_(True),
+                    NotificationChannel.owner_id == task.owner_id,
+                )
+                channels = list((await session.execute(fallback_stmt)).scalars().all())
+
+        success_count = 0
+        for item in items:
+            item_id = str(item.get("item_id") or "")
+            # 搜索接口的 targetUrl 可能是跳转协议、跟踪地址甚至首页。
+            # 通知中始终使用可直接打开的标准商品详情页，避免发送首页链接。
+            item_url = (
+                f"https://www.goofish.com/item?id={quote(item_id, safe='')}"
+                if item_id
+                else str(item.get("target_url") or "").strip()
+            )
+            context = {
+                "task_name": task.keyword,
+                "task_id": task.id,
+                "keyword": task.keyword,
+                "item_id": item_id,
+                "title": item.get("title") or "未知",
+                "price": item.get("price") or "未知",
+                "area": item.get("area") or "未知",
+                "seller_nick": item.get("seller_nick") or "未知",
+                "seller_credit": item.get("seller_credit_label") or "未知",
+                "free_shipping": "是" if item.get("is_free_shipping") is True else "否/未知",
+                "tags": item.get("tags") or "",
+                "item_url": item_url,
+                "time": get_beijing_now_naive().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            for channel in channels:
+                if await send_monitor_item_notification(channel, context, owner_id=task.owner_id):
+                    success_count += 1
+        return success_count
 
     async def _direct_order_item(
         self,
