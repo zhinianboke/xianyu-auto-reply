@@ -9,6 +9,10 @@
 import { Bell, Link, Mail, MessageCircle, Send, Smartphone } from 'lucide-react'
 import type { NotifyType } from '@/types'
 
+export const defaultBarkIconUrl = 'https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/f5/01/e7/f501e794-30b4-c66c-2ec8-9730d5ebecf7/AppIcon-0-0-1x_U007epad-0-1-0-sRGB-85-220.png/512x512bb.jpg'
+export const defaultBarkChatTitleTemplate = '{{account_remark}}-{{buyer_nick}}'
+export const barkChatTitleTemplateKey = 'bark_chat_title_template'
+
 export const channelTypes = [
   {
     type: 'dingtalk',
@@ -40,6 +44,7 @@ export const channelTypes = [
     defaultConfig: {
       device_key: '你的设备密钥',
       server_url: 'https://api.day.app',
+      icon: defaultBarkIconUrl,
     },
   },
   {
@@ -260,11 +265,31 @@ export function getTemplateValidationError(template: string, templateType: Notif
   return unknownVariables.length > 0 ? `不支持的占位符: ${unknownVariables.join(', ')}` : null
 }
 
+export function getBarkChatTitleValidationError(template: string): string | null {
+  if (!template.trim()) return null
+  const placeholderPattern = /{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}/g
+  const placeholders = [...template.matchAll(placeholderPattern)]
+  const remaining = template.replace(placeholderPattern, '')
+  if (remaining.includes('{{') || remaining.includes('}}')) {
+    return '占位符必须使用 {{variable}} 格式'
+  }
+  const knownVariables = new Set(['account_remark', 'buyer_nick'])
+  const unknownVariables = [...new Set(
+    placeholders.map((match) => match[1]).filter((name) => !knownVariables.has(name)),
+  )]
+  return unknownVariables.length > 0 ? `不支持的占位符: ${unknownVariables.join(', ')}` : null
+}
+
 export function splitTemplateConfig(config?: Record<string, unknown>) {
   const templates: Record<NotifyType, string> = { ...defaultTemplates }
   const channelConfig: Record<string, unknown> = {}
+  let barkChatTitleTemplate = ''
   for (const [key, value] of Object.entries(config || {})) {
     if (key === 'notify_types') continue
+    if (key === barkChatTitleTemplateKey) {
+      if (typeof value === 'string') barkChatTitleTemplate = value
+      continue
+    }
     const templateType = (Object.keys(templateConfigKeys) as NotifyType[])
       .find((type) => templateConfigKeys[type] === key)
     if (templateType) {
@@ -273,5 +298,5 @@ export function splitTemplateConfig(config?: Record<string, unknown>) {
       channelConfig[key] = value
     }
   }
-  return { templates, channelConfig }
+  return { templates, channelConfig, barkChatTitleTemplate }
 }

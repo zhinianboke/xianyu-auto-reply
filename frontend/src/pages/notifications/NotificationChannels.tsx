@@ -10,7 +10,7 @@ import { Pager } from '@/components/common/Pager'
 import { getApiErrorMessage } from '@/utils/request'
 import { useNotificationTypeOptions } from './useNotificationTypeOptions'
 import { NotificationChannelList } from './NotificationChannelList'
-import { channelTypeLabels, channelTypes, defaultTemplates, getChannelConfigHint, getTemplateValidationError, notifyTypeHints, parseNotifyTypes, splitTemplateConfig, templateConfigKeys, templateVariables } from './notificationChannelConfig'
+import { barkChatTitleTemplateKey, channelTypeLabels, channelTypes, defaultBarkChatTitleTemplate, defaultTemplates, getBarkChatTitleValidationError, getChannelConfigHint, getTemplateValidationError, notifyTypeHints, parseNotifyTypes, splitTemplateConfig, templateConfigKeys, templateVariables } from './notificationChannelConfig'
 import type { ChannelType } from './notificationChannelConfig'
 import type { NotificationChannel, NotifyType } from '@/types'
 
@@ -32,6 +32,7 @@ export function NotificationChannels() {
   const [formName, setFormName] = useState('')
   const [formConfig, setFormConfig] = useState('')
   const [formTemplates, setFormTemplates] = useState<Record<NotifyType, string>>({ ...defaultTemplates })
+  const [formBarkChatTitleTemplate, setFormBarkChatTitleTemplate] = useState('')
   const [formNotifyTypes, setFormNotifyTypes] = useState<NotifyType[]>([])
   const [formEnabled, setFormEnabled] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -146,6 +147,7 @@ export function NotificationChannels() {
       setFormConfig('')
     }
     setFormTemplates({ ...defaultTemplates })
+    setFormBarkChatTitleTemplate('')
     setFormNotifyTypes([...allNotifyTypes])
     setFormEnabled(true)
     setIsModalOpen(true)
@@ -171,7 +173,7 @@ export function NotificationChannels() {
     setEditingChannel(channel)
     setFormName(channel.name)
     // 历史异常原文保留在编辑器中供用户修复，禁止用示例配置覆盖。
-    const { templates, channelConfig } = splitTemplateConfig(channel.config)
+    const { templates, channelConfig, barkChatTitleTemplate } = splitTemplateConfig(channel.config)
     if (channel.config_error) {
       setFormConfig(channel.raw_config || '')
       addToast({ type: 'warning', message: channel.config_error })
@@ -181,6 +183,7 @@ export function NotificationChannels() {
       setFormConfig('{}')
     }
     setFormTemplates(templates)
+    setFormBarkChatTitleTemplate(barkChatTitleTemplate)
     setFormNotifyTypes(parseNotifyTypes(channel.config?.notify_types, allNotifyTypes))
     setFormEnabled(channel.enabled)
     setIsModalOpen(true)
@@ -233,6 +236,17 @@ export function NotificationChannels() {
         if (template.trim() && template !== defaultTemplates[definition.value]) {
           config[templateConfigKeys[definition.value]] = template
         }
+      }
+
+      delete config[barkChatTitleTemplateKey]
+      if (selectedType === 'bark') {
+        const titleValidationError = getBarkChatTitleValidationError(formBarkChatTitleTemplate)
+        if (titleValidationError) {
+          addToast({ type: 'error', message: `Bark聊天标题${titleValidationError}` })
+          return
+        }
+        // 显式保存空值，使历史通用 title 不会覆盖新默认聊天标题。
+        config[barkChatTitleTemplateKey] = formBarkChatTitleTemplate
       }
 
       // 显式保存全选，区分“用户选择全类型”和“旧客户端未提交字段”。
@@ -341,6 +355,21 @@ export function NotificationChannels() {
                     {getChannelConfigHint(selectedType)}
                   </p>
                 </div>
+                {selectedType === 'bark' && (
+                  <div>
+                    <label className="input-label">Bark 聊天标题模板</label>
+                    <input
+                      type="text"
+                      value={formBarkChatTitleTemplate}
+                      onChange={(event) => setFormBarkChatTitleTemplate(event.target.value)}
+                      className="input-ios font-mono text-sm"
+                      placeholder={defaultBarkChatTitleTemplate}
+                    />
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                      留空使用默认值 {defaultBarkChatTitleTemplate}；账号备注为空时默认改用账号 ID。可用变量：{'{{account_remark}}'}、{'{{buyer_nick}}'}。
+                    </p>
+                  </div>
+                )}
                 <div className="border-t border-slate-200 dark:border-slate-700 pt-4 space-y-4">
                   <div>
                     <p className="input-label">通知正文模板</p>

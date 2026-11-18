@@ -319,6 +319,7 @@ class AutoReplyLogsMixin:
                 "account": account_desc,
                 "account_id": self.cookie_id,
                 "account_remark": remark or "未知",
+                "_account_remark_raw": remark,
                 "buyer_nick": send_user_name or "未知",
                 "buyer_id": send_user_id or "未知",
                 "message": send_message or "",
@@ -347,7 +348,13 @@ class AutoReplyLogsMixin:
                         notification_content,
                     )
                     
-                    await dispatch_notification(channel_type, config_data, channel_message)
+                    await dispatch_notification(
+                        channel_type,
+                        config_data,
+                        channel_message,
+                        notification_type="chat",
+                        template_context=template_context,
+                    )
 
                 except Exception as e:
                     logger.error(f"【{self.cookie_id}】发送{channel_type}通知失败: {e}")

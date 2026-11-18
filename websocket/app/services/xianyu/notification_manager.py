@@ -112,6 +112,7 @@ class NotificationManager:
                     "account": account_desc,
                     "account_id": self.cookie_id,
                     "account_remark": remark or "未知",
+                    "_account_remark_raw": remark,
                     "buyer_nick": send_user_name or "未知",
                     "buyer_id": send_user_id or "未知",
                     "message": send_message or "",
@@ -409,7 +410,12 @@ class NotificationManager:
                 ) if template_type else message
 
                 success = await dispatch_notification(
-                    channel_type, config_data, channel_message, attachment_path
+                    channel_type,
+                    config_data,
+                    channel_message,
+                    attachment_path,
+                    notification_type=template_type,
+                    template_context=template_context,
                 )
                 notification_sent = notification_sent or success
 
