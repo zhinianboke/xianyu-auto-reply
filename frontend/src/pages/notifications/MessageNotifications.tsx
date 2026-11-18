@@ -18,7 +18,7 @@ export function MessageNotifications() {
   const { addToast } = useUIStore()
   const { isAuthenticated, token, _hasHydrated } = useAuthStore()
   const canLoad = _hasHydrated && isAuthenticated && Boolean(token)
-  const { options: notifyTypeOptions, loading: notifyTypesLoading, error: notifyTypesError, reload: reloadNotifyTypes } = useNotificationTypeOptions(canLoad)
+  const { options: notifyTypeOptions, loading: notifyTypesLoading, error: notifyTypesError, reload: reloadNotifyTypes } = useNotificationTypeOptions(canLoad, true)
   const allNotifyTypes = notifyTypeOptions.map((option) => option.value)
   const notifyTypeLabels = Object.fromEntries(
     notifyTypeOptions.map((option) => [option.value, option.label]),
@@ -156,7 +156,7 @@ export function MessageNotifications() {
     setFormChannelId(String(notification.channel_id))
     setFormEnabled(notification.subscription_enabled ?? notification.enabled)
     setFormNotifyTypes(
-      notification.notify_types?.filter((type) => allNotifyTypes.includes(type)) || [...allNotifyTypes],
+      (notification.notify_types ?? allNotifyTypes).filter((type) => allNotifyTypes.includes(type)),
     )
     setIsModalOpen(true)
   }
@@ -187,14 +187,16 @@ export function MessageNotifications() {
       addToast({ type: 'warning', message: '请选择通知渠道' })
       return
     }
-    if (formNotifyTypes.length === 0) {
+    if (formNotifyTypes.length === 0 && !editingNotification) {
       addToast({ type: 'warning', message: '请至少选择一种通知类型' })
       return
     }
 
     setSaving(true)
     try {
-      const result = await setMessageNotification(formAccountId, Number(formChannelId), formEnabled, formNotifyTypes, editingNotification?.id)
+      // 历史空订阅只能保留或主动选择账号事件；省略字段让后端保留原值。
+      const notifyTypes = formNotifyTypes.length > 0 ? formNotifyTypes : undefined
+      const result = await setMessageNotification(formAccountId, Number(formChannelId), formEnabled, notifyTypes, editingNotification?.id)
       if (!result.success) {
         addToast({ type: 'error', message: result.message || '保存失败' })
         return
@@ -289,10 +291,7 @@ export function MessageNotifications() {
                       {notification.channel_name || `渠道 ${notification.channel_id}`}
                     </td>
                     <td className="text-xs whitespace-nowrap">
-                      {(notification.notify_types && notification.notify_types.length > 0
-                        ? notification.notify_types
-                        : allNotifyTypes
-                      ).map((t) => (
+                      {(notification.notify_types ?? allNotifyTypes).filter((t) => allNotifyTypes.includes(t)).map((t) => (
                         <span
                           key={t}
                           className="inline-block mr-1 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"
@@ -300,6 +299,7 @@ export function MessageNotifications() {
                           {notifyTypeLabels[t] || t}
                         </span>
                       ))}
+                      {notification.notify_types?.length === 0 && '未订阅账号事件'}
                     </td>
                     <td>
                       {notification.channel_enabled === false ? (
@@ -425,6 +425,9 @@ export function MessageNotifications() {
                   <p className="text-xs text-slate-500 mt-1">
                     只勾「{notifyTypeLabels.account || 'account'}」时，仅在账号掉线、Cookie 失效、需要重新扫码时推送；
                     买家聊天和每单发货都不会再消耗你的推送额度
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    上新监控通知由「通知渠道」中的开关控制，与账号绑定无关。
                   </p>
                 </div>
                 <div className="flex items-center justify-between pt-2">

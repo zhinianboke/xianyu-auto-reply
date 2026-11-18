@@ -26,6 +26,7 @@ from loguru import logger
 
 from app.core.config import get_settings
 from common.db.init_database import ddl_connection, init_advisory_lock
+from common.db.notification_schema import ensure_monitor_email_operation
 from common.db.redis_client import close_redis_client, initialize_redis_client
 from common.db.scheduled_publish_rule_schema import ensure_scheduled_publish_rule_schema
 from common.utils.logging_utils import setup_logging
@@ -77,13 +78,14 @@ async def lifespan(app: FastAPI):
         logger.error("数据库连接失败，服务退出")
         sys.exit(1)
 
-    # Scheduler 可能被单独启动；任务运行前必须确保定时发布表结构已完成幂等升级。
+    # 调度服务可能单独升级；运行任务前补齐定时发布表结构和上新邮件字典。
     try:
         async with init_advisory_lock():
             async with ddl_connection() as conn:
                 await ensure_scheduled_publish_rule_schema(conn)
+                await ensure_monitor_email_operation(conn)
     except Exception:
-        logger.exception("定时发布相关表结构自检失败，服务退出")
+        logger.exception("调度服务数据库自检失败，服务退出")
         raise
 
     # 初始化 Redis 健康连接池；失败时按指数退避重试，最终失败则停止启动。

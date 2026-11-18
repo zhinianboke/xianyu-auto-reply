@@ -193,8 +193,8 @@ export const getMessageNotifications = async (): Promise<ApiResponse<MessageNoti
 }
 
 // 获取通知事件类型数据字典，中文名称禁止在页面硬编码
-export const getMessageNotificationOptions = (): Promise<ApiResponse<{ notify_types: NotificationTypeOption[] }>> => {
-  return get(`${MESSAGE_PREFIX}/options`)
+export const getMessageNotificationOptions = (accountOnly = false): Promise<ApiResponse<{ notify_types: NotificationTypeOption[] }>> => {
+  return get(`${MESSAGE_PREFIX}/options`, { params: { account_only: accountOnly } })
 }
 
 // 分页获取消息通知配置；保留原列表接口供旧客户端兼容使用
@@ -218,7 +218,8 @@ export const getMessageNotificationPage = async (
         enabled: item.enabled,
         subscription_enabled: item.subscription_enabled ?? item.enabled,
         channel_enabled: item.channel_enabled ?? true,
-        notify_types: item.notify_types as MessageNotification['notify_types'],
+        // 旧后端仍可能返回渠道专属的上新事件；保留空数组与缺省值的区别。
+        notify_types: item.notify_types?.filter((type) => type !== 'monitor') as MessageNotification['notify_types'],
       })),
     },
   }

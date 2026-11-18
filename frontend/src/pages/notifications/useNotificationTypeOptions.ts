@@ -3,14 +3,14 @@
  *
  * 功能：
  * 1. 统一从后端数据字典加载通知类型及中文名称
- * 2. 向通知渠道页和消息通知页提供同一份选项、加载状态和错误信息
+ * 2. 按渠道或账号绑定范围提供选项、加载状态和错误信息
  */
 import { useCallback, useEffect, useState } from 'react'
 import { getMessageNotificationOptions } from '@/api/notifications'
 import type { NotificationTypeOption } from '@/api/notifications'
 import { getApiErrorMessage } from '@/utils/request'
 
-export function useNotificationTypeOptions(enabled: boolean) {
+export function useNotificationTypeOptions(enabled: boolean, accountOnly = false) {
   const [options, setOptions] = useState<NotificationTypeOption[]>([])
   const [loading, setLoading] = useState(enabled)
   const [error, setError] = useState('')
@@ -23,14 +23,15 @@ export function useNotificationTypeOptions(enabled: boolean) {
     setLoading(true)
     setError('')
     try {
-      const result = await getMessageNotificationOptions()
+      const result = await getMessageNotificationOptions(accountOnly)
       if (!result.success) {
         setOptions([])
         setError(result.message || '加载通知类型失败')
         return
       }
-      const values = result.data?.notify_types || []
-      if (!['chat', 'delivery', 'account', 'monitor'].every((type) => values.some((item) => item.value === type && item.label))) {
+      const values = (result.data?.notify_types || []).filter((item) => !accountOnly || item.value !== 'monitor')
+      const requiredTypes = accountOnly ? ['chat', 'delivery', 'account'] : ['chat', 'delivery', 'account', 'monitor']
+      if (!requiredTypes.every((type) => values.some((item) => item.value === type && item.label))) {
         setOptions([])
         setError('通知类型数据字典不完整，请联系管理员检查数据库初始化')
         return
@@ -42,7 +43,7 @@ export function useNotificationTypeOptions(enabled: boolean) {
     } finally {
       setLoading(false)
     }
-  }, [enabled])
+  }, [enabled, accountOnly])
 
   useEffect(() => {
     void load()

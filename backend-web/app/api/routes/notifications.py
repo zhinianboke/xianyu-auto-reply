@@ -1,3 +1,4 @@
+"""提供通知渠道、账号绑定及通知事件字典接口。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -174,12 +175,13 @@ async def list_message_notifications(
 
 @messages_router.get("/options", response_model=ApiResponse)
 async def get_message_notification_options(
+    account_only: bool = Query(False, description="是否仅查询账号绑定可用的通知类型"),
     current_user: User = Depends(deps.get_current_active_user),
     service: MessageNotificationService = Depends(deps.get_message_notification_service),
 ) -> ApiResponse:
     """读取通知事件类型数据字典，供网页统一展示中文名称。"""
     _ = current_user
-    options = await service.get_notify_type_options()
+    options = await service.get_notify_type_options(account_only=account_only)
     return ApiResponse(success=True, message="操作成功", data={"notify_types": options})
 
 

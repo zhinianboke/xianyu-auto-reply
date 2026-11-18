@@ -5,6 +5,7 @@
 1. 幂等补齐通知类型字段与软删除字段
 2. 迁移失败时明确阻止服务带病启动
 3. 仅新增字段并保留全部历史通知数据
+4. 幂等补齐上新监控邮件的触发操作字典
 """
 from __future__ import annotations
 
@@ -12,6 +13,8 @@ from loguru import logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.exc import DBAPIError
+
+from common.services.email_log_service import EMAIL_OPERATION_MONITOR_NOTIFICATION
 
 
 NOTIFICATION_COLUMNS = (
@@ -42,7 +45,7 @@ NOTIFICATION_INDEXES = (
 
 
 async def ensure_notification_schema(conn: AsyncConnection) -> None:
-    """幂等补齐通知模块关键字段，失败时向启动入口抛出异常。
+    """幂等补齐通知模块关键字段和邮件字典，失败时向启动入口抛出异常。
 
     Args:
         conn: 数据库初始化入口提供的异步连接。
@@ -121,7 +124,33 @@ async def ensure_notification_schema(conn: AsyncConnection) -> None:
         if not verified:
             raise RuntimeError(f"通知模块关键索引缺失：{table_name}.{index_name}")
 
+    await ensure_monitor_email_operation(conn)
     logger.info("通知模块数据库结构自检完成，历史数据保持不变")
 
 
-__all__ = ["ensure_notification_schema"]
+async def ensure_monitor_email_operation(conn: AsyncConnection) -> None:
+    """补齐上新监控邮件字典项，重复执行时保留已有配置。
+
+    Args:
+        conn: 启动自检使用的异步数据库连接。
+    Returns:
+        无返回值；数据库写入失败时抛出异常。
+    """
+    await conn.execute(
+        text(
+            "INSERT INTO xy_data_dictionaries "
+            "(dict_type, dict_value, dict_label, sort_order, enabled) "
+            "VALUES (:dict_type, :dict_value, :dict_label, :sort_order, 1) "
+            "ON DUPLICATE KEY UPDATE id = id"
+        ),
+        {
+            "dict_type": "email_trigger_operation",
+            "dict_value": EMAIL_OPERATION_MONITOR_NOTIFICATION,
+            "dict_label": "上新监控邮件",
+            "sort_order": 70,
+        },
+    )
+    logger.info("上新监控邮件字典自检完成")
+
+
+__all__ = ["ensure_monitor_email_operation", "ensure_notification_schema"]

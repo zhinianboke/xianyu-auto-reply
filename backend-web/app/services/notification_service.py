@@ -1,4 +1,5 @@
-﻿from __future__ import annotations
+﻿"""管理账号通知绑定及通知类型选项，区分账号事件和渠道级上新事件。"""
+from __future__ import annotations
 
 from typing import Any
 
@@ -13,6 +14,7 @@ from common.schemas.notification import (
     MessageNotificationSet,
 )
 from common.services.notification_types import (
+    ACCOUNT_NOTIFICATION_TYPES,
     DEFAULT_NOTIFICATION_TYPES,
     NOTIFICATION_TYPE_DICTIONARY,
     NotificationTypeValueError,
@@ -32,7 +34,7 @@ from app.services.notification_channel_service import (
 class MessageNotificationService:
     """Account notification subscriptions."""
 
-    DEFAULT_NOTIFY_TYPES = ",".join(DEFAULT_NOTIFICATION_TYPES)
+    DEFAULT_NOTIFY_TYPES = ",".join(ACCOUNT_NOTIFICATION_TYPES)
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -47,23 +49,35 @@ class MessageNotificationService:
         Returns:
             按公共固定顺序排列的逗号分隔值。
         Raises:
-            NotificationTypeValidationError: 类型为空或包含未知值。
+            NotificationTypeValidationError: 类型为空、包含未知值或没有账号事件。
         """
         if value is None:
             return cls.DEFAULT_NOTIFY_TYPES
         try:
-            return ",".join(normalize_notification_types(value))
+            types = normalize_notification_types(value)
         except NotificationTypeValueError as error:
             raise NotificationTypeValidationError(str(error)) from error
+        # 旧网页会把上新事件和账号事件一起提交；只保存有效的账号事件。
+        account_types = [value for value in types if value in ACCOUNT_NOTIFICATION_TYPES]
+        if not account_types:
+            raise NotificationTypeValidationError("上新监控请在通知渠道中设置，不支持账号绑定开关")
+        return ",".join(account_types)
 
-    async def get_notify_type_options(self) -> list[dict[str, str]]:
-        """从数据字典读取通知事件类型及中文名称。"""
+    async def get_notify_type_options(self, *, account_only: bool = False) -> list[dict[str, str]]:
+        """从数据字典读取指定范围的通知事件。
+
+        Args:
+            account_only: 为True时仅查询账号事件，默认保留全部渠道事件。
+        Returns:
+            包含事件值和数据库中文名称的选项列表。
+        """
+        allowed_types = ACCOUNT_NOTIFICATION_TYPES if account_only else DEFAULT_NOTIFICATION_TYPES
         result = await self.session.execute(
             select(XYDataDictionary)
             .where(
                 XYDataDictionary.dict_type == NOTIFICATION_TYPE_DICTIONARY,
                 XYDataDictionary.enabled.is_(True),
-                XYDataDictionary.dict_value.in_(DEFAULT_NOTIFICATION_TYPES),
+                XYDataDictionary.dict_value.in_(allowed_types),
             )
             .order_by(XYDataDictionary.sort_order.asc(), XYDataDictionary.id.asc())
         )
@@ -342,5 +356,6 @@ class MessageNotificationService:
             "channel_name": channel.name,
             "channel_type": channel.channel_type,
             "channel_config": channel.config_payload or {},
-            "notify_types": list(notify_types),
+            # 历史monitor值只在响应中排除，原绑定数据及账号事件范围保持不变。
+            "notify_types": [value for value in notify_types if value in ACCOUNT_NOTIFICATION_TYPES],
         }

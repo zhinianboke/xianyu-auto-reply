@@ -13,6 +13,8 @@ from collections.abc import Iterable
 
 NOTIFICATION_TYPE_DICTIONARY = "notification_type"
 DEFAULT_NOTIFICATION_TYPES = ("chat", "delivery", "account", "monitor")
+# 上新监控按任务所属用户选择渠道，不属于账号绑定事件。
+ACCOUNT_NOTIFICATION_TYPES = tuple(value for value in DEFAULT_NOTIFICATION_TYPES if value != "monitor")
 
 
 class NotificationTypeValueError(ValueError):
@@ -66,6 +68,7 @@ def resolve_stored_notification_types(value: object) -> tuple[tuple[str, ...], b
 
 
 __all__ = [
+    "ACCOUNT_NOTIFICATION_TYPES",
     "DEFAULT_NOTIFICATION_TYPES",
     "NOTIFICATION_TYPE_DICTIONARY",
     "NotificationTypeValueError",
