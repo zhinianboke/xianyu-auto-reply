@@ -83,7 +83,11 @@ export function MainLayout() {
         <main className="flex-1 p-3 sm:p-4 lg:p-6 overflow-x-hidden">
           {/* 其他页面通过 Outlet 渲染，ChatNew 活跃时隐藏 */}
           <div style={{ display: isChatNew ? 'none' : undefined }}>
-            <Outlet />
+            {/* 路由级 Suspense：懒加载页面首次加载时只替换内容区，
+                避免顶层 Suspense 触发整个布局（侧边栏/顶栏/页签）卸载重建 */}
+            <Suspense fallback={<PageLoading />}>
+              <Outlet />
+            </Suspense>
           </div>
           {/* ChatNew KeepAlive：首次访问后始终挂载，切换菜单时仅隐藏 */}
           {chatNewMounted && (
