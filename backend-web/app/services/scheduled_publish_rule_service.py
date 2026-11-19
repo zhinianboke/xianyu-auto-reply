@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import re
 from datetime import time
 from typing import Any
 
@@ -288,8 +289,12 @@ class ScheduledPublishRuleService:
             raise ScheduledPublishRuleValidationError("请至少选择一条素材")
         await self._validate_resource_ownership(owner_id, account_ids, material_ids)
 
-        start_time = self._parse_time(str(data.get("trigger_start_time") or ""))
-        end_time = self._parse_time(str(data.get("trigger_end_time") or ""))
+        start_time = self._parse_time(
+            str(data.get("trigger_start_time") or ""), "触发开始时间"
+        )
+        end_time = self._parse_time(
+            str(data.get("trigger_end_time") or ""), "触发结束时间"
+        )
         if self._time_minutes(start_time) >= self._time_minutes(end_time):
             raise ScheduledPublishRuleValidationError("触发开始时间必须早于结束时间")
         interval_min = int(data.get("interval_min_minutes") or 0)
@@ -383,12 +388,24 @@ class ScheduledPublishRuleService:
         }
 
     @staticmethod
-    def _parse_time(value: str) -> time:
-        """解析 HH:MM 时间字符串。"""
-        try:
-            return time.fromisoformat(value)
-        except ValueError as exc:
-            raise ScheduledPublishRuleValidationError("触发时间格式不正确") from exc
+    def _parse_time(value: str, field_name: str = "触发时间") -> time:
+        """校验并解析分钟精度时间，兼容零秒后缀和首尾空格。
+
+        Args:
+            value: HH:MM 或 HH:MM:00 时间字符串。
+            field_name: 面向用户的中文字段名称。
+        Returns:
+            秒数为零、不带时区的每日触发时间。
+        Raises:
+            ScheduledPublishRuleValidationError: 格式非法或包含非零秒数。
+        """
+        normalized = value.strip()
+        if not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9](?::00)?", normalized):
+            raise ScheduledPublishRuleValidationError(
+                f"{field_name}格式不正确，请按小时和分钟设置（例如 07:00），秒数必须为 00"
+            )
+        # 先验证再去掉零秒后缀，避免静默截断用户设置的非零秒数。
+        return time.fromisoformat(normalized[:5])
 
     @staticmethod
     def _time_minutes(value: time) -> int:

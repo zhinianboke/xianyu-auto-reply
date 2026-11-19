@@ -45,3 +45,15 @@ export function getBeijingDateInputValue(value: Date = new Date()): string {
   const partMap = Object.fromEntries(parts.map((part) => [part.type, part.value]))
   return `${partMap.year}-${partMap.month}-${partMap.day}`
 }
+
+/**
+ * 校验并统一每日时间为 HH:MM，兼容零秒后缀和首尾空格，不做时区转换。
+ *
+ * @param value HH:MM 或 HH:MM:00 时间字符串
+ * @returns 分钟精度时间；空值、非法时间或非零秒数返回 null，由调用方提示用户
+ */
+export function normalizeMinuteTime(value?: string | null): string | null {
+  const normalized = value?.trim() ?? ''
+  if (!/^(?:[01][0-9]|2[0-3]):[0-5][0-9](?::00)?$/.test(normalized)) return null
+  return normalized.slice(0, 5)
+}

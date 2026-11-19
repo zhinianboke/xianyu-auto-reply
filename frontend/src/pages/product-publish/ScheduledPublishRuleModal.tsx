@@ -19,6 +19,7 @@ import {
 } from '@/api/scheduledPublish'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/apiError'
+import { normalizeMinuteTime } from '@/utils/date'
 
 interface ScheduledPublishRuleModalProps {
   rule?: ScheduledPublishRule | null
@@ -41,8 +42,12 @@ export function ScheduledPublishRuleModal({ rule, onClose, onSaved }: ScheduledP
   const { addToast } = useUIStore()
   const editing = Boolean(rule)
   const [ruleName, setRuleName] = useState(rule?.rule_name ?? '')
-  const [triggerStartTime, setTriggerStartTime] = useState(rule?.trigger_start_time ?? '07:00')
-  const [triggerEndTime, setTriggerEndTime] = useState(rule?.trigger_end_time ?? '20:00')
+  const [triggerStartTime, setTriggerStartTime] = useState(
+    () => normalizeMinuteTime(rule?.trigger_start_time ?? '07:00') ?? rule?.trigger_start_time ?? '',
+  )
+  const [triggerEndTime, setTriggerEndTime] = useState(
+    () => normalizeMinuteTime(rule?.trigger_end_time ?? '20:00') ?? rule?.trigger_end_time ?? '',
+  )
   const [intervalMinMinutes, setIntervalMinMinutes] = useState(String(rule?.interval_min_minutes ?? 1))
   const [intervalMaxMinutes, setIntervalMaxMinutes] = useState(String(rule?.interval_max_minutes ?? 3))
   const [accounts, setAccounts] = useState<ScheduledPublishAccountOption[]>([])
@@ -184,7 +189,16 @@ export function ScheduledPublishRuleModal({ rule, onClose, onSaved }: ScheduledP
       addToast({ type: 'warning', message: '请完整设置触发开始时间和结束时间' })
       return
     }
-    if (triggerStartTime >= triggerEndTime) {
+    const startTime = normalizeMinuteTime(triggerStartTime)
+    const endTime = normalizeMinuteTime(triggerEndTime)
+    if (!startTime || !endTime) {
+      addToast({
+        type: 'warning',
+        message: `${startTime ? '触发结束时间' : '触发开始时间'}格式不正确，请按小时和分钟设置（例如 07:00），秒数必须为 00`,
+      })
+      return
+    }
+    if (startTime >= endTime) {
       addToast({ type: 'warning', message: '触发开始时间必须早于结束时间' })
       return
     }
@@ -212,8 +226,8 @@ export function ScheduledPublishRuleModal({ rule, onClose, onSaved }: ScheduledP
         rule_name: ruleName.trim(),
         account_ids: Array.from(selectedAccounts),
         material_ids: Array.from(selectedMaterials),
-        trigger_start_time: triggerStartTime,
-        trigger_end_time: triggerEndTime,
+        trigger_start_time: startTime,
+        trigger_end_time: endTime,
         interval_min_minutes: minMinutes,
         interval_max_minutes: maxMinutes,
       }
@@ -331,9 +345,9 @@ export function ScheduledPublishRuleModal({ rule, onClose, onSaved }: ScheduledP
             <div>
               <label className="input-label mb-2 flex items-center gap-2"><Clock3 className="h-4 w-4 text-blue-500" />每日触发时间范围</label>
               <div className="flex items-center gap-2">
-                <input type="time" className="input-ios" value={triggerStartTime} onChange={(event) => setTriggerStartTime(event.target.value)} />
+                <input type="time" step="60" className="input-ios" value={triggerStartTime} onChange={(event) => setTriggerStartTime(event.target.value)} />
                 <span className="text-sm text-slate-500">至</span>
-                <input type="time" className="input-ios" value={triggerEndTime} onChange={(event) => setTriggerEndTime(event.target.value)} />
+                <input type="time" step="60" className="input-ios" value={triggerEndTime} onChange={(event) => setTriggerEndTime(event.target.value)} />
               </div>
               <p className="input-hint">例如 07:00 至 20:00，系统仅在每天该时间段内处理此规则。</p>
             </div>

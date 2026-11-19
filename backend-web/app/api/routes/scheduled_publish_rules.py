@@ -46,8 +46,13 @@ class ScheduledPublishRuleCreateRequest(BaseModel):
         min_length=1,
         max_length=2000,
     )
-    trigger_start_time: str = Field(..., pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
-    trigger_end_time: str = Field(..., pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    # 时间格式由 service 统一校验、规范化，并返回具体中文业务错误。
+    trigger_start_time: str = Field(
+        ..., max_length=32, description="每日触发开始时间，HH:MM，兼容 HH:MM:00"
+    )
+    trigger_end_time: str = Field(
+        ..., max_length=32, description="每日触发结束时间，HH:MM，兼容 HH:MM:00"
+    )
     interval_min_minutes: int = Field(..., ge=1, le=43200)
     interval_max_minutes: int = Field(..., ge=1, le=43200)
 
