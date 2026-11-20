@@ -15,6 +15,9 @@ TEMPLATE_CONFIG_KEYS = {
     "monitor": "monitor_template",
 }
 
+BARK_CHAT_TITLE_TEMPLATE_KEY = "bark_chat_title_template"
+BARK_CHAT_TITLE_VARIABLES = {"account_remark", "buyer_nick"}
+
 TEMPLATE_VARIABLES = {
     "chat": {
         "account",
@@ -114,7 +117,34 @@ def validate_notification_templates(config_data: Mapping[str, Any] | None) -> st
         )
         if validation_error:
             return f"{template_labels[template_type]}模板无效：{validation_error}"
+
+    if BARK_CHAT_TITLE_TEMPLATE_KEY in config_data:
+        template = config_data[BARK_CHAT_TITLE_TEMPLATE_KEY]
+        if not isinstance(template, str):
+            return "Bark聊天标题模板无效：模板必须是文本"
+        matches = list(_PLACEHOLDER_RE.finditer(template))
+        remaining = _PLACEHOLDER_RE.sub("", template)
+        if "{{" in remaining or "}}" in remaining:
+            return "Bark聊天标题模板无效：占位符必须使用 {{variable}} 格式"
+        unknown_variables = sorted(
+            {match.group(1) for match in matches} - BARK_CHAT_TITLE_VARIABLES
+        )
+        if unknown_variables:
+            return f"Bark聊天标题模板无效：不支持的占位符: {', '.join(unknown_variables)}"
     return None
+
+
+def render_bark_chat_title_template(
+    template: str,
+    context: Mapping[str, Any],
+) -> str:
+    """渲染已通过校验的 Bark 聊天标题模板。"""
+
+    def replace_placeholder(match: re.Match[str]) -> str:
+        value = context.get(match.group(1))
+        return "" if value is None else str(value)
+
+    return _PLACEHOLDER_RE.sub(replace_placeholder, template)
 
 
 def render_notification_template(
