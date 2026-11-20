@@ -1041,10 +1041,11 @@ class OrderService:
             page_updated = 0
             for parsed in parsed_items:
                 try:
+                    existing_order = existing_orders_map.get(parsed['order_no'])
                     result = await self._upsert_order(
                         parsed,
                         account,
-                        existing=existing_orders_map.get(parsed['order_no'])
+                        existing=existing_order
                     )
                     total_fetched += 1
                     if result == 'inserted':
@@ -1052,6 +1053,27 @@ class OrderService:
                     elif result == 'updated':
                         updated += 1
                         page_updated += 1
+
+                    # 列表接口不含规格：新订单补详情，待发货订单缺规格时重试。
+                    # ALL 同步不回填已有历史订单，避免每轮重复请求详情。
+                    needs_detail = (
+                        result == 'inserted'
+                        or (
+                            query_code == 'NOT_SHIP'
+                            and existing_order is not None
+                            and (not existing_order.spec_name or not existing_order.spec_value)
+                        )
+                    )
+                    if needs_detail:
+                        detail_service = OrderDetailService(str(account.account_id), cookies_str)
+                        # 详情服务自行捕获失败，基础订单已提交，后续待发货同步可重试。
+                        await detail_service.fetch_and_update_order_detail(
+                            parsed['order_no'],
+                            item_id=parsed.get('item_id'),
+                            buyer_id=parsed.get('buyer_id'),
+                        )
+                        # 详情响应也可能刷新 Cookie，后续详情和分页需沿用最新值。
+                        cookies_str = detail_service.cookies_str
                 except Exception as e:
                     await self.session.rollback()
                     failed += 1
