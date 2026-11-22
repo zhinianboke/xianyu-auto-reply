@@ -20,6 +20,13 @@ export interface AdminUserApiItem {
   card_count?: number
   balance?: string | null
   expire_at?: string | null
+  created_at?: string | null
+  last_login_at?: string | null
+}
+
+export interface UserRoleOption {
+  value: UserRole
+  label: string
 }
 
 export interface CreateAdminUserPayload {
@@ -57,10 +64,12 @@ const mapAdminUser = (user: AdminUserApiItem): User => ({
   account_limit: user.account_limit,
   balance: user.balance,
   expire_at: user.expire_at,
+  created_at: user.created_at,
+  last_login_at: user.last_login_at,
 })
 
 // 获取用户列表
-export const getUsers = async (params?: { page?: number; pageSize?: number; username?: string }): Promise<{ success: boolean; data?: User[]; total?: number; message?: string }> => {
+export const getUsers = async (params?: { page?: number; pageSize?: number; username?: string; role?: UserRole | '' }): Promise<{ success: boolean; data?: User[]; total?: number; roles?: UserRoleOption[]; message?: string }> => {
   const query = new URLSearchParams()
   const page = params?.page || 1
   const pageSize = params?.pageSize || 20
@@ -72,13 +81,16 @@ export const getUsers = async (params?: { page?: number; pageSize?: number; user
   if (username) {
     query.set('username', username)
   }
+  if (params?.role) {
+    query.set('role', params.role)
+  }
 
-  const result = await get<{ success: boolean; message?: string; users?: AdminUserApiItem[]; total?: number }>(`${ADMIN_PREFIX}/users?${query.toString()}`)
+  const result = await get<{ success: boolean; message?: string; users?: AdminUserApiItem[]; total?: number; roles?: UserRoleOption[] }>(`${ADMIN_PREFIX}/users?${query.toString()}`)
   if (!result.success) {
     return { success: false, data: [], total: result.total, message: result.message }
   }
   const users: User[] = (result.users || []).map(mapAdminUser)
-  return { success: true, data: users, total: result.total, message: result.message }
+  return { success: true, data: users, total: result.total, roles: result.roles, message: result.message }
 }
 
 export const addUser = (payload: CreateAdminUserPayload): Promise<ApiResponse<{ user: AdminUserApiItem }>> => {

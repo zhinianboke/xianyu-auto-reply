@@ -1,21 +1,17 @@
 import { useEffect, useState } from 'react'
-import { Users as UsersIcon, RefreshCw, Plus, ChevronLeft, ChevronRight, Loader2, Pencil, Power, PowerOff, Wallet, Search, X } from 'lucide-react'
-import { getUsers, deleteUser, updateUser } from '@/api/admin'
+import { Users as UsersIcon, RefreshCw, Plus, Loader2, Pencil, Power, PowerOff, Wallet, Search, X } from 'lucide-react'
+import { getUsers, deleteUser, updateUser, type UserRoleOption } from '@/api/admin'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
-import { PageLoading } from '@/components/common/Loading'
+import { Loading } from '@/components/common/Loading'
+import { Pager } from '@/components/common/Pager'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { UserFormModal } from './UserFormModal'
 import { UserRechargeModal } from './UserRechargeModal'
 import { UserSettlementsModal } from './UserSettlementsModal'
 import { getApiErrorMessage } from '@/utils/request'
-import type { User } from '@/types'
-
-const roleLabelMap: Record<string, string> = {
-  ADMIN: '管理员',
-  OPERATOR: '运营人员',
-  MEMBER: '普通用户',
-}
+import { formatBeijingDateTime } from '@/utils/date'
+import type { User, UserRole } from '@/types'
 
 const statusLabelMap: Record<string, string> = {
   ACTIVE: '正常',
@@ -34,8 +30,7 @@ const statusClassMap: Record<string, string> = {
 // 格式化到期日展示（后端为北京时间 naive 字符串，无需做时区转换）
 const formatExpireAt = (value?: string | null): string => {
   if (!value) return '永不过期'
-  // 形如 '2026-06-25T14:30:00' -> '2026-06-25 14:30:00'
-  return value.replace('T', ' ').slice(0, 19)
+  return formatBeijingDateTime(value)
 }
 
 // 判断是否已到期（到期日存在且早于当前时间）
@@ -55,9 +50,11 @@ export function Users() {
   const [pageSize, setPageSize] = useState(20)
   const [total, setTotal] = useState(0)
 
-  // 用户名搜索：输入框值与已应用的查询值分离，避免输入过程中频繁请求
+  // 编辑条件与已生效条件分离，下拉选择不会发起查询，翻页保留已生效条件。
   const [searchUsername, setSearchUsername] = useState('')
-  const [appliedUsername, setAppliedUsername] = useState('')
+  const [searchRole, setSearchRole] = useState<UserRole | ''>('')
+  const [appliedFilters, setAppliedFilters] = useState<{ username: string; role: UserRole | '' }>({ username: '', role: '' })
+  const [roleOptions, setRoleOptions] = useState<UserRoleOption[]>([])
 
   const [statusConfirm, setStatusConfirm] = useState<{ open: boolean; user: User | null; action: 'enable' | 'disable' }>({ open: false, user: null, action: 'disable' })
   const [statusSubmitting, setStatusSubmitting] = useState(false)
@@ -70,7 +67,7 @@ export function Users() {
     if (!_hasHydrated || !isAuthenticated || !token) return
     try {
       setLoading(true)
-      const result = await getUsers({ page: currentPage, pageSize, username: appliedUsername })
+      const result = await getUsers({ page: currentPage, pageSize, ...appliedFilters })
       if (!result.success) {
         setUsers([])
         setTotal(0)
@@ -79,6 +76,7 @@ export function Users() {
       }
       setUsers(result.data || [])
       setTotal(result.total || 0)
+      setRoleOptions(result.roles || [])
     } catch (error) {
       addToast({ type: 'error', message: getApiErrorMessage(error, '加载用户列表失败') })
     } finally {
@@ -89,19 +87,19 @@ export function Users() {
   useEffect(() => {
     if (!_hasHydrated || !isAuthenticated || !token) return
     loadUsers()
-  }, [_hasHydrated, isAuthenticated, token, currentPage, pageSize, appliedUsername])
+  }, [_hasHydrated, isAuthenticated, token, currentPage, pageSize, appliedFilters])
 
-  // 执行用户名搜索：应用输入值并回到第一页
+  // 查询时一次性应用用户名和角色，并回到第一页。
   const handleSearch = () => {
-    const keyword = searchUsername.trim()
-    setAppliedUsername(keyword)
+    setAppliedFilters({ username: searchUsername.trim(), role: searchRole })
     setCurrentPage(1)
   }
 
-  // 重置用户名搜索条件
+  // 重置全部查询条件并重新加载第一页。
   const handleResetSearch = () => {
     setSearchUsername('')
-    setAppliedUsername('')
+    setSearchRole('')
+    setAppliedFilters({ username: '', role: '' })
     setCurrentPage(1)
   }
 
@@ -152,15 +150,9 @@ export function Users() {
     }
   }
 
-  const totalPages = Math.ceil(total / pageSize)
-  const startIndex = (currentPage - 1) * pageSize + 1
-  const endIndex = Math.min(currentPage * pageSize, total)
   const isEnableAction = statusConfirm.action === 'enable'
-
-  // 仅首屏（未应用搜索条件）整屏展示加载态；应用搜索后保留搜索框，避免输入框中途消失
-  if (loading && users.length === 0 && !appliedUsername) {
-    return <PageLoading />
-  }
+  const hasAppliedFilters = Boolean(appliedFilters.username || appliedFilters.role)
+  const roleLabelMap = Object.fromEntries(roleOptions.map((option) => [option.value, option.label]))
 
   return (
     <div className="space-y-4">
@@ -185,40 +177,68 @@ export function Users() {
         </div>
       </div>
 
-      <div className="vben-card flex flex-col" style={{ height: 'calc(100vh - 280px)', minHeight: '400px' }}>
-        <div className="vben-card-header flex-shrink-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div className="vben-card">
+        <div className="vben-card-body">
+          <form
+            className="flex flex-wrap items-end gap-4"
+            onSubmit={(event) => {
+              event.preventDefault()
+              handleSearch()
+            }}
+          >
+            <div className="input-group w-full sm:w-52">
+              <label htmlFor="user-search-username" className="input-label">用户名</label>
+              <input
+                id="user-search-username"
+                type="text"
+                value={searchUsername}
+                onChange={(e) => setSearchUsername(e.target.value)}
+                placeholder="搜索用户名"
+                className="input-ios"
+              />
+            </div>
+            <div className="input-group w-full sm:w-44">
+              <label htmlFor="user-search-role" className="input-label">用户角色</label>
+              <select
+                id="user-search-role"
+                value={searchRole}
+                onChange={(event) => setSearchRole(event.target.value as UserRole | '')}
+                className="input-ios"
+              >
+                <option value="">全部角色</option>
+                {roleOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="ml-auto flex gap-3">
+              <button type="submit" disabled={loading} className="btn-ios-primary">
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                查询
+              </button>
+              {hasAppliedFilters && (
+                <button type="button" onClick={handleResetSearch} disabled={loading} className="btn-ios-secondary">
+                  <X className="w-4 h-4" />
+                  重置
+                </button>
+              )}
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div className="vben-card relative flex flex-col" style={{ height: 'calc(100vh - 380px)', minHeight: '300px' }}>
+        {loading && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg bg-white/80 dark:bg-slate-900/80">
+            <Loading text="加载中..." />
+          </div>
+        )}
+        <div className="vben-card-header flex-shrink-0">
           <h2 className="vben-card-title">
             <UsersIcon className="w-4 h-4" />
             用户列表
           </h2>
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-              <input
-                type="text"
-                value={searchUsername}
-                onChange={(e) => setSearchUsername(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                placeholder="搜索用户名"
-                className="w-44 sm:w-52 pl-8 pr-8 py-1.5 text-sm border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
-              />
-              {searchUsername && (
-                <button
-                  type="button"
-                  onClick={handleResetSearch}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                  title="清空"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-            <button onClick={handleSearch} className="btn-ios-secondary">
-              <Search className="w-4 h-4" />
-              搜索
-            </button>
-            <span className="badge-primary whitespace-nowrap">{total} 个用户</span>
-          </div>
+          <span className="badge-primary whitespace-nowrap">{total} 个用户</span>
         </div>
         <div className="table-scroll">
           <table className="table-ios">
@@ -233,6 +253,8 @@ export function Users() {
                 <th>余额</th>
                 <th>结算记录</th>
                 <th>到期日</th>
+                <th>创建时间</th>
+                <th>最后登录时间</th>
                 <th>状态</th>
                 <th>操作</th>
               </tr>
@@ -240,10 +262,10 @@ export function Users() {
             <tbody>
               {users.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="text-center py-8 text-slate-500 dark:text-slate-400">
+                  <td colSpan={13} className="text-center py-8 text-slate-500 dark:text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <UsersIcon className="w-12 h-12 text-slate-300 dark:text-slate-600" />
-                      <p>{appliedUsername ? `未找到用户名包含「${appliedUsername}」的用户` : '暂无用户数据'}</p>
+                      <p>{hasAppliedFilters ? '未找到符合查询条件的用户' : '暂无用户数据'}</p>
                     </div>
                   </td>
                 </tr>
@@ -256,7 +278,7 @@ export function Users() {
                     <td className="text-slate-500 dark:text-slate-400">{user.phone || '-'}</td>
                     <td>
                       <span className={user.role === 'ADMIN' ? 'badge-warning' : 'badge-gray'}>
-                        {roleLabelMap[user.role || (user.is_admin ? 'ADMIN' : 'MEMBER')] || '普通用户'}
+                        {roleLabelMap[user.role || (user.is_admin ? 'ADMIN' : 'MEMBER')] || '-'}
                       </span>
                     </td>
                     <td className="text-slate-500 dark:text-slate-400">{user.account_limit ?? '-'}</td>
@@ -265,6 +287,12 @@ export function Users() {
                     <td className={`whitespace-nowrap text-sm ${isExpired(user.expire_at) ? 'text-red-500 font-medium' : 'text-slate-500 dark:text-slate-400'}`}>
                       {formatExpireAt(user.expire_at)}
                       {isExpired(user.expire_at) && <span className="ml-1">(已到期)</span>}
+                    </td>
+                    <td className="whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
+                      {formatBeijingDateTime(user.created_at)}
+                    </td>
+                    <td className="whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
+                      {formatBeijingDateTime(user.last_login_at)}
                     </td>
                     <td>
                       <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${statusClassMap[user.status || 'ACTIVE'] || statusClassMap.ACTIVE}`}>
@@ -318,49 +346,17 @@ export function Users() {
           </table>
         </div>
 
-        {total > 0 && (
-          <div className="flex-shrink-0 vben-card-footer flex flex-col sm:flex-row items-center justify-between gap-4 px-4 py-3 border-t border-slate-200 dark:border-slate-700">
-            <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-              <span>每页</span>
-              <select
-                value={pageSize}
-                onChange={(e) => {
-                  setPageSize(Number(e.target.value))
-                  setCurrentPage(1)
-                }}
-                className="px-2 py-1 border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300"
-              >
-                <option value={10}>10</option>
-                <option value={20}>20</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </select>
-              <span>条</span>
-              <span className="ml-2">
-                显示 {startIndex}-{endIndex} 条，共 {total} 条
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                className="p-2 rounded border border-slate-300 dark:border-slate-600 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-100 dark:hover:bg-slate-700"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <span className="px-3 py-1 text-sm text-slate-600 dark:text-slate-400">
-                第 {currentPage} / {totalPages || 1} 页
-              </span>
-              <button
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage >= totalPages}
-                className="p-2 rounded border border-slate-300 dark:border-slate-600 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-100 dark:hover:bg-slate-700"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
+        <Pager
+          page={currentPage}
+          pageSize={pageSize}
+          total={total}
+          loading={loading}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size)
+            setCurrentPage(1)
+          }}
+        />
       </div>
 
       <div className="vben-card">

@@ -33,6 +33,7 @@ from common.db.scheduled_publish_rule_schema import ensure_scheduled_publish_rul
 from common.db.payment_schema import ensure_payment_schema
 from common.db.item_query_indexes import ensure_item_query_indexes
 from common.db.api_keyword_schema import ensure_api_keyword_schema
+from common.db.user_role_dictionary import ensure_user_role_dictionary
 from common.db.notification_schema import ensure_notification_schema
 from common.db.session import async_engine, async_session_maker
 from common.services.notification_types import NOTIFICATION_TYPE_DICTIONARY
@@ -2463,6 +2464,7 @@ class DatabaseInitializer:
             (NOTIFICATION_TYPE_DICTIONARY, "monitor", "上新监控", 40),
         )
         async with ddl_connection() as conn:
+            await ensure_user_role_dictionary(conn)
             for dict_type, dict_value, dict_label, sort_order in items:
                 await conn.execute(
                     text(

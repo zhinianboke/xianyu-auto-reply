@@ -58,6 +58,8 @@ const toUser = (item: AdminUserApiItem): User => ({
   is_admin: item.is_admin,
   account_limit: item.account_limit,
   expire_at: item.expire_at,
+  created_at: item.created_at,
+  last_login_at: item.last_login_at,
 })
 
 export function UserFormModal({ initial, onClose, onSaved }: Props) {

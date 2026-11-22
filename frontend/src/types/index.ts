@@ -14,6 +14,8 @@ export interface User {
   account_limit?: number | null
   balance?: string | null
   expire_at?: string | null
+  created_at?: string | null
+  last_login_at?: string | null
 }
 
 export interface LoginRequest {

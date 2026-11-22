@@ -29,6 +29,16 @@ export function formatDateTime(value?: string | Date | null): string {
 }
 
 /**
+ * 直接展示后端返回的北京时间，不依赖浏览器时区。
+ *
+ * @param value 北京时间 ISO 字符串或空值
+ * @returns 秒精度的 YYYY-MM-DD HH:mm:ss 文本；缺失时为 -
+ */
+export function formatBeijingDateTime(value?: string | null): string {
+  return value ? value.replace('T', ' ').slice(0, 19) : '-'
+}
+
+/**
  * 获取北京时间日期字符串，格式为 input[type="date"] 可直接使用的 YYYY-MM-DD。
  *
  * @param value 可选日期，默认当前时间
