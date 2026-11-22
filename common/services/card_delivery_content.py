@@ -51,7 +51,7 @@ async def consume_batch_data(session: AsyncSession, card_id: int) -> Optional[st
     Returns:
         消费的数据内容；无数据时返回 None
     """
-    stmt = select(Card).where(Card.id == card_id).with_for_update()
+    stmt = select(Card).where(Card.id == card_id, Card.is_deleted == False, Card.enabled == True).with_for_update()
     result = await session.execute(stmt)
     card = result.scalars().first()
 
@@ -214,6 +214,9 @@ async def build_delivery_content(
     Returns:
         发货内容文本；获取失败返回 None
     """
+    if card.is_deleted or not card.enabled:
+        logger.warning(f"卡券 {card.id} 已删除或停用，无法获取发货内容")
+        return None
     context = context or {}
     card_type = card.type
     text_content: Optional[str] = None

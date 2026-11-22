@@ -244,10 +244,13 @@ async def _find_existing_auto_card(
             and_(
                 CardItemRelation.card_id == Card.id,
                 CardItemRelation.item_id == published_item_id,
+                CardItemRelation.user_id == user_id,
+                CardItemRelation.is_deleted.is_(False),
             ),
         )
         .where(
             Card.user_id == user_id,
+            Card.is_deleted.is_(False),
             or_(
                 Card.item_id == published_item_id,
                 CardItemRelation.id.is_not(None),
@@ -269,9 +272,12 @@ async def _find_existing_auto_card(
 
 
 async def _has_card_item_relation(session: AsyncSession, card_id: int, published_item_id: str) -> bool:
-    stmt = select(CardItemRelation.id).where(
+    stmt = select(CardItemRelation.id).join(Card, CardItemRelation.card_id == Card.id).where(
         CardItemRelation.card_id == card_id,
         CardItemRelation.item_id == published_item_id,
+        CardItemRelation.is_deleted.is_(False),
+        CardItemRelation.user_id == Card.user_id,
+        Card.is_deleted.is_(False),
     ).limit(1)
     result = await session.execute(stmt)
     return result.scalar_one_or_none() is not None

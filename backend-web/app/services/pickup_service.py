@@ -130,7 +130,7 @@ class PickupService:
 
         # 查卡券
         card = await self.session.get(Card, dock_record.card_id)
-        if not card:
+        if not card or card.is_deleted:
             return PickupResult(False, "提货失败：卡券不存在")
         if not card.enabled:
             return PickupResult(False, "提货失败：卡券已停用")

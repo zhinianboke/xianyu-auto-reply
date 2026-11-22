@@ -30,6 +30,8 @@ from common.models.user_setting import UserSetting
 from common.models.system_setting import SystemSetting
 from common.utils.time_utils import get_beijing_now, get_beijing_now_naive
 from common.services.notification_types import resolve_stored_notification_types
+from common.services.card_matcher import CardMatcher
+from common.services.card_consumption_errors import CardConsumptionConfigurationError
 from common.utils.notification_config import parse_notification_config
 
 
@@ -78,13 +80,15 @@ class DBManagerCompat:
         """直接运行异步协程（在异步上下文中使用）"""
         return await coro
     
-    def _run_async(self, async_func: Callable):
+    def _run_async(self, async_func: Callable, *, raise_errors: bool = False, retry_on_failure: bool = True):
         """在同步代码中运行异步操作
         
         使用独立线程和新事件循环来避免死锁
         async_func: 一个接受session_maker参数的异步函数
+        raise_errors: 卡券安全链路启用；超时或重试耗尽时抛出真实异常，其他旧调用保持原行为
+        retry_on_failure: 只读查询可重试；实际取卡禁止在提交结果不确定时自动再次消费
         """
-        max_attempts = 3
+        max_attempts = 3 if retry_on_failure else 1
 
         for attempt in range(1, max_attempts + 1):
             result = [None]
@@ -129,14 +133,21 @@ class DBManagerCompat:
 
             if thread.is_alive():
                 logger.error("异步操作超时")
+                if raise_errors:
+                    raise TimeoutError("数据库操作超时，请人工核实处理结果，勿直接重复取卡")
                 return None
 
             if exception[0]:
+                if raise_errors and isinstance(exception[0], CardConsumptionConfigurationError):
+                    # 配置拒绝不是暂时连接故障；重试可能在配置恢复后意外消费。
+                    raise exception[0]
                 if attempt < max_attempts:
                     logger.warning(f"执行异步操作失败，第{attempt}次重试前等待 {attempt} 秒: {exception[0]}")
                     time.sleep(attempt)
                     continue
                 logger.error(f"执行异步操作失败: {exception[0]}")
+                if raise_errors:
+                    raise exception[0]
                 return None
 
             return result[0]
@@ -699,7 +710,10 @@ class DBManagerCompat:
                     'id': order.id,
                     'order_id': order.order_no,
                     'account_id': order.account_id,
+                    'owner_id': order.owner_id,
                     'item_id': order.item_id,
+                    'spec_name': order.spec_name,
+                    'spec_value': order.spec_value,
                     'buyer_nick': order.buyer_nick,
                     'buyer_fish_nick': order.buyer_fish_nick,
                     'buyer_id': order.buyer_id,
@@ -711,6 +725,8 @@ class DBManagerCompat:
                     'card_only_delivered': order.card_only_delivered,
                     'delivery_method': order.delivery_method,
                     'delivery_content': order.delivery_content,
+                    'delivery_fail_reason': order.delivery_fail_reason,
+                    'metadata_json': order.metadata_json,
                 }
         return self._run_async(_query)
     
@@ -843,7 +859,7 @@ class DBManagerCompat:
         """更新卡券图片URL"""
         async def _update():
             async with async_session_maker() as session:
-                stmt = update(Card).where(Card.id == card_id).values(image_url=image_url)
+                stmt = update(Card).where(Card.id == card_id, Card.is_deleted == False).values(image_url=image_url)
                 result = await session.execute(stmt)
                 await session.commit()
                 return result.rowcount > 0
@@ -869,7 +885,7 @@ class DBManagerCompat:
         async def _update(session_maker):
             async with session_maker() as session:
                 # 先获取当前的image_urls
-                stmt = select(Card.image_urls).where(Card.id == card_id)
+                stmt = select(Card.image_urls).where(Card.id == card_id, Card.is_deleted == False)
                 result = await session.execute(stmt)
                 current_urls = result.scalar_one_or_none()
                 
@@ -891,7 +907,7 @@ class DBManagerCompat:
                 
                 # 保存回数据库
                 new_urls_json = json.dumps(urls_list, ensure_ascii=False)
-                update_stmt = update(Card).where(Card.id == card_id).values(image_urls=new_urls_json)
+                update_stmt = update(Card).where(Card.id == card_id, Card.is_deleted == False).values(image_urls=new_urls_json)
                 result = await session.execute(update_stmt)
                 await session.commit()
                 return result.rowcount > 0
@@ -1603,28 +1619,28 @@ class DBManagerCompat:
             logger.error(f"插入或更新订单失败: {e}")
             return False
     
-    def get_cards_by_item_id(self, item_id: str, spec_name: str = None, spec_value: str = None) -> List[Dict[str, Any]]:
+    def get_cards_by_item_id(self, item_id: str, spec_name: str = None, spec_value: str = None, *, user_id: int) -> List[Dict[str, Any]]:
         """根据商品ID获取卡券列表（通过关联表查询，含向后兼容回退）
         
         Args:
             item_id: 商品ID
             spec_name: 规格名称（可选，用于多规格匹配）
             spec_value: 规格值（可选，用于多规格匹配）
+            user_id: 实际订单或闲鱼账号的所属用户，发货匹配必须明确归属
             
         Returns:
             卡券列表
         """
         async def _query(session_maker):
             async with session_maker() as session:
-                from common.services.card_matcher import CardMatcher
                 matcher = CardMatcher(session)
-                return await matcher.get_cards_by_item_id(item_id, spec_name, spec_value)
+                return await matcher.get_cards_by_item_id(item_id, spec_name, spec_value, user_id=user_id)
         
         try:
-            return self._run_async(_query) or []
+            return self._run_async(_query, raise_errors=True) or []
         except Exception as e:
-            logger.error(f"根据商品ID获取卡券失败: {e}")
-            return []
+            logger.opt(exception=e).error(f"根据商品ID获取卡券失败: user_id={user_id}, item_id={item_id}, 错误={e}")
+            raise
     
     def consume_batch_data(self, card_id: int) -> Optional[str]:
         """消费批量数据卡券的一条数据
@@ -1647,7 +1663,7 @@ class DBManagerCompat:
             card_id: 卡券ID
 
         Returns:
-            消费的数据内容或None
+            消费的数据内容；真实空库存返回 None，配置失效或数据库失败抛出异常
         """
         # CAS 失败（被其他并发请求抢先消费）时的最大重试次数，避免极端竞争下死循环
         max_cas_retries = 50
@@ -1656,12 +1672,16 @@ class DBManagerCompat:
             async with session_maker() as session:
                 for _ in range(max_cas_retries):
                     # 1. 读取当前卡券内容（普通读，无需行锁）
-                    stmt = select(Card.data_content).where(Card.id == card_id)
+                    stmt = select(Card.data_content, Card.enabled, Card.is_deleted, Card.type).where(Card.id == card_id)
                     result = await session.execute(stmt)
-                    current_content = result.scalar_one_or_none()
-
-                    if current_content is None:
-                        logger.warning(f"卡券 {card_id} 不存在或没有批量数据")
+                    row = result.first()
+                    if row is None or row.is_deleted or not row.enabled or row.type != 'data':
+                        raise CardConsumptionConfigurationError(
+                            f"卡券 {card_id} 已删除、停用或类型发生变化，已停止取卡，请人工核实发货配置"
+                        )
+                    current_content = row.data_content
+                    if not current_content:
+                        logger.warning(f"卡券 {card_id} 批量数据已用完")
                         return None
 
                     # 2. 计算首行与剩余内容
@@ -1678,7 +1698,7 @@ class DBManagerCompat:
                     #    并发下只有一个请求能命中（rowcount=1），其余 rowcount=0 重试
                     cas_stmt = (
                         update(Card)
-                        .where(Card.id == card_id, Card.data_content == current_content)
+                        .where(Card.id == card_id, Card.data_content == current_content, Card.is_deleted == False, Card.enabled == True, Card.type == 'data')
                         .values(data_content=new_content)
                     )
                     cas_result = await session.execute(cas_stmt)
@@ -1691,14 +1711,13 @@ class DBManagerCompat:
                     # rowcount=0：内容已被其他并发请求改写，重读重试
                     logger.warning(f"卡券 {card_id} 消费存在并发竞争，重试中...")
 
-                logger.error(f"卡券 {card_id} 消费失败：并发竞争超过最大重试次数 {max_cas_retries}")
-                return None
+                raise RuntimeError(f"卡券 {card_id} 消费失败：并发竞争超过最大重试次数 {max_cas_retries}，请人工核实")
 
         try:
-            return self._run_async(_consume)
+            return self._run_async(_consume, raise_errors=True, retry_on_failure=False)
         except Exception as e:
-            logger.error(f"消费批量数据失败: {e}")
-            return None
+            logger.opt(exception=e).error(f"消费批量数据失败: card_id={card_id}, 错误={e}")
+            raise
 
     def increment_delivery_count(self, card_id: int) -> bool:
         """增加卡券的发货次数
@@ -1713,7 +1732,7 @@ class DBManagerCompat:
             async with session_maker() as session:
                 stmt = (
                     update(Card)
-                    .where(Card.id == card_id)
+                    .where(Card.id == card_id, Card.is_deleted == False)
                     .values(delivery_count=Card.delivery_count + 1)
                 )
                 result = await session.execute(stmt)

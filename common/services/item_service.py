@@ -26,6 +26,7 @@ from common.models.xy_account import XYAccount
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.default_reply import DefaultReply
 from common.models.card import Card
+from common.services.card_matcher import CardMatcher
 
 
 class ItemService:
@@ -191,7 +192,7 @@ class ItemService:
         default_reply_map = await self._get_default_reply_status_batch(items_data)
         card_set = await self._get_card_status_batch(items_data)
         
-        return [self._serialize_item(item, acct_id, default_reply_map.get((acct_id, item.item_id)), item.item_id in card_set) for item, acct_id in items_data]
+        return [self._serialize_item(item, acct_id, default_reply_map.get((acct_id, item.item_id)), (item.owner_id, item.item_id) in card_set) for item, acct_id in items_data]
 
     async def list_items_paginated(
         self,
@@ -297,7 +298,7 @@ class ItemService:
         default_reply_map = await self._get_default_reply_status_batch(items_data)
         card_set = await self._get_card_status_batch(items_data)
         
-        items = [self._serialize_item(item, acct_id, default_reply_map.get((acct_id, item.item_id)), item.item_id in card_set) for item, acct_id in items_data]
+        items = [self._serialize_item(item, acct_id, default_reply_map.get((acct_id, item.item_id)), (item.owner_id, item.item_id) in card_set) for item, acct_id in items_data]
         return items, total
 
     async def fetch_items_page_from_account(
@@ -945,30 +946,29 @@ class ItemService:
         
         return reply_map
 
-    async def _get_card_status_batch(self, items_data: list) -> Set[str]:
-        """批量获取商品卡券配置状态（通过关联表+旧字段兼容，不区分用户）
+    async def _get_card_status_batch(self, items_data: list) -> Set[tuple[int, str]]:
+        """按每个商品的实际归属批量获取卡券配置状态。
         
         Args:
             items_data: [(item, account_id), ...] 商品数据列表
             
         Returns:
-            {item_id, ...} 已配置卡券的商品ID集合
+            {(owner_id, item_id), ...} 已配置卡券的用户与商品标识集合
         """
         if not items_data:
             return set()
         
-        # 收集所有需要查询的 item_id
-        item_ids = list(set(item.item_id for item, _ in items_data))
-        
-        from common.services.card_matcher import CardMatcher
+        # 管理员列表也按实际商品归属匹配，避免同一商品 ID 的跨用户绑定污染状态。
+        owner_item_ids: Dict[int, Set[str]] = {}
+        for item, _ in items_data:
+            owner_item_ids.setdefault(item.owner_id, set()).add(item.item_id)
         matcher = CardMatcher(self.session)
-        
-        # 按 item_id 查询卡券状态（不区分用户，与发货配置弹窗逻辑一致）
-        status_map = await matcher.get_items_with_card_status(item_ids)
-        configured_items: Set[str] = set()
-        for item_id, has_card in status_map.items():
-            if has_card:
-                configured_items.add(item_id)
+        configured_items: Set[tuple[int, str]] = set()
+        for user_id, item_ids in owner_item_ids.items():
+            status_map = await matcher.get_items_with_card_status(list(item_ids), user_id)
+            configured_items.update(
+                (user_id, item_id) for item_id, has_card in status_map.items() if has_card
+            )
         
         return configured_items
 
@@ -1053,10 +1053,7 @@ class ItemService:
         return True
 
     async def delete_item(self, account: XYAccount, item_id: str) -> bool:
-        """删除商品（同时删除关联表记录）"""
-        from loguru import logger
-        from common.services.card_matcher import CardMatcher
-        
+        """删除商品时仅停用该商品所有者的卡券关联，并保留关联历史。"""
         stmt = (
             select(XYCatalogItem)
             .where(
@@ -1072,7 +1069,7 @@ class ItemService:
         
         # 级联删除关联表记录
         matcher = CardMatcher(self.session)
-        rel_count = await matcher.delete_relations_by_item_id(item_id)
+        rel_count = await matcher.delete_relations_by_item_id(item_id, account.owner_id)
         if rel_count > 0:
             logger.info(f"删除商品 {item_id} 的 {rel_count} 条卡券关联记录")
         
@@ -1099,9 +1096,6 @@ class ItemService:
         Returns:
             'ok'：删除成功；'not_found'：商品不存在；'account_required'：商品所属账号仍存在，需指定账号
         """
-        # CardMatcher 采用局部导入，避免与 card_matcher 模块产生循环依赖（与 delete_item 保持一致）
-        from common.services.card_matcher import CardMatcher
-
         # 情况一：调用方已指定并校验账号 → 复用原有按账号删除逻辑
         if account is not None:
             ok = await self.delete_item(account, item_id)
@@ -1127,7 +1121,9 @@ class ItemService:
 
         # 全部为孤儿商品（账号已删除）→ 按 item_id 删除，并清理卡券关联
         matcher = CardMatcher(self.session)
-        rel_count = await matcher.delete_relations_by_item_id(item_id)
+        rel_count = 0
+        for item_owner_id in {it.owner_id for it in items}:
+            rel_count += await matcher.delete_relations_by_item_id(item_id, item_owner_id)
         if rel_count > 0:
             logger.info(f"删除孤儿商品 {item_id} 的 {rel_count} 条卡券关联记录")
         for it in items:

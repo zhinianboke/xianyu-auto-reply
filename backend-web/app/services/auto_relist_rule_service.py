@@ -8,12 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.auto_relist_event import AutoRelistEvent
 from common.models.auto_relist_rule import AutoRelistRule
-from common.models.card import Card
-from common.models.card_item_relation import CardItemRelation
 from common.models.product_material import ProductMaterial
 from common.models.publish_log import PublishLog
 from common.models.xy_account import XYAccount
 from common.models.xy_catalog_item import XYCatalogItem
+from common.services.card_access import CardAccess
+from common.services.card_matcher import CardMatcher
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.account_status import is_account_active
 from app.services.auto_relist_serializers import (
@@ -204,13 +204,16 @@ class AutoRelistRuleService:
         ))).scalar_one_or_none()
         if not item:
             raise ValueError("当前商品不属于所选闲鱼账号，请先获取该账号商品")
-        card = (await self.session.execute(select(Card).where(Card.id == card_id, Card.user_id == user_id))).scalar_one_or_none()
-        if not card:
-            raise ValueError("自动发货卡券不存在或无权使用")
+        # 先锁定卡券并检查历史唯一键，拒绝时不能修改规则、事件或任何关联。
+        card = (await CardAccess(self.session).require_cards([card_id], user_id, lock=True))[0]
         if not card.enabled:
             raise ValueError("自动发货卡券已停用，请先启用卡券")
         if rule and expected_version is not None and rule.version != expected_version:
             raise ValueError("配置已被其他操作更新，请刷新后重试")
+        matcher = CardMatcher(self.session)
+        binding = {"card_id": int(card_id), "source": "own", "dock_record_id": 0}
+        pairs = [(current_item_id, binding)]
+        await matcher._check_binding_conflicts(user_id, pairs)
         item_changed = not rule or rule.current_item_id != current_item_id
         if not rule:
             rule = AutoRelistRule(user_id=user_id, material_id=material_id)
@@ -240,19 +243,8 @@ class AutoRelistRuleService:
             claimed_at=None,
             lease_expires_at=None,
         ))
-        relation = (await self.session.execute(select(CardItemRelation.id).where(
-            CardItemRelation.user_id == user_id,
-            CardItemRelation.card_id == int(card_id),
-            CardItemRelation.item_id == current_item_id,
-        ))).scalar_one_or_none()
-        if not relation:
-            self.session.add(CardItemRelation(
-                user_id=user_id,
-                card_id=int(card_id),
-                item_id=current_item_id,
-                source="own",
-                dock_record_id=0,
-            ))
+        # 明确保存规则可以恢复本人的绑定，NULL/0 历史重复由公共 upsert 安全归并。
+        await matcher._upsert_bindings(user_id, pairs)
         # 保留旧版仅读取 xy_cards.item_id 的兼容路径；关联表仍是完整关系的事实来源。
         if not card.item_id:
             card.item_id = current_item_id

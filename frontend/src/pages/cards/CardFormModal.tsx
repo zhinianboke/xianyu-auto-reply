@@ -11,6 +11,7 @@ import { updateCard, createCard, uploadCardImage, type CardData } from '@/api/ca
 import { useUIStore } from '@/store/uiStore'
 import { Select } from '@/components/common/Select'
 import { getSystemSettings } from '@/api/settings'
+import { getApiErrorMessage } from '@/utils/apiError'
 
 // 卡券类型选项
 const cardTypeOptions = [
@@ -270,63 +271,53 @@ export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFor
   }
 
   // 提交表单
-  const handleSubmit = async (e: FormEvent) => {
+  const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
     if (!validateForm()) return
 
     setSaving(true)
-    try {
-      const cardData: Partial<CardData> = {
-        name: formData.name.trim(),
-        type: formData.type as 'api' | 'text' | 'data' | 'image',
-        description: formData.description.trim() || undefined,
-        enabled: true,
-        delay_seconds: formData.delaySeconds,
-        use_no_logistics_form: formData.type === 'text' && formData.useNoLogisticsForm,
-        price: formData.price.trim() || null,
-        is_dockable: formData.isDockable,
-        fee_payer: formData.isDockable ? formData.feePayer : null,
-        min_price: formData.isDockable ? (formData.minPrice.trim() || null) : null,
-        dock_visibility: formData.isDockable ? formData.dockVisibility : null,
-        is_multi_spec: formData.isMultiSpec,
-        spec_name: formData.isMultiSpec ? formData.specName.trim() : undefined,
-        spec_value: formData.isMultiSpec ? formData.specValue.trim() : undefined,
-      }
+    const cardData: Partial<CardData> = {
+      name: formData.name.trim(),
+      type: formData.type as 'api' | 'text' | 'data' | 'image',
+      description: formData.description.trim() || undefined,
+      enabled: true,
+      delay_seconds: formData.delaySeconds,
+      use_no_logistics_form: formData.type === 'text' && formData.useNoLogisticsForm,
+      price: formData.price.trim() || null,
+      is_dockable: formData.isDockable,
+      fee_payer: formData.isDockable ? formData.feePayer : null,
+      min_price: formData.isDockable ? (formData.minPrice.trim() || null) : null,
+      dock_visibility: formData.isDockable ? formData.dockVisibility : null,
+      is_multi_spec: formData.isMultiSpec,
+      spec_name: formData.isMultiSpec ? formData.specName.trim() : undefined,
+      spec_value: formData.isMultiSpec ? formData.specValue.trim() : undefined,
+    }
 
-      if (formData.type === 'api') {
-        cardData.api_config = {
-          url: formData.apiUrl.trim(),
-          method: formData.apiMethod,
-          timeout: formData.apiTimeout,
-          headers: formData.apiHeaders.trim() || undefined,
-          params: formData.apiParams.trim() || undefined,
-          response_field: formData.apiResponseField.trim() || undefined,
-        }
-      } else if (formData.type === 'text') {
-        cardData.text_content = formData.textContent.trim()
-      } else if (formData.type === 'data') {
-        cardData.data_content = formData.dataContent.trim()
+    if (formData.type === 'api') {
+      cardData.api_config = {
+        url: formData.apiUrl.trim(),
+        method: formData.apiMethod,
+        timeout: formData.apiTimeout,
+        headers: formData.apiHeaders.trim() || undefined,
+        params: formData.apiParams.trim() || undefined,
+        response_field: formData.apiResponseField.trim() || undefined,
       }
+    } else if (formData.type === 'text') {
+      cardData.text_content = formData.textContent.trim()
+    } else if (formData.type === 'data') {
+      cardData.data_content = formData.dataContent.trim()
+    }
 
-      if (formData.imageUrls.length > 0) {
-        cardData.image_urls = formData.imageUrls
-      }
+    if (formData.imageUrls.length > 0) {
+      cardData.image_urls = formData.imageUrls
+    }
 
-      if (isEditMode) {
-        await updateCard(String(cardId), cardData)
-        addToast({ type: 'success', message: '卡券更新成功' })
-      } else {
-        await createCard(cardData as Parameters<typeof createCard>[0])
-        addToast({ type: 'success', message: '卡券创建成功' })
-      }
-
+    return (isEditMode ? updateCard(String(cardId), cardData) : createCard(cardData as Parameters<typeof createCard>[0])).then(() => {
+      addToast({ type: 'success', message: isEditMode ? '卡券更新成功' : '卡券创建成功' })
       onSaved()
       onClose()
-    } catch {
-      addToast({ type: 'error', message: isEditMode ? '更新卡券失败' : '创建卡券失败' })
-    } finally {
-      setSaving(false)
-    }
+    }).catch(error => addToast({ type: 'error', message: getApiErrorMessage(error, isEditMode ? '更新卡券失败' : '创建卡券失败') }))
+      .finally(() => setSaving(false))
   }
 
   return (
@@ -545,15 +536,15 @@ export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFor
                         type="file"
                         accept="image/*"
                         className="hidden"
-                        onChange={async (e: ChangeEvent<HTMLInputElement>) => {
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => {
                           const file = e.target.files?.[0]
                           if (!file) return
                           if (file.size > 5 * 1024 * 1024) {
                             addToast({ type: 'error', message: '图片大小不能超过5MB' })
                             return
                           }
-                          try {
-                            const result = await uploadCardImage(file)
+                          const input = e.target
+                          return uploadCardImage(file).then(result => {
                             if (result.success && result.image_url) {
                               const newUrls = [...formData.imageUrls, result.image_url]
                               updateField('imageUrls', newUrls)
@@ -561,10 +552,8 @@ export function CardFormModal({ cardId, initialData, onClose, onSaved }: CardFor
                             } else {
                               addToast({ type: 'error', message: result.message || '图片上传失败' })
                             }
-                          } catch {
-                            addToast({ type: 'error', message: '图片上传失败' })
-                          }
-                          e.target.value = ''
+                          }).catch(error => addToast({ type: 'error', message: getApiErrorMessage(error, '图片上传失败') }))
+                            .finally(() => { input.value = '' })
                         }}
                       />
                       <ImagePlus className="w-6 h-6 text-gray-400" />

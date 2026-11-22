@@ -4,6 +4,7 @@ import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem
 import { getAccountDetails } from '@/api/accounts'
 import { getUserSetting } from '@/api/settings'
 import { batchClearItemRelations } from '@/api/cards'
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ItemCardRelationModal } from './ItemCardRelationModal'
 import SellerItemEditModal from './SellerItemEditModal'
 import { useUIStore } from '@/store/uiStore'
@@ -1155,7 +1156,7 @@ export function Items() {
 
   // ==================== 批量清空关联卡券 ====================
 
-  const handleBatchClearCardRelations = async () => {
+  const handleBatchClearCardRelations = () => {
     if (selectedIds.size === 0) {
       addToast({ type: 'warning', message: '请先选择要清空关联卡券的商品' })
       return
@@ -1172,8 +1173,7 @@ export function Items() {
     }
 
     setDeleting(true)
-    try {
-      const result = await batchClearItemRelations(selectedItemIds)
+    return batchClearItemRelations(selectedItemIds).then(result => {
       if (result.success) {
         addToast({ type: 'success', message: result.message || '清空关联卡券成功' })
         setSelectedIds(new Set())
@@ -1182,11 +1182,8 @@ export function Items() {
       } else {
         addToast({ type: 'error', message: result.message || '清空失败' })
       }
-    } catch {
-      addToast({ type: 'error', message: '清空关联卡券失败' })
-    } finally {
-      setDeleting(false)
-    }
+    }).catch(error => addToast({ type: 'error', message: getApiErrorMessage(error, '清空关联卡券失败') }))
+      .finally(() => setDeleting(false))
   }
 
   // ==================== 批量新增AI提示词 ====================

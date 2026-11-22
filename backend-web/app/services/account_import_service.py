@@ -3,91 +3,31 @@
 
 功能：
 1. 解析导出的Excel文件（openpyxl）
-2. 按Sheet逐一导入数据到数据库（upsert逻辑）
+2. 按 Sheet 导入数据并统一提交；权限或数据库失败时回滚本次写入
 3. 支持两种模式：保存（按Excel状态）/ 保存并全部启用
 4. 返回导入统计结果
 """
 from __future__ import annotations
 
-import json
 from io import BytesIO
-from typing import Any
 
 from loguru import logger
 from openpyxl import load_workbook
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.xy_account import XYAccount
-from common.models.card import Card
-from common.models.card_item_relation import CardItemRelation
 from common.models.xy_keyword_rule import XYKeywordRule
-from common.models.default_reply import DefaultReply
 from common.models.xy_catalog_item import XYCatalogItem
-from common.models.confirm_receipt_message import ConfirmReceiptMessage
-from common.models.auto_rate_config import AutoRateConfig
+from app.services.account_import_cards import AccountCardImportMixin
+from app.services.account_import_settings import AccountSettingsImportMixin
+from app.services.account_import_parsing import _parse_bool, _parse_int, _parse_json, _parse_str, _read_sheet_rows
+from app.services.websocket_client import websocket_client
+from common.services.card_access import CardAccessError
 from common.utils.time_utils import get_beijing_now_naive
 
 
-def _parse_bool(value: str | None) -> bool:
-    """解析布尔值：'是'/True/'true'/'1' → True，其余 → False"""
-    if value is None:
-        return False
-    v = str(value).strip().lower()
-    return v in ("是", "true", "1", "yes")
-
-
-def _parse_int(value: str | None, default: int = 0) -> int:
-    """解析整数，失败返回默认值"""
-    if value is None or str(value).strip() == "":
-        return default
-    try:
-        return int(float(str(value).strip()))
-    except (ValueError, TypeError):
-        return default
-
-
-def _parse_str(value: Any) -> str:
-    """解析字符串，None → 空字符串"""
-    if value is None:
-        return ""
-    return str(value).strip()
-
-
-def _parse_json(value: str | None) -> Any:
-    """解析JSON字符串，失败返回None"""
-    if not value or str(value).strip() == "":
-        return None
-    try:
-        return json.loads(str(value))
-    except (json.JSONDecodeError, TypeError):
-        return None
-
-
-def _read_sheet_rows(wb, sheet_name: str) -> list[dict[str, str]]:
-    """读取Sheet为字典列表（表头作为key）"""
-    if sheet_name not in wb.sheetnames:
-        return []
-    ws = wb[sheet_name]
-    rows = list(ws.iter_rows(values_only=True))
-    if len(rows) < 2:
-        return []
-    headers = [str(h or "").strip() for h in rows[0]]
-    result = []
-    for row in rows[1:]:
-        row_dict = {}
-        for i, header in enumerate(headers):
-            if not header:
-                continue
-            val = row[i] if i < len(row) else None
-            row_dict[header] = str(val).strip() if val is not None else ""
-        # 跳过全空行
-        if any(v for v in row_dict.values()):
-            result.append(row_dict)
-    return result
-
-
-class AccountImportService:
+class AccountImportService(AccountCardImportMixin, AccountSettingsImportMixin):
     """账号数据导入服务"""
 
     def __init__(self, session: AsyncSession, owner_id: int):
@@ -121,12 +61,14 @@ class AccountImportService:
         except Exception as e:
             return {
                 "success": False,
+                "code": 40001,
                 "message": f"Excel文件解析失败: {str(e)}",
                 "data": None,
             }
 
+        committing = False
         try:
-            # 按顺序导入各Sheet
+            # 各 Sheet 只 flush，关联校验完成前不得提交前面的账号或卡券。
             await self._import_accounts_basic(wb, enable_all)
             await self._import_account_switches(wb)
             await self._import_ai_settings(wb)
@@ -139,18 +81,40 @@ class AccountImportService:
             await self._import_confirm_receipt(wb)
             await self._import_auto_rate(wb)
 
-            # 启动需要启用的账号
+            # 先获取本次账号列表，提交成功后才允许请求消息服务启动账号。
             accounts_to_start = await self._get_accounts_to_start(enable_all)
-            for account_id, cookie in accounts_to_start:
-                try:
-                    await self._start_account(account_id, cookie)
-                    self.started += 1
-                except Exception as e:
-                    self.errors.append(f"账号 {account_id} 启动失败: {str(e)}")
+            committing = True
+            await self.session.commit()
 
+        except CardAccessError as e:
+            logger.exception("卡券关联导入被拒绝：owner_id={}，原因={}", self.owner_id, e)
+            rollback_error = await self._rollback_failed_import()
+            message = (
+                f"导入已停止，回滚未能完成，请人工核实，勿重复导入：{e}；{rollback_error}"
+                if rollback_error else f"导入已取消，本次数据未保存：{e}"
+            )
+            return {"success": False, "code": 40001, "message": message, "data": None}
         except Exception as e:
-            logger.error(f"导入过程异常: {e}")
-            self.errors.append(f"导入异常: {str(e)}")
+            logger.exception("账号导入失败：owner_id={}，提交阶段={}，原因={}", self.owner_id, committing, e)
+            rollback_error = await self._rollback_failed_import()
+            message = (
+                f"导入提交失败，结果不确定，请人工核实，勿重复导入：{e}"
+                if committing else f"导入已取消，本次数据未保存：{e}"
+            )
+            if rollback_error:
+                message = f"导入已停止，结果需人工核实，勿重复导入：{e}；{rollback_error}" if not committing else f"{message}；{rollback_error}"
+            return {"success": False, "code": 40001, "message": message, "data": None}
+        finally:
+            wb.close()
+
+        # 数据提交和外部启动分开；启动失败明确说明数据已保存，不伪称回滚成功。
+        for account_id, cookie in accounts_to_start:
+            try:
+                await self._start_account(account_id, cookie)
+                self.started += 1
+            except Exception as e:
+                logger.exception("导入数据已保存，但账号启动失败：owner_id={}，account_id={}", self.owner_id, account_id)
+                self.errors.append(f"账号 {account_id} 启动失败（导入数据已保存）: {e}")
 
         message = (
             f"导入完成：新增 {self.inserted} 个，更新 {self.updated} 个，"
@@ -158,6 +122,7 @@ class AccountImportService:
         )
         return {
             "success": True,
+            "code": 200,
             "message": message,
             "data": {
                 "inserted": self.inserted,
@@ -169,6 +134,21 @@ class AccountImportService:
         }
 
     # ==================== 各Sheet导入逻辑 ====================
+
+    async def _rollback_failed_import(self) -> str | None:
+        """回滚失败导入；回滚异常保留原始错误并关闭失效会话，返回需展示的收尾错误。"""
+        try:
+            await self.session.rollback()
+            return None
+        except Exception as error:
+            logger.exception("导入回滚失败：owner_id={}", self.owner_id)
+            message = f"回滚失败：{error}"
+            try:
+                await self.session.close()
+            except Exception as close_error:
+                logger.exception("失效导入会话关闭失败：owner_id={}", self.owner_id)
+                message += f"；会话关闭失败：{close_error}"
+            return message
 
     async def _import_accounts_basic(self, wb, enable_all: bool) -> None:
         """导入账号基本信息"""
@@ -260,7 +240,7 @@ class AccountImportService:
                 if pk:
                     self._account_id_to_pk[account_id] = pk
 
-        await self.session.commit()
+        await self.session.flush()
 
     async def _import_account_switches(self, wb) -> None:
         """导入账号开关配置"""
@@ -303,7 +283,7 @@ class AccountImportService:
                 account.delivery_disabled_excluded_items = excluded
             self.session.add(account)
 
-        await self.session.commit()
+        await self.session.flush()
 
     async def _import_ai_settings(self, wb) -> None:
         """导入AI回复设置"""
@@ -329,7 +309,7 @@ class AccountImportService:
             account.metadata_json = metadata
             self.session.add(account)
 
-        await self.session.commit()
+        await self.session.flush()
 
     async def _import_catalog_items(self, wb) -> None:
         """导入商品目录"""
@@ -366,112 +346,7 @@ class AccountImportService:
                 )
                 self.session.add(item)
 
-        await self.session.commit()
-
-    async def _import_cards(self, wb) -> None:
-        """导入卡券"""
-        rows = _read_sheet_rows(wb, "卡券")
-        for row in rows:
-            name = _parse_str(row.get("卡券名称"))
-            if not name:
-                continue
-            card_type = _parse_str(row.get("类型")) or "text"
-            spec_value = _parse_str(row.get("规格值"))
-
-            # 按 名称+规格值 查找
-            stmt = select(Card).where(
-                Card.user_id == self.owner_id,
-                Card.name == name,
-            )
-            if spec_value:
-                stmt = stmt.where(Card.spec_value == spec_value)
-            else:
-                stmt = stmt.where((Card.spec_value.is_(None)) | (Card.spec_value == ""))
-
-            result = await self.session.execute(stmt)
-            existing = result.scalars().first()
-
-            if existing:
-                existing.type = card_type
-                existing.enabled = _parse_bool(row.get("启用"))
-                existing.delay_seconds = _parse_int(row.get("延迟秒数"), 0)
-                existing.is_multi_spec = _parse_bool(row.get("多规格"))
-                existing.spec_name = _parse_str(row.get("规格名")) or existing.spec_name
-                existing.spec_value = spec_value or existing.spec_value
-                existing.api_config = _parse_str(row.get("API配置")) or existing.api_config
-                existing.text_content = _parse_str(row.get("文本内容")) or existing.text_content
-                existing.data_content = _parse_str(row.get("数据内容")) or existing.data_content
-                existing.image_url = _parse_str(row.get("图片URL")) or existing.image_url
-                existing.image_urls = _parse_str(row.get("多图片URL")) or existing.image_urls
-                self.session.add(existing)
-                self._card_name_spec_to_id[f"{name}|{spec_value}"] = existing.id
-            else:
-                card = Card(
-                    user_id=self.owner_id,
-                    name=name,
-                    type=card_type,
-                    enabled=_parse_bool(row.get("启用")),
-                    delay_seconds=_parse_int(row.get("延迟秒数"), 0),
-                    is_multi_spec=_parse_bool(row.get("多规格")),
-                    spec_name=_parse_str(row.get("规格名")) or None,
-                    spec_value=spec_value or None,
-                    api_config=_parse_str(row.get("API配置")) or None,
-                    text_content=_parse_str(row.get("文本内容")) or None,
-                    data_content=_parse_str(row.get("数据内容")) or None,
-                    image_url=_parse_str(row.get("图片URL")) or None,
-                    image_urls=_parse_str(row.get("多图片URL")) or None,
-                )
-                self.session.add(card)
-                await self.session.flush()
-                self._card_name_spec_to_id[f"{name}|{spec_value}"] = card.id
-
-        await self.session.commit()
-
-        # 补充映射：查询所有该用户的卡券
-        stmt = select(Card.id, Card.name, Card.spec_value).where(Card.user_id == self.owner_id)
-        result = await self.session.execute(stmt)
-        for card_id, card_name, card_spec in result.all():
-            key = f"{card_name}|{card_spec or ''}"
-            self._card_name_spec_to_id[key] = card_id
-
-    async def _import_card_item_relations(self, wb) -> None:
-        """导入卡券商品关联"""
-        rows = _read_sheet_rows(wb, "卡券商品关联")
-        for row in rows:
-            card_name = _parse_str(row.get("卡券名称"))
-            item_id = _parse_str(row.get("商品ID"))
-            if not card_name or not item_id:
-                continue
-
-            # 查找卡券ID（先精确匹配名称，不带规格）
-            card_id = None
-            for key, cid in self._card_name_spec_to_id.items():
-                if key.startswith(f"{card_name}|"):
-                    card_id = cid
-                    break
-            if not card_id:
-                continue
-
-            # 检查是否已存在
-            stmt = select(CardItemRelation).where(
-                CardItemRelation.card_id == card_id,
-                CardItemRelation.item_id == item_id,
-                CardItemRelation.user_id == self.owner_id,
-            )
-            result = await self.session.execute(stmt)
-            if result.scalars().first():
-                continue  # 已存在，跳过
-
-            source = _parse_str(row.get("来源")) or "own"
-            rel = CardItemRelation(
-                user_id=self.owner_id,
-                card_id=card_id,
-                item_id=item_id,
-                source=source,
-            )
-            self.session.add(rel)
-
-        await self.session.commit()
+        await self.session.flush()
 
     async def _import_keyword_rules(self, wb) -> None:
         """导入关键词规则"""
@@ -529,151 +404,7 @@ class AccountImportService:
                 )
                 self.session.add(rule)
 
-        await self.session.commit()
-
-    async def _import_default_replies(self, wb) -> None:
-        """导入默认回复"""
-        rows = _read_sheet_rows(wb, "默认回复")
-        for row in rows:
-            account_id = _parse_str(row.get("账号ID"))
-            if not account_id:
-                continue
-            item_id = _parse_str(row.get("商品ID")) or None
-
-            stmt = select(DefaultReply).where(DefaultReply.account_id == account_id)
-            if item_id:
-                stmt = stmt.where(DefaultReply.item_id == item_id)
-            else:
-                stmt = stmt.where((DefaultReply.item_id.is_(None)) | (DefaultReply.item_id == ""))
-
-            result = await self.session.execute(stmt)
-            existing = result.scalars().first()
-
-            if existing:
-                existing.enabled = _parse_bool(row.get("启用"))
-                existing.reply_content = _parse_str(row.get("回复内容")) or existing.reply_content
-                existing.reply_image = _parse_str(row.get("回复图片")) or existing.reply_image
-                existing.reply_once = _parse_bool(row.get("仅回复一次"))
-                existing.reply_type = _parse_str(row.get("回复类型")) or existing.reply_type or "text"
-                existing.api_url = _parse_str(row.get("API地址")) or existing.api_url
-                api_timeout = _parse_int(row.get("API超时"))
-                if api_timeout:
-                    existing.api_timeout = api_timeout
-                existing.location_name = _parse_str(row.get("\u5b9a\u4f4d\u540d\u79f0")) or existing.location_name
-                existing.location_longitude = _parse_str(row.get("\u7ecf\u5ea6")) or existing.location_longitude
-                existing.location_latitude = _parse_str(row.get("\u7eac\u5ea6")) or existing.location_latitude
-                existing.location_title = _parse_str(row.get("\u4f4d\u7f6e\u6807\u9898")) or existing.location_title
-                existing.location_subtitle = _parse_str(row.get("\u4f4d\u7f6e\u526f\u6807\u9898")) or existing.location_subtitle
-            else:
-                reply = DefaultReply(
-                    account_id=account_id,
-                    item_id=item_id,
-                    enabled=_parse_bool(row.get("启用")),
-                    reply_content=_parse_str(row.get("回复内容")) or None,
-                    reply_image=_parse_str(row.get("回复图片")) or None,
-                    reply_once=_parse_bool(row.get("仅回复一次")),
-                    reply_type=_parse_str(row.get("回复类型")) or "text",
-                    api_url=_parse_str(row.get("API地址")) or None,
-                    api_timeout=_parse_int(row.get("API超时")) or 80,
-                )
-                reply.location_name = _parse_str(row.get("\u5b9a\u4f4d\u540d\u79f0")) or None
-                reply.location_longitude = _parse_str(row.get("\u7ecf\u5ea6")) or None
-                reply.location_latitude = _parse_str(row.get("\u7eac\u5ea6")) or None
-                reply.location_title = _parse_str(row.get("\u4f4d\u7f6e\u6807\u9898")) or None
-                reply.location_subtitle = _parse_str(row.get("\u4f4d\u7f6e\u526f\u6807\u9898")) or None
-                self.session.add(reply)
-
-        await self.session.commit()
-
-    async def _import_message_filters(self, wb) -> None:
-        """导入消息过滤规则"""
-        rows = _read_sheet_rows(wb, "消息过滤规则")
-        for row in rows:
-            account_id = _parse_str(row.get("账号ID"))
-            keyword = _parse_str(row.get("关键词"))
-            filter_type = _parse_str(row.get("过滤类型"))
-            if not account_id or not keyword or not filter_type:
-                continue
-
-            # 检查唯一约束
-            check_sql = text("""
-                SELECT id FROM xy_message_filters
-                WHERE account_id = :account_id AND keyword = :keyword AND filter_type = :filter_type
-                LIMIT 1
-            """)
-            result = await self.session.execute(check_sql, {
-                "account_id": account_id, "keyword": keyword, "filter_type": filter_type
-            })
-            if result.scalar_one_or_none():
-                continue  # 已存在，跳过
-
-            enabled = _parse_bool(row.get("启用"))
-            insert_sql = text("""
-                INSERT INTO xy_message_filters (account_id, keyword, filter_type, enabled)
-                VALUES (:account_id, :keyword, :filter_type, :enabled)
-            """)
-            await self.session.execute(insert_sql, {
-                "account_id": account_id, "keyword": keyword,
-                "filter_type": filter_type, "enabled": 1 if enabled else 0,
-            })
-
-        await self.session.commit()
-
-    async def _import_confirm_receipt(self, wb) -> None:
-        """导入确认收货消息"""
-        rows = _read_sheet_rows(wb, "确认收货消息")
-        for row in rows:
-            account_id = _parse_str(row.get("账号ID"))
-            if not account_id:
-                continue
-
-            stmt = select(ConfirmReceiptMessage).where(ConfirmReceiptMessage.account_id == account_id)
-            result = await self.session.execute(stmt)
-            existing = result.scalars().first()
-
-            if existing:
-                existing.enabled = _parse_bool(row.get("启用"))
-                existing.message_content = _parse_str(row.get("消息内容")) or existing.message_content
-                existing.message_image = _parse_str(row.get("消息图片")) or existing.message_image
-            else:
-                msg = ConfirmReceiptMessage(
-                    account_id=account_id,
-                    enabled=_parse_bool(row.get("启用")),
-                    message_content=_parse_str(row.get("消息内容")) or None,
-                    message_image=_parse_str(row.get("消息图片")) or None,
-                )
-                self.session.add(msg)
-
-        await self.session.commit()
-
-    async def _import_auto_rate(self, wb) -> None:
-        """导入自动评价配置"""
-        rows = _read_sheet_rows(wb, "自动评价配置")
-        for row in rows:
-            account_id = _parse_str(row.get("账号ID"))
-            if not account_id:
-                continue
-
-            stmt = select(AutoRateConfig).where(AutoRateConfig.account_id == account_id)
-            result = await self.session.execute(stmt)
-            existing = result.scalars().first()
-
-            if existing:
-                existing.enabled = _parse_bool(row.get("启用"))
-                existing.rate_type = _parse_str(row.get("评价类型")) or existing.rate_type
-                existing.text_content = _parse_str(row.get("评价内容")) or existing.text_content
-                existing.api_url = _parse_str(row.get("API地址")) or existing.api_url
-            else:
-                cfg = AutoRateConfig(
-                    account_id=account_id,
-                    enabled=_parse_bool(row.get("启用")),
-                    rate_type=_parse_str(row.get("评价类型")) or "text",
-                    text_content=_parse_str(row.get("评价内容")) or None,
-                    api_url=_parse_str(row.get("API地址")) or None,
-                )
-                self.session.add(cfg)
-
-        await self.session.commit()
+        await self.session.flush()
 
     # ==================== 启动逻辑 ====================
 
@@ -694,7 +425,6 @@ class AccountImportService:
 
     async def _start_account(self, account_id: str, cookie: str) -> None:
         """启动单个账号的WebSocket任务"""
-        from app.services.websocket_client import websocket_client
         result = await websocket_client.start_account(account_id, cookie, self.owner_id)
         if isinstance(result, dict) and not result.get("success", True):
             raise Exception(result.get("message", "启动失败"))

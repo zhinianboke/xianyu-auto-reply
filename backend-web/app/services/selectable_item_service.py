@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from common.db.retry import with_db_retry
 from common.models.card_item_relation import CardItemRelation
 from common.models.xy_catalog_item import XYCatalogItem
+from common.services.card_access import CardAccess
 
 
 class SelectableItemService:
@@ -108,9 +109,14 @@ class SelectableItemService:
             card_id: 卡券ID
             owner_id: 用户ID，None 表示管理员（不加 owner 过滤）
         """
-        relation_ids = select(CardItemRelation.item_id).where(
-            CardItemRelation.card_id == card_id
-        ).distinct().subquery("associated_item_ids")
+        await CardAccess(self.session).require_cards([card_id], owner_id)
+        relation_stmt = select(CardItemRelation.item_id).where(
+            CardItemRelation.card_id == card_id,
+            CardItemRelation.is_deleted.is_(False),
+        )
+        if owner_id is not None:
+            relation_stmt = relation_stmt.where(CardItemRelation.user_id == owner_id)
+        relation_ids = relation_stmt.distinct().subquery("associated_item_ids")
         stmt = (
             select(XYCatalogItem.item_id, XYCatalogItem.title, XYCatalogItem.price)
             .join(relation_ids, relation_ids.c.item_id == XYCatalogItem.item_id)

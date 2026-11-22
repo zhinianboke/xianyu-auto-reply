@@ -30,6 +30,8 @@ export interface ManualDeliveryResponse {
     order_no: string
     card_name: string
     card_type: string
+    delivery_incomplete?: boolean
+    delivery_configuration_changed?: boolean
   }
 }
 

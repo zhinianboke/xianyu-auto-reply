@@ -185,6 +185,7 @@ class SubDockRecordService:
             .where(
                 DockRecord.id == record_id,
                 Card.user_id == owner_user_id,
+                Card.is_deleted.is_(False),
             )
         )
         result = await self.session.execute(stmt)
@@ -249,6 +250,7 @@ class SubDockRecordService:
             DockRecord.allow_sub_dock == True,
             DockRecord.status == True,
             DockRecord.user_id != current_user_id,
+            Card.is_deleted.is_(False),
         ]
         
         # sub_dock_visibility 过滤：public/NULL 所有人可见，dealer_only 仅已绑定对接码的可见

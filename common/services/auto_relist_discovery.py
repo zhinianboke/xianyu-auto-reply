@@ -11,6 +11,7 @@ from common.models.auto_relist_event import AutoRelistEvent
 from common.models.auto_relist_rule import AutoRelistRule
 from common.models.xy_order import XYOrder
 from common.services.auto_relist_utils import build_publish_request_id, naive_beijing
+from common.services.order_delivery_result import completed_delivery_condition
 from common.utils.time_utils import get_beijing_now_naive
 
 
@@ -59,6 +60,7 @@ class AutoRelistDiscoveryMixin:
                     XYOrder.owner_id == rule.user_id,
                     XYOrder.account_id == rule.account_id,
                     XYOrder.item_id == rule.current_item_id,
+                    completed_delivery_condition(),
                     or_(
                         and_(
                             XYOrder.status.in_(["shipped", "completed"]),

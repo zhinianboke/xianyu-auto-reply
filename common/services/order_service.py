@@ -24,6 +24,7 @@ from loguru import logger
 from common.models.xy_order import XYOrder
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.auto_reply_message_log import XYAutoReplyMessageLog
+from common.services.order_delivery_result import attach_delivery_result
 
 
 # 复用的 goofish API 连接池（TCPConnector）
@@ -464,6 +465,8 @@ class OrderService:
         delivery_method: str,
         delivery_content: str | None = None,
         buyer_fish_nick: str | None = None,
+        *,
+        delivery_result: dict | None = None,
     ) -> bool:
         """更新订单发货信息
         
@@ -473,6 +476,7 @@ class OrderService:
             delivery_method: 发货方式 (manual-手动发货, auto-自动发货, scheduled-定时发货)
             delivery_content: 发货内容（卡券内容）
             buyer_fish_nick: 买家闲鱼昵称（明文）
+            delivery_result: 可选的结构化发货结果，与状态在同一事务保存
             
         Returns:
             是否更新成功
@@ -490,6 +494,7 @@ class OrderService:
             if buyer_fish_nick:
                 values["buyer_fish_nick"] = buyer_fish_nick
 
+            values = await attach_delivery_result(self.session, order_no, values, delivery_result)
             stmt = (
                 update(XYOrder)
                 .where(XYOrder.order_no == order_no)
@@ -499,7 +504,7 @@ class OrderService:
             await self.session.commit()
             return result.rowcount > 0
         except Exception as e:
-            logger.error(f"更新订单发货信息失败: {e}")
+            logger.opt(exception=e).error(f"更新订单发货信息失败: order_no={order_no}, 错误={e}")
             await self.session.rollback()
             return False
 
@@ -509,13 +514,15 @@ class OrderService:
         delivery_method: str,
         delivery_content: str | None = None,
         buyer_fish_nick: str | None = None,
+        *,
+        delivery_result: dict | None = None,
     ) -> bool:
         """专为「禁止发货 + 主动关闭订单 + 关闭后只发卡券」场景设计的记录方法
 
         与 update_order_delivery_info 的区别：
           - 不修改 status：因为订单已经被卖家主动关闭（status 已由关闭流程更新），
             这里再标记为 'shipped' 会导致与闲鱼平台真实状态冲突
-          - 写入 card_only_delivered：标记只发卡券流程已完成，供自动续售识别该场景
+          - 写入 card_only_delivered 防重复；是否完成还需核对结构化发货结果
           - 不清空 delivery_fail_reason：保留 pre_delivery_check_and_close 写入的
             "禁止发货原因"，便于后续追溯为什么走了 card_only 流程
 
@@ -526,6 +533,7 @@ class OrderService:
             delivery_method: 发货方式（沿用 'auto' / 'manual' / 'scheduled' 等）
             delivery_content: 补发的卡券内容（>2000 字会截断）
             buyer_fish_nick: 买家闲鱼昵称（明文）
+            delivery_result: 可选的结构化发货结果，与防重标记在同一事务保存
 
         Returns:
             是否更新成功
@@ -542,6 +550,7 @@ class OrderService:
             if buyer_fish_nick:
                 values["buyer_fish_nick"] = buyer_fish_nick
 
+            values = await attach_delivery_result(self.session, order_no, values, delivery_result)
             stmt = (
                 update(XYOrder)
                 .where(XYOrder.order_no == order_no)
@@ -551,7 +560,7 @@ class OrderService:
             await self.session.commit()
             return result.rowcount > 0
         except Exception as e:
-            logger.error(f"记录已关闭订单的卡券补发信息失败: {e}")
+            logger.opt(exception=e).error(f"记录已关闭订单的卡券补发信息失败: order_no={order_no}, 错误={e}")
             await self.session.rollback()
             return False
 
@@ -561,11 +570,14 @@ class OrderService:
         delivery_method: str,
         delivery_content: str | None = None,
         buyer_fish_nick: str | None = None,
+        *,
+        delivery_result: dict | None = None,
     ) -> bool:
-        """记录账号级“只发卡券”已处理结果，不伪造闲鱼平台订单状态。
+        """记录已取卡的防重结果，不伪造平台状态，也不将部分发货视为完成。
 
         卡券内容在调用本方法前可能已经从库存/API 中取出，因此即使消息发送失败也要
         持久化防重标记和内容，避免定时任务再次消费一张新卡券。失败原因由调用方随后写入。
+        delivery_result 可选，存在时与内容及防重标记原子保存；返回是否保存成功。
         """
         try:
             if delivery_content and len(delivery_content) > 2000:
@@ -580,6 +592,7 @@ class OrderService:
             if buyer_fish_nick:
                 values["buyer_fish_nick"] = buyer_fish_nick
 
+            values = await attach_delivery_result(self.session, order_no, values, delivery_result)
             stmt = (
                 update(XYOrder)
                 .where(XYOrder.order_no == order_no)
@@ -589,7 +602,7 @@ class OrderService:
             await self.session.commit()
             return result.rowcount > 0
         except Exception as e:
-            logger.error(f"记录只发卡券结果失败: {e}")
+            logger.opt(exception=e).error(f"记录只发卡券结果失败: order_no={order_no}, 错误={e}")
             await self.session.rollback()
             return False
 

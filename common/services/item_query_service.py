@@ -1,6 +1,6 @@
-"""商品管理分页查询：先定位本页商品，再在同一次查询中读取配置状态。
+"""商品管理分页查询：先定位本页商品，再按实际归属批量读取卡券状态。
 
-保留商品 ID、标题、完整详情包含搜索以及历史卡券状态口径，减少数据库往返。
+保留商品 ID、标题和完整详情搜索，卡券状态共用自有与合法对接授权规则。
 """
 from __future__ import annotations
 
@@ -11,11 +11,10 @@ from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.db.retry import with_db_retry
-from common.models.card import Card
-from common.models.card_item_relation import CardItemRelation
 from common.models.default_reply import DefaultReply
 from common.models.xy_account import XYAccount
 from common.models.xy_catalog_item import XYCatalogItem
+from common.services.card_matcher import CardMatcher
 
 
 class ItemQueryService:
@@ -63,8 +62,8 @@ class ItemQueryService:
 
     @staticmethod
     def _page_statement(conditions: list, page: int, page_size: int):
-        """按筛选和分页构造查询，返回商品、账号、默认回复状态和卡券状态。"""
-        # 派生表先分页，详情读取和状态子查询只对本页执行；时间相同按主键稳定排序。
+        """按筛选和分页构造商品、账号和默认回复状态查询，卡券状态随后批量补齐。"""
+        # 派生表先分页，详情和默认回复查询只对本页执行；时间相同按主键稳定排序。
         page_ids = (
             select(XYCatalogItem.id).where(*conditions)
             .order_by(XYCatalogItem.created_at.desc(), XYCatalogItem.id.desc())
@@ -82,17 +81,9 @@ class ItemQueryService:
         has_reply = select(DefaultReply.id).where(*reply_conditions).correlate(
             XYCatalogItem, XYAccount
         ).exists()
-        # 保留现有口径：关联表存在，或旧字段中存在启用卡券，即为已配置。
-        has_relation = select(CardItemRelation.id).where(
-            CardItemRelation.item_id == XYCatalogItem.item_id
-        ).correlate(XYCatalogItem).exists()
-        has_legacy_card = select(Card.id).where(
-            Card.item_id == XYCatalogItem.item_id, Card.enabled == True
-        ).correlate(XYCatalogItem).exists()
         return (
             select(XYCatalogItem, XYAccount.account_id,
-                   func.coalesce(reply_enabled, False), has_reply,
-                   or_(has_relation, has_legacy_card))
+                   func.coalesce(reply_enabled, False), has_reply)
             .join(page_ids, page_ids.c.id == XYCatalogItem.id)
             .outerjoin(XYAccount, XYCatalogItem.account_pk == XYAccount.id)
             .order_by(XYCatalogItem.created_at.desc(), XYCatalogItem.id.desc())
@@ -124,6 +115,16 @@ class ItemQueryService:
                     self._page_statement(conditions, page, page_size)
                 )
                 rows = result.all()
+                owner_items: dict[int, list[str]] = {}
+                for row in rows:
+                    owner_items.setdefault(row[0].owner_id, []).append(row[0].item_id)
+                card_states = {}
+                matcher = CardMatcher(self.session)
+                for item_owner_id, item_ids in owner_items.items():
+                    states = await matcher.get_items_with_card_status(item_ids, item_owner_id)
+                    card_states.update(((item_owner_id, item_id), enabled) for item_id, enabled in states.items())
+                # 管理和发货共用授权规则，非法旧绑定不会被展示成可用配置。
+                rows = [tuple(row) + (card_states.get((row[0].owner_id, row[0].item_id), False),) for row in rows]
             logger.info(
                 "商品分页查询完成: owner_id={}, account_id={}, page={}, page_size={}, "
                 "keyword={}, total={}, returned={}, duration_ms={:.1f}",

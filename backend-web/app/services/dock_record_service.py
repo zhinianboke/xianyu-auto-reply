@@ -145,6 +145,7 @@ class DockRecordService:
             .where(
                 DockRecord.id == record_id,
                 Card.user_id == owner_user_id,
+                Card.is_deleted.is_(False),
             )
         )
         result = await self.session.execute(stmt)
@@ -215,7 +216,7 @@ class DockRecordService:
         Returns:
             分页数据字典
         """
-        base_conditions = []
+        base_conditions = [DockRecord.card_id.in_(select(Card.id).where(Card.is_deleted.is_(False)))]
         if user_id is not None:
             base_conditions.append(DockRecord.user_id == user_id)
         if search:
@@ -368,7 +369,7 @@ class DockRecordService:
             分页数据字典，每条记录包含分销商信息和对接卡券数量
         """
         # 基础条件：对接记录关联的卡券属于当前用户
-        base_conditions = [Card.user_id == owner_user_id]
+        base_conditions = [Card.user_id == owner_user_id, Card.is_deleted.is_(False)]
         if search:
             base_conditions.append(User.username.ilike(f"%{search}%"))
 
@@ -449,6 +450,7 @@ class DockRecordService:
         base_conditions = [
             DockRecord.user_id == dealer_user_id,
             Card.user_id == owner_user_id,
+            Card.is_deleted.is_(False),
         ]
 
         # 查询总数
@@ -516,6 +518,7 @@ class DockRecordService:
             DockRecord.user_id == dealer_user_id,
             DockRecord.source_user_id == source_user_id,
             DockRecord.level == 2,
+            DockRecord.card_id.in_(select(Card.id).where(Card.is_deleted.is_(False))),
         ]
 
         # 查询总数
@@ -648,6 +651,7 @@ class DockRecordService:
             DockRecord.allow_sub_dock == True,
             DockRecord.status == True,
             DockRecord.user_id != current_user_id,
+            Card.is_deleted.is_(False),
         ]
         
         # sub_dock_visibility 过滤：public/NULL 所有人可见，dealer_only 仅已绑定对接码的可见
@@ -898,6 +902,7 @@ class DockRecordService:
             .where(
                 DockRecord.id == record_id,
                 Card.user_id == owner_user_id,
+                Card.is_deleted.is_(False),
             )
         )
         result = await self.session.execute(stmt)

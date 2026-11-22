@@ -3,6 +3,33 @@ import type { ApiResponse } from '@/types'
 
 const CARD_PREFIX = '/api/v1/cards'
 
+/** 检查卡券接口业务结果，保留后端拒绝原因。 */
+const requireCardSuccess = (result: unknown): void => {
+  if (!result || typeof result !== 'object') throw new Error('卡券接口返回格式错误，请重试')
+  if (result && typeof result === 'object' && 'success' in result && result.success === false) {
+    const message = 'message' in result && typeof result.message === 'string' ? result.message : '卡券操作失败'
+    throw new Error(message)
+  }
+}
+
+/** 兼容旧版裸数据和统一响应中的 data，业务失败不返回空数据。 */
+const cardData = async <T>(request: Promise<unknown>): Promise<T> => {
+  const result = await request
+  requireCardSuccess(result)
+  if (result && typeof result === 'object' && 'success' in result && 'data' in result) {
+    if (result.data === null || result.data === undefined) throw new Error('卡券接口返回格式错误，请重试')
+    return result.data as T
+  }
+  return result as T
+}
+
+/** 操作接口保留 success/message，兼容旧版操作结果。 */
+const cardResponse = async <T = unknown>(request: Promise<unknown>): Promise<ApiResponse<T>> => {
+  const result = await request
+  requireCardSuccess(result)
+  return { ...(result as ApiResponse<T>), success: true }
+}
+
 // 卡券类型定义
 export interface CardData {
   id?: number
@@ -68,20 +95,20 @@ export const getCards = async (params?: CardQueryParams): Promise<CardPaginatedR
   if (params?.type) query.set('type', params.type)
   const qs = query.toString()
   const url = qs ? `${CARD_PREFIX}?${qs}` : CARD_PREFIX
-  return get<CardPaginatedResult>(url)
+  return cardData<CardPaginatedResult>(get(url))
 }
 
 // 获取全部卡券（不分页，用于关联弹窗等场景）
 // lite=1：仅返回列表所需轻字段（剔除卡密/文本/API配置/图片等大字段），
 // 避免卡券过多时一次性传输超大 JSON 导致界面卡顿；完整内容用 getCard 按需获取
 export const getAllCards = async (): Promise<CardData[]> => {
-  const result = await get<CardPaginatedResult>(`${CARD_PREFIX}?page_size=9999&lite=1`)
-  return result?.list || []
+  const result = await cardData<CardPaginatedResult>(get(`${CARD_PREFIX}?page_size=9999&lite=1`))
+  return result.list
 }
 
 // 获取单个卡券完整详情（用于列表中按需查看详情，补齐轻量列表未返回的大字段）
 export const getCard = (cardId: number): Promise<CardData> => {
-  return get<CardData>(`${CARD_PREFIX}/${cardId}`)
+  return cardData<CardData>(get(`${CARD_PREFIX}/${cardId}`))
 }
 
 // 商品关联卡券选择弹窗：可选卡券项（自有 + 对接 合并后的轻字段）
@@ -121,7 +148,7 @@ export const getSelectableCards = (
   q.set('page', String(page))
   q.set('page_size', String(pageSize))
   if (search) q.set('search', search)
-  return get<SelectablePaginatedResult>(`${CARD_PREFIX}/selectable?${q.toString()}`)
+  return cardData<SelectablePaginatedResult>(get(`${CARD_PREFIX}/selectable?${q.toString()}`))
 }
 
 // 获取全部匹配的可选卡券轻量项（供「全选当前筛选结果」）
@@ -131,52 +158,54 @@ export const getAllSelectableCardKeys = (
   const q = new URLSearchParams()
   if (search) q.set('search', search)
   const qs = q.toString()
-  return get(`${CARD_PREFIX}/selectable/all${qs ? `?${qs}` : ''}`)
+  return cardData(get(`${CARD_PREFIX}/selectable/all${qs ? `?${qs}` : ''}`))
 }
 
 // 按商品ID获取卡券列表
 export const getCardsByItemId = async (itemId: string): Promise<{ success: boolean; data?: CardData[] }> => {
-  const result = await get<CardData[]>(`${CARD_PREFIX}/item/${itemId}`)
-  return { success: true, data: Array.isArray(result) ? result : [] }
+  const result = await cardData<CardData[]>(get(`${CARD_PREFIX}/item/${itemId}`))
+  if (!Array.isArray(result)) throw new Error('卡券接口返回格式错误，请重试')
+  return { success: true, data: result }
 }
 
 // 创建卡券
 export const createCard = (data: Omit<CardData, 'id' | 'created_at' | 'updated_at' | 'user_id'>): Promise<{ id: number; message: string }> => {
-  return post(CARD_PREFIX, data)
+  return cardData(post(CARD_PREFIX, data))
 }
 
 // 更新卡券
 export const updateCard = (cardId: string, data: Partial<CardData>): Promise<ApiResponse> => {
-  return put(`${CARD_PREFIX}/${cardId}`, data)
+  return cardResponse(put(`${CARD_PREFIX}/${cardId}`, data))
 }
 
 // 删除卡券
 export const deleteCard = (cardId: string): Promise<ApiResponse> => {
-  return del(`${CARD_PREFIX}/${cardId}`)
+  return cardResponse(del(`${CARD_PREFIX}/${cardId}`))
 }
 
 // 批量删除卡券
 export const batchDeleteCards = (cardIds: number[]): Promise<ApiResponse> => {
-  return post(`${CARD_PREFIX}/batch-delete`, { ids: cardIds })
+  return cardResponse(post(`${CARD_PREFIX}/batch-delete`, { ids: cardIds }))
 }
 
 // 上传卡券图片
 export const uploadCardImage = async (file: File): Promise<{ success: boolean; image_url?: string; message?: string }> => {
   const formData = new FormData()
   formData.append('image', file)
-  return post(`${CARD_PREFIX}/upload-image`, formData, {
+  const result = await cardData<{ image_url?: string; message?: string }>(post(`${CARD_PREFIX}/upload-image`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
-  })
+  }))
+  return { ...result, success: true }
 }
 
 // 获取卡券关联的商品ID列表
 export const getCardItemIds = (cardId: number): Promise<ApiResponse<{ item_ids: string[] }>> => {
-  return get(`${CARD_PREFIX}/${cardId}/items`)
+  return cardResponse(get(`${CARD_PREFIX}/${cardId}/items`))
 }
 
 // 更新卡券关联的商品列表
 export const updateCardItems = (cardId: number, itemIds: string[]): Promise<ApiResponse> => {
-  return put(`${CARD_PREFIX}/${cardId}/items`, { item_ids: itemIds })
+  return cardResponse(put(`${CARD_PREFIX}/${cardId}/items`, { item_ids: itemIds }))
 }
 
 // 单条卡券关联信息
@@ -191,12 +220,12 @@ export const updateItemCards = (
   itemId: string,
   cardItems: CardRelationItem[],
 ): Promise<ApiResponse> => {
-  return put(`${CARD_PREFIX}/item/${itemId}/cards`, {
+  return cardResponse(put(`${CARD_PREFIX}/item/${itemId}/cards`, {
     card_items: cardItems,
-  })
+  }))
 }
 
 // 批量清空商品的卡券关联关系（不删除卡券本身）
 export const batchClearItemRelations = (itemIds: string[]): Promise<ApiResponse> => {
-  return post(`${CARD_PREFIX}/batch-clear-item-relations`, { item_ids: itemIds })
+  return cardResponse(post(`${CARD_PREFIX}/batch-clear-item-relations`, { item_ids: itemIds }))
 }

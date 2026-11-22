@@ -21,6 +21,7 @@ from sqlalchemy.orm import aliased, load_only
 
 from common.models.card import Card
 from common.models.dock_record import DockRecord
+from common.services.card_access import dock_access_condition
 
 
 class SelectableCardService:
@@ -39,7 +40,7 @@ class SelectableCardService:
 
     def _own_conditions(self, user_id: Optional[int], search: str) -> List[Any]:
         """构建自有卡券查询条件（owner 作用域 + 搜索：名称/类型/ID）"""
-        conds: List[Any] = []
+        conds: List[Any] = [Card.is_deleted.is_(False)]
         if user_id is not None:
             conds.append(Card.user_id == user_id)
         if search:
@@ -57,16 +58,16 @@ class SelectableCardService:
     def _dock_conditions(self, user_id: Optional[int], search: str) -> List[Any]:
         """构建对接卡券查询条件
 
-        - 仅启用（status=True）的对接记录
+        - 供货卡及对接链均有效，与绑定保存和发货的授权规则一致
         - owner 作用域
         - 去重：card_id 不在本人自有卡券集合内（与前端历史行为一致）
         - 搜索：对接名称 或 卡券名称
         """
-        conds: List[Any] = [DockRecord.status == True]  # noqa: E712
+        conds: List[Any] = [dock_access_condition()]
         if user_id is not None:
             conds.append(DockRecord.user_id == user_id)
         # 去重：对接记录引用的 card_id 若已是本人自有卡券，则不重复展示
-        own_ids_subq = select(Card.id)
+        own_ids_subq = select(Card.id).where(Card.is_deleted.is_(False))
         if user_id is not None:
             own_ids_subq = own_ids_subq.where(Card.user_id == user_id)
         conds.append(DockRecord.card_id.notin_(own_ids_subq))

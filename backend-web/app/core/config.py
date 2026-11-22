@@ -12,7 +12,7 @@ import json
 from functools import lru_cache
 from typing import List
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, field_validator
 
 from common.core.config import BaseConfig
 from common.utils.service_restart import detect_runtime
@@ -39,6 +39,23 @@ class BackendWebConfig(BaseConfig):
     version: str = Field(default="0.1.0")
     api_v1_prefix: str = Field(default="/api/v1")
     service_port: int = Field(default=8089, alias="BACKEND_WEB_PORT")
+
+    # 卡券请求总大小限制（字节），与历史 Nginx 50 MiB 上限一致；图片业务上限不变。
+    card_request_max_bytes: int = Field(default=52428800, ge=1, alias="CARD_REQUEST_MAX_BYTES")
+
+    @field_validator("card_request_max_bytes", mode="before")
+    @classmethod
+    def validate_card_request_max_bytes(cls, value: object) -> int:
+        """校验卡券请求上限；参数为环境或 .env 原值，返回正整数字节数，非法值明确报错。"""
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            raise ValueError("CARD_REQUEST_MAX_BYTES 必须为正整数（字节）")
+        try:
+            limit = int(value)
+        except ValueError as exc:
+            raise ValueError("CARD_REQUEST_MAX_BYTES 必须为正整数（字节）") from exc
+        if limit <= 0:
+            raise ValueError("CARD_REQUEST_MAX_BYTES 必须为正整数（字节）")
+        return limit
 
     # 在线安装的连接、执行时限及共享任务日志保留时间（秒）。
     online_install_connect_timeout: int = Field(default=60, ge=1, le=60)

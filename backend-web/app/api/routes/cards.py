@@ -1,165 +1,24 @@
-"""卡券管理路由"""
+"""卡券管理路由：按当前用户校验对象权限，统一响应并保留旧客户端字典字段。"""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from app.api.routes.cards_support import CardAPIRoute, CARD_UPLOAD_DIR, get_card_service, _validate_card_payload
+from app.schemas.cards import (
+    CardCreate, CardUpdate, BatchDeleteRequest, BatchSaveCardRequest,
+    BatchClearItemRelationsRequest, BatchBindRequest, UpdateCardItemsRequest,
+    UpdateItemCardsRequest,
+)
+from app.services.card_service import CardService
+from app.services.selectable_card_service import SelectableCardService
 from common.models.user import User
 from common.schemas.common import ApiResponse
 from common.utils.auth_scope import resolve_owner_scope
 from common.utils.local_image_upload import ImageUploadError, save_uploaded_image
-from app.services.card_service import CardService
-from app.services.selectable_card_service import SelectableCardService
 
-router = APIRouter(tags=["cards"])
-
-# 卡券图片上传目录 - 使用统一的静态文件根目录（兼容Docker共享卷）
-from app.core.paths import STATIC_ROOT
-CARD_UPLOAD_DIR = STATIC_ROOT / "uploads" / "cards"
-CARD_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-
-class CardCreate(BaseModel):
-    item_id: Optional[str] = None  # 关联商品ID
-    name: str
-    type: str  # 'api' | 'text' | 'data' | 'image'
-    description: Optional[str] = None
-    enabled: Optional[bool] = True
-    delay_seconds: Optional[int] = 0
-    use_no_logistics_form: bool = False
-    price: Optional[str] = None  # 对接价格
-    is_dockable: Optional[bool] = False  # 是否可对接
-    fee_payer: Optional[str] = None  # 手续费支付方式：distributor/dealer
-    min_price: Optional[str] = None  # 最低售价
-    dock_visibility: Optional[str] = None  # 对接可见性：public/dealer_only
-    is_multi_spec: Optional[bool] = False
-    spec_name: Optional[str] = None
-    spec_value: Optional[str] = None
-    api_config: Optional[Dict[str, Any]] = None
-    text_content: Optional[str] = None
-    data_content: Optional[str] = None
-    image_url: Optional[str] = None
-    image_urls: Optional[List[str]] = None  # 多图片URL列表，最多3张
-
-
-class CardUpdate(BaseModel):
-    item_id: Optional[str] = None  # 关联商品ID
-    name: Optional[str] = None
-    type: Optional[str] = None
-    description: Optional[str] = None
-    enabled: Optional[bool] = None
-    delay_seconds: Optional[int] = None
-    use_no_logistics_form: Optional[bool] = None
-    price: Optional[str] = None  # 对接价格
-    is_dockable: Optional[bool] = None  # 是否可对接
-    fee_payer: Optional[str] = None  # 手续费支付方式：distributor/dealer
-    min_price: Optional[str] = None  # 最低售价
-    dock_visibility: Optional[str] = None  # 对接可见性：public/dealer_only
-    is_multi_spec: Optional[bool] = None
-    spec_name: Optional[str] = None
-    spec_value: Optional[str] = None
-    api_config: Optional[Dict[str, Any]] = None
-    text_content: Optional[str] = None
-    data_content: Optional[str] = None
-    image_url: Optional[str] = None
-    image_urls: Optional[List[str]] = None  # 多图片URL列表，最多3张
-
-
-class BatchDeleteRequest(BaseModel):
-    ids: List[int]
-
-
-class BatchSaveCardRequest(BaseModel):
-    """批量保存卡券请求"""
-    item_ids: List[str]
-    name: str
-    type: str
-    description: Optional[str] = None
-    enabled: Optional[bool] = True
-    delay_seconds: Optional[int] = 0
-    use_no_logistics_form: bool = False
-    price: Optional[str] = None  # 对接价格
-    is_dockable: Optional[bool] = False  # 是否可对接
-    fee_payer: Optional[str] = None  # 手续费支付方式：distributor/dealer
-    min_price: Optional[str] = None  # 最低售价
-    dock_visibility: Optional[str] = None  # 对接可见性：public/dealer_only
-    is_multi_spec: Optional[bool] = False
-    spec_name: Optional[str] = None
-    spec_value: Optional[str] = None
-    api_config: Optional[Dict[str, Any]] = None
-    text_content: Optional[str] = None
-    data_content: Optional[str] = None
-    image_url: Optional[str] = None
-    image_urls: Optional[List[str]] = None  # 多图片URL列表，最多3张
-
-
-class BatchClearItemRelationsRequest(BaseModel):
-    """批量清空商品的卡券关联关系"""
-    item_ids: List[str]
-
-
-class BatchBindRequest(BaseModel):
-    """批量绑定卡券到商品（多对多关联表方式）"""
-    card_ids: List[int]
-    item_ids: List[str]
-
-
-class UpdateCardItemsRequest(BaseModel):
-    """更新卡券关联的商品列表"""
-    item_ids: List[str]
-
-
-class CardRelationItem(BaseModel):
-    """单条卡券关联信息"""
-    card_id: int
-    source: str = "own"  # own/dock_l1/dock_l2
-    dock_record_id: Optional[int] = None
-
-class UpdateItemCardsRequest(BaseModel):
-    """更新商品关联的卡券列表"""
-    card_items: List[CardRelationItem]
-
-
-async def get_card_service(session: AsyncSession = Depends(deps.get_db_session)) -> CardService:
-    return CardService(session)
-
-
-def _validate_card_payload(data: Any, *, validate_fee_payer: bool = True) -> Optional[str]:
-    """校验卡券请求负载的公共逻辑。
-
-    被 create_card / update_card / batch_save_card 三处共用，避免多处重复
-    书写多规格、图片数量、手续费支付方式三块同样的校验代码。
-
-    Args:
-        data: ``CardCreate`` / ``CardUpdate`` / ``BatchSaveCardRequest`` 实例，
-            需拥有 ``is_multi_spec`` / ``spec_name`` / ``spec_value`` /
-            ``image_urls`` / ``is_dockable`` / ``fee_payer`` 这些字段。
-        validate_fee_payer: 是否对 ``is_dockable`` 与 ``fee_payer`` 执行校验。
-            默认开启；批量保存接口历史上不做该校验，由调用方传 ``False``
-            以保持原有行为，避免意外重收紧。
-
-    Returns:
-        首个不通过项的中文错误消息，可直接作为 HTTPException ``detail`` 或
-        ApiResponse ``message``；全部通过返回 ``None``。
-    """
-    if data.is_multi_spec:
-        if not data.spec_name or not data.spec_value:
-            return "多规格卡券必须提供规格名称和规格值"
-
-    if data.image_urls and len(data.image_urls) > 3:
-        return "最多只能上传3张图片"
-
-    if validate_fee_payer:
-        if data.is_dockable and not data.fee_payer:
-            return "勾选可对接时，手续费支付方式必选"
-        if data.fee_payer and data.fee_payer not in ('distributor', 'dealer'):
-            return "手续费支付方式无效"
-
-    return None
+router = APIRouter(tags=["cards"], route_class=CardAPIRoute)
 
 
 @router.get("")
@@ -379,7 +238,8 @@ async def get_card_items(
     card_service: CardService = Depends(get_card_service),
 ):
     """获取卡券关联的商品ID列表"""
-    item_ids = await card_service.get_card_item_ids(card_id)
+    user_id, _ = resolve_owner_scope(current_user)
+    item_ids = await card_service.get_card_item_ids(card_id, user_id)
     return ApiResponse(success=True, data={"item_ids": item_ids})
 
 
@@ -411,9 +271,9 @@ async def batch_bind_cards(
 ):
     """批量绑定卡券到商品（通过关联表，不再复制卡券）"""
     if not request.card_ids:
-        return ApiResponse(success=False, message="请至少选择一个卡券")
+        return ApiResponse(success=False, code=40001, message="请至少选择一个卡券")
     if not request.item_ids:
-        return ApiResponse(success=False, message="请至少选择一个商品")
+        return ApiResponse(success=False, code=40001, message="请至少选择一个商品")
 
     result = await card_service.batch_bind_cards_to_items(
         user_id=current_user.id,
@@ -436,13 +296,13 @@ async def batch_save_card(
 ):
     """批量保存卡券到多个商品（创建一个卡券并通过关联表绑定到多个商品）"""
     if not request.item_ids:
-        return ApiResponse(success=False, message="请至少选择一个商品")
+        return ApiResponse(success=False, code=40001, message="请至少选择一个商品")
 
     # 多规格 / 图片数量 校验（与 create_card / update_card 共用 helper；
     # 本接口历史上不做 fee_payer 校验，传 validate_fee_payer=False 保持原有行为）
     err = _validate_card_payload(request, validate_fee_payer=False)
     if err:
-        return ApiResponse(success=False, message=err)
+        return ApiResponse(success=False, code=40001, message=err)
 
     try:
         result = await card_service.batch_save_and_bind(
@@ -475,7 +335,7 @@ async def batch_save_card(
             data=result,
         )
     except ValueError as e:
-        return ApiResponse(success=False, message=str(e))
+        return ApiResponse(success=False, code=40001, message=str(e))
 
 
 @router.delete("/relation/{card_id}/{item_id}")
@@ -486,10 +346,10 @@ async def delete_card_item_relation(
     card_service: CardService = Depends(get_card_service),
 ):
     """删除指定卡券与指定商品的关联关系"""
-    success = await card_service.delete_card_item_relation(card_id, item_id)
+    success = await card_service.delete_card_item_relation(card_id, item_id, current_user.id)
     if success:
         return ApiResponse(success=True, message="已删除关联关系")
-    return ApiResponse(success=False, message="未找到该关联关系")
+    return ApiResponse(success=False, code=40001, message="未找到该关联关系")
 
 
 @router.put("/item/{item_id}/cards")
@@ -525,9 +385,9 @@ async def batch_clear_item_relations(
 ):
     """批量清空商品的卡券关联关系（不删除卡券本身）"""
     if not request.item_ids:
-        return ApiResponse(success=False, message="请至少选择一个商品")
+        return ApiResponse(success=False, code=40001, message="请至少选择一个商品")
 
-    removed = await card_service.batch_clear_item_relations(request.item_ids)
+    removed = await card_service.batch_clear_item_relations(request.item_ids, current_user.id)
     return ApiResponse(
         success=True,
         message=f"已清空 {len(request.item_ids)} 个商品的卡券关联（共删除 {removed} 条关联记录）",

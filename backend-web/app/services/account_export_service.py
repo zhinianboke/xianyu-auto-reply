@@ -168,12 +168,18 @@ class AccountExportService:
         return list(result.scalars().all())
 
     async def _get_cards(self, user_ids: list[int]) -> list[Card]:
-        stmt = select(Card).where(Card.user_id.in_(user_ids)).order_by(Card.id.asc())
+        stmt = select(Card).where(
+            Card.user_id.in_(user_ids), Card.is_deleted.is_(False),
+        ).order_by(Card.id.asc())
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
     async def _get_card_item_relations(self, card_ids: list[int]) -> list[CardItemRelation]:
-        stmt = select(CardItemRelation).where(CardItemRelation.card_id.in_(card_ids))
+        stmt = select(CardItemRelation).join(Card, CardItemRelation.card_id == Card.id).where(
+            CardItemRelation.card_id.in_(card_ids),
+            CardItemRelation.is_deleted.is_(False),
+            CardItemRelation.user_id == Card.user_id,
+        )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 

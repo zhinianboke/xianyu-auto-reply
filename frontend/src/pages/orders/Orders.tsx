@@ -267,7 +267,10 @@ export function Orders() {
     try {
       const result = await manualDelivery(orderNo)
       if (result.success) {
-        addToast({ type: 'success', message: `发货成功: ${result.data?.card_name || ''}` })
+        addToast({
+          type: (result.data?.delivery_incomplete || result.data?.delivery_configuration_changed) ? 'warning' : 'success',
+          message: result.message || '发货成功',
+        })
       } else {
         addToast({ type: 'error', message: result.message || '发货失败' })
       }

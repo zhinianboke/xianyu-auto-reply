@@ -828,7 +828,10 @@ export function ChatNew() {
     setDeliveringOrderNo(orderNo)
     try {
       const res = await manualDelivery(orderNo)
-      addToast({ message: res.message || (res.success ? '发货成功' : '发货失败'), type: res.success ? 'success' : 'error' })
+      addToast({
+        message: res.message || (res.success ? '发货成功' : '发货失败'),
+        type: res.success ? ((res.data?.delivery_incomplete || res.data?.delivery_configuration_changed) ? 'warning' : 'success') : 'error',
+      })
       await loadCustomerOrders()
     } catch (e: any) {
       addToast({ message: e.message || '发货失败', type: 'error' })

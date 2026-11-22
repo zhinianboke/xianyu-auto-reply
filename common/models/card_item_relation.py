@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, DateTime, Index, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base
@@ -35,5 +35,8 @@ class CardItemRelation(Base):
     item_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True, comment="商品ID")
     source: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default="own", comment="卡券来源：own-自有，dock_l1-一级对接，dock_l2-二级对接")
     dock_record_id: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0", comment="对接记录ID（对接卡券时关联，0表示自有卡券）")
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0", comment="是否已软删除"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间")

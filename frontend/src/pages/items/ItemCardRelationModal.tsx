@@ -21,6 +21,7 @@ import {
 } from '@/api/cards'
 import { CardDetailModal } from '@/pages/cards/CardDetailModal'
 import { useUIStore } from '@/store/uiStore'
+import { getApiErrorMessage } from '@/utils/apiError'
 
 // 统一卡券项（自有卡券 + 对接记录）
 interface UnifiedCardItem {
@@ -85,6 +86,7 @@ export function ItemCardRelationModal({ itemId, itemName, onClose, onSaved }: It
   const { addToast } = useUIStore()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [associatedReady, setAssociatedReady] = useState(false)
 
   // 左侧：服务端分页列表
   const [leftItems, setLeftItems] = useState<UnifiedCardItem[]>([])
@@ -141,9 +143,9 @@ export function ItemCardRelationModal({ itemId, itemName, onClose, onSaved }: It
   }, [rightSearch])
 
   // 加载商品已关联的卡券：喂给缓存并作为初始选中项
-  const loadAssociated = async () => {
-    try {
-      const relResult = await getCardsByItemId(itemId)
+  const loadAssociated = () => {
+    setAssociatedReady(false)
+    return getCardsByItemId(itemId).then(relResult => {
       const existing: CardData[] = relResult?.data || []
       const keys = new Set<string>()
       const cacheItems: UnifiedCardItem[] = []
@@ -175,48 +177,40 @@ export function ItemCardRelationModal({ itemId, itemName, onClose, onSaved }: It
       }
       mergeCache(cacheItems)
       setSelectedKeys(keys)
-    } catch {
-      addToast({ type: 'error', message: '加载已关联卡券失败' })
-    }
+      setAssociatedReady(true)
+    }).catch(error => addToast({ type: 'error', message: getApiErrorMessage(error, '加载已关联卡券失败') }))
   }
 
   // 加载/重置到第一页
-  const loadFirstPage = async (search: string) => {
+  const loadFirstPage = (search: string) => {
     setLoading(true)
-    try {
-      const res = await getSelectableCards(itemId, 1, REQUEST_PAGE_SIZE, search)
+    return getSelectableCards(itemId, 1, REQUEST_PAGE_SIZE, search).then(res => {
       const items = (res.list || []).map(toUnified)
       setLeftItems(items)
       setLeftPage(1)
       setLeftTotal(res.total || 0)
       mergeCache(items)
-    } catch {
-      addToast({ type: 'error', message: '加载卡券失败' })
-    } finally {
-      setLoading(false)
-    }
+    }).catch(error => addToast({ type: 'error', message: getApiErrorMessage(error, '加载卡券失败') }))
+      .finally(() => setLoading(false))
   }
 
   // 滚动到底部：加载下一页并追加
-  const loadMore = async () => {
+  const loadMore = () => {
     if (loadingMoreRef.current || loading) return
     if (leftItems.length >= leftTotal) return
     loadingMoreRef.current = true
     setLeftLoadingMore(true)
-    try {
-      const nextPage = leftPage + 1
-      const res = await getSelectableCards(itemId, nextPage, REQUEST_PAGE_SIZE, appliedSearch)
+    const nextPage = leftPage + 1
+    return getSelectableCards(itemId, nextPage, REQUEST_PAGE_SIZE, appliedSearch).then(res => {
       const items = (res.list || []).map(toUnified)
       setLeftItems(prev => [...prev, ...items])
       setLeftPage(nextPage)
       setLeftTotal(res.total || 0)
       mergeCache(items)
-    } catch {
-      addToast({ type: 'error', message: '加载更多失败' })
-    } finally {
+    }).catch(error => addToast({ type: 'error', message: getApiErrorMessage(error, '加载更多失败') })).finally(() => {
       loadingMoreRef.current = false
       setLeftLoadingMore(false)
-    }
+    })
   }
 
   const handleLeftScroll = (e: UIEvent<HTMLDivElement>) => {
@@ -247,10 +241,9 @@ export function ItemCardRelationModal({ itemId, itemName, onClose, onSaved }: It
   }
 
   // 全选/取消全选当前筛选结果（拉取全部匹配项，避免只操作已加载的部分）
-  const handleSelectAll = async (select: boolean) => {
+  const handleSelectAll = (select: boolean) => {
     setSelectAllLoading(true)
-    try {
-      const res = await getAllSelectableCardKeys(appliedSearch)
+    return getAllSelectableCardKeys(appliedSearch).then(res => {
       const items = (res.list || []).map(toUnified)
       mergeCache(items)
       const keys = items.map(i => i.uniqueKey)
@@ -263,25 +256,18 @@ export function ItemCardRelationModal({ itemId, itemName, onClose, onSaved }: It
         }
         return next
       })
-    } catch {
-      addToast({ type: 'error', message: '全选加载失败' })
-    } finally {
-      setSelectAllLoading(false)
-    }
+    }).catch(error => addToast({ type: 'error', message: getApiErrorMessage(error, '全选加载失败') }))
+      .finally(() => setSelectAllLoading(false))
   }
 
   // 按需拉取卡券完整详情后再打开详情弹窗
-  const openCardDetail = async (card: UnifiedCardItem) => {
+  const openCardDetail = (card: UnifiedCardItem) => {
     if (card.id === undefined) return
     setDetailLoadingKey(card.uniqueKey)
-    try {
-      const full = await getCard(card.id)
+    return getCard(card.id).then(full => {
       setViewingCard(full)
-    } catch {
-      addToast({ type: 'error', message: '加载卡券详情失败' })
-    } finally {
-      setDetailLoadingKey(null)
-    }
+    }).catch(error => addToast({ type: 'error', message: getApiErrorMessage(error, '加载卡券详情失败') }))
+      .finally(() => setDetailLoadingKey(null))
   }
 
   // 右侧已选卡券列表（从缓存按选中键取，按右侧搜索本地过滤）
@@ -303,21 +289,21 @@ export function ItemCardRelationModal({ itemId, itemName, onClose, onSaved }: It
   const allLoadedSelected = leftItems.length > 0 && leftItems.every(c => selectedKeys.has(c.uniqueKey))
 
   // 保存
-  const handleSave = async () => {
+  const handleSave = () => {
+    if (!associatedReady) return
     setSaving(true)
-    try {
-      const cardItems: CardRelationItem[] = []
-      for (const key of selectedKeys) {
-        const card = cardCache.get(key)
-        if (card && card.id !== undefined) {
-          cardItems.push({
-            card_id: card.id,
-            source: card.source,
-            dock_record_id: card.dockRecordId ?? null,
-          })
-        }
+    const cardItems: CardRelationItem[] = []
+    for (const key of selectedKeys) {
+      const card = cardCache.get(key)
+      if (card && card.id !== undefined) {
+        cardItems.push({
+          card_id: card.id,
+          source: card.source,
+          dock_record_id: card.dockRecordId ?? null,
+        })
       }
-      const result = await updateItemCards(itemId, cardItems)
+    }
+    return updateItemCards(itemId, cardItems).then(result => {
       if (result.success) {
         addToast({ type: 'success', message: result.message || '关联卡券保存成功' })
         onSaved()
@@ -325,11 +311,8 @@ export function ItemCardRelationModal({ itemId, itemName, onClose, onSaved }: It
       } else {
         addToast({ type: 'error', message: result.message || '保存失败' })
       }
-    } catch {
-      addToast({ type: 'error', message: '保存失败' })
-    } finally {
-      setSaving(false)
-    }
+    }).catch(error => addToast({ type: 'error', message: getApiErrorMessage(error, '保存失败') }))
+      .finally(() => setSaving(false))
   }
 
   // 卡券来源标签
@@ -380,7 +363,7 @@ export function ItemCardRelationModal({ itemId, itemName, onClose, onSaved }: It
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handleSelectAll(!allLoadedSelected)}
-                      disabled={selectAllLoading || leftTotal === 0}
+                      disabled={selectAllLoading || !associatedReady || leftTotal === 0}
                       className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-50 ${
                         allLoadedSelected
                           ? 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400'
@@ -428,7 +411,7 @@ export function ItemCardRelationModal({ itemId, itemName, onClose, onSaved }: It
                       return (
                         <div
                           key={card.uniqueKey}
-                          onClick={() => toggleCard(card.uniqueKey)}
+                          onClick={() => associatedReady && !saving && toggleCard(card.uniqueKey)}
                           className={`flex items-center gap-3 px-4 py-2.5 border-b border-gray-100 dark:border-gray-800 cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors ${checked ? 'bg-blue-50 dark:bg-blue-900/20' : ''}`}
                         >
                           {checked ? (
@@ -564,7 +547,7 @@ export function ItemCardRelationModal({ itemId, itemName, onClose, onSaved }: It
           <button onClick={onClose} className="btn-ios-secondary" disabled={saving}>
             取消
           </button>
-          <button onClick={handleSave} className="btn-ios-primary" disabled={saving || loading}>
+          <button onClick={handleSave} className="btn-ios-primary" disabled={saving || loading || !associatedReady}>
             {saving ? (
               <span className="flex items-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin" />

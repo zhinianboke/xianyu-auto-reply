@@ -4,10 +4,11 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable
 
 from loguru import logger
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from common.models.card import Card
 from common.models.card_item_relation import CardItemRelation
 from common.models.default_reply import DefaultReply
 from common.models.relist_association_migration import RelistAssociationMigration
@@ -16,6 +17,8 @@ from common.models.xy_catalog_item import XYCatalogItem
 from common.models.xy_delivery_block_rule import XYDeliveryBlockRule
 from common.models.xy_keyword_rule import XYKeywordRule
 from common.models.xy_personal_blacklist import XYPersonalBlacklist
+from common.services.card_access import CardAccess, CardAccessError
+from common.services.card_matcher import CardMatcher
 
 
 class RelistAssociationMigrationService:
@@ -144,52 +147,72 @@ class RelistAssociationMigrationService:
             raise
 
     async def _migrate_card_relations(self, owner_id: int, old_item_id: str, new_item_id: str) -> None:
+        """按历史物理键迁移整组关系；有效源优先，目标历史保留且绝不接管他人。"""
+        # 与绑定和软删除共用“先卡后关系”的锁顺序，包含已删除卡以安全保留墓碑。
+        source_card_ids = set((await self.session.execute(select(CardItemRelation.card_id).where(
+            CardItemRelation.user_id == owner_id, CardItemRelation.item_id == old_item_id,
+        ))).scalars().all())
+        locked_cards = set((await self.session.execute(select(Card.id).where(
+            Card.id.in_(source_card_ids),
+        ).order_by(Card.id).with_for_update())).scalars().all())
         rows = (
             await self.session.execute(
                 select(CardItemRelation).where(
                     CardItemRelation.user_id == owner_id,
                     CardItemRelation.item_id == old_item_id,
-                )
+                ).order_by(CardItemRelation.id).with_for_update().execution_options(populate_existing=True)
             )
         ).scalars().all()
+        # 同一唯一键的 NULL/0 与来源 NULL/own 历史是一个逻辑关系；源墓碑不能
+        # 遮蔽仍有效的活跃记录。不存在的旧卡只允许复制墓碑，不会产生发货授权。
+        groups: dict[tuple[int, int], list[CardItemRelation]] = {}
         for row in rows:
-            # 历史表允许 NULL，而当前表默认使用 0 表示自有卡券。两者视为同一
-            # 个来源进行去重，并将新关系规范化为当前表可接受的 0。
-            source_dock_record_id = row.dock_record_id if row.dock_record_id is not None else 0
-            source_condition = (
-                CardItemRelation.source.is_(None)
-                if row.source is None
-                else CardItemRelation.source == row.source
-            )
-            dock_record_condition = (
-                or_(
-                    CardItemRelation.dock_record_id.is_(None),
-                    CardItemRelation.dock_record_id == 0,
-                )
-                if row.dock_record_id is None
-                else CardItemRelation.dock_record_id == row.dock_record_id
-            )
-            exists = (
-                await self.session.execute(
-                    select(CardItemRelation.id).where(
-                        CardItemRelation.user_id == owner_id,
-                        CardItemRelation.card_id == row.card_id,
-                        CardItemRelation.item_id == new_item_id,
-                        source_condition,
-                        dock_record_condition,
-                    )
-                )
-            ).scalar_one_or_none()
-            if not exists:
-                self.session.add(
-                    CardItemRelation(
-                        user_id=row.user_id,
-                        card_id=row.card_id,
-                        item_id=new_item_id,
-                        source=row.source,
-                        dock_record_id=source_dock_record_id,
-                    )
-                )
+            groups.setdefault((row.card_id, row.dock_record_id or 0), []).append(row)
+        candidates = []
+        access = CardAccess(self.session)
+        for (card_id, dock_id), group in sorted(groups.items()):
+            selected = None
+            for row in group:
+                if row.is_deleted:
+                    continue
+                if card_id not in source_card_ids:
+                    # 源卡集合在锁定期间新增，重试后才能按统一顺序锁定完整集合。
+                    raise CardAccessError("卡券关联已变化，请稍后重试迁移")
+                if card_id not in locked_cards:
+                    logger.warning("续售跳过缺失卡券关联: user_id={}, card_id={}, item_id={}", owner_id, card_id, old_item_id)
+                    continue
+                try:
+                    await access.validate_bindings(owner_id, [{
+                        "card_id": row.card_id,
+                        "source": row.source or "own",
+                        "dock_record_id": dock_id,
+                    }])
+                except CardAccessError as exc:
+                    logger.warning("续售跳过未授权卡券关联: user_id={}, card_id={}, item_id={}, 原因={}", owner_id, row.card_id, old_item_id, exc)
+                    continue
+                selected = row
+                break
+            if selected is None:
+                selected = next((row for row in group if row.is_deleted), None)
+            if selected is not None:
+                candidates.append({
+                    "card_id": card_id, "source": selected.source or "own",
+                    "dock_record_id": dock_id, "is_deleted": selected.is_deleted,
+                })
+        # 在任何新增前检查完整目标集合；非法旧归属即便是墓碑也不能被接管。
+        await CardMatcher(self.session)._check_binding_conflicts(
+            owner_id, [(new_item_id, value) for value in candidates],
+        )
+        targets = (await self.session.execute(select(CardItemRelation).where(
+            CardItemRelation.card_id.in_({value["card_id"] for value in candidates}),
+            CardItemRelation.item_id == new_item_id,
+        ).order_by(CardItemRelation.id).with_for_update())).scalars().all() if candidates else []
+        existing_keys = {(row.card_id, row.dock_record_id or 0) for row in targets}
+        for value in candidates:
+            if (value["card_id"], value["dock_record_id"]) in existing_keys:
+                # 目标的活跃/墓碑及重复历史均保持原样，重复补偿不会复活已撤销绑定。
+                continue
+            self.session.add(CardItemRelation(user_id=owner_id, item_id=new_item_id, **value))
         await self.session.flush()
 
     async def _migrate_keyword_rules(self, owner_id: int, account_pk: int, old_item_id: str, new_item_id: str) -> None:

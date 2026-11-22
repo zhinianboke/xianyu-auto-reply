@@ -24,6 +24,7 @@ from common.db.session import async_session_maker
 from common.models.card import Card
 from common.models.xy_order import XYOrder
 from common.services.card_delivery_content import build_delivery_content
+from common.services.card_matcher import CardMatcher
 from common.services.delivery_utils import CARD_SOURCE_PRIORITY, group_cards_by_source
 from common.utils.time_utils import get_beijing_now_naive
 
@@ -56,6 +57,7 @@ async def read_order_snapshot(order_no: str) -> Optional[Dict[str, Any]]:
             "spec_value": order.spec_value,
             "buyer_fish_nick": order.buyer_fish_nick,
             "account_id": order.account_id,
+            "owner_id": order.owner_id,
             "status": order.status,
             "agree_deliver_agreed": bool(order.agree_deliver_agreed),
             "delivery_content": order.delivery_content,
@@ -121,8 +123,18 @@ async def consume_card_and_record(
         if order.agree_deliver_agreed and order.delivery_content:
             return True, "您已同意发货", order.delivery_content
 
+        # 平台确认后再次按订单归属匹配，防止期间的解绑、停用或删除继续消费卡券。
+        cards = await CardMatcher(session).get_cards_by_item_id(
+            order.item_id, order.spec_name, order.spec_value, user_id=order.owner_id
+        )
+        matched_card, card_error = pick_unique_own_card(cards)
+        if card_error or not matched_card or matched_card["id"] != card_id:
+            return False, card_error or "卡券配置已变更，请联系卖家", None
         card = (
-            await session.execute(select(Card).where(Card.id == card_id))
+            await session.execute(select(Card).where(
+                Card.id == card_id, Card.user_id == order.owner_id,
+                Card.is_deleted == False, Card.enabled == True,
+            ))
         ).scalars().first()
         if not card:
             return False, "卡券不存在，请联系卖家", None

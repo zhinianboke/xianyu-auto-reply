@@ -30,6 +30,9 @@ class Card(Base):
     type: Mapped[str] = mapped_column(String(50), nullable=False, comment='卡券类型(api/text/data/image)')  # api, text, data, image
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='卡券描述')
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment='是否启用')
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0", comment='是否已软删除'
+    )
     delay_seconds: Mapped[int] = mapped_column(Integer, default=0, comment='延迟秒数')
     use_no_logistics_form: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0", comment='是否通过无需邮寄表单发货'
@@ -68,7 +71,7 @@ class Card(Base):
     # 多对多关联关系 - 通过 xy_card_item_relations 表关联商品
     item_relations = relationship(
         "CardItemRelation",
-        primaryjoin="Card.id == CardItemRelation.card_id",
+        primaryjoin="and_(Card.id == CardItemRelation.card_id, CardItemRelation.is_deleted == False)",
         foreign_keys="[CardItemRelation.card_id]",
         viewonly=True,
         lazy="select",

@@ -23,6 +23,7 @@ from common.schemas.item import (
 )
 from common.services.item_offline_service import batch_offline_items_from_xianyu
 from common.services.item_delete_service import batch_delete_items_from_xianyu
+from common.services.card_access import CardAccessError
 from app.services.account_service import AccountService
 from app.services.item_service import ItemService
 from app.services.selectable_item_service import SelectableItemService
@@ -177,10 +178,14 @@ async def list_items_by_card(
     GET /cards/{card_id}/items 提供，保存时不丢失。
     """
     owner_id, _ = resolve_owner_scope(current_user)
-    items = await SelectableItemService(session).get_associated_items(
-        card_id=card_id,
-        owner_id=owner_id,
-    )
+    try:
+        items = await SelectableItemService(session).get_associated_items(
+            card_id=card_id,
+            owner_id=owner_id,
+        )
+    except CardAccessError as exc:
+        logger.warning("读取卡券关联商品被拒绝：card_id=%s，user_id=%s，原因=%s", card_id, current_user.id, exc)
+        return ApiResponse(success=False, code=40001, message=str(exc), data=None)
     return {"list": items, "total": len(items)}
 
 

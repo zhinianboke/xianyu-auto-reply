@@ -8,6 +8,7 @@ import hashlib
 from typing import Any
 
 from common.models.product_material import ProductMaterial
+from common.services.order_delivery_result import has_incomplete_delivery
 from common.utils.time_utils import BEIJING_TZ
 
 
@@ -69,6 +70,8 @@ def build_publish_request_id(rule_id: int, order_no: str, old_item_id: str) -> s
 
 def order_still_eligible(order: Any) -> bool:
     """判断订单当前状态是否仍满足自动续售触发条件。"""
+    if has_incomplete_delivery(order):
+        return False
     has_content = bool(str(order.delivery_content or "").strip())
     normal_delivery = (
         order.status in {"shipped", "completed"}

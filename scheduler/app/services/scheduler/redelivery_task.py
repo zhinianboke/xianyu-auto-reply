@@ -26,6 +26,8 @@ from common.models.xy_account import XYAccount
 from common.models.xy_order import XYOrder
 from common.utils.time_utils import get_beijing_now_naive
 from common.models.card import Card
+from common.services.card_matcher import CardMatcher
+from common.services.order_delivery_result import has_incomplete_delivery, read_delivery_result
 from app.core.config import get_settings
 from app.core.http_client import get_http_client
 
@@ -412,9 +414,12 @@ class RedeliveryTask:
         
         try:
             # 即使 Redis 降级，也先复查持久化状态，避免已发卡订单被重复处理。
-            stmt = select(XYOrder).where(XYOrder.order_no == order_no)
+            stmt = select(XYOrder).where(XYOrder.order_no == order_no).execution_options(populate_existing=True)
             result = await session.execute(stmt)
             current_order = result.scalars().first()
+            if current_order and has_incomplete_delivery(current_order):
+                delivery_result = read_delivery_result(current_order)
+                return False, delivery_result.get("message") or "订单发货未完成，请人工核实后补发；本次未重复耗卡", cookie_string
             if current_order and (
                 current_order.status == 'shipped' or current_order.card_only_delivered
             ):
@@ -613,6 +618,8 @@ class RedeliveryTask:
                     # record_delivery_for_closed_order 维持为 'closed'，并保留 delivery_fail_reason，
                     # 这里若再覆盖为 'shipped' 会让本地状态与平台不一致，且丢失禁止发货原因。
                     if result_data.get('is_card_only'):
+                        if result_data.get('delivery_incomplete') or result_data.get('delivery_configuration_changed'):
+                            return False, result.get('message') or "关闭订单补发中途配置已变更，请人工核实后补发", cookie_string
                         logger.info(
                             f"[定时补发货] 订单 {order_no} card_only 模式：卡券已补发，"
                             f"订单已被关闭，本地状态保持不变，不覆盖为 shipped"
@@ -620,14 +627,15 @@ class RedeliveryTask:
                         # 仍返回 True，避免任务重复触发；视为本次处理完成
                         return True, None, cookie_string
 
-                    if result_data.get('only_send_card'):
+                    delivery_incomplete = bool(result_data.get('delivery_incomplete'))
+                    if result_data.get('only_send_card') or delivery_incomplete:
                         # 平台订单仍是待发货，不能伪装成 shipped；写持久化标记防止下轮重复发券。
                         order.card_only_delivered = True
                         order.delivery_method = "scheduled"
                         order.delivery_content = result_data.get('content', '')
                         await session.commit()
                         logger.info(
-                            f"[定时补发货] 订单 {order_no} 只发卡券完成，"
+                            f"[定时补发货] 订单 {order_no} 已保存本次卡券结果，"
                             f"平台状态保持 {order.status}，已写入防重复标记"
                         )
                     else:
@@ -682,11 +690,20 @@ class RedeliveryTask:
                         final_reason = (
                             f"{degraded_warn_msg}；{intercept_reason}" if degraded_warn_msg else intercept_reason
                         )
+                        if delivery_incomplete or result_data.get('delivery_configuration_changed'):
+                            configuration_reason = result.get('message') or result_data.get('early_break_reason') or "发货配置已变更，请人工核实后补发"
+                            final_reason = f"{configuration_reason}；{final_reason}"
                         logger.warning(
                             f"[定时补发货] 订单 {order_no} 卡券疑似被平台拦截，"
                             f"已标记发货但批次日志记为失败: {final_reason}"
                         )
                         return False, final_reason, cookie_string
+
+                    if delivery_incomplete or result_data.get('delivery_configuration_changed'):
+                        # 已取出的卡券有持久化防重标记，不重发；任务结果明确提示人工补发。
+                        incomplete_reason = result.get('message') or result_data.get('early_break_reason') or "发货中途配置已变更，请人工核实后补发"
+                        logger.warning("[定时补发货] 订单 {} 发货未完成: {}", order_no, incomplete_reason)
+                        return False, incomplete_reason, cookie_string
 
                     logger.info(f"[定时补发货] 订单 {order_no} 发货成功")
                     return True, None, cookie_string
@@ -828,14 +845,14 @@ class RedeliveryTask:
         Returns:
             匹配的卡券或None
         """
-        from common.services.card_matcher import CardMatcher
-        
         item_id = order.item_id
         spec_name = order.spec_name
         spec_value = order.spec_value
         
         matcher = CardMatcher(session)
-        matched_cards = await matcher.get_cards_by_item_id(item_id, spec_name, spec_value)
+        matched_cards = await matcher.get_cards_by_item_id(
+            item_id, spec_name, spec_value, user_id=order.owner_id
+        )
         
         if not matched_cards:
             logger.info(f"[定时补发货] 商品 {item_id} 没有匹配的卡券")
@@ -849,7 +866,7 @@ class RedeliveryTask:
         
         # 从字典中获取卡券ID，再查询完整的Card对象
         card_id = matched_cards[0].get('id')
-        stmt = select(Card).where(Card.id == card_id)
+        stmt = select(Card).where(Card.id == card_id, Card.is_deleted == False, Card.enabled == True)
         result = await session.execute(stmt)
         return result.scalars().first()
     

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 
 from common.core.config import get_settings
 from common.db.redis_client import distributed_lock
@@ -109,7 +109,7 @@ class AutoRelistTask(AutoRelistLifecycleMixin, AutoRelistDiscoveryMixin):
             if rule:
                 card = (
                     await session.execute(
-                        select(Card).where(Card.id == rule.card_id, Card.user_id == event.user_id)
+                        select(Card).where(Card.id == rule.card_id, Card.user_id == event.user_id, Card.is_deleted == False)
                     )
                 ).scalars().first()
             if not rule or rule.user_id != event.user_id or rule.material_id != event.material_id:
@@ -153,6 +153,9 @@ class AutoRelistTask(AutoRelistLifecycleMixin, AutoRelistDiscoveryMixin):
                             CardItemRelation.user_id == event.user_id,
                             CardItemRelation.card_id == rule.card_id,
                             CardItemRelation.item_id == event.old_item_id,
+                            CardItemRelation.is_deleted == False,
+                            or_(CardItemRelation.source.is_(None), CardItemRelation.source == "own"),
+                            or_(CardItemRelation.dock_record_id.is_(None), CardItemRelation.dock_record_id == 0),
                         ).limit(1)
                     )
                 ).scalar_one_or_none()

@@ -21,6 +21,7 @@ import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { CardDetailModal } from './CardDetailModal'
 import { CardFormModal, cardToFormData, cardToCopyFormData, emptyCardFormData } from './CardFormModal'
 import { CardItemRelationModal } from './CardItemRelationModal'
+import { getApiErrorMessage } from '@/utils/apiError'
 
 // 卡券类型标签（与发货配置一致）
 const cardTypeLabels: Record<string, string> = {
@@ -72,28 +73,24 @@ export function Cards() {
   const [pageSize, setPageSize] = useState(20)
 
   // 加载卡券列表（后端分页）
-  const loadCards = async (p?: number, ps?: number, s?: string, t?: string) => {
+  const loadCards = (p?: number, ps?: number, s?: string, t?: string) => {
     if (!_hasHydrated || !isAuthenticated || !token) return
     const currentPage = p ?? page
     const currentPageSize = ps ?? pageSize
     const currentSearch = s ?? searchText
     const currentType = t ?? typeFilter
-    try {
-      setLoading(true)
-      const result: CardPaginatedResult = await getCards({
+    setLoading(true)
+    return getCards({
         page: currentPage,
         page_size: currentPageSize,
         search: currentSearch || undefined,
         type: currentType || undefined,
-      })
+      }).then((result: CardPaginatedResult) => {
       setCards(result.list || [])
       setTotal(result.total || 0)
       setTotalPages(result.total_pages || 0)
-    } catch {
-      addToast({ type: 'error', message: '加载卡券列表失败' })
-    } finally {
-      setLoading(false)
-    }
+    }).catch(error => addToast({ type: 'error', message: getApiErrorMessage(error, '加载卡券列表失败') }))
+      .finally(() => setLoading(false))
   }
 
   useEffect(() => {
@@ -122,41 +119,32 @@ export function Cards() {
   const pagedCards = cards
 
   // 切换启用/禁用
-  const handleToggleEnabled = async (card: CardData) => {
+  const handleToggleEnabled = (card: CardData) => {
     if (!card.id) return
-    try {
-      await updateCard(String(card.id), { enabled: !card.enabled })
+    return updateCard(String(card.id), { enabled: !card.enabled }).then(() => {
       addToast({ type: 'success', message: `卡券已${card.enabled ? '禁用' : '启用'}` })
       loadCards()
-    } catch {
-      addToast({ type: 'error', message: '操作失败' })
-    }
+    }).catch(error => addToast({ type: 'error', message: getApiErrorMessage(error, '操作失败') }))
   }
 
   // 删除卡券
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (!deleteConfirm.card?.id) return
-    try {
-      await deleteCard(String(deleteConfirm.card.id))
+    return deleteCard(String(deleteConfirm.card.id)).then(() => {
       addToast({ type: 'success', message: '卡券已删除' })
       setDeleteConfirm({ open: false, card: null })
       loadCards()
-    } catch {
-      addToast({ type: 'error', message: '删除失败' })
-    }
+    }).catch(error => addToast({ type: 'error', message: getApiErrorMessage(error, '删除失败') }))
   }
 
   // 批量删除
-  const handleBatchDelete = async () => {
-    try {
-      await batchDeleteCards(Array.from(selectedIds))
+  const handleBatchDelete = () => {
+    return batchDeleteCards(Array.from(selectedIds)).then(() => {
       addToast({ type: 'success', message: `成功删除 ${selectedIds.size} 张卡券` })
       setSelectedIds(new Set())
       setBatchDeleteConfirm(false)
       loadCards()
-    } catch {
-      addToast({ type: 'error', message: '批量删除失败' })
-    }
+    }).catch(error => addToast({ type: 'error', message: getApiErrorMessage(error, '批量删除失败') }))
   }
 
   // 打开新建弹窗

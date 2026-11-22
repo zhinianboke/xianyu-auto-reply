@@ -35,6 +35,7 @@ from common.db.item_query_indexes import ensure_item_query_indexes
 from common.db.api_keyword_schema import ensure_api_keyword_schema
 from common.db.user_role_dictionary import ensure_user_role_dictionary
 from common.db.notification_schema import ensure_notification_schema
+from common.db.card_schema import ensure_card_schema
 from common.db.session import async_engine, async_session_maker
 from common.services.notification_types import NOTIFICATION_TYPE_DICTIONARY
 from common.utils.time_utils import get_beijing_now_naive
@@ -717,6 +718,7 @@ class DatabaseInitializer:
                 type VARCHAR(50) NOT NULL COMMENT '卡券类型(api/text/data/image)',
                 description TEXT COMMENT '卡券描述',
                 enabled TINYINT(1) DEFAULT 1 COMMENT '是否启用',
+                is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已软删除',
                 delay_seconds INT DEFAULT 0 COMMENT '延迟秒数',
                 use_no_logistics_form TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否通过无需邮寄表单发货',
                 delivery_count INT DEFAULT 0 COMMENT '发货次数',
@@ -1301,6 +1303,7 @@ class DatabaseInitializer:
                 item_id VARCHAR(64) NOT NULL COMMENT '商品ID',
                 source VARCHAR(20) DEFAULT 'own' COMMENT '卡券来源：own-自有，dock_l1-一级对接，dock_l2-二级对接',
                 dock_record_id BIGINT NOT NULL DEFAULT 0 COMMENT '对接记录ID（对接卡券时关联，0表示自有卡券）',
+                is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已软删除',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                 INDEX idx_user_id (user_id),
@@ -2327,6 +2330,10 @@ class DatabaseInitializer:
                 with suppress_db_warnings():
                     # 1. 创建所有表
                     await self.create_all_tables()
+
+                    # 卡券读写均依赖软删除字段；补齐失败必须阻止启动。
+                    async with ddl_connection() as conn:
+                        await ensure_card_schema(conn)
 
                     # 通知查询依赖这些字段；缺失时必须阻止启动，避免通知静默中断。
                     async with ddl_connection() as conn:
@@ -4144,21 +4151,21 @@ class DatabaseInitializer:
         """
         try:
             async with async_session_maker() as session:
-                # 检查关联表中已有数据量
+                # 已撤销关联保留墓碑；统计包含软删除记录，避免重启重新导入旧绑定。
                 existing_result = await session.execute(
                     text("SELECT COUNT(*) FROM xy_card_item_relations")
                 )
                 existing = existing_result.scalar()
                 
                 if existing > 0:
-                    logger.debug(f"✓ 卡券商品关联表已有 {existing} 条数据，跳过迁移")
+                    logger.info(f"✓ 卡券商品关联表已有 {existing} 条数据（含软删除），跳过迁移")
                     return
                 
                 # 统计需要迁移的数据量
                 count_result = await session.execute(
                     text("""
                         SELECT COUNT(*) FROM xy_cards 
-                        WHERE item_id IS NOT NULL AND item_id != ''
+                        WHERE item_id IS NOT NULL AND item_id != '' AND is_deleted = 0
                     """)
                 )
                 total = count_result.scalar()
@@ -4173,7 +4180,7 @@ class DatabaseInitializer:
                         INSERT IGNORE INTO xy_card_item_relations (user_id, card_id, item_id, dock_record_id, created_at, updated_at)
                         SELECT user_id, id, item_id, 0, NOW(), NOW()
                         FROM xy_cards
-                        WHERE item_id IS NOT NULL AND item_id != ''
+                        WHERE item_id IS NOT NULL AND item_id != '' AND is_deleted = 0
                     """)
                 )
                 await session.commit()

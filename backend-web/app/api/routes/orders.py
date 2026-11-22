@@ -16,6 +16,7 @@ from app.services.order_service import OrderService
 from app.services.card_service import CardService
 from app.services.websocket_client import websocket_client
 from common.services.order_service import OrderDetailService
+from common.services.order_delivery_result import has_incomplete_delivery, read_delivery_result
 from common.models.xy_account import XYAccount
 from sqlalchemy import select as order_select
 
@@ -460,6 +461,12 @@ async def manual_delivery(
         if not is_admin and order.owner_id != current_user.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权操作此订单")
 
+        if has_incomplete_delivery(order):
+            delivery_result = read_delivery_result(order)
+            return ApiResponse(
+                success=False, code=40001,
+                message=delivery_result.get("message") or "该订单发货未完成，请核实已取卡券后人工补发；本次未重复耗卡",
+            )
         if order.card_only_delivered:
             return ApiResponse(
                 success=False,
@@ -568,7 +575,9 @@ async def manual_delivery(
         spec_value = order.spec_value
         logger.info(f"查询卡券: item_id={order.item_id}, spec_name={spec_name}, spec_value={spec_value}")
         
-        cards = await card_service.get_cards_by_item_id_and_spec(order.item_id, spec_name, spec_value)
+        cards = await card_service.get_cards_by_item_id_and_spec(
+            order.item_id, spec_name, spec_value, user_id=order.owner_id
+        )
         logger.info(f"匹配到 {len(cards)} 个卡券")
         
         if not cards:
@@ -657,6 +666,7 @@ async def manual_delivery(
         # 中由 pre_check 写入的禁止发货原因。
         delivery_data = delivery_result.get('data') or {}
         is_card_only = bool(delivery_data.get('is_card_only'))
+        delivery_incomplete = bool(delivery_data.get('delivery_incomplete'))
         skipped_due_to_dock = bool(delivery_data.get('skipped_due_to_dock_card'))
         # 多数量退化标记：订单 quantity>1 但因卡券类型限制只发了 1 张，
         # 写入 delivery_fail_reason 提醒商家原因和后续动作
@@ -678,6 +688,10 @@ async def manual_delivery(
                 f"订单数量 {requested} 张，仅发送 1 张固定内容（剩余 {max(requested - sent, 0)} 张未发）。"
                 f"如需多数量发送不同卡密，请改用 data 或 api 类型卡券"
             )
+
+        if delivery_incomplete or delivery_data.get('delivery_configuration_changed'):
+            incomplete_reason = delivery_result.get('message') or delivery_data.get('early_break_reason') or "发货中途配置已变更，请人工核实后补发"
+            degraded_warn_msg = f"{degraded_warn_msg}；{incomplete_reason}" if degraded_warn_msg else incomplete_reason
 
         if degraded_warn_msg:
             try:
