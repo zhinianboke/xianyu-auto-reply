@@ -214,7 +214,7 @@ export function Login() {
           is_admin: result.is_admin!,
           account_limit: result.account_limit,
         })
-        addToast({ type: 'success', message: '登录成功' })
+        addToast({ type: 'success', message: result.message ?? '登录成功' })
         navigate('/dashboard')
       } else {
         addToast({ type: 'error', message: result.message || '登录失败' })

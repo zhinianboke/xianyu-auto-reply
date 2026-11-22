@@ -104,6 +104,9 @@ REDIS_STARTUP_RETRY_CAP_DELAY=10
 
 # 端口配置
 FRONTEND_PORT=9000
+XIANYU_NETWORK_SUBNET=172.30.56.0/24
+FRONTEND_IPV4_ADDRESS=172.30.56.10
+TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128,${FRONTEND_IPV4_ADDRESS}/32
 BACKEND_WEB_PORT=8089
 WEBSOCKET_PORT=8090
 SCHEDULER_PORT=8091
@@ -165,6 +168,14 @@ ENVEOF
     exit 0
 fi
 
+# 仅补齐缺失配置，保留已有值；可信地址引用实际前端 IP，不扩大为整个容器网段。
+for proxy_setting in 'XIANYU_NETWORK_SUBNET=172.30.56.0/24' 'FRONTEND_IPV4_ADDRESS=172.30.56.10' 'TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128,${FRONTEND_IPV4_ADDRESS}/32'; do
+    proxy_key=${proxy_setting%%=*}
+    if ! grep -qE "^[[:space:]]*(export[[:space:]]+)?${proxy_key}[[:space:]]*=" "$ENV_FILE"; then
+        printf '\n%s\n' "$proxy_setting" >> "$ENV_FILE"
+    fi
+done
+
 # ========== 生成 docker-compose.remote.yml（远程镜像 + 远程 MySQL/Redis） ==========
 echo "[信息] 生成 docker-compose.remote.yml..."
 cat > "$COMPOSE_FILE" << 'COMPOSEEOF'
@@ -216,6 +227,7 @@ services:
       - ONLINE_INSTALL_TIMEOUT=${ONLINE_INSTALL_TIMEOUT:-7200}
       - ONLINE_INSTALL_RETENTION_SECONDS=${ONLINE_INSTALL_RETENTION_SECONDS:-86400}
       - HOST=0.0.0.0
+      - TRUSTED_PROXY_CIDRS=${TRUSTED_PROXY_CIDRS-127.0.0.1/32,::1/128,${FRONTEND_IPV4_ADDRESS:-172.30.56.10}/32}
       - JWT_ALGORITHM=HS256
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
       - REFRESH_TOKEN_EXPIRE_MINUTES=${REFRESH_TOKEN_EXPIRE_MINUTES:-10080}
@@ -245,8 +257,6 @@ services:
       - ./xianyu_auto_reply/logs/backend_web:/app/backend-web/logs
       - ./xianyu_auto_reply/static:/app/static
       - ./xianyu_auto_reply/backups:/app/backups
-    ports:
-      - "${BACKEND_WEB_PORT:-8089}:8089"
     networks:
       - xianyu-network
     healthcheck:
@@ -311,8 +321,6 @@ services:
       - ./xianyu_auto_reply/logs/websocket:/app/websocket/logs
       - ./xianyu_auto_reply/static:/app/static
       - ./xianyu_auto_reply/browser_data:/app/browser_data
-    ports:
-      - "${WEBSOCKET_PORT:-8090}:8090"
     networks:
       - xianyu-network
     depends_on:
@@ -376,8 +384,6 @@ services:
       - ./xianyu_auto_reply/logs/scheduler:/app/scheduler/logs
       - ./xianyu_auto_reply/static:/app/static:ro
       - ./xianyu_auto_reply/backups:/app/backups
-    ports:
-      - "${SCHEDULER_PORT:-8091}:8091"
     networks:
       - xianyu-network
     depends_on:
@@ -400,9 +406,10 @@ services:
     environment:
       - TZ=Asia/Shanghai
     ports:
-      - "${FRONTEND_PORT:-9000}:80"
+      - "127.0.0.1:${FRONTEND_PORT:-9000}:80"
     networks:
-      - xianyu-network
+      xianyu-network:
+        ipv4_address: ${FRONTEND_IPV4_ADDRESS:-172.30.56.10}
     depends_on:
       backend-web:
         condition: service_healthy
@@ -410,6 +417,9 @@ services:
 networks:
   xianyu-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: ${XIANYU_NETWORK_SUBNET:-172.30.56.0/24}
 COMPOSEEOF
 echo -e "${GREEN}✓ docker-compose.remote.yml 已生成${NC}"
 echo ""
@@ -490,10 +500,9 @@ echo "  部署完成！"
 echo "==========================================${NC}"
 echo ""
 echo "服务访问地址："
-echo "  前端:        http://服务器IP:${frontend_port}"
-echo "  Backend-Web: http://服务器IP:${backend_web_port}"
-echo "  WebSocket:   http://服务器IP:${websocket_port}"
-echo "  Scheduler:   http://服务器IP:${scheduler_port}"
+echo "  宿主机反代目标: http://127.0.0.1:${frontend_port}"
+echo "  后端 / WebSocket / Scheduler: 仅项目容器网络访问"
+echo "  公网访问: 请通过宿主机 Nginx / 宝塔域名入口"
 echo ""
 echo "常用命令："
 echo "  查看日志: $DC_CMD logs -f"

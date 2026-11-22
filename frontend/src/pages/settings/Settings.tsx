@@ -41,6 +41,7 @@ import { BasicSettingsTab } from './BasicSettingsTab'
 import { ContactSettingsTab } from './ContactSettingsTab'
 import { PaymentSettingsTab } from './PaymentSettingsTab'
 import { ServiceRestartCard } from './ServiceRestartCard'
+import { SecuritySettingsTab } from './SecuritySettingsTab'
 import { SystemSettingsTabs } from './SystemSettingsTabs'
 import { TestEmailModal } from './TestEmailModal'
 import { UserNetworkSettingsTab } from './UserNetworkSettingsTab'
@@ -147,6 +148,8 @@ export function Settings() {
       </div>
 
       <SystemSettingsTabs activeTab={activeTab} onChange={setActiveTab} />
+
+      <div hidden={activeTab !== 'security'}><SecuritySettingsTab /></div>
 
       {activeTab === 'basic' && <BasicSettingsTab
         settings={settings}

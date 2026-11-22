@@ -36,6 +36,8 @@ from common.db.api_keyword_schema import ensure_api_keyword_schema
 from common.db.user_role_dictionary import ensure_user_role_dictionary
 from common.db.notification_schema import ensure_notification_schema
 from common.db.card_schema import ensure_card_schema
+from common.db.auth_security_schema import ensure_auth_security_schema
+from common.db.registration_log_schema import ensure_registration_log_schema
 from common.db.session import async_engine, async_session_maker
 from common.services.notification_types import NOTIFICATION_TYPE_DICTIONARY
 from common.utils.time_utils import get_beijing_now_naive
@@ -567,6 +569,7 @@ class DatabaseInitializer:
                 `key` VARCHAR(120) PRIMARY KEY COMMENT '设置键',
                 value TEXT NOT NULL COMMENT '设置值',
                 description TEXT COMMENT '设置描述',
+                `group` VARCHAR(32) DEFAULT NULL COMMENT '设置分组',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='系统设置表';
         """,
@@ -2331,6 +2334,10 @@ class DatabaseInitializer:
                     # 1. 创建所有表
                     await self.create_all_tables()
 
+                    # 安全配置按分组管理；只补字段、缺失配置和迁移分组，保留已有键值。
+                    async with ddl_connection() as conn:
+                        await ensure_auth_security_schema(conn)
+
                     # 卡券读写均依赖软删除字段；补齐失败必须阻止启动。
                     async with ddl_connection() as conn:
                         await ensure_card_schema(conn)
@@ -2341,6 +2348,10 @@ class DatabaseInitializer:
 
                     # 1.1 初始化所有枚举数据字典
                     await self.init_data_dictionaries()
+
+                    # 注册日志与注册验证码邮件审计依赖长文本字段、索引和中文字典。
+                    async with ddl_connection() as conn:
+                        await ensure_registration_log_schema(conn)
 
                     # 首页广告类型与支付关联独立迁移，只追加字段及初始化项。
                     async with ddl_connection() as conn:
@@ -2441,6 +2452,7 @@ class DatabaseInitializer:
             ("email_trigger_operation", "register_verification_code", "注册验证码", 10),
             ("email_trigger_operation", "reset_password_verification_code", "找回密码验证码", 20),
             ("email_trigger_operation", "email_login_verification_code", "邮箱验证码登录", 30),
+            ("email_trigger_operation", "verification_code_request", "验证码请求参数拒绝", 35),
             ("email_trigger_operation", "test_email", "测试邮件", 40),
             ("email_trigger_operation", "withdraw_notification", "提现通知邮件", 50),
             ("email_trigger_operation", "notification_channel_test", "通知渠道测试邮件", 60),

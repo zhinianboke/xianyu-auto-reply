@@ -2,86 +2,47 @@
 推广返佣系统 - 认证API路由
 
 功能：
-1. 用户登录（用户名+密码）
+1. 用户登录（用户名密码，与主系统共用限流和账号锁）
 2. 令牌验证
 3. 令牌刷新
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Request
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from app.api.routes.geetest import check_geetest_verified
 from app.core.security import decode_token
+from app.services.auth_service import AuthService
 from common.models.user import User, UserRole, UserStatus
-from common.schemas.auth import TokenPayload
+from common.schemas.auth import LoginRequest, LoginResponse, TokenPayload
+from common.services.auth_request_validation import AuthenticationAPIRoute
+from common.services.login_flow_service import perform_login
+from common.services.login_settings_service import load_login_settings
+from common.services.user_login_log_service import (
+    LOGIN_METHOD_USERNAME_PASSWORD,
+    UserLoginLogService,
+)
+from common.utils.http_utils import get_client_ip
 
-router = APIRouter(tags=["认证"])
+router = APIRouter(tags=["认证"], route_class=AuthenticationAPIRoute)
 
 
-@router.post("/login")
+@router.post("/login", response_model=LoginResponse)
 async def login_user(
-    payload: dict,
+    payload: LoginRequest,
+    request: Request,
     session: AsyncSession = Depends(deps.get_db_session),
-):
-    """
-    用户登录
-
-    支持用户名+密码登录，集成极验滑动验证码校验
-    """
-    from app.services.auth_service import AuthService
+) -> LoginResponse:
+    """执行用户名密码登录；计数、锁定、后缀和审计与主系统共享。"""
     auth_service = AuthService(session)
-
-    username = payload.get("username")
-    password = payload.get("password")
-
-    if not username or not password:
-        return {"success": False, "message": "请输入用户名和密码"}
-
-    # 检查是否启用了登录滑动验证码
-    from sqlalchemy import select as sa_select
-    from common.models.system_setting import SystemSetting
-    try:
-        captcha_result = await session.execute(
-            sa_select(SystemSetting.value).where(SystemSetting.key == "login_captcha_enabled")
-        )
-        captcha_enabled_str = captcha_result.scalar_one_or_none()
-        # 默认开启
-        captcha_enabled = captcha_enabled_str in (None, "true", "1")
-    except Exception:
-        captcha_enabled = True
-
-    # 如果启用了验证码，校验极验滑动验证
-    if captcha_enabled:
-        from app.api.routes.geetest import check_geetest_verified
-
-        geetest_challenge = payload.get("geetest_challenge")
-        if not geetest_challenge:
-            return {"success": False, "message": "请完成滑动验证"}
-
-        geetest_ok, geetest_msg = check_geetest_verified(geetest_challenge)
-        if not geetest_ok:
-            return {"success": False, "message": geetest_msg}
-
-    user, error_message = await auth_service.authenticate_by_username(username, password)
-
-    if not user:
-        return {"success": False, "message": error_message or "登录失败"}
-
-    if user.status != UserStatus.ACTIVE:
-        return {"success": False, "message": "账号已禁用，请联系管理员"}
-
-    await auth_service.mark_login(user)
-    return {
-        "success": True,
-        "message": "登录成功",
-        "token": auth_service.create_access_token(user),
-        "refresh_token": auth_service.create_refresh_token(user),
-        "user_id": user.id,
-        "username": user.username,
-        "is_admin": user.role == UserRole.ADMIN,
-        "account_limit": user.account_limit,
-    }
+    return await perform_login(
+        payload, get_client_ip(request), auth_service, session, UserLoginLogService(session),
+        captcha_check=check_geetest_verified, settings_loader=load_login_settings,
+        supported_login_methods=frozenset({LOGIN_METHOD_USERNAME_PASSWORD}),
+    )
 
 
 @router.get("/verify")
@@ -112,14 +73,12 @@ async def refresh_token(
     if payload.sub is None:
         return {"success": False, "message": "令牌无效"}
 
-    from sqlalchemy import select
     result = await session.execute(select(User).where(User.id == int(payload.sub)))
     user = result.scalar_one_or_none()
 
     if not user or user.status != UserStatus.ACTIVE:
         return {"success": False, "message": "用户不存在或已禁用"}
 
-    from app.services.auth_service import AuthService
     auth_service = AuthService(session)
 
     return {

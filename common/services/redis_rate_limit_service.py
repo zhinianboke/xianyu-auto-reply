@@ -52,7 +52,7 @@ async def check_sliding_window_limit(
     """
     if window_seconds <= 0 or max_requests <= 0:
         raise ValueError("限流窗口和请求上限必须大于零")
-    identity_hash = hashlib.sha256(identifier.encode("utf-8")).hexdigest()
+    identity_hash = hashlib.sha256(identifier.encode("utf-8", errors="surrogatepass")).hexdigest()
     key = f"rate:{namespace}:{identity_hash}"
     client = await get_redis_client()
     result = await client.eval(

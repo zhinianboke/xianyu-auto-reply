@@ -32,6 +32,8 @@ RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories
 
 # 复制nginx配置
 COPY docker/frontend/nginx.conf /etc/nginx/conf.d/default.conf
+COPY docker/frontend/25_init_realip.sh /docker-entrypoint.d/25_init_realip.sh
+RUN chmod +x /docker-entrypoint.d/25_init_realip.sh
 
 # 复制构建产物（已混淆压缩，不含源码）
 COPY --from=builder /app/dist /usr/share/nginx/html

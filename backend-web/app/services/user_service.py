@@ -196,7 +196,11 @@ class UserService:
 
 
 
-    async def create(self, payload: UserCreate, *, role: UserRole | None = None) -> User:
+    async def create(
+        self, payload: UserCreate, *, role: UserRole | None = None, commit: bool = True,
+    ) -> User:
+
+        """创建注册用户；commit=False 时由注册流程同时提交用户与成功审计。"""
 
         # 注册时按系统设置的默认天数计算到期日（未配置则为 None，表示永不过期）
 
@@ -224,7 +228,8 @@ class UserService:
 
         await self.session.flush()
 
-        await self.session.commit()
+        if commit:
+            await self.session.commit()
 
         return user
 

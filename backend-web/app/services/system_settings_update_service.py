@@ -12,13 +12,19 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from app.services.system_setting_service import SENSITIVE_KEYS, SystemSettingService
 from app.services.payment_config_service import (
     CHANNEL_ZZCODE,
     VALID_CHANNELS,
     normalize_pay_types,
 )
+from app.services.system_setting_service import SENSITIVE_KEYS, SystemSettingService
 from common.services.advertisement_types import AD_PRICE_DEFAULTS, parse_ad_price
+from common.services.auth_security_policy import (
+    AUTH_SECURITY_DEFAULTS,
+    normalize_security_setting,
+    normalize_security_updates,
+)
+from common.services.registration_policy import REGISTRATION_ENABLED_KEY
 from common.services.remote_password_login_api import (
     validate_remote_password_login_settings,
 )
@@ -32,8 +38,6 @@ from common.services.system_setting_validation import (
     parse_log_retention_days,
     validate_business_setting,
 )
-from common.services.registration_policy import REGISTRATION_ENABLED_KEY
-from common.services.email_domain_policy import EMAIL_DOMAIN_DEFAULTS, normalize_policy_setting
 from common.services.token_api_mode import (
     TOKEN_API_MODE_REMOTE,
     TOKEN_API_MODE_SETTING_KEY,
@@ -103,9 +107,9 @@ def _normalize_email_setting(key: str, value: str) -> tuple[str, str | None]:
 def _normalize_setting_value(key: str, raw_value: str) -> tuple[str, str | None]:
     """规范化并校验单个设置值，不处理需要完整目标状态的跨字段约束。"""
     value = str(raw_value or "")
-    if key in EMAIL_DOMAIN_DEFAULTS:
+    if key in AUTH_SECURITY_DEFAULTS:
         try:
-            return normalize_policy_setting(key, value), None
+            return normalize_security_setting(key, value), None
         except ValueError as exc:
             return value, str(exc)
     if key == REGISTRATION_ENABLED_KEY:
@@ -174,6 +178,12 @@ def _normalize_setting_value(key: str, raw_value: str) -> tuple[str, str | None]
 
 def _validate_target_state(target: Mapping[str, str], changed_keys: set[str]) -> str | None:
     """基于本次提交后的完整目标状态校验跨字段约束。"""
+    security_keys = changed_keys.intersection(AUTH_SECURITY_DEFAULTS)
+    if security_keys:
+        try:
+            normalize_security_updates(target, {key: target[key] for key in security_keys})
+        except ValueError as exc:
+            return str(exc)
     if changed_keys.intersection({PROXY_URL_KEY, PROXY_ENABLED_KEY}):
         proxy_url = str(target.get(PROXY_URL_KEY) or "").strip()
         if parse_boolean_setting(target.get(PROXY_ENABLED_KEY)) and not proxy_url:

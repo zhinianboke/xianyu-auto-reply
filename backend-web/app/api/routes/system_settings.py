@@ -14,6 +14,8 @@ from fastapi import APIRouter, Depends, Request
 from loguru import logger
 
 from app.api import deps
+from app.api.security_settings_route import SecuritySettingsRoute
+from app.services.auth_security_settings_service import AuthSecuritySettingsService
 from app.services.email_service import send_test_email
 from app.services.log_retention_service import refresh_log_retention_runtime
 from app.services.system_setting_service import SENSITIVE_KEYS, SystemSettingService
@@ -35,7 +37,7 @@ from common.services.remote_password_login_api import (
 from common.utils.browser_utils import is_frozen
 from common.utils.http_utils import get_client_ip
 
-router = APIRouter(tags=["system_settings"])
+router = APIRouter(tags=["system_settings"], route_class=SecuritySettingsRoute)
 
 NON_ADMIN_ALLOWED_KEYS = {
     "disclaimer.title",
@@ -166,6 +168,40 @@ async def update_system_settings_batch(
         for key, setting in payload.settings.items()
     }
     return await _save_system_settings(updates, service)
+
+
+@router.get("/security", response_model=ApiResponse)
+async def get_auth_security_settings(
+    current_user: User = Depends(deps.get_current_admin_user),  # noqa: B008
+    service: SystemSettingService = Depends(deps.get_system_setting_service),  # noqa: B008
+) -> ApiResponse:
+    """仅管理员读取四项安全配置；不向公开接口或普通用户暴露禁止名单。"""
+    try:
+        values = await AuthSecuritySettingsService(service.session).get_settings()
+        return ApiResponse(success=True, message="安全设置读取成功", data=values)
+    except Exception as exc:  # noqa: BLE001 - 安全配置读取故障统一返回中文失败
+        await service.rollback()
+        logger.opt(exception=exc).error("安全设置读取失败：user_id={}", current_user.id)
+        return ApiResponse(success=False, code=50001, message="安全设置读取失败，请稍后重试", data=None)
+
+
+@router.put("/security", response_model=ApiResponse)
+async def update_auth_security_settings(
+    payload: dict,
+    current_user: User = Depends(deps.get_current_admin_user),  # noqa: B008
+    service: SystemSettingService = Depends(deps.get_system_setting_service),  # noqa: B008
+) -> ApiResponse:
+    """仅管理员整组校验并保存安全配置，省略字段保留、空字符串显式清空。"""
+    try:
+        values = await AuthSecuritySettingsService(service.session).save_settings(payload)
+        return ApiResponse(success=True, message="安全设置已更新", data=values)
+    except ValueError as exc:
+        await service.rollback()
+        return ApiResponse(success=False, code=40001, message=str(exc), data=None)
+    except Exception as exc:  # noqa: BLE001 - 安全配置保存故障回滚后返回中文失败
+        await service.rollback()
+        logger.opt(exception=exc).error("安全设置保存失败：user_id={} fields={}", current_user.id, list(payload))
+        return ApiResponse(success=False, code=50001, message="安全设置保存失败，请稍后重试", data=None)
 
 
 @router.put("/{key}", response_model=ApiResponse)

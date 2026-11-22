@@ -7,6 +7,7 @@ interface SystemSettingsTabsProps {
 
 const TABS: Array<[SettingsTab, string]> = [
   ['basic', '基础与认证'],
+  ['security', '安全设置'],
   ['contact', '邮件与联系'],
   ['appearance', '界面与文案'],
   ['payment', '支付与费用'],

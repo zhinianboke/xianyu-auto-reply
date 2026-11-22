@@ -16,6 +16,7 @@ from common.models.ai_chat_message import AIChatMessage
 from common.models.risk_control_log import XYRiskControlLog as RiskControlLog
 from common.models.account_login_log import XYAccountLoginLog
 from common.models.user_login_log import XYUserLoginLog
+from common.models.registration_log import RegistrationLog
 from common.models.email_log import XYEmailLog
 from common.models.data_dictionary import XYDataDictionary
 from common.models.system_setting import SystemSetting
@@ -92,6 +93,7 @@ __all__ = [
     "RiskControlLog",
     "XYAccountLoginLog",
     "XYUserLoginLog",
+    "RegistrationLog",
     "XYEmailLog",
     "XYDataDictionary",
     "SystemSetting",

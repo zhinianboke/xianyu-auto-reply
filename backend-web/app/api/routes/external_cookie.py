@@ -31,6 +31,7 @@ from app.services.account_service import AccountService
 from common.models.user import User, UserStatus
 from common.models.xy_account import XYAccount
 from common.utils.auth_scope import is_admin_user
+from common.utils.http_utils import get_client_ip
 from common.utils.xianyu_utils import trans_cookies
 
 router = APIRouter(
@@ -53,12 +54,9 @@ def _mask_secret(secret: str) -> str:
     return f"{secret[:2]}{'*' * (len(secret) - 4)}{secret[-2:]}"
 
 
-def _client_ip(request: Request) -> str:
-    """获取客户端 IP（兼容反向代理 X-Forwarded-For）。"""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "-"
+def _client_ip(request: Request) -> str | None:
+    """兼容原调用点；参数为 HTTP 请求，返回公共可信代理校验后的 IP，未知时为 None。"""
+    return get_client_ip(request)
 
 
 async def _notify_scheduler_clear_cooldown(account_id: str) -> None:

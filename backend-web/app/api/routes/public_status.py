@@ -22,7 +22,7 @@ async def _check_access(request: Request, response: Response) -> ApiResponse | N
     """校验客户端 IP 和共享限流额度，失败返回统一响应，放行返回 None。
 
     Args:
-        request: 前端代理转发的请求，通过公共工具读取首个真实 IP。
+        request: 前端代理转发的请求，通过公共工具读取可信客户端 IP。
         response: 用于设置禁止缓存、限流额度及重试等待响应头。
     Returns:
         IP 无效、超限或 Redis 异常时的业务响应；通过校验时为 None。
@@ -35,6 +35,9 @@ async def _check_access(request: Request, response: Response) -> ApiResponse | N
     log = logger.bind(request_id=request_id, operation="public_status", client_ip=client_ip)
     request.state.public_status_log = log
     log.info("[公开状态] 接口请求：method={} path={} query={} headers={}", request.method, request.url.path, str(request.query_params), dict(request.headers))
+    if client_ip is None:
+        log.warning("[公开状态] 无法识别连接对端，拒绝请求")
+        return ApiResponse(success=False, code=40001, message="无法识别客户端IP", data=None)
     try:
         address = ip_address(client_ip)
         client_ip = str(getattr(address, "ipv4_mapped", None) or address)

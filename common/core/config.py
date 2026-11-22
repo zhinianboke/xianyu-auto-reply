@@ -10,10 +10,29 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from ipaddress import IPv4Network, IPv6Network, ip_network
 from urllib.parse import quote_plus
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+@lru_cache(maxsize=32)
+def parse_trusted_proxy_cidrs(value: str) -> tuple[IPv4Network | IPv6Network, ...]:
+    """校验可信代理配置；参数为逗号分隔的 CIDR，返回规范化网段，空值表示不信任代理。"""
+    if not value.strip():
+        return ()
+    networks = []
+    for item in value.split(","):
+        try:
+            network = ip_network(item.strip(), strict=False)
+        except ValueError as exc:
+            raise ValueError("TRUSTED_PROXY_CIDRS 必须为逗号分隔的合法 IPv4/IPv6 网段") from exc
+        if network.prefixlen == 0:
+            raise ValueError("TRUSTED_PROXY_CIDRS 禁止信任全部地址（0.0.0.0/0 或 ::/0）")
+        if network not in networks:
+            networks.append(network)
+    return tuple(networks)
 
 
 class BaseConfig(BaseSettings):
@@ -33,6 +52,17 @@ class BaseConfig(BaseSettings):
     # 环境配置
     environment: str = Field(default="development")
     log_level: str = Field(default="INFO")
+
+    # 本机默认仅信任 loopback；Docker 由 Compose 注入实际前端代理的单地址网段。
+    trusted_proxy_cidrs: str = Field(
+        default="127.0.0.1/32,::1/128", alias="TRUSTED_PROXY_CIDRS"
+    )
+
+    @field_validator("trusted_proxy_cidrs")
+    @classmethod
+    def validate_trusted_proxy_cidrs(cls, value: str) -> str:
+        """启动时验证可信代理网段；返回规范化配置，非法或全网可信配置明确报错。"""
+        return ",".join(str(network) for network in parse_trusted_proxy_cidrs(value))
 
     # SQL 日志开关：开启后会在每条 SQL 执行前打印拼接好参数的完整 SQL。
     # 默认开启，便于开发与 Docker 环境排查；高并发生产环境如需降低开销可设为 false。

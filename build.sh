@@ -65,6 +65,13 @@ echo ""
 # ========== 生成 .env（首次） ==========
 generate_env() {
     if [ -f "$ENV_FILE" ]; then
+        # 只补齐缺失项，保留已有网段、代理地址和用户信任配置。
+        for proxy_setting in 'XIANYU_NETWORK_SUBNET=172.30.56.0/24' 'FRONTEND_IPV4_ADDRESS=172.30.56.10' 'TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128,${FRONTEND_IPV4_ADDRESS}/32'; do
+            proxy_key=${proxy_setting%%=*}
+            if ! grep -qE "^[[:space:]]*(export[[:space:]]+)?${proxy_key}[[:space:]]*=" "$ENV_FILE"; then
+                printf '\n%s\n' "$proxy_setting" >> "$ENV_FILE"
+            fi
+        done
         return
     fi
     echo -e "${YELLOW}[提示] 首次构建，生成默认 .env 配置${NC}"
@@ -113,6 +120,9 @@ REDIS_STARTUP_RETRY_CAP_DELAY=10
 
 # 端口
 FRONTEND_PORT=9000
+XIANYU_NETWORK_SUBNET=172.30.56.0/24
+FRONTEND_IPV4_ADDRESS=172.30.56.10
+TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128,${FRONTEND_IPV4_ADDRESS}/32
 BACKEND_WEB_PORT=8089
 WEBSOCKET_PORT=8090
 SCHEDULER_PORT=8091
@@ -207,10 +217,10 @@ start_services() {
     echo "==========================================${NC}"
     echo ""
     echo "服务访问地址："
-    echo "  前端:         http://localhost:9000"
-    echo "  Backend-Web:  http://localhost:8089"
-    echo "  WebSocket:    http://localhost:8090"
-    echo "  Scheduler:    http://localhost:8091"
+    frontend_port=$(grep -E '^FRONTEND_PORT=' "$ENV_FILE" | cut -d '=' -f2 | tr -d '\r')
+    echo "  宿主机反代目标: http://127.0.0.1:${frontend_port:-9000}"
+    echo "  后端 / WebSocket / Scheduler: 仅项目容器网络访问"
+    echo "  公网访问: 请通过宿主机 Nginx / 宝塔域名入口"
     echo ""
     echo "默认账号: admin / admin123"
     echo ""

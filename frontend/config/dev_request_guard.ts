@@ -40,12 +40,27 @@ function browserExternalCode(id: string): string {
   return `export default new Proxy({}, { get(_, key) { throw new Error(${start} + String(key) + ${end}); } });`
 }
 
+/** 按 Vite 代理规则识别后端请求，避免把业务查询参数当成前端模块参数。 */
+function isProxyRequest(id: string, server: ViteDevServer): boolean {
+  return Object.keys(server.config.server.proxy ?? {}).some(context =>
+    context.startsWith('^') ? new RegExp(context).test(id) : id.startsWith(context))
+}
+
+/** 拒绝查询参数伪装脚本扩展名；Vite 5 会误用该扩展名选择 esbuild 解析器。 */
+function mismatchedScriptQuery(id: string): boolean {
+  if (!id.includes('?') || id.includes('\0')) return false
+  // 这些参数会生成新的包装模块，其解析类型不由原始文件扩展名决定。
+  if (/[?&](?:raw|url|worker|sharedworker)(?:&|$)/.test(id)) return false
+  const sourceExtension = id.replace(/[?#].*$/, '').match(/\.(?:[cm]?[jt]s|[jt]sx)$/)?.[0]
+  const queryExtension = id.match(/\.\w+$/)?.[0]
+  return Boolean(sourceExtension && queryExtension && sourceExtension !== queryExtension)
+}
+
 /** 仅校验 HTML 代理的真实缓存；缺失模块返回请求错误，其他插件异常仍按原流程报错。 */
 async function invalidHtmlProxy(url: string, server: ViteDevServer): Promise<boolean> {
   const id = transformRequestUrl(url, server)
   if (!/\?html-proxy\b/.test(id)) return false
-  const proxyContexts = Object.keys(server.config.server.proxy ?? {})
-  if (proxyContexts.some(context => context.startsWith('^') ? new RegExp(context).test(id) : id.startsWith(context))) return false
+  if (isProxyRequest(id, server)) return false
   if (!/\?html-proxy=?(?:&inline-css)?(?:&style-attr)?&index=\d+\.(?:js|css)$/.test(id)) {
     // direct CSS 由 Vite 在 HTML 转换期间生成和处理，不使用内联脚本代理缓存。
     return !/\?html-proxy&direct&index=\d+\.css$/.test(id)
@@ -118,7 +133,8 @@ export function rejectUnsafeDevServerPaths(): Plugin {
           decodedUrl = decodeURI(req.url)
           const pathname = new URL(decodedUrl, 'http://vite.local').pathname
           const decodedPathname = decodeURIComponent(pathname).replace(/[\\]+/g, '/')
-          if (unsafeBrowserExternalModule(transformRequestUrl(decodedUrl, server))
+          const moduleId = transformRequestUrl(decodedUrl, server)
+          if (unsafeBrowserExternalModule(moduleId)
             || unsafeBrowserExternalModule(transformRequestUrl(decodedPathname, server))) {
             logRejectedRequest(server, req, '拒绝非法浏览器外部模块')
             rejectRequest(res, '浏览器外部模块请求不合法')
@@ -132,6 +148,11 @@ export function rejectUnsafeDevServerPaths(): Plugin {
           if (sensitiveRoots.has(rootPath) || isWindowsAbsolutePath || isUncPath || hasTraversal) {
             logRejectedRequest(server, req, '拒绝非法路径')
             rejectRequest(res, '请求路径不合法')
+            return
+          }
+          if (!isProxyRequest(moduleId, server) && mismatchedScriptQuery(moduleId)) {
+            logRejectedRequest(server, req, '拒绝脚本扩展名伪装')
+            rejectRequest(res, '脚本请求的查询参数与文件类型不一致，请使用原始模块地址')
             return
           }
         } catch {

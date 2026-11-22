@@ -25,6 +25,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
 
+from common.db.redis_client import close_redis_client, initialize_redis_client
+from common.core.request_origin_log import RequestOriginLoggingMiddleware
 
 def _setup_windows_event_loop_policy() -> None:
     """Windows环境下切换为ProactorEventLoopPolicy"""
@@ -46,7 +48,7 @@ from common.utils.network_utils import resolve_listen_host
 settings = get_settings()
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def _application_lifespan(app: FastAPI):
     """应用生命周期管理"""
     logger.info("=" * 60)
     logger.info(f"推广返佣系统后端服务启动中...")
@@ -116,6 +118,17 @@ async def lifespan(app: FastAPI):
     logger.info("推广返佣系统后端服务已停止")
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """参数为应用；启动时检查统一 Redis，正常关闭或启动失败时始终释放连接池。"""
+    try:
+        await initialize_redis_client()
+        async with _application_lifespan(app):
+            yield
+    finally:
+        await close_redis_client()
+
+
 # 创建FastAPI应用
 app = FastAPI(
     title=settings.project_name,
@@ -131,6 +144,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestOriginLoggingMiddleware)
 
 
 # 全局异常处理
@@ -173,6 +187,7 @@ def run_server():
         host=listen_host,
         port=settings.service_port,
         reload=reload_enabled,
+        proxy_headers=False,
         # 保留公共日志工具配置，确保 Uvicorn 日志也进入普通日志和 error.log。
         log_config=None,
     )

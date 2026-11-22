@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import get_settings
 from app.services.db_backup_log_service import DbBackupLogService
 from app.services.system_setting_service import SystemSettingService
+from common.core.request_origin_log import RequestOriginLoggingMiddleware
 from common.db.error_messages import get_public_database_error_message
 from common.db.init_database import init_database
 from common.db.redis_client import close_redis_client, initialize_redis_client
@@ -263,6 +264,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestOriginLoggingMiddleware)
 
 # 挂载静态文件目录
 static_path = Path(settings.static_dir)
@@ -424,6 +426,7 @@ def run_server():
         host=listen_host,
         port=settings.service_port,
         reload=False,
+        proxy_headers=False,
         log_level=settings.log_level.lower(),
         # 保留公共日志工具配置，确保 Uvicorn 日志也进入普通日志和 error.log。
         log_config=None,

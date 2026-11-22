@@ -14,18 +14,24 @@ from loguru import logger
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from common.db.auth_security_schema import ensure_auth_security_schema
 from common.db.base_class import Base
+from common.db.init_database import ddl_connection, init_advisory_lock
 from common.db.session import async_engine, async_session_maker
-from common.models.fy_material import PUBLISH_STATUS_FAILED, PUBLISH_STATUS_PUBLISHED, PUBLISH_STATUS_UNPUBLISHED
+from common.models.fy_material import (
+    PUBLISH_STATUS_FAILED,
+    PUBLISH_STATUS_PUBLISHED,
+    PUBLISH_STATUS_UNPUBLISHED,
+)
 
 
 def _register_fy_models() -> None:
     """注册 fy_ 开头模型，确保 Base.metadata 中已加载相关表定义。"""
     from common.models.fy_account import FYAccount  # noqa: F401
+    from common.models.fy_delete_rule import FYDeleteRule  # noqa: F401
     from common.models.fy_material import FYMaterial  # noqa: F401
     from common.models.fy_product_rule import FYProductRule  # noqa: F401
     from common.models.fy_publish_rule import FYPublishRule  # noqa: F401
-    from common.models.fy_delete_rule import FYDeleteRule  # noqa: F401
 
 
 async def check_database_connection() -> bool:
@@ -41,6 +47,10 @@ async def check_database_connection() -> bool:
 
 async def init_fy_tables() -> None:
     """自检返佣系统数据库表，自动创建缺失表并补建缺失字段。"""
+    # 推广系统可能先于主系统启动；公共设置字段和安全配置必须先独立补齐。
+    # 失败直接向生命周期传播，不能被下面历史fy_迁移异常分支吞掉。
+    async with init_advisory_lock(), ddl_connection() as conn:
+        await ensure_auth_security_schema(conn)
     try:
         _register_fy_models()
         async with async_engine.connect() as conn:

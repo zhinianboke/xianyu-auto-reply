@@ -132,7 +132,7 @@ export function Login() {
           is_admin: res.is_admin ?? false,
           account_limit: res.account_limit,
         })
-        addToast({ message: '登录成功', type: 'success' })
+        addToast({ message: res.message ?? '登录成功', type: 'success' })
         navigate('/dashboard')
       } else {
         addToast({ message: res.message || '登录失败', type: 'error' })

@@ -10,13 +10,14 @@
 - 仅追加写入，不提供 UPDATE / DELETE 业务接口
 - owner_id 为触发用户 ID；找不到对应用户时为空
 - trigger_operation 的取值统一落入数据字典
-- 字段类型、长度与注释均与 common/db/init_database.py 中 xy_email_logs 建表 DDL 保持一致
+- 收件邮箱按注册审计启动迁移扩容为长文本，保留非法或超长原参数而不截断
 """
 from __future__ import annotations
 
 from datetime import datetime
 
 from sqlalchemy import BigInteger, Boolean, DateTime, Index, String, Text, func
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base
@@ -37,7 +38,9 @@ class XYEmailLog(Base):
     owner_id: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True, comment="触发用户ID（找不到对应用户时为空）"
     )
-    recipient_email: Mapped[str] = mapped_column(String(255), nullable=False, comment="收件邮箱")
+    recipient_email: Mapped[str] = mapped_column(
+        Text().with_variant(LONGTEXT(), "mysql"), nullable=False, comment="收件邮箱，保留非法或超长原参数"
+    )
     trigger_operation: Mapped[str] = mapped_column(String(64), nullable=False, comment="触发操作")
     success: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="是否成功：1-成功，0-失败")
     client_ip: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="客户端IP")

@@ -14,20 +14,25 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.payment_config_service import PAYMENT_SETTING_DEFAULTS
 from common.models.system_setting import SystemSetting
 from common.services.advertisement_types import AD_PRICE_DEFAULTS, parse_ad_price
-from app.services.payment_config_service import PAYMENT_SETTING_DEFAULTS
+from common.services.auth_security_policy import (
+    AUTH_SECURITY_DEFAULTS,
+    AUTH_SECURITY_GROUP,
+    load_policy_settings,
+    normalize_security_updates,
+)
+from common.services.registration_policy import REGISTRATION_ENABLED_KEY
 from common.services.remote_token_api import (
     TOKEN_REMOTE_SECRET_KEY_SETTING_KEY,
     TOKEN_REMOTE_URL_SETTING_KEY,
 )
+from common.services.system_setting_validation import parse_boolean_setting
 from common.services.token_api_mode import (
     TOKEN_API_MODE_SETTING_KEY,
     normalize_token_api_mode,
 )
-from common.services.registration_policy import REGISTRATION_ENABLED_KEY
-from common.services.email_domain_policy import EMAIL_DOMAIN_DEFAULTS
-from common.services.system_setting_validation import parse_boolean_setting
 from common.utils.text_utils import escape_xss
 
 # 敏感配置不通过通用系统设置接口返回或修改。
@@ -58,7 +63,7 @@ DEFAULT_LOGIN_SYSTEM_DESCRIPTION = "自动回复、智能客服、订单管理�
 DEFAULT_AUTH_FOOTER_AD_HTML = "© 2026 划算云服务器 ·<a href=\"http://www.hsykj.com\" target=\"_BLANK\">www.hsykj.com</a>"
 
 DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
-    **EMAIL_DOMAIN_DEFAULTS,
+    **AUTH_SECURITY_DEFAULTS,
     **AD_PRICE_DEFAULTS,
     **PAYMENT_SETTING_DEFAULTS,
     "disclaimer.title": ("免责声明", "系统免责声明标题"),
@@ -109,7 +114,7 @@ DEFAULT_SYSTEM_SETTINGS: dict[str, tuple[str, str | None]] = {
 
 # 不需要XSS转义的键（布尔值、数字等）
 NO_ESCAPE_KEYS = {
-    *EMAIL_DOMAIN_DEFAULTS,
+    *AUTH_SECURITY_DEFAULTS,
     REGISTRATION_ENABLED_KEY,
     "show_default_login_info",
     "login_captcha_enabled",
@@ -219,7 +224,10 @@ class SystemSettingService:
                 existing_result = await self.session.execute(existing_stmt)
                 existing_keys = set(existing_result.scalars().all())
                 missing_records = [
-                    SystemSetting(key=key, value=value, description=description)
+                    SystemSetting(
+                        key=key, value=value, description=description,
+                        group=AUTH_SECURITY_GROUP if key in AUTH_SECURITY_DEFAULTS else None,
+                    )
                     for key, (value, description) in DEFAULT_SYSTEM_SETTINGS.items()
                     if key not in existing_keys
                 ]
@@ -291,6 +299,9 @@ class SystemSettingService:
             raise ValueError("敏感设置不能通过通用接口修改")
         if key in AD_PRICE_DEFAULTS:
             parse_ad_price(value)
+        if key in AUTH_SECURITY_DEFAULTS:
+            current = await load_policy_settings(self.session)
+            value = normalize_security_updates(current, {key: value})[key]
         try:
             stmt = select(SystemSetting).where(SystemSetting.key == key)
             result = await self.session.execute(stmt)
@@ -308,6 +319,8 @@ class SystemSettingService:
                 record = SystemSetting(key=key, value=safe_value, description=safe_description)
 
             self.session.add(record)
+            if key in AUTH_SECURITY_DEFAULTS:
+                record.group = AUTH_SECURITY_GROUP
             await self.session.commit()
         except Exception as exc:
             await self.rollback()
@@ -334,16 +347,24 @@ class SystemSettingService:
         sensitive_keys = set(settings).intersection(SENSITIVE_KEYS)
         if sensitive_keys:
             raise ValueError("敏感设置不能通过通用接口修改")
-        for key, (value, _) in settings.items():
+        normalized_settings = {}
+        security_updates = {key: value for key, (value, _) in settings.items() if key in AUTH_SECURITY_DEFAULTS}
+        if security_updates:
+            current = await load_policy_settings(self.session)
+            security_updates = normalize_security_updates(current, security_updates)
+        for key, (value, description) in settings.items():
             if key in AD_PRICE_DEFAULTS:
                 parse_ad_price(value)
+            if key in AUTH_SECURITY_DEFAULTS:
+                value = security_updates[key]
+            normalized_settings[key] = (value, description)
 
         try:
             stmt = select(SystemSetting).where(SystemSetting.key.in_(tuple(settings.keys())))
             result = await self.session.execute(stmt)
             records = {record.key: record for record in result.scalars().all()}
 
-            for key, (value, description) in settings.items():
+            for key, (value, description) in normalized_settings.items():
                 safe_value = value if key in NO_ESCAPE_KEYS else escape_xss(value)
                 safe_description = escape_xss(description) if description else None
                 record = records.get(key)
@@ -358,6 +379,8 @@ class SystemSettingService:
                         description=safe_description,
                     )
                 self.session.add(record)
+                if key in AUTH_SECURITY_DEFAULTS:
+                    record.group = AUTH_SECURITY_GROUP
 
             await self.session.commit()
         except Exception as exc:

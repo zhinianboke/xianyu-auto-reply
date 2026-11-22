@@ -7,30 +7,27 @@
 3. 用户注册
 4. 用户登出
 """
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
-from loguru import logger
-from app.services.login_flow_service import perform_login
-from common.services.auth_rate_limit_service import AuthRateLimitRejected, check_registration_limit
-from common.db.session_recovery import rollback_session
-from common.services.email_domain_policy import EmailDomainRejected, enforce_email_domain
-from common.services.email_verification_code_service import check_email_code
-from common.services.registration_policy import get_registration_rejection_message
 from app.core.security import decode_token, get_password_hash
+from app.services.auth import AuthService
+from app.services.login_flow_service import perform_login
+from app.services.registration_flow_service import perform_registration
+from app.services.system_setting_service import SystemSettingService
+from app.services.user_login_log_service import UserLoginLogService
+from app.services.user_service import UserService
 from common.models.user import User, UserRole, UserStatus
 from common.schemas.auth import LoginRequest, LoginResponse, VerifyResponse
 from common.schemas.common import ApiResponse
 from common.schemas.user import UserCreate
-from app.services.auth import AuthService
-from app.services.system_setting_service import SystemSettingService
-from app.services.user_service import UserService
-from app.services.user_login_log_service import UserLoginLogService
+from common.services.auth_request_validation import AuthenticationAPIRoute
+from common.services.email_verification_code_service import check_email_code
 from common.utils.http_utils import get_client_ip
 
-router = APIRouter(tags=["auth"])
+router = APIRouter(tags=["auth"], route_class=AuthenticationAPIRoute)
 
 class ResetPasswordRequest(BaseModel):
     """重置密码请求"""
@@ -164,49 +161,8 @@ async def register_user(
     Returns:
         统一业务响应，关闭注册时不消费验证码或创建账号。
     """
-    # 注册尝试先计数；后缀或开关拒绝也占用额度，且不能消费旧验证码。
-    try:
-        await check_registration_limit(get_client_ip(request), payload.email)
-        await enforce_email_domain(setting_service.session, payload.email)
-    except (EmailDomainRejected, AuthRateLimitRejected) as exc:
-        return ApiResponse(success=False, code=exc.code, message=str(exc))
-    except Exception as exc:
-        logger.opt(exception=exc).error("注册策略检查失败：email={}", payload.email)
-        await rollback_session(setting_service.session, operation="注册策略检查")
-        return ApiResponse(success=False, code=50001, message="注册校验暂不可用，请稍后重试")
-
-    # 在消费验证码和创建账号前重新读取开关，旧验证码不能绕过已关闭的注册。
-    settings = await setting_service.list_settings()
-    rejection_message = get_registration_rejection_message(settings)
-    if rejection_message:
-        return ApiResponse(
-            success=False,
-            code=status.HTTP_403_FORBIDDEN,
-            message=rejection_message,
-        )
-
-    # 验证邮箱验证码
-    if payload.email and payload.verification_code:
-        code_valid, code_msg = check_email_code(payload.email, payload.verification_code, "register")
-        if not code_valid:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=code_msg)
-    elif payload.email:
-        # 有邮箱但没有验证码
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请输入邮箱验证码")
-    
-    # 检查用户名是否已存在
-    existing = await user_service.get_by_username(payload.username)
-    if existing:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名已被注册")
-    
-    # 检查邮箱是否已存在
-    if payload.email:
-        existing_email = await user_service.get_by_email(payload.email)
-        if existing_email:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="邮箱已被注册")
-    
-    await user_service.create(payload)
-    return ApiResponse(success=True, message="注册成功")
+    request.state.registration_started = True
+    return await perform_registration(payload, get_client_ip(request), user_service, setting_service)
 
 
 @router.post("/reset-password", response_model=ApiResponse)

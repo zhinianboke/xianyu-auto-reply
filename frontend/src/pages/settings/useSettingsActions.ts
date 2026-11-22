@@ -104,9 +104,6 @@ export function useSettingsActions(getSettings: SettingsGetter) {
         smtp_user: smtpUser,
         smtp_password: String(settings.smtp_password || ''),
         smtp_from: String(settings.smtp_from || ''),
-        'auth.email_allowed_suffixes': String(settings['auth.email_allowed_suffixes'] ?? ''),
-        'auth.email_denied_suffixes': String(settings['auth.email_denied_suffixes'] ?? ''),
-        'auth.email_denied_message': String(settings['auth.email_denied_message'] ?? ''),
       }, '发件人设置保存成功', '发件人设置保存失败')
     })
   }, [addToast, getSettings, persist, run])

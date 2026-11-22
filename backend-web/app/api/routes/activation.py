@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db_session
 from common.schemas.common import ApiResponse
+from common.utils.http_utils import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -194,15 +195,9 @@ def _build_history_expire_info(code_type: str, generated_code: str) -> tuple[str
     return _format_expire_time(expire_ts), expired, "已到期" if expired else "未到期"
 
 
-def _get_client_ip(request: Request) -> str:
-    """获取客户端真实IP地址"""
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip.strip()
-    return request.client.host if request.client else "unknown"
+def _get_client_ip(request: Request) -> str | None:
+    """兼容原调用点；参数为 HTTP 请求，返回公共可信代理校验后的 IP，未知时为 None。"""
+    return get_client_ip(request)
 
 
 async def _check_daily_limit(
@@ -249,7 +244,7 @@ async def _check_daily_limit(
 
 async def _save_activation_log(
     db: AsyncSession, machine_id: str, code_type: str,
-    generated_code: str, days: int, ip_address: str
+    generated_code: str, days: int, ip_address: str | None
 ) -> None:
     """
     保存激活码生成记录到数据库

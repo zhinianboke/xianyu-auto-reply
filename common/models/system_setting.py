@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import ClassVar
 
 from sqlalchemy import DateTime, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -20,10 +21,12 @@ class SystemSetting(Base):
     """系统设置表 - 存储全局键值对配置"""
 
     __tablename__ = "xy_system_settings"
+    __table_args__: ClassVar[dict[str, str]] = {"comment": "系统设置表"}
 
     key: Mapped[str] = mapped_column(String(120), primary_key=True, comment="设置键")
     value: Mapped[str] = mapped_column(Text, nullable=False, comment="设置值")
     description: Mapped[str | None] = mapped_column(Text, nullable=True, comment="设置描述")
+    group: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="设置分组")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
