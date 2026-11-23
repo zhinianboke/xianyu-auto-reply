@@ -20,9 +20,9 @@ from common.services.advertisement_types import AD_PRICE_DEFAULTS, parse_ad_pric
 from common.services.auth_security_policy import (
     AUTH_SECURITY_DEFAULTS,
     AUTH_SECURITY_GROUP,
-    load_policy_settings,
     normalize_security_updates,
 )
+from common.services.security_config_service import load_security_values_locked, lock_security_task, save_security_values
 from common.services.registration_policy import REGISTRATION_ENABLED_KEY
 from common.services.remote_token_api import (
     TOKEN_REMOTE_SECRET_KEY_SETTING_KEY,
@@ -300,8 +300,8 @@ class SystemSettingService:
         if key in AD_PRICE_DEFAULTS:
             parse_ad_price(value)
         if key in AUTH_SECURITY_DEFAULTS:
-            current = await load_policy_settings(self.session)
-            value = normalize_security_updates(current, {key: value})[key]
+            await self.set_settings({key: (value, description)})
+            return
         try:
             stmt = select(SystemSetting).where(SystemSetting.key == key)
             result = await self.session.execute(stmt)
@@ -350,7 +350,8 @@ class SystemSettingService:
         normalized_settings = {}
         security_updates = {key: value for key, (value, _) in settings.items() if key in AUTH_SECURITY_DEFAULTS}
         if security_updates:
-            current = await load_policy_settings(self.session)
+            security_task = await lock_security_task(self.session)
+            current = await load_security_values_locked(self.session)
             security_updates = normalize_security_updates(current, security_updates)
         for key, (value, description) in settings.items():
             if key in AD_PRICE_DEFAULTS:
@@ -361,10 +362,14 @@ class SystemSettingService:
 
         try:
             stmt = select(SystemSetting).where(SystemSetting.key.in_(tuple(settings.keys())))
+            if security_updates:
+                await save_security_values(self.session, security_task, security_updates)
             result = await self.session.execute(stmt)
             records = {record.key: record for record in result.scalars().all()}
 
             for key, (value, description) in normalized_settings.items():
+                if key in AUTH_SECURITY_DEFAULTS:
+                    continue
                 safe_value = value if key in NO_ESCAPE_KEYS else escape_xss(value)
                 safe_description = escape_xss(description) if description else None
                 record = records.get(key)

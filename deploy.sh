@@ -739,6 +739,7 @@ REDIS_IMAGE=registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-redis:7-al
 
 # 日志级别
 LOG_LEVEL=INFO
+LOG_FILE_MAX_SIZE=70 MB
 
 # 在线安装：SSH 连接超时、脚本执行上限和任务日志保留期（秒）
 ONLINE_INSTALL_CONNECT_TIMEOUT=60
@@ -930,6 +931,7 @@ services:
       - ENABLE_REMOTE_POPUP_ANNOUNCEMENTS=${ENABLE_REMOTE_POPUP_ANNOUNCEMENTS:-true}
       - BROWSER_HEADLESS=true
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FILE_MAX_SIZE=${LOG_FILE_MAX_SIZE:-70 MB}
       - SQL_ECHO=${SQL_ECHO:-false}
       - TOKEN_CACHE_TTL_MIN_HOURS=${TOKEN_CACHE_TTL_MIN_HOURS:-5}
       - TOKEN_CACHE_TTL_MAX_HOURS=${TOKEN_CACHE_TTL_MAX_HOURS:-10}
@@ -999,6 +1001,7 @@ services:
       - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
       - STATIC_DIR=/app/static
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FILE_MAX_SIZE=${LOG_FILE_MAX_SIZE:-70 MB}
       - SQL_ECHO=${SQL_ECHO:-false}
       - TOKEN_CACHE_TTL_MIN_HOURS=${TOKEN_CACHE_TTL_MIN_HOURS:-5}
       - TOKEN_CACHE_TTL_MAX_HOURS=${TOKEN_CACHE_TTL_MAX_HOURS:-10}
@@ -1068,6 +1071,7 @@ services:
       - STATIC_DIR=/app/static
       - BACKUP_DIR=/app/backups
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FILE_MAX_SIZE=${LOG_FILE_MAX_SIZE:-70 MB}
       - SQL_ECHO=${SQL_ECHO:-false}
       - TZ=Asia/Shanghai
     volumes:

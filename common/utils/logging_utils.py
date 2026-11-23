@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import List, Optional
 
 from loguru import logger
+from common.core.config import get_settings
+from common.utils.file_log_sink import ObservableFileSink
+from common.utils.time_utils import BEIJING_TZ
 
 # 默认日志保留天数
 DEFAULT_LOG_RETENTION_DAYS = 7
@@ -30,7 +34,13 @@ _current_retention_days: int = DEFAULT_LOG_RETENTION_DAYS
 
 # 文件日志格式与轮转大小（普通日志和错误日志共用）
 _FILE_LOG_FORMAT = "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}"
-_FILE_LOG_ROTATION = "100 MB"
+_FILE_LOG_ROTATION = os.environ.get('LOG_FILE_MAX_SIZE') or get_settings().log_file_max_size
+_current_log_level = 'INFO'
+
+
+def _beijing_log_time(record: dict) -> None:
+    """将同一日志记录时间转为北京时间，所有输出复用该记录。"""
+    record['time'] = record['time'].astimezone(BEIJING_TZ)
 
 
 class InterceptHandler(logging.Handler):
@@ -67,21 +77,16 @@ def _add_file_handlers(log_file: Path, retention_days: int) -> tuple[int, int]:
         普通日志处理器 ID 和错误日志处理器 ID。
     """
     common_handler_id = logger.add(
-        log_file,
-        level="DEBUG",
+        ObservableFileSink(log_file, rotation=_FILE_LOG_ROTATION, retention=f"{retention_days} days", encoding='utf-8'),
+        level=_current_log_level,
         format=_FILE_LOG_FORMAT,
-        rotation=_FILE_LOG_ROTATION,
-        retention=f"{retention_days} days",
-        encoding="utf-8",
         enqueue=True,
     )
     error_handler_id = logger.add(
-        log_file.parent / "error.log",
+        ObservableFileSink(log_file.with_name(log_file.stem + '_error.log'), rotation=_FILE_LOG_ROTATION,
+                           retention=f"{retention_days} days", encoding='utf-8'),
         level="ERROR",
         format=_FILE_LOG_FORMAT,
-        rotation=_FILE_LOG_ROTATION,
-        retention=f"{retention_days} days",
-        encoding="utf-8",
         enqueue=True,
     )
     return common_handler_id, error_handler_id
@@ -95,8 +100,8 @@ def setup_logging(
 ) -> None:
     """统一配置服务日志
     
-    配置 loguru 的控制台、普通日志文件和 error.log，并将标准 logging 转发到 loguru。
-    error.log 仅记录 ERROR 及以上级别，但与普通日志使用相同的轮转大小和保留天数。
+    配置控制台、项目业务日志及项目专属错误日志，并将标准logging转发到loguru。
+    ERROR及以上同条记录双写，控制台和文件使用相同格式、级别与滚动保留策略。
     
     Args:
         log_file: 日志文件路径
@@ -105,6 +110,10 @@ def setup_logging(
         retention_days: 日志保留天数，默认 7 天
     """
     global _file_handler_id, _error_file_handler_id, _current_log_file, _current_retention_days
+    global _current_log_level
+    # 禁止DEBUG输出，同时确保ERROR始终进入控制台和正常文件。
+    configured_level = logger.level(log_level.upper()).no
+    _current_log_level = 'INFO' if configured_level < 20 else 'ERROR' if configured_level > 40 else log_level.upper()
     _current_log_file = log_file
     _current_retention_days = retention_days
 
@@ -113,16 +122,17 @@ def setup_logging(
 
     # 移除默认的 stderr handler
     logger.remove()
+    logger.configure(patcher=_beijing_log_time)
 
     # 添加控制台输出
     logger.add(
         sys.stderr,
-        level=log_level.upper(),
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-        colorize=True,
+        level=_current_log_level,
+        format=_FILE_LOG_FORMAT,
+        colorize=False,
     )
 
-    # 普通日志记录 DEBUG 及以上级别；ERROR 及以上级别同时写入 error.log。
+    # 普通日志和控制台共用配置级别，ERROR及以上同时写入项目专属错误文件。
     _file_handler_id, _error_file_handler_id = _add_file_handlers(
         log_file,
         retention_days,

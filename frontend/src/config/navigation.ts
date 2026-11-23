@@ -155,6 +155,7 @@ export const adminNavItems: NavEntry[] = [
       { key: 'admin-account-login-logs', icon: LogIn, label: '账号登录日志', path: '/admin/account-login-logs', adminOnly: true },
       { key: 'admin-user-login-logs', icon: LogIn, label: '用户登录日志', path: '/admin/user-login-logs', adminOnly: true },
       { key: 'admin-registration-logs', icon: Users, label: '注册日志', path: '/admin/registration-logs', adminOnly: true },
+      { key: 'admin-security-logs', icon: Timer, label: '安全日志', path: '/admin/security-logs', adminOnly: true },
       { key: 'admin-rate-batches', icon: Star, label: '补评价日志', path: '/admin/rate-batches', adminOnly: true },
       { key: 'admin-polish-batches', icon: Star, label: '擦亮日志', path: '/admin/polish-batches', adminOnly: true },
       { key: 'admin-login-renew-batches', icon: Key, label: '登录续期日志', path: '/admin/login-renew-batches', adminOnly: true },

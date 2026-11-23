@@ -5,6 +5,8 @@ SQLAlchemy模型导出
 """
 
 from common.models.user import User, UserRole, UserStatus
+from common.models.security_log import SecurityLog
+from common.models.security_task import SecurityTask
 from common.models.xy_account import XYAccount
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.xy_keyword_rule import XYKeywordRule
@@ -158,4 +160,6 @@ __all__ = [
     "ScheduledPublishRule",
     "ScheduledPublishRecord",
     "ScheduledPublishTrigger",
+    "SecurityLog",
+    "SecurityTask",
 ]

@@ -12,9 +12,13 @@ import { Clock, RefreshCw, Loader2, Play, Pause, Edit2, Check, X, Zap } from 'lu
 import { getScheduledTasks, updateScheduledTask, triggerScheduledTask, type ScheduledTask } from '@/api/scheduledTasks'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
-import { PageLoading } from '@/components/common/Loading'
+import { Loading } from '@/components/common/Loading'
+import { SecurityTasks } from './SecurityTasks'
+import { useViewportContentHeight } from '@/components/common/useViewportContentHeight'
 
 export function ScheduledTasks() {
+  const { containerRef, height } = useViewportContentHeight<HTMLDivElement>()
+  const [taskGroup, setTaskGroup] = useState<'security' | 'plugins'>('security')
   const { addToast } = useUIStore()
   const { isAuthenticated, token, _hasHydrated } = useAuthStore()
   const [loading, setLoading] = useState(true)
@@ -117,19 +121,16 @@ export function ScheduledTasks() {
     }
   }
 
-  if (loading && tasks.length === 0) {
-    return <PageLoading />
-  }
-
   return (
-    <div className="space-y-4">
+    <div ref={containerRef} style={{ height }} className="relative flex min-h-0 flex-col gap-4 overflow-hidden">
+      {taskGroup === 'plugins' && loading && <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg bg-white/80 dark:bg-slate-900/80"><Loading text="正在加载插件任务…" /></div>}
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="max-h-[35%] shrink-0 overflow-y-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="page-title">定时任务管理</h1>
           <p className="page-description">管理系统定时任务的执行间隔和启用状态</p>
         </div>
-        <div className="flex gap-3">
+        {taskGroup === 'plugins' && <div className="flex gap-3">
           <button onClick={loadTasks} disabled={loading} className="btn-ios-secondary">
             {loading ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -138,11 +139,17 @@ export function ScheduledTasks() {
             )}
             刷新
           </button>
-        </div>
+        </div>}
       </div>
 
+      <div className="flex shrink-0 gap-3" role="tablist" aria-label="定时任务分类">
+        <button role="tab" aria-selected={taskGroup === 'security'} className={taskGroup === 'security' ? 'btn-ios-primary' : 'btn-ios-secondary'} onClick={() => setTaskGroup('security')}>安全定时任务</button>
+        <button role="tab" aria-selected={taskGroup === 'plugins'} className={taskGroup === 'plugins' ? 'btn-ios-primary' : 'btn-ios-secondary'} onClick={() => setTaskGroup('plugins')}>插件定时任务</button>
+      </div>
+      {taskGroup === 'security' ? <SecurityTasks /> : <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+
       {/* Tasks List */}
-      <div className="vben-card">
+      <div className="vben-card flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="vben-card-header flex items-center justify-between">
           <h2 className="vben-card-title">
             <Clock className="w-4 h-4" />
@@ -150,7 +157,7 @@ export function ScheduledTasks() {
           </h2>
           <span className="badge-primary">{tasks.length} 个任务</span>
         </div>
-        <div className="overflow-x-auto">
+        <div className="table-scroll">
           <table className="table-ios">
             <thead>
               <tr>
@@ -280,13 +287,14 @@ export function ScheduledTasks() {
       </div>
 
       {/* 提示信息 */}
-      <div className="vben-card">
+      <div className="vben-card max-h-[30%] shrink-0 overflow-y-auto">
         <div className="vben-card-body">
           <p className="text-sm text-slate-500 dark:text-slate-400">
             提示：修改定时任务配置后会立即生效。禁用任务后，该任务将不再执行，但调度器仍会按间隔时间检查任务状态。
           </p>
         </div>
       </div>
+      </div>}
     </div>
   )
 }

@@ -15,7 +15,7 @@ EMAIL_DOMAIN_ALLOW_KEY = "auth.email_allowed_suffixes"
 EMAIL_DOMAIN_DENY_KEY = "auth.email_denied_suffixes"
 EMAIL_DOMAIN_MESSAGE_KEY = "auth.email_denied_message"
 DEFAULT_EMAIL_DOMAIN_MESSAGE = "该邮箱后缀不允许登录或注册，请更换邮箱"
-MAX_SUFFIX_LIST_LENGTH = 4096
+MAX_SUFFIX_LIST_LENGTH = 60000
 MAX_DENIAL_MESSAGE_LENGTH = 500
 EMAIL_DOMAIN_DEFAULTS = {
     EMAIL_DOMAIN_ALLOW_KEY: ("", "允许注册和登录的邮箱后缀（英文逗号分隔，留空不限制）"),

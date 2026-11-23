@@ -52,6 +52,7 @@ class BaseConfig(BaseSettings):
     # 环境配置
     environment: str = Field(default="development")
     log_level: str = Field(default="INFO")
+    log_file_max_size: str = Field(default='70 MB', min_length=1)
 
     # 本机默认仅信任 loopback；Docker 由 Compose 注入实际前端代理的单地址网段。
     trusted_proxy_cidrs: str = Field(

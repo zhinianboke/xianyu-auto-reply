@@ -1,53 +1,60 @@
-"""管理员安全配置读写服务：邮箱三项和禁止 IP 整组校验，省略字段保留原值。"""
+"""管理员安全配置读写：七档频率及名单原子校验，锁内版本防止旧表单覆盖自动封禁。"""
 from __future__ import annotations
 
 from collections.abc import Mapping
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.system_setting_service import SystemSettingService
 from common.services.auth_security_policy import (
-    AUTH_SECURITY_DEFAULTS,
-    AUTH_SECURITY_FIELDS,
-    load_policy_settings,
-    normalize_security_updates,
+    AUTH_FREQUENCY_KEYS, AUTH_SECURITY_DEFAULTS, AUTH_SECURITY_FIELDS,
+    MAX_SECURITY_FREQUENCY, normalize_security_setting, normalize_security_updates,
+)
+from common.services.security_config_service import (
+    load_security_values_locked, lock_security_task, save_security_values,
 )
 
 
 class AuthSecuritySettingsService:
-    """安全设置专用服务，只操作四个安全键，不读取或覆盖 SMTP 配置。"""
+    """只操作安全组，不读取、解密或覆盖SMTP配置；未提交字段保留。"""
 
     def __init__(self, session: AsyncSession):
-        """使用当前请求会话与项目统一设置服务，不自行创建数据库连接。"""
+        """使用当前请求会话与统一锁，不创建引擎或会话工厂。"""
         self.session = session
-        self.settings = SystemSettingService(session)
 
-    async def get_settings(self) -> dict[str, str]:
-        """读取当前四项安全配置；返回接口字段名，提示语保持原始普通文本。"""
-        current = await load_policy_settings(self.session)
-        return {field: current.get(key, AUTH_SECURITY_DEFAULTS[key][0])
-                for field, key in AUTH_SECURITY_FIELDS.items()}
+    async def get_settings(self) -> dict:
+        """锁内读取一致的配置与版本；频率返回整数，提示语保持原始普通文本。"""
+        task = await lock_security_task(self.session)
+        current = await load_security_values_locked(self.session)
+        result = {field: current.get(key, AUTH_SECURITY_DEFAULTS[key][0])
+                  for field, key in AUTH_SECURITY_FIELDS.items()}
+        for key in AUTH_FREQUENCY_KEYS.values():
+            field = key.removeprefix('auth.')
+            result[field] = int(normalize_security_setting(key, result[field]))
+        result['config_version'] = str(task.config_version or 0)
+        return result
 
-    async def save_settings(self, updates: Mapping[str, str]) -> dict[str, str]:
-        """整组校验后单事务保存本次提交的字段，省略保留、显式空字符串清空。
-
-        Args:
-            updates: API四个字段的部分或完整更新，不接受空值、数字及未知字段。
-        Returns:
-            保存后的完整四项配置，使用规范化列表和原始禁止提示语。
-        """
-        if set(updates) - set(AUTH_SECURITY_FIELDS):
+    async def save_settings(self, updates: Mapping) -> dict:
+        """校验整个目标后只保存提交字段；新客户端携带版本，旧客户端保留兼容。"""
+        if set(updates) - set(AUTH_SECURITY_FIELDS) - {'config_version'}:
             raise ValueError('安全设置包含未知字段')
-        if any(not isinstance(value, str) for value in updates.values()):
-            raise ValueError('安全设置必须为文本，清空时请提交空字符串')
-        current = await load_policy_settings(self.session)
-        submitted = {AUTH_SECURITY_FIELDS[field]: value for field, value in updates.items()}
+        submitted = {}
+        for field, value in updates.items():
+            if field == 'config_version':
+                continue
+            key = AUTH_SECURITY_FIELDS[field]
+            if key in AUTH_FREQUENCY_KEYS.values():
+                if type(value) is not int or not 0 <= value <= MAX_SECURITY_FREQUENCY:
+                    raise ValueError('安全频率必须为0至9007199254740991的非负整数，0表示关闭')
+                value = str(value)
+            elif not isinstance(value, str):
+                raise ValueError('安全设置名单和提示语必须为文本，清空请提交空字符串')
+            submitted[key] = value
+        task = await lock_security_task(self.session)
+        if 'config_version' in updates and updates['config_version'] != str(task.config_version or 0):
+            raise ValueError('安全配置已被后台检查或其他管理员更新，请重新加载后再保存')
+        current = await load_security_values_locked(self.session)
         normalized = normalize_security_updates(current, submitted)
-        # 仅写提交字段，避免省略字段在并发管理员保存时覆盖另一组或其他新值。
-        changes = {
-            AUTH_SECURITY_FIELDS[field]: (
-                normalized[AUTH_SECURITY_FIELDS[field]], AUTH_SECURITY_DEFAULTS[AUTH_SECURITY_FIELDS[field]][1],
-            ) for field in updates
-        }
-        await self.settings.set_settings(changes)
-        return await self.get_settings()
+        await save_security_values(self.session, task, normalized)
+        result = await self.get_settings()
+        await self.session.commit()
+        return result

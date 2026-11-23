@@ -27,7 +27,7 @@ class XYDataDictionary(Base):
         Index("idx_dd_type_sort", "dict_type", "sort_order"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment="字典项ID")
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, 'sqlite'), primary_key=True, autoincrement=True, comment="字典项ID")
     dict_type: Mapped[str] = mapped_column(String(64), nullable=False, comment="字典类型")
     dict_value: Mapped[str] = mapped_column(String(64), nullable=False, comment="字典值")
     dict_label: Mapped[str] = mapped_column(String(128), nullable=False, comment="中文名称")

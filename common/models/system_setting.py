@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import ClassVar
 
 from sqlalchemy import DateTime, String, Text, func
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base
@@ -24,7 +25,7 @@ class SystemSetting(Base):
     __table_args__: ClassVar[dict[str, str]] = {"comment": "系统设置表"}
 
     key: Mapped[str] = mapped_column(String(120), primary_key=True, comment="设置键")
-    value: Mapped[str] = mapped_column(Text, nullable=False, comment="设置值")
+    value: Mapped[str] = mapped_column(Text().with_variant(LONGTEXT, 'mysql'), nullable=False, comment="设置值")
     description: Mapped[str | None] = mapped_column(Text, nullable=True, comment="设置描述")
     group: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="设置分组")
     updated_at: Mapped[datetime] = mapped_column(

@@ -16,21 +16,31 @@ from common.services.email_domain_policy import (
     EMAIL_DOMAIN_DENY_KEY,
     EMAIL_DOMAIN_MESSAGE_KEY,
     normalize_policy_setting,
+    normalize_suffixes,
 )
 
 AUTH_SECURITY_GROUP = 'security'
 AUTH_DENIED_IPS_KEY = 'auth.denied_ips'
 DEFAULT_IP_DENIED_MESSAGE = '该 IP 不允许登录或注册，请联系管理员'
-MAX_DENIED_IPS_LENGTH = 4096
+MAX_DENIED_IPS_LENGTH = 60000
+AUTH_COMMON_SUFFIXES_KEY = 'auth.common_email_suffixes'
+AUTH_FREQUENCY_KEYS = {minutes: f'auth.frequency_{minutes}m' for minutes in (1, 5, 10)}
+AUTH_FREQUENCY_KEYS.update({hours * 60: f'auth.frequency_{hours}h' for hours in (1, 5, 10, 24)})
+MAX_SECURITY_FREQUENCY = 9007199254740991
 AUTH_SECURITY_DEFAULTS = {
     **EMAIL_DOMAIN_DEFAULTS,
     AUTH_DENIED_IPS_KEY: ('', '禁止注册和登录的 IP 列表（英文逗号分隔，支持完整地址和地址片段）'),
+    AUTH_COMMON_SUFFIXES_KEY: ('', '常见邮箱后缀，仅豁免自动后缀封禁，不豁免IP或管理员原有禁止项'),
+    **{key: ('0', f'{str(minutes) + "分钟" if minutes < 60 else str(minutes // 60) + "小时"}安全频率阈值，0关闭，大于等于阈值判定违规')
+       for minutes, key in AUTH_FREQUENCY_KEYS.items()},
 }
 AUTH_SECURITY_FIELDS = {
     'email_allowed_suffixes': EMAIL_DOMAIN_ALLOW_KEY,
     'email_denied_suffixes': EMAIL_DOMAIN_DENY_KEY,
     'email_denied_message': EMAIL_DOMAIN_MESSAGE_KEY,
     'denied_ips': AUTH_DENIED_IPS_KEY,
+    'common_email_suffixes': AUTH_COMMON_SUFFIXES_KEY,
+    **{key.removeprefix('auth.'): key for key in AUTH_FREQUENCY_KEYS.values()},
 }
 
 
@@ -99,6 +109,14 @@ def normalize_denied_ips(raw_value: str) -> str:
 
 def normalize_security_setting(key: str, value: str) -> str:
     """校验一个安全设置值；邮箱与共享提示沿用原规则，IP 使用公共规范化。"""
+    if key in AUTH_FREQUENCY_KEYS.values():
+        if not isinstance(value, str) or not re.fullmatch(r'[0-9]{1,16}', value) or int(value) > MAX_SECURITY_FREQUENCY:
+            raise ValueError('安全频率必须为0至9007199254740991的非负整数，0表示关闭')
+        return str(int(value))
+    if not isinstance(value, str):
+        raise ValueError('安全配置列表和提示语必须为文本')
+    if key == AUTH_COMMON_SUFFIXES_KEY:
+        return normalize_suffixes(value)
     return normalize_denied_ips(value) if key == AUTH_DENIED_IPS_KEY else normalize_policy_setting(key, value)
 
 
