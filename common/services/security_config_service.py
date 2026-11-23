@@ -27,7 +27,7 @@ async def ensure_security_defaults(connection) -> None:
     now = get_beijing_now_naive()
     await insert_defaults(connection, SecurityTask.__table__, {
         'task_code': SECURITY_TASK_CODE, 'interval_seconds': SECURITY_INTERVAL_SECONDS, 'config_version': 0,
-        'next_run_at': now, 'created_at': now, 'updated_at': now,
+        'enabled': False, 'next_run_at': None, 'created_at': now, 'updated_at': now,
     }, ('task_code',))
     for key, (value, description) in AUTH_SECURITY_DEFAULTS.items():
         await insert_defaults(connection, SystemSetting.__table__, {

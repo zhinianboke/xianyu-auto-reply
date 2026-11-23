@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -34,6 +34,8 @@ class SecurityTask(Base):
     task_code: Mapped[str] = mapped_column(String(64), nullable=False, comment='任务代码，关联任务名称字典')
     interval_seconds: Mapped[int] = mapped_column(Integer, default=SECURITY_INTERVAL_SECONDS,
                                                 server_default=str(SECURITY_INTERVAL_SECONDS), comment='执行间隔秒数')
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default='0',
+                                        comment='是否启用自动安全检查，默认停止')
     config_version: Mapped[int] = mapped_column(BigInteger, default=0, server_default='0', comment='安全配置版本')
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime, comment='下次执行北京时间')
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, comment='上次执行开始北京时间')

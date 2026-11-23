@@ -9,7 +9,7 @@ from common.utils.async_cleanup import complete_before_cancellation
 
 
 async def run_security_frequency(stop: asyncio.Event) -> None:
-    """由应用生命周期启动；每20秒到期一次，未到期或其他实例占用不追加日志。"""
+    """由应用生命周期启动；默认停止，启用后按20秒调度，停止或未到期不执行、不追加日志。"""
     while not stop.is_set():
         try:
             await security_frequency_service.execute()

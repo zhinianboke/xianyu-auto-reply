@@ -50,8 +50,5 @@ async def execute_task(task_code: str, admin: Admin, session: Database):
     """管理员手动执行与自动检查共用统计、锁和审计，完成提交后反馈真实结果。"""
     if task_code != SECURITY_TASK_CODE:
         raise ValueError('安全任务不存在')
-    owner_id = admin.id
-    # 释放鉴权依赖的只读事务，避免长时间等待执行时占用额外数据库锁和快照。
-    await session.commit()
-    result = await security_frequency_service.execute('manual', owner_id)
+    result = await security_frequency_service.execute_manual(session, admin.id)
     return ApiResponse(success=True, code=200, message=result['message'], data=result)

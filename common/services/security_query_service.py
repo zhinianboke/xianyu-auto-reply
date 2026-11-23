@@ -84,16 +84,23 @@ class SecurityQueryService:
         self.validate_pagination(page, page_size)
         rows, total = await execute_paginated_with_filters(self.session, SecurityTask,
             order_by=[SecurityTask.id], page=page, page_size=page_size)
+        return {'items': [self.serialize_task(row) for row in rows], 'total': total, 'page': page, 'page_size': page_size,
+            'pages': (total + page_size - 1) // page_size, 'dictionaries': await self.dictionaries()}
+
+    @staticmethod
+    def serialize_task(row: SecurityTask) -> dict:
+        """统一序列化安全任务原始调度状态，供原定时任务列表与兼容接口复用。"""
         now = get_beijing_now_naive()
-        return {'items': [{
+        return {
             # 运行间隔来自执行器统一常量；旧表NULL或遗留值不能伪装成当前真实调度间隔。
             'id': row.id, 'task_code': row.task_code, 'interval_seconds': SECURITY_INTERVAL_SECONDS,
-            'next_run_at': safe_isoformat(row.next_run_at), 'last_run_at': safe_isoformat(row.last_run_at),
+            'enabled': bool(row.enabled),
+            'next_run_at': safe_isoformat(row.next_run_at) if row.enabled else None,
+            'last_run_at': safe_isoformat(row.last_run_at),
             'last_result': row.last_result, 'last_message': row.last_message,
             'running': bool(row.lease_id and row.lease_expires_at and row.lease_expires_at > now),
             'execution_id': row.lease_id, 'lease_expires_at': safe_isoformat(row.lease_expires_at),
-        } for row in rows], 'total': total, 'page': page, 'page_size': page_size,
-            'pages': (total + page_size - 1) // page_size, 'dictionaries': await self.dictionaries()}
+        }
 
     @staticmethod
     def validate_pagination(page: int, page_size: int) -> None:

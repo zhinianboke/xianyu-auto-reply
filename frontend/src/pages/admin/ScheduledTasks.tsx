@@ -5,148 +5,57 @@
  * 1. 显示定时任务列表（任务名称、间隔时间、是否启用、运行状态）
  * 2. 支持开启/关闭定时任务
  * 3. 支持修改定时任务间隔时间
- * 4. 修改后实时生效
+ * 4. 原列表追加安全频率任务，修改和手动执行后实时反馈
  */
 import { useState, useEffect } from 'react'
-import { Clock, RefreshCw, Loader2, Play, Pause, Edit2, Check, X, Zap } from 'lucide-react'
-import { getScheduledTasks, updateScheduledTask, triggerScheduledTask, type ScheduledTask } from '@/api/scheduledTasks'
+import { Clock, RefreshCw, Loader2, Play, Pause, Zap } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
-import { useAuthStore } from '@/store/authStore'
 import { Loading } from '@/components/common/Loading'
-import { SecurityTasks } from './SecurityTasks'
+import { SecurityTaskRow } from './SecurityTasks'
+import { useScheduledTasks } from './useScheduledTasks'
+import { Pager } from '@/components/common/Pager'
 import { useViewportContentHeight } from '@/components/common/useViewportContentHeight'
 
 export function ScheduledTasks() {
   const { containerRef, height } = useViewportContentHeight<HTMLDivElement>()
-  const [taskGroup, setTaskGroup] = useState<'security' | 'plugins'>('security')
+  const state = useScheduledTasks()
+  const { data, error: loadError, busy, operation } = state
   const { addToast } = useUIStore()
-  const { isAuthenticated, token, _hasHydrated } = useAuthStore()
-  const [loading, setLoading] = useState(true)
-  const [tasks, setTasks] = useState<ScheduledTask[]>([])
-  
-  // 编辑状态
   const [editingTask, setEditingTask] = useState<string | null>(null)
-  const [editInterval, setEditInterval] = useState<number>(0)
-  const [updating, setUpdating] = useState<string | null>(null)
-  const [triggering, setTriggering] = useState<string | null>(null)
-
-  const loadTasks = async () => {
-    if (!_hasHydrated || !isAuthenticated || !token) return
-    try {
-      setLoading(true)
-      const result = await getScheduledTasks()
-      if (result.success) {
-        setTasks(result.data || [])
-      }
-    } catch {
-      addToast({ type: 'error', message: '加载定时任务列表失败' })
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    if (!_hasHydrated || !isAuthenticated || !token) return
-    loadTasks()
-  }, [_hasHydrated, isAuthenticated, token])
-
-  // 手动触发任务
-  const handleTrigger = async (task: ScheduledTask) => {
-    setTriggering(task.task_code)
-    try {
-      const result = await triggerScheduledTask(task.task_code)
-      if (result.success) {
-        addToast({ type: 'success', message: result.message || `${task.task_name} 已触发执行` })
-      } else {
-        addToast({ type: 'error', message: result.message || '触发失败' })
-      }
-    } catch (error: any) {
-      addToast({ type: 'error', message: error.response?.data?.detail || '触发失败' })
-    } finally {
-      setTriggering(null)
-    }
-  }
-
-  // 切换任务启用状态
-  const handleToggleEnabled = async (task: ScheduledTask) => {
-    setUpdating(task.task_code)
-    try {
-      const result = await updateScheduledTask(task.task_code, { enabled: !task.enabled })
-      if (result.success) {
-        addToast({ type: 'success', message: result.message })
-        loadTasks()
-      } else {
-        addToast({ type: 'error', message: '更新失败' })
-      }
-    } catch (error: any) {
-      addToast({ type: 'error', message: error.response?.data?.detail || '更新失败' })
-    } finally {
-      setUpdating(null)
-    }
-  }
-
-  // 开始编辑间隔时间
-  const handleStartEdit = (task: ScheduledTask) => {
-    setEditingTask(task.task_code)
-    setEditInterval(task.interval_seconds)
-  }
-
-  // 取消编辑
-  const handleCancelEdit = () => {
-    setEditingTask(null)
-    setEditInterval(0)
-  }
-
-  // 保存间隔时间
-  const handleSaveInterval = async (taskCode: string) => {
-    if (editInterval < 1) {
-      addToast({ type: 'error', message: '间隔时间不能小于1秒' })
+  const [editInterval, setEditInterval] = useState(0)
+  const tasks = data?.items || []
+  const updating = operation?.kind === 'update' ? operation.code : null
+  const triggering = operation?.kind === 'trigger' ? operation.code : null
+  useEffect(() => { setEditingTask(null) }, [state.isCurrentSession])
+  const handleCancelEdit = () => { setEditingTask(null); setEditInterval(0) }
+  const handleSaveInterval = (code: string) => {
+    if (!Number.isInteger(editInterval) || editInterval < 1 || editInterval > 2147483647) {
+      addToast({ type: 'error', message: '执行间隔必须是1至2147483647之间的整数秒数' })
       return
     }
-    
-    setUpdating(taskCode)
-    try {
-      const result = await updateScheduledTask(taskCode, { interval_seconds: editInterval })
-      if (result.success) {
-        addToast({ type: 'success', message: result.message })
-        setEditingTask(null)
-        loadTasks()
-      } else {
-        addToast({ type: 'error', message: '更新失败' })
-      }
-    } catch (error: any) {
-      addToast({ type: 'error', message: error.response?.data?.detail || '更新失败' })
-    } finally {
-      setUpdating(null)
-    }
+    state.update(code, { interval_seconds: editInterval }, handleCancelEdit)
   }
 
   return (
     <div ref={containerRef} style={{ height }} className="relative flex min-h-0 flex-col gap-4 overflow-hidden">
-      {taskGroup === 'plugins' && loading && <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg bg-white/80 dark:bg-slate-900/80"><Loading text="正在加载插件任务…" /></div>}
+      {busy && <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg bg-white/80 dark:bg-slate-900/80"><Loading text={operation ? '正在处理任务并保存结果…' : '正在加载定时任务…'} /></div>}
       {/* Header */}
       <div className="max-h-[35%] shrink-0 overflow-y-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="page-title">定时任务管理</h1>
           <p className="page-description">管理系统定时任务的执行间隔和启用状态</p>
         </div>
-        {taskGroup === 'plugins' && <div className="flex gap-3">
-          <button onClick={loadTasks} disabled={loading} className="btn-ios-secondary">
-            {loading ? (
+        <div className="flex gap-3">
+          <button onClick={state.refresh} disabled={busy} className="btn-ios-secondary">
+            {busy ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
               <RefreshCw className="w-4 h-4" />
             )}
             刷新
           </button>
-        </div>}
+        </div>
       </div>
-
-      <div className="flex shrink-0 gap-3" role="tablist" aria-label="定时任务分类">
-        <button role="tab" aria-selected={taskGroup === 'security'} className={taskGroup === 'security' ? 'btn-ios-primary' : 'btn-ios-secondary'} onClick={() => setTaskGroup('security')}>安全定时任务</button>
-        <button role="tab" aria-selected={taskGroup === 'plugins'} className={taskGroup === 'plugins' ? 'btn-ios-primary' : 'btn-ios-secondary'} onClick={() => setTaskGroup('plugins')}>插件定时任务</button>
-      </div>
-      {taskGroup === 'security' ? <SecurityTasks /> : <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
 
       {/* Tasks List */}
       <div className="vben-card flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -155,7 +64,7 @@ export function ScheduledTasks() {
             <Clock className="w-4 h-4" />
             定时任务列表
           </h2>
-          <span className="badge-primary">{tasks.length} 个任务</span>
+          <span className="badge-primary">{loadError ? '任务加载异常' : data ? `${data.total} 个任务` : '正在加载'}</span>
         </div>
         <div className="table-scroll">
           <table className="table-ios">
@@ -170,18 +79,20 @@ export function ScheduledTasks() {
               </tr>
             </thead>
             <tbody>
-              {tasks.length === 0 ? (
+              {loadError ? <tr><td colSpan={6} className="text-center py-8 text-red-600 dark:text-red-400">{loadError}</td></tr> : tasks.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="text-center py-8 text-slate-500 dark:text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <Clock className="w-12 h-12 text-slate-300 dark:text-slate-600" />
-                      <p>暂无定时任务</p>
+                      <p>{data ? '暂无定时任务' : '定时任务尚未加载'}</p>
                     </div>
                   </td>
                 </tr>
               ) : (
-                tasks.map((task) => (
-                  <tr key={task.task_code}>
+                tasks.map((task) => task.task_source === 'security' ? (
+                  <SecurityTaskRow key={`security:${task.id}`} task={task} dictionaries={data!.dictionaries} busy={busy} run={state.run} update={state.update} />
+                ) : (
+                  <tr key={`scheduled:${task.id}`}>
                     <td className="font-medium text-slate-900 dark:text-white">
                       {task.task_name}
                     </td>
@@ -194,6 +105,9 @@ export function ScheduledTasks() {
                           <input
                             type="number"
                             min="1"
+                            max="2147483647"
+                            step="1"
+                            disabled={busy}
                             value={editInterval}
                             onChange={(e) => setEditInterval(Number(e.target.value))}
                             className="w-20 px-2 py-1 border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-sm"
@@ -201,22 +115,23 @@ export function ScheduledTasks() {
                           <span className="text-sm text-slate-500">秒</span>
                           <button
                             onClick={() => handleSaveInterval(task.task_code)}
-                            disabled={updating === task.task_code}
+                            disabled={busy}
                             className="p-1 rounded hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
                             title="保存"
                           >
                             {updating === task.task_code ? (
                               <Loader2 className="w-4 h-4 animate-spin text-green-500" />
                             ) : (
-                              <Check className="w-4 h-4 text-green-500" />
+                              '保存'
                             )}
                           </button>
                           <button
                             onClick={handleCancelEdit}
+                            disabled={busy}
                             className="p-1 rounded hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
                             title="取消"
                           >
-                            <X className="w-4 h-4 text-red-500" />
+                            取消
                           </button>
                         </div>
                       ) : (
@@ -224,11 +139,12 @@ export function ScheduledTasks() {
                           <span className="font-medium">{task.interval_seconds}</span>
                           <span className="text-sm text-slate-500">秒</span>
                           <button
-                            onClick={() => handleStartEdit(task)}
+                            onClick={() => { setEditingTask(task.task_code); setEditInterval(task.interval_seconds) }}
+                            disabled={busy}
                             className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                             title="编辑"
                           >
-                            <Edit2 className="w-3.5 h-3.5 text-slate-400" />
+                            编辑
                           </button>
                         </div>
                       )}
@@ -246,8 +162,8 @@ export function ScheduledTasks() {
                     <td>
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => handleTrigger(task)}
-                          disabled={triggering === task.task_code}
+                          onClick={() => state.run(task.task_code)}
+                          disabled={busy}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/20 dark:text-blue-400 dark:hover:bg-blue-900/30"
                           title="手动执行一次该任务"
                         >
@@ -259,8 +175,8 @@ export function ScheduledTasks() {
                           执行
                         </button>
                         <button
-                          onClick={() => handleToggleEnabled(task)}
-                          disabled={updating === task.task_code}
+                          onClick={() => state.update(task.task_code, { enabled: !task.enabled })}
+                          disabled={busy}
                           className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                             task.enabled
                               ? 'bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30'
@@ -284,6 +200,11 @@ export function ScheduledTasks() {
             </tbody>
           </table>
         </div>
+        {data && !loadError && <div className="max-h-[35%] shrink-0 overflow-y-auto">
+          <Pager page={data.page} pageSize={data.page_size} total={data.total} totalPages={data.pages} loading={busy}
+            onPageChange={(page) => { handleCancelEdit(); state.load(page, state.pageSize, state.filters) }}
+            onPageSizeChange={(size) => { handleCancelEdit(); state.load(1, size, state.filters) }} />
+        </div>}
       </div>
 
       {/* 提示信息 */}
@@ -291,10 +212,10 @@ export function ScheduledTasks() {
         <div className="vben-card-body">
           <p className="text-sm text-slate-500 dark:text-slate-400">
             提示：修改定时任务配置后会立即生效。禁用任务后，该任务将不再执行，但调度器仍会按间隔时间检查任务状态。
+            安全频率任务默认停止，启用后每20秒执行；停止时仍可手动检查，执行详情见「安全日志」。
           </p>
         </div>
       </div>
-      </div>}
     </div>
   )
 }

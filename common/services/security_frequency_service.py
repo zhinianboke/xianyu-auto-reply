@@ -57,6 +57,11 @@ class SecurityFrequencyService:
         """取消后的收尾只等待已有执行，保留原取消语义，不发起第二次检查。"""
         await asyncio.gather(asyncio.shield(worker), return_exceptions=True)
 
+    async def execute_manual(self, session, owner_id: int) -> dict:
+        """释放鉴权只读事务后执行人工检查，原管理接口与安全兼容接口共用。"""
+        await session.commit()
+        return await self.execute('manual', owner_id)
+
     async def drain(self) -> None:
         """禁止新增执行，等待当前自动/手动检查及其失败审计全部结束。"""
         self.closing = True
@@ -73,6 +78,8 @@ class SecurityFrequencyService:
             """行锁下检查本轮占用与真实到期时间，不覆盖活跃执行。"""
             task = await lock_security_task(session)
             now = get_beijing_now_naive()
+            if method == 'auto' and not task.enabled:
+                return False
             if task.lease_id and task.lease_expires_at and task.lease_expires_at > now:
                 return False
             if method == 'auto' and task.next_run_at and task.next_run_at > now:
@@ -191,7 +198,7 @@ class SecurityFrequencyService:
                              added_ips=','.join(ips), details=json.dumps(details, ensure_ascii=False),
                              started_at=started_at, finished_at=finished)
         session.add(record)
-        task.next_run_at = finished + timedelta(seconds=SECURITY_INTERVAL_SECONDS)
+        task.next_run_at = finished + timedelta(seconds=SECURITY_INTERVAL_SECONDS) if task.enabled else None
         task.last_run_at, task.last_result, task.last_message = started_at, result, message
         task.lease_id = task.lease_expires_at = None
         task.updated_at = finished

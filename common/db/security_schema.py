@@ -31,10 +31,10 @@ async def _ensure_table(connection, table) -> None:
             raise RuntimeError(f'{table.comment}缺少主键，请先备份并修复结构')
         copy = column._copy()
         copy.nullable, copy.default, copy.server_default = True, None, None
-        if table.name == SecurityTask.__tablename__ and column.name in ('interval_seconds', 'config_version'):
+        if table.name == SecurityTask.__tablename__ and column.name in ('interval_seconds', 'config_version', 'enabled'):
             # 新增运行配置采用真实默认值；历史执行时间及结果仍保持NULL，不推测补造。
             copy.nullable = False
-            copy.server_default = DefaultClause(str(column.default.arg))
+            copy.server_default = DefaultClause('0' if column.name == 'enabled' else str(column.default.arg))
         ddl = str(CreateColumn(copy).compile(dialect=connection.dialect))
         preparer = connection.dialect.identifier_preparer
         await connection.execute(text(f'ALTER TABLE {preparer.quote(table.name)} ADD COLUMN {ddl}'))

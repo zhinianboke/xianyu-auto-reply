@@ -14,6 +14,11 @@ from common.services.audit_writer import report_safely
 class SecurityManagementRoute(APIRoute):
     """安全日志和任务端点共用边界，普通用户不可查询或执行。"""
 
+    failure_message = '安全管理暂不可用，请稍后重试'
+    authentication_message = '请先登录后管理安全日志和任务'
+    authorization_message = '仅管理员可管理安全日志和任务'
+    validation_message = '安全管理参数格式不正确，请检查页码、日期和筛选条件'
+
     def get_route_handler(self):
         """返回单次请求处理函数，业务失败和依赖失败均明确反馈中文消息。"""
         original = super().get_route_handler()
@@ -23,12 +28,12 @@ class SecurityManagementRoute(APIRoute):
             try:
                 response = await original(request)
             except Exception as exc:
-                code, message = 50001, str(exc) if isinstance(exc, RuntimeError) else '安全管理暂不可用，请稍后重试'
+                code, message = 50001, str(exc) if isinstance(exc, RuntimeError) else self.failure_message
                 if isinstance(exc, HTTPException):
                     code = 401 if exc.status_code == 401 else 403
-                    message = '请先登录后管理安全日志和任务' if code == 401 else '仅管理员可管理安全日志和任务'
+                    message = self.authentication_message if code == 401 else self.authorization_message
                 elif isinstance(exc, RequestValidationError):
-                    code, message = 40001, '安全管理参数格式不正确，请检查页码、日期和筛选条件'
+                    code, message = 40001, self.validation_message
                 elif isinstance(exc, ValueError):
                     code, message = 40001, str(exc)
                 response = JSONResponse(status_code=200, content=ApiResponse(

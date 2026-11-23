@@ -12,6 +12,7 @@ from fastapi import APIRouter
 from . import (
     activation,
     admin,
+    scheduled_tasks,
     admin_users,
     admin_settlements,
     advertisements,
@@ -182,6 +183,7 @@ api_router.include_router(risk_control_logs.router, tags=["风控日志"])
 
 # 管理员功能
 api_router.include_router(admin.router, prefix="/admin", tags=["管理员功能"])
+api_router.include_router(scheduled_tasks.router, prefix="/admin", tags=["管理员功能"])
 api_router.include_router(admin_users.router, prefix="/admin", tags=["管理员功能"])
 api_router.include_router(admin_settlements.router, prefix="/admin", tags=["管理员功能"])
 api_router.include_router(cookies_refresh_logs.router, prefix="/admin", tags=["COOKIES刷新日志"])
