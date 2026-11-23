@@ -6,7 +6,7 @@ import asyncio
 from collections import Counter, defaultdict
 from datetime import timedelta
 
-from sqlalchemy import case, select, union_all
+from sqlalchemy import case, select
 
 from common.models.email_log import XYEmailLog
 from common.models.registration_log import RegistrationLog
@@ -17,6 +17,8 @@ from common.services.auth_security_policy import (
 )
 from common.services.email_domain_policy import normalize_domain, normalize_suffixes
 from common.utils.email_utils import normalize_email_address
+
+_AUDIT_BATCH_SIZE = 1000
 
 
 def event_identity(email, ip) -> tuple[str | None, str | None]:
@@ -53,6 +55,39 @@ def initialize_statistics(settings: dict, now, details: dict) -> None:
                    event_count=0, statistics_complete=False)
 
 
+async def _iter_audit_events(session, midnight, now):
+    """在原事务按三类日志各自主键分批读取，返回真实邮箱、IP和发生时间。
+
+    分开读取原始邮箱列，避免UNION把LONGTEXT转成超大VAR_STRING元数据，
+    触发Windows asyncmy解析列长度时的C整数溢出；原文完整保留，不截断或改写。
+    普通游标每批最多1000条，主键游标不遗漏同一时间的记录，不加载全量日志。
+    """
+    # 账号密码日志只通过真实关联用户或真实用户名定位绑定邮箱；没有匹配则为空。
+    bound_email = select(User.email).where(case(
+        (XYUserLoginLog.owner_id.is_not(None), User.id == XYUserLoginLog.owner_id),
+        else_=User.username == XYUserLoginLog.login_account,
+    )).correlate(XYUserLoginLog).limit(1).scalar_subquery()
+    login_email = case((XYUserLoginLog.login_method == 'username_password', bound_email),
+                       else_=XYUserLoginLog.login_account)
+    for model, email in ((RegistrationLog, RegistrationLog.email), (XYEmailLog, XYEmailLog.recipient_email),
+                         (XYUserLoginLog, login_email)):
+        query = select(model.id, email, model.client_ip, model.created_at).where(
+            model.created_at >= midnight, model.created_at <= now)
+        last_id = None
+        while True:
+            batch_query = query if last_id is None else query.where(model.id > last_id)
+            result = await session.execute(batch_query.order_by(model.id).limit(_AUDIT_BATCH_SIZE))
+            try:
+                rows = result.all()
+            finally:
+                result.close()
+            for log_id, event_email, ip, occurred_at in rows:
+                yield event_email, ip, occurred_at
+                last_id = log_id
+            if len(rows) < _AUDIT_BATCH_SIZE:
+                break
+
+
 async def collect_statistics(session, settings: dict, now, details: dict) -> None:
     """查询当天零点至执行开始，成功失败都统计；原地保留完整窗口及候选。"""
     if not details.get('windows'):
@@ -64,25 +99,11 @@ async def collect_statistics(session, settings: dict, now, details: dict) -> Non
     thresholds = {minutes: window['threshold'] for minutes, window in windows.items()}
     common = set(normalize_suffixes(settings[AUTH_COMMON_SUFFIXES_KEY]).split(',')) - {''}
     details['common_suffixes'] = sorted(common)
-    # 账号密码日志只通过真实关联用户或真实用户名定位绑定邮箱；没有匹配则为空。
-    bound_email = select(User.email).where(case(
-        (XYUserLoginLog.owner_id.is_not(None), User.id == XYUserLoginLog.owner_id),
-        else_=User.username == XYUserLoginLog.login_account,
-    )).correlate(XYUserLoginLog).limit(1).scalar_subquery()
-    login_email = case((XYUserLoginLog.login_method == 'username_password', bound_email),
-                       else_=XYUserLoginLog.login_account)
-    query = union_all(*[
-        select(email.label('email'), model.client_ip.label('ip'), model.created_at.label('occurred_at'))
-        .where(model.created_at >= midnight, model.created_at <= now)
-        for model, email in ((RegistrationLog, RegistrationLog.email), (XYEmailLog, XYEmailLog.recipient_email),
-                             (XYUserLoginLog, login_email))
-    ])
     counts = {minutes: (Counter(), Counter()) for minutes in windows}
     suffix_ips, ip_suffixes = defaultdict(set), defaultdict(set)
     count = 0
-    result = await session.stream(query.execution_options(yield_per=1000))
     try:
-        async for email, ip, occurred_at in result:
+        async for email, ip, occurred_at in _iter_audit_events(session, midnight, now):
             count += 1
             suffix, normalized_ip = event_identity(email, ip)
             if suffix and normalized_ip:
@@ -107,7 +128,6 @@ async def collect_statistics(session, settings: dict, now, details: dict) -> Non
             threshold = thresholds[minutes]
             window['hit_suffixes'] = sorted(key for key, value in suffix_counts.items() if threshold and value >= threshold)
             window['hit_ips'] = sorted(key for key, value in ip_counts.items() if threshold and value >= threshold)
-        await result.close()
     details['statistics_complete'] = True
     direct_suffixes = set().union(*(set(window['hit_suffixes']) - common for window in windows.values()))
     direct_ips = set().union(*(set(window['hit_ips']) for window in windows.values()))
