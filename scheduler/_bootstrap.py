@@ -25,12 +25,18 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 
 from app.core.config import get_settings
+from app.core.http_client import close_http_client
 from common.db.init_database import ddl_connection, init_advisory_lock
 from common.db.notification_schema import ensure_monitor_email_operation
+from common.db.auth_security_schema import ensure_auth_security_schema
 from common.db.redis_client import close_redis_client, initialize_redis_client
+from common.db.session import async_engine
 from common.db.scheduled_publish_rule_schema import ensure_scheduled_publish_rule_schema
 from common.utils.logging_utils import setup_logging
 from common.utils.network_utils import resolve_listen_host
+from common.utils.async_cleanup import complete_before_cancellation
+from app.services.scheduled_task_manager import get_scheduler_service
+from common.services.order_service import close_goofish_connector
 
 faulthandler.enable()
 
@@ -84,6 +90,7 @@ async def lifespan(app: FastAPI):
             async with ddl_connection() as conn:
                 await ensure_scheduled_publish_rule_schema(conn)
                 await ensure_monitor_email_operation(conn)
+                await ensure_auth_security_schema(conn)
     except Exception:
         logger.exception("调度服务数据库自检失败，服务退出")
         raise
@@ -109,40 +116,45 @@ async def lifespan(app: FastAPI):
     log_retention_sync_task = asyncio.create_task(run_db_log_retention_sync())
     
     # 启动定时任务
-    from app.services.scheduler_service import get_scheduler_service
     scheduler = get_scheduler_service()
     scheduler.start()
     logger.info("定时任务管理器已启动")
     
-    yield
-    
-    # 停止定时任务
-    scheduler.stop()
-    logger.info("定时任务管理器已停止")
+    try:
+        yield
+    finally:
+        # 安全自动与手动执行共用原调度器，停止后先完成已有执行和审计。
+        scheduler.stop()
+        await complete_before_cancellation(_close_scheduler(scheduler, log_retention_sync_task),
+                                           operation='关闭定时任务管理器和依赖资源')
 
+
+async def _close_scheduler(scheduler, log_retention_sync_task) -> None:
+    """等待安全审计后关闭原有资源，任一关闭故障保留堆栈且继续释放其他资源。"""
+    errors = []
+    try:
+        await scheduler.close()
+    except Exception as exc:
+        errors.append(exc)
+        logger.opt(exception=exc).error('定时任务排空失败')
     log_retention_sync_task.cancel()
     try:
         await log_retention_sync_task
     except asyncio.CancelledError:
-        pass
-    
-    logger.info(f"{settings.project_name} 关闭中...")
-    
-    # 关闭HTTP客户端
-    from app.core.http_client import close_http_client
-    await close_http_client()
-    logger.info("HTTP客户端已关闭")
-
-    # 关闭复用的 goofish API 连接池
-    from common.services.order_service import close_goofish_connector
-    await close_goofish_connector()
-    logger.info("goofish API 连接池已关闭")
-
-    # 先释放Redis客户端，再断开全局连接池
-    try:
-        await close_redis_client()
-    except Exception:
-        logger.exception("关闭Redis连接失败")
+        logger.info('日志配置同步任务已停止')
+    except Exception as exc:
+        errors.append(exc)
+        logger.opt(exception=exc).error('日志配置同步任务关闭失败')
+    for operation, close in (('HTTP客户端', close_http_client), ('goofish连接池', close_goofish_connector),
+                             ('Redis连接池', close_redis_client), ('数据库引擎', async_engine.dispose)):
+        try:
+            await close()
+        except Exception as exc:
+            errors.append(exc)
+            logger.opt(exception=exc).error('关闭{}失败', operation)
+    logger.info('定时任务管理器已停止，依赖资源关闭完成')
+    if errors:
+        raise RuntimeError('定时任务服务关闭失败：' + '; '.join(str(exc) for exc in errors)) from errors[0]
 
 
 # 创建FastAPI应用

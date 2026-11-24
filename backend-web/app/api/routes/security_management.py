@@ -11,7 +11,7 @@ from app.api.security_management_route import SecurityManagementRoute
 from common.models.security_task import SECURITY_TASK_CODE
 from common.models.user import User
 from common.schemas.common import ApiResponse
-from common.services.security_frequency_service import security_frequency_service
+from app.services.scheduled_task_management_service import ScheduledTaskManagementService
 from common.services.security_query_service import SecurityQueryService
 
 router = APIRouter(route_class=SecurityManagementRoute)
@@ -50,5 +50,5 @@ async def execute_task(task_code: str, admin: Admin, session: Database):
     """管理员手动执行与自动检查共用统计、锁和审计，完成提交后反馈真实结果。"""
     if task_code != SECURITY_TASK_CODE:
         raise ValueError('安全任务不存在')
-    result = await security_frequency_service.execute_manual(session, admin.id)
-    return ApiResponse(success=True, code=200, message=result['message'], data=result)
+    result = await ScheduledTaskManagementService(session).trigger(task_code, admin.id)
+    return ApiResponse(success=True, code=200, **result)

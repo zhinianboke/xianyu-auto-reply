@@ -34,23 +34,28 @@ export interface ScheduledTasksResponse {
   scheduler_running?: boolean
 }
 
-/** 同表任务保留真实ID，来源用于区分两表可能重合的ID与不同操作。 */
-export type ScheduledTaskItem = (ScheduledTask & { task_source: 'scheduled' })
-  | (SecurityTask & { task_source: 'security'; task_name: string | null })
+/** 所有任务共用原表配置，安全任务附带真实执行状态。 */
+export type ScheduledTaskItem = ScheduledTask & Partial<SecurityTask>
 
 const isScheduledTaskItem = (item: unknown) => {
   if (!item || typeof item !== 'object') return false
   const row = item as Record<string, unknown>
   if (!Number.isSafeInteger(row.id) || typeof row.task_code !== 'string'
     || !Number.isSafeInteger(row.interval_seconds)) return false
-  if (row.task_source === 'scheduled') return typeof row.task_name === 'string'
-    && typeof row.enabled === 'boolean' && (row.description === null || typeof row.description === 'string')
-  return row.task_source === 'security' && isSecurityTask(row)
-    && (row.task_name === null || typeof row.task_name === 'string')
-    && ['next_run_at', 'last_run_at', 'last_result', 'last_message'].every((key) => row[key] === null || typeof row[key] === 'string')
+  return typeof row.task_name === 'string' && typeof row.enabled === 'boolean'
+    && (row.description === null || typeof row.description === 'string')
+    && (row.task_code !== 'security_frequency' || isSecurityTask(row))
 }
 
-/** 原管理接口分页读取两类任务，未带分页的旧调用仍使用原数组响应。 */
+/** 保存响应使用原配置字段，执行状态由刷新列表取得。 */
+const isScheduledTaskConfig = (item: unknown) => {
+  if (!item || typeof item !== 'object') return false
+  const row = item as Record<string, unknown>
+  return Number.isSafeInteger(row.id) && typeof row.task_name === 'string' && typeof row.task_code === 'string'
+    && typeof row.enabled === 'boolean' && Number.isSafeInteger(row.interval_seconds)
+}
+
+/** 原管理接口统一分页读取，未带分页的旧调用仍使用原数组响应。 */
 export const getScheduledTaskPage = (page: number, pageSize: number) =>
   get<ApiResponse<SecurityPage<ScheduledTaskItem>>>(`${ADMIN_PREFIX}/scheduled-tasks`, {
     params: { page, page_size: pageSize },
@@ -67,7 +72,7 @@ export interface UpdateScheduledTaskParams {
 export interface UpdateScheduledTaskResponse {
   success: boolean
   message: string
-  data: ScheduledTask | SecurityTask | null
+  data: ScheduledTask | null
 }
 
 /**
@@ -95,8 +100,7 @@ export async function updateScheduledTask(
   }
   return put<UpdateScheduledTaskResponse>(`${ADMIN_PREFIX}/scheduled-tasks/${encodeURIComponent(taskCode)}?${query.toString()}`)
     .then((response) => {
-      validateResponse(response, (data) => taskCode === 'security_frequency' ? isSecurityTask(data)
-        : Boolean(data && typeof data === 'object' && isScheduledTaskItem({ ...data, task_source: 'scheduled' })),
+      validateResponse(response, isScheduledTaskConfig,
       '定时任务未返回完整配置，请重新加载确认保存结果')
       return response
     })

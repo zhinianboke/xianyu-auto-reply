@@ -1,3 +1,4 @@
+/** 用户管理：用户查询与编辑，宽表使用公共容器在内部横向滚动。 */
 import { useEffect, useState } from 'react'
 import { Users as UsersIcon, RefreshCw, Plus, Loader2, Pencil, Power, PowerOff, Wallet, Search, X } from 'lucide-react'
 import { getUsers, deleteUser, updateUser, type UserRoleOption } from '@/api/admin'
@@ -155,7 +156,7 @@ export function Users() {
   const roleLabelMap = Object.fromEntries(roleOptions.map((option) => [option.value, option.label]))
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="page-title">用户管理</h1>
@@ -227,7 +228,7 @@ export function Users() {
         </div>
       </div>
 
-      <div className="vben-card relative flex flex-col" style={{ height: 'calc(100vh - 380px)', minHeight: '300px' }}>
+      <div className="vben-card relative flex min-w-0 flex-col overflow-hidden" style={{ height: 'calc(100vh - 380px)', minHeight: '300px' }}>
         {loading && (
           <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg bg-white/80 dark:bg-slate-900/80">
             <Loading text="加载中..." />
@@ -241,22 +242,22 @@ export function Users() {
           <span className="badge-primary whitespace-nowrap">{total} 个用户</span>
         </div>
         <div className="table-scroll">
-          <table className="table-ios">
+          <table className="table-ios min-w-[2200px] whitespace-nowrap">
             <thead className="sticky top-0 bg-white dark:bg-slate-800 z-10">
               <tr>
-                <th>ID</th>
-                <th>用户名</th>
-                <th>邮箱</th>
-                <th>手机号</th>
-                <th>角色</th>
-                <th>可添加账号数</th>
-                <th>余额</th>
-                <th>结算记录</th>
-                <th>到期日</th>
-                <th>创建时间</th>
-                <th>最后登录时间</th>
-                <th>状态</th>
-                <th>操作</th>
+                <th className="min-w-[70px]">ID</th>
+                <th className="min-w-[160px]">用户名</th>
+                <th className="min-w-[240px]">邮箱</th>
+                <th className="min-w-[150px]">手机号</th>
+                <th className="min-w-[120px]">角色</th>
+                <th className="min-w-[130px]">可添加账号数</th>
+                <th className="min-w-[130px]">余额</th>
+                <th className="min-w-[130px]">结算记录</th>
+                <th className="min-w-[230px]">到期日</th>
+                <th className="min-w-[190px]">创建时间</th>
+                <th className="min-w-[190px]">最后登录时间</th>
+                <th className="min-w-[100px]">状态</th>
+                <th className="min-w-[320px]">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -300,7 +301,7 @@ export function Users() {
                       </span>
                     </td>
                     <td>
-                      <div className="flex flex-wrap gap-2">
+                      <div className="inline-flex items-center gap-2">
                         <button
                           onClick={() => handleOpenEdit(user)}
                           className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400 transition-colors"

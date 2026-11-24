@@ -16,6 +16,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.scheduled_task import ScheduledTask
+from common.models.security_task import SECURITY_INTERVAL_SECONDS, SECURITY_TASK_CODE
+from common.services.scheduled_task_config_service import update_scheduled_task
 
 
 # 任务代码常量
@@ -47,6 +49,7 @@ TASK_CODE_SCHEDULED_PUBLISH = "scheduled_publish"
 
 # 默认配置（数据库无配置时使用）
 DEFAULT_CONFIGS = {
+    SECURITY_TASK_CODE: {'interval_seconds': SECURITY_INTERVAL_SECONDS, 'enabled': False},
     TASK_CODE_REDELIVERY: {"interval_seconds": 5, "enabled": True},
     TASK_CODE_RATE: {"interval_seconds": 20, "enabled": True},
     TASK_CODE_POLISH: {"interval_seconds": 60, "enabled": True},
@@ -114,15 +117,25 @@ class ScheduledTaskService:
                     "interval_seconds": task.interval_seconds,
                     "enabled": task.enabled,
                 }
-                # 更新缓存
+                if task_code == SECURITY_TASK_CODE and config['interval_seconds'] != SECURITY_INTERVAL_SECONDS:
+                    raise ValueError('安全频率限制执行间隔必须为20秒，请在定时任务中修正配置')
+                changed = self._config_cache.get(task_code) != config
+                # 更新缓存；安全任务检查真实配置，但未变化时不重复输出每秒配置日志。
                 self._config_cache[task_code] = config
-                logger.info(
-                    f"[定时任务配置] 加载任务配置 {task_code}: "
-                    f"间隔={config['interval_seconds']}秒, 启用={config['enabled']}"
-                )
+                if task_code != SECURITY_TASK_CODE or changed:
+                    logger.info(
+                        f"[定时任务配置] 加载任务配置 {task_code}: "
+                        f"间隔={config['interval_seconds']}秒, 启用={config['enabled']}"
+                    )
                 return config
         except Exception as e:
+            if task_code == SECURITY_TASK_CODE:
+                self._config_cache.pop(task_code, None)
+                raise
             logger.error(f"[定时任务配置] 加载任务配置失败 {task_code}: {e}")
+
+        if task_code == SECURITY_TASK_CODE:
+            raise RuntimeError('安全频率限制未初始化，请检查调度服务数据库自检结果')
         
         # 返回默认配置
         default_config = DEFAULT_CONFIGS.get(
@@ -171,16 +184,9 @@ class ScheduledTaskService:
             logger.warning(f"[定时任务配置] 任务不存在: {task_code}")
             return None
         
-        # 更新字段
-        if interval_seconds is not None:
-            if interval_seconds < 1:
-                raise ValueError("执行间隔不能小于1秒")
-            task.interval_seconds = interval_seconds
-        
-        if enabled is not None:
-            task.enabled = enabled
-        
+        # 各管理入口共用同一配置保存及锁顺序，不另建安全任务开关。
         await self.session.commit()
+        await update_scheduled_task(task_code, interval_seconds, enabled)
         await self.session.refresh(task)
         
         logger.info(

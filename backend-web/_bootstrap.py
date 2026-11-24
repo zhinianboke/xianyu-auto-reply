@@ -35,8 +35,6 @@ from common.db.error_messages import get_public_database_error_message
 from common.db.init_database import init_database
 from common.db.redis_client import close_redis_client, initialize_redis_client
 from common.db.session import async_engine, async_session_maker
-from common.services.audit_writer import report_safely
-from common.services.security_frequency_lifecycle import run_security_frequency, stop_security_frequency
 from common.utils.async_cleanup import complete_before_cancellation
 from common.utils.logging_utils import setup_logging
 from common.utils.network_utils import resolve_listen_host
@@ -168,22 +166,9 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("已禁用自动启动Goofish定时采集任务（AUTO_START_CRAWL_JOBS=false）")
     
-    security_stop = asyncio.Event()
-    security_worker = asyncio.create_task(run_security_frequency(security_stop))
     try:
         yield
     finally:
-        cancellation = None
-        shutdown_error = None
-        try:
-            await stop_security_frequency(security_stop, security_worker)
-        except asyncio.CancelledError as exc:
-            # 排空方法完成必要审计后才传播取消，继续释放资源后再恢复取消语义。
-            cancellation = exc
-        except Exception as exc:
-            # 自动循环已经结束并排空审计后发生的关闭异常，不能跳过其他资源的释放。
-            shutdown_error = exc
-            report_safely('安全检查关闭失败，继续释放资源', exc)
         try:
             logger.info(f"{settings.project_name} 关闭中...")
 
@@ -224,12 +209,7 @@ async def lifespan(app: FastAPI):
             except asyncio.CancelledError:
                 pass
         finally:
-            # 审计已排空；资源关闭异常或再次取消也必须等待统一数据库引擎释放。
-            await complete_before_cancellation(async_engine.dispose(), operation='关闭安全任务后释放数据库引擎')
-            if cancellation is not None:
-                raise cancellation
-            if shutdown_error is not None:
-                raise shutdown_error
+            await complete_before_cancellation(async_engine.dispose(), operation='关闭网页后端数据库引擎')
 
 
 async def start_goofish_crawl_jobs():

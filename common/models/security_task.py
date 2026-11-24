@@ -1,9 +1,17 @@
-"""安全定时任务模型：共享配置锁、版本和可到期恢复的执行占用，不影响插件调度。"""
+"""安全执行状态模型：保留历史字段，任务配置统一由xy_scheduled_tasks管理。"""
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,7 +32,7 @@ SECURITY_DICTIONARIES = {
 
 
 class SecurityTask(Base):
-    """安全定时任务表；占用在业务事务前单独提交，失败审计结束后再释放。"""
+    """安全执行状态；enabled/interval_seconds仅保留旧值，不再作为运行配置。"""
 
     __tablename__ = 'security_tasks'
     __table_args__ = (UniqueConstraint('task_code', name='uk_security_task_code'),

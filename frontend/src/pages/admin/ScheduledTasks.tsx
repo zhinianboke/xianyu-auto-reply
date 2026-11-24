@@ -8,10 +8,12 @@
  * 4. 原列表追加安全频率任务，修改和手动执行后实时反馈
  */
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { Clock, RefreshCw, Loader2, Play, Pause, Zap } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
 import { Loading } from '@/components/common/Loading'
-import { SecurityTaskRow } from './SecurityTasks'
+import { securityLabel } from '@/api/securityManagement'
+import { formatBeijingDateTime } from '@/utils/date'
 import { useScheduledTasks } from './useScheduledTasks'
 import { Pager } from '@/components/common/Pager'
 import { useViewportContentHeight } from '@/components/common/useViewportContentHeight'
@@ -89,12 +91,11 @@ export function ScheduledTasks() {
                   </td>
                 </tr>
               ) : (
-                tasks.map((task) => task.task_source === 'security' ? (
-                  <SecurityTaskRow key={`security:${task.id}`} task={task} dictionaries={data!.dictionaries} busy={busy} run={state.run} update={state.update} />
-                ) : (
-                  <tr key={`scheduled:${task.id}`}>
+                tasks.map((task) => (
+                  <tr key={task.id}>
                     <td className="font-medium text-slate-900 dark:text-white">
-                      {task.task_name}
+                      {task.task_code === 'security_frequency'
+                        ? securityLabel(data!.dictionaries, 'security_task_name', task.task_code) : task.task_name}
                     </td>
                     <td className="text-slate-500 dark:text-slate-400 font-mono text-sm">
                       {task.task_code}
@@ -138,14 +139,14 @@ export function ScheduledTasks() {
                         <div className="flex items-center gap-2">
                           <span className="font-medium">{task.interval_seconds}</span>
                           <span className="text-sm text-slate-500">秒</span>
-                          <button
+                          {task.task_code !== 'security_frequency' && <button
                             onClick={() => { setEditingTask(task.task_code); setEditInterval(task.interval_seconds) }}
                             disabled={busy}
                             className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                             title="编辑"
                           >
                             编辑
-                          </button>
+                          </button>}
                         </div>
                       )}
                     </td>
@@ -153,17 +154,23 @@ export function ScheduledTasks() {
                       {task.enabled ? (
                         <span className="badge-success">已启用</span>
                       ) : (
-                        <span className="badge-gray">已禁用</span>
+                        <span className="badge-gray">已停止</span>
                       )}
                     </td>
-                    <td className="text-slate-500 dark:text-slate-400 text-sm max-w-xs truncate">
-                      {task.description || '-'}
+                    <td className="text-slate-500 dark:text-slate-400 text-sm max-w-sm break-words">
+                      <p>{task.description || '-'}</p>
+                      {task.task_code === 'security_frequency' && <>
+                        <p>下次执行：{formatBeijingDateTime(task.next_run_at)}</p>
+                        <p>上次执行：{formatBeijingDateTime(task.last_run_at)}</p>
+                        <p>上次结果：{securityLabel(data!.dictionaries, 'security_execution_result', task.last_result ?? null)}</p>
+                        {task.last_message && <p>{task.last_message}</p>}
+                      </>}
                     </td>
                     <td>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <button
                           onClick={() => state.run(task.task_code)}
-                          disabled={busy}
+                          disabled={busy || task.running}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/20 dark:text-blue-400 dark:hover:bg-blue-900/30"
                           title="手动执行一次该任务"
                         >
@@ -190,8 +197,9 @@ export function ScheduledTasks() {
                           ) : (
                             <Play className="w-4 h-4" />
                           )}
-                          {task.enabled ? '禁用' : '启用'}
+                          {task.enabled ? '停止' : '启用'}
                         </button>
+                        {task.task_code === 'security_frequency' && <Link className="btn-ios-secondary" to="/admin/security-logs">查看日志</Link>}
                       </div>
                     </td>
                   </tr>
@@ -211,7 +219,7 @@ export function ScheduledTasks() {
       <div className="vben-card max-h-[30%] shrink-0 overflow-y-auto">
         <div className="vben-card-body">
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            提示：修改定时任务配置后会立即生效。禁用任务后，该任务将不再执行，但调度器仍会按间隔时间检查任务状态。
+            提示：修改定时任务配置后会立即生效。停止任务后，自动调度暂停，仍可手动执行。
             安全频率任务默认停止，启用后每20秒执行；停止时仍可手动检查，执行详情见「安全日志」。
           </p>
         </div>

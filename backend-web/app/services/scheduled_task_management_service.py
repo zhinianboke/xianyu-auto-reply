@@ -1,16 +1,13 @@
-"""原定时任务管理服务：保留原配置更新与调度器通知，安全任务复用独立审计执行器。"""
+"""原定时任务管理服务：统一配置保存、调度器通知和手动执行。"""
 from __future__ import annotations
 
-from sqlalchemy import select
+from urllib.parse import quote
 
 from app.core.config import get_settings
 from app.core.http_client import get_http_client
-from common.models.scheduled_task import ScheduledTask
-from common.models.security_task import SECURITY_INTERVAL_SECONDS, SECURITY_TASK_CODE
+from common.models.security_task import SECURITY_TASK_CODE
 from common.services.audit_writer import report_safely
-from common.services.scheduled_task_query_service import ScheduledTaskQueryService
-from common.services.security_frequency_service import security_frequency_service
-from common.services.security_task_service import set_security_task_enabled
+from common.services.scheduled_task_config_service import update_scheduled_task
 
 
 class ScheduledTaskManagementService:
@@ -21,46 +18,46 @@ class ScheduledTaskManagementService:
         self.session = session
 
     async def update(self, task_code: str, interval_seconds: int | None, enabled: bool | None) -> dict:
-        """只更新指定配置；安全任务支持持久化启停，执行间隔固定20秒。"""
-        if task_code == SECURITY_TASK_CODE:
-            if interval_seconds is not None and interval_seconds != SECURITY_INTERVAL_SECONDS:
-                raise ValueError('安全频率检查固定每20秒执行，请在系统设置的安全设置中修改频率阈值')
-            # 释放鉴权只读事务，独立事务重新取得调度与安全设置共用的锁。
-            await self.session.commit()
-            data = await set_security_task_enabled(enabled)
-            return {'message': '安全定时任务已启用' if data['enabled'] else '安全定时任务已停止', 'data': data}
-        result = await self.session.execute(select(ScheduledTask).where(ScheduledTask.task_code == task_code))
-        task = result.scalar_one_or_none()
-        if task is None:
-            raise ValueError(f'任务不存在: {task_code}')
-        if interval_seconds is not None:
-            if interval_seconds < 1 or interval_seconds > 2147483647:
-                raise ValueError('执行间隔必须是1至2147483647之间的整数秒数')
-            task.interval_seconds = interval_seconds
-        if enabled is not None:
-            task.enabled = enabled
+        """所有任务共用原配置保存，未提交字段保持原值，再通知原调度器。"""
         await self.session.commit()
-        await self.session.refresh(task)
-        data = ScheduledTaskQueryService.serialize_task(task)
-        report_safely(f'定时任务配置已保存 task_code={task_code} result={data}', level='INFO')
+        data = await update_scheduled_task(task_code, interval_seconds, enabled)
+        file_error = report_safely(f'定时任务配置已保存 task_code={task_code} result={data}', level='INFO')
         try:
             response = await get_http_client().post(f'{get_settings().scheduler_service_url}/internal/tasks/reload')
         except Exception as exc:
             report_safely(f'定时任务配置已保存但通知调度器失败 task_code={task_code} data={data}', exc)
+            if file_error:
+                raise RuntimeError(f'配置已保存，但通知调度器失败：{exc}；{file_error}，请刷新确认') from exc
             return {'message': f'配置已保存，但通知调度器失败：{exc}，请刷新调度器配置', 'data': data}
         if not response.get('success'):
             report_safely(f'定时任务配置已保存但调度器刷新失败 task_code={task_code} response={response}')
+            if file_error:
+                raise RuntimeError(f'配置已保存，但调度器刷新失败：{response.get("message")}；{file_error}')
             return {'message': f"配置已保存，但调度器刷新失败：{response.get('message') or '未返回处理结果'}", 'data': data}
+        if file_error:
+            raise RuntimeError(f'定时任务配置已保存并通知调度器，{file_error}，请刷新确认')
         return {'message': '更新成功，已通知调度器刷新配置', 'data': data}
 
     async def trigger(self, task_code: str, owner_id: int) -> dict:
         """按原任务代码分派执行；安全检查完成实际审计后才返回成功结果。"""
+        await self.session.commit()
+        url = f'{get_settings().scheduler_service_url}/internal/tasks/{quote(task_code, safe="")}/trigger'
         if task_code == SECURITY_TASK_CODE:
-            data = await security_frequency_service.execute_manual(self.session, owner_id)
-            return {'message': data['message'], 'data': data}
-        response = await get_http_client().post(
-            f'{get_settings().scheduler_service_url}/internal/tasks/{task_code}/trigger')
+            url += f'?owner_id={owner_id}'
+        try:
+            # 执行请求有副作用；超时不重试，避免一次点击触发多轮审计。
+            response = await get_http_client().post(url, timeout=90, max_retries=1)
+        except Exception as exc:
+            report_safely(f'定时任务执行响应未确认 task_code={task_code} owner_id={owner_id}', exc)
+            raise RuntimeError('未能确认定时任务执行结果，请查询执行日志后再操作') from exc
         if not response.get('success'):
             raise ValueError(response.get('message') or '触发任务失败')
-        report_safely(f'定时任务手动触发成功 task_code={task_code} owner_id={owner_id} response={response}', level='INFO')
-        return {'message': response.get('message') or f'任务 {task_code} 已触发执行', 'data': None}
+        if task_code == SECURITY_TASK_CODE:
+            result = response.get('data')
+            if not isinstance(result, dict) or not result.get('execution_id') or not result.get('id'):
+                raise RuntimeError('安全检查未返回完整审计结果，请查询安全日志确认')
+        file_error = report_safely(f'定时任务手动触发成功 task_code={task_code} owner_id={owner_id} response={response}', level='INFO')
+        if file_error:
+            raise RuntimeError(f'定时任务已执行，{file_error}，请查询执行日志确认')
+        return {'message': response.get('message') or f'任务 {task_code} 已触发执行',
+                'data': response.get('data')}

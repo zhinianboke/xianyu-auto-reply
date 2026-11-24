@@ -9,17 +9,29 @@ from uuid import uuid4
 
 from common.models.security_log import SecurityLog
 from common.models.security_task import (
-    SECURITY_INTERVAL_SECONDS, SECURITY_LEASE_SECONDS, SECURITY_METHODS,
+    SECURITY_INTERVAL_SECONDS,
+    SECURITY_LEASE_SECONDS,
+    SECURITY_METHODS,
     SECURITY_SCAN_TIMEOUT_SECONDS,
 )
 from common.services.audit_writer import AuditWriteError, AuditWriter, report_safely
 from common.services.auth_security_policy import (
-    AUTH_DENIED_IPS_KEY, AUTH_FREQUENCY_KEYS, AUTH_SECURITY_DEFAULTS,
+    AUTH_DENIED_IPS_KEY,
+    AUTH_FREQUENCY_KEYS,
+    AUTH_SECURITY_DEFAULTS,
     normalize_security_setting,
 )
 from common.services.email_domain_policy import EMAIL_DOMAIN_DENY_KEY
-from common.services.security_config_service import load_security_values_locked, lock_security_task, save_security_values
-from common.services.security_frequency_stats import collect_statistics, initialize_statistics
+from common.services.security_config_service import (
+    load_security_values_locked,
+    lock_security_schedule,
+    lock_security_task,
+    save_security_values,
+)
+from common.services.security_frequency_stats import (
+    collect_statistics,
+    initialize_statistics,
+)
 from common.utils.async_cleanup import complete_before_cancellation
 from common.utils.time_utils import get_beijing_now_naive
 
@@ -41,6 +53,8 @@ class SecurityFrequencyService:
         """注册执行生命周期；请求取消仍等待执行和审计完成，关闭后拒绝新任务。"""
         if method not in SECURITY_METHODS or (method == 'manual' and owner_id is None):
             raise ValueError('安全检查执行方式或管理员信息无效')
+        if method == 'manual' and (type(owner_id) is not int or owner_id <= 0):
+            raise ValueError('安全检查管理员信息无效')
         if self.closing:
             raise SecurityExecutionError('系统正在关闭，请稍后执行安全检查')
         worker = asyncio.create_task(self._execute(method, owner_id if method == 'manual' else None))
@@ -57,11 +71,6 @@ class SecurityFrequencyService:
         """取消后的收尾只等待已有执行，保留原取消语义，不发起第二次检查。"""
         await asyncio.gather(asyncio.shield(worker), return_exceptions=True)
 
-    async def execute_manual(self, session, owner_id: int) -> dict:
-        """释放鉴权只读事务后执行人工检查，原管理接口与安全兼容接口共用。"""
-        await session.commit()
-        return await self.execute('manual', owner_id)
-
     async def drain(self) -> None:
         """禁止新增执行，等待当前自动/手动检查及其失败审计全部结束。"""
         self.closing = True
@@ -77,8 +86,11 @@ class SecurityFrequencyService:
         async def claim(session):
             """行锁下检查本轮占用与真实到期时间，不覆盖活跃执行。"""
             task = await lock_security_task(session)
+            schedule = await lock_security_schedule(session)
+            if schedule.interval_seconds != SECURITY_INTERVAL_SECONDS:
+                raise SecurityExecutionError('安全频率限制执行间隔必须为20秒，请在定时任务中修正配置')
             now = get_beijing_now_naive()
-            if method == 'auto' and not task.enabled:
+            if method == 'auto' and not schedule.enabled:
                 return False
             if task.lease_id and task.lease_expires_at and task.lease_expires_at > now:
                 return False
@@ -198,7 +210,8 @@ class SecurityFrequencyService:
                              added_ips=','.join(ips), details=json.dumps(details, ensure_ascii=False),
                              started_at=started_at, finished_at=finished)
         session.add(record)
-        task.next_run_at = finished + timedelta(seconds=SECURITY_INTERVAL_SECONDS) if task.enabled else None
+        schedule = await lock_security_schedule(session)
+        task.next_run_at = finished + timedelta(seconds=schedule.interval_seconds) if schedule.enabled else None
         task.last_run_at, task.last_result, task.last_message = started_at, result, message
         task.lease_id = task.lease_expires_at = None
         task.updated_at = finished

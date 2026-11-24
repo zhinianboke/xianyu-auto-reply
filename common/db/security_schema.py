@@ -1,13 +1,19 @@
 """安全频率迁移：幂等补表、缺字段、唯一索引、字典和默认配置，保留历史值。"""
 from __future__ import annotations
 
-from sqlalchemy import DefaultClause, Index, UniqueConstraint, inspect, text
+from sqlalchemy import DefaultClause, Index, UniqueConstraint, inspect, select, text
 from sqlalchemy.schema import CreateColumn
 
 from common.db.idempotent_insert import insert_defaults
 from common.models.data_dictionary import XYDataDictionary
+from common.models.scheduled_task import ScheduledTask
 from common.models.security_log import SecurityLog
-from common.models.security_task import SECURITY_DICTIONARIES, SecurityTask
+from common.models.security_task import (
+    SECURITY_DICTIONARIES,
+    SECURITY_INTERVAL_SECONDS,
+    SECURITY_TASK_CODE,
+    SecurityTask,
+)
 from common.models.system_setting import SystemSetting
 from common.services.security_config_service import ensure_security_defaults
 from common.utils.time_utils import get_beijing_now_naive
@@ -16,7 +22,7 @@ from common.utils.time_utils import get_beijing_now_naive
 async def _ensure_table(connection, table) -> None:
     """由统一迁移连接创建新表，旧表只补结构；缺失历史字段保持NULL。"""
     await connection.run_sync(lambda sync: table.create(sync, checkfirst=True))
-    if table.name in (SecurityTask.__tablename__, SecurityLog.__tablename__):
+    if table.name in (ScheduledTask.__tablename__, SecurityTask.__tablename__, SecurityLog.__tablename__):
         await _ensure_storage_options(connection, table)
     primary_key = await connection.run_sync(lambda sync: inspect(sync).get_pk_constraint(table.name))
     expected_pk = [column.name for column in table.primary_key.columns]
@@ -31,6 +37,8 @@ async def _ensure_table(connection, table) -> None:
             raise RuntimeError(f'{table.comment}缺少主键，请先备份并修复结构')
         copy = column._copy()
         copy.nullable, copy.default, copy.server_default = True, None, None
+        if table.name == ScheduledTask.__tablename__ and column.name in ('created_at', 'updated_at'):
+            copy.comment = '创建时间' if column.name == 'created_at' else '更新时间'
         if table.name == SecurityTask.__tablename__ and column.name in ('interval_seconds', 'config_version', 'enabled'):
             # 新增运行配置采用真实默认值；历史执行时间及结果仍保持NULL，不推测补造。
             copy.nullable = False
@@ -64,7 +72,7 @@ async def _ensure_indexes(connection, table) -> None:
             continue
         index = item if isinstance(item, Index) else Index(item.name, *item.columns, unique=True)
         try:
-            await connection.run_sync(lambda sync: index.create(sync, checkfirst=True))
+            await connection.run_sync(lambda sync, index=index: index.create(sync, checkfirst=True))
         finally:
             if isinstance(item, UniqueConstraint):
                 # 临时补建对象不得积累进公共模型，否则重复自检会增长元数据索引集合。
@@ -108,6 +116,25 @@ async def ensure_security_schema(connection) -> None:
                 'sort_order': sort * 10, 'enabled': True, 'created_at': now, 'updated_at': now,
             }, ('dict_type', 'dict_value'))
     await ensure_security_defaults(connection)
+    await _ensure_scheduled_security_task(connection)
+
+
+async def _ensure_scheduled_security_task(connection) -> None:
+    """仅向原任务表补安全任务；原表已有配置优先，旧安全状态和历史日志保持原样。"""
+    table = ScheduledTask.__table__
+    await _ensure_table(connection, table)
+    # 保留曾经保存的旧开关；全新部署及旧表缺开关时由安全默认项提供False。
+    enabled = (await connection.execute(select(SecurityTask.enabled).where(
+        SecurityTask.task_code == SECURITY_TASK_CODE))).scalar_one()
+    name = (await connection.execute(select(XYDataDictionary.dict_label).where(
+        XYDataDictionary.dict_type == 'security_task_name',
+        XYDataDictionary.dict_value == SECURITY_TASK_CODE))).scalar_one()
+    now = get_beijing_now_naive()
+    await insert_defaults(connection, table, {
+        'task_code': SECURITY_TASK_CODE, 'task_name': name, 'interval_seconds': SECURITY_INTERVAL_SECONDS,
+        'enabled': bool(enabled), 'description': '检查注册、邮件和登录频率；频率阈值在安全设置中配置，详情见安全日志。',
+        'created_at': now, 'updated_at': now,
+    }, ('task_code',))
 
 
 async def _ensure_longtext_columns(connection, table, names) -> None:

@@ -9,13 +9,14 @@ Scheduler服务内部API路由
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from loguru import logger
 from pydantic import BaseModel
 
 from app.services.scheduler.listing_monitor_task import listing_monitor_task_service
-from app.services.scheduler_service import get_scheduler_service
+from app.services.scheduled_task_manager import get_scheduler_service
 from common.services.account_cooldown import account_cooldown_manager
+from common.models.security_task import SECURITY_TASK_CODE
 from common.utils.time_utils import get_beijing_now_naive
 from app.api.deps import require_internal_auth
 
@@ -124,7 +125,7 @@ async def get_tasks_status():
 
 
 @router.post("/tasks/{task_code}/trigger")
-async def trigger_task(task_code: str):
+async def trigger_task(task_code: str, owner_id: int | None = Query(None, gt=0)):
     """
     手动触发任务执行
     
@@ -136,7 +137,7 @@ async def trigger_task(task_code: str):
     """
     try:
         # 验证任务代码
-        if task_code not in ["redelivery", "rate", "polish", "day_switch", "cleanup_browser_data", "cleanup_unconfigured_browser_data", "fetch_orders", "fetch_pending_orders", "fetch_refund_orders", "fetch_items", "login_renew", "token_renewal", "cookies_refresh", "api_cookie_renew", "close_notice", "red_flower", "db_backup", "delivery_timeout", "listing_monitor", "seller_fill", "dm_send", "auto_order", "image_cleanup", "auto_relist_scan", "scheduled_publish"]:
+        if task_code not in [SECURITY_TASK_CODE, "redelivery", "rate", "polish", "day_switch", "cleanup_browser_data", "cleanup_unconfigured_browser_data", "fetch_orders", "fetch_pending_orders", "fetch_refund_orders", "fetch_items", "login_renew", "token_renewal", "cookies_refresh", "api_cookie_renew", "close_notice", "red_flower", "db_backup", "delivery_timeout", "listing_monitor", "seller_fill", "dm_send", "auto_order", "image_cleanup", "auto_relist_scan", "scheduled_publish"]:
             return {
                 "success": False,
                 "code": 400,
@@ -145,19 +146,20 @@ async def trigger_task(task_code: str):
             }
         
         scheduler = get_scheduler_service()
-        await scheduler.trigger_task(task_code)
+        # owner_id只能经已校验服务间令牌的接口接收，由网页管理员鉴权结果传入。
+        result = await scheduler.trigger_task(task_code, owner_id) if task_code == SECURITY_TASK_CODE else await scheduler.trigger_task(task_code)
         
         return {
             "success": True,
             "code": 200,
-            "message": f"任务 {task_code} 已触发执行",
-            "data": {
+            "message": result['message'] if result else f"任务 {task_code} 已触发执行",
+            "data": result if result else {
                 "task_code": task_code,
                 "triggered_at": get_beijing_now_naive().isoformat(),
             },
         }
     except Exception as e:
-        logger.error(f"[内部API] 触发任务执行失败: {e}")
+        logger.opt(exception=e).error('[内部API] 触发任务执行失败 task_code={} owner_id={} exception={}', task_code, owner_id, e)
         return {
             "success": False,
             "code": 500,
