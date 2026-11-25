@@ -10,6 +10,7 @@ from common.models.dock_record import DockRecord
 from common.models.dock_code_binding import DockCodeBinding
 from common.services.card_matcher import CardMatcher
 from common.utils.time_utils import safe_isoformat
+from common.db.query_conditions import not_deleted
 
 
 class CardQueryMixin:
@@ -21,7 +22,7 @@ class CardQueryMixin:
         Args:
             user_id: 用户ID，None表示查询所有用户（管理员）
         """
-        stmt = select(Card).where(Card.is_deleted.is_(False))
+        stmt = select(Card).where(not_deleted(Card))
         if user_id is not None:
             stmt = stmt.where(Card.user_id == user_id)
         result = await self.session.execute(stmt)
@@ -65,7 +66,7 @@ class CardQueryMixin:
             包含分页数据的字典：{list, total, page, page_size, total_pages}
         """
         # 构建基础查询条件
-        base_conditions = [Card.is_deleted.is_(False)]
+        base_conditions = [not_deleted(Card)]
         if user_id is not None:
             base_conditions.append(Card.user_id == user_id)
         if search:
@@ -128,7 +129,7 @@ class CardQueryMixin:
         Returns:
             包含分页数据的字典
         """
-        base_conditions = [Card.is_deleted.is_(False), Card.is_dockable == True, Card.enabled == True]
+        base_conditions = [not_deleted(Card), Card.is_dockable == True, Card.enabled == True]
         if search:
             base_conditions.append(
                 or_(
@@ -231,7 +232,7 @@ class CardQueryMixin:
             user_id: 用户ID，None表示不限制用户（管理员）
         """
         stmt = select(Card).options(selectinload(Card.item_relations)).where(
-            Card.id == card_id, Card.is_deleted.is_(False)
+            Card.id == card_id, not_deleted(Card)
         )
         if user_id is not None:
             stmt = stmt.where(Card.user_id == user_id)

@@ -67,7 +67,7 @@ async def _execute_all_rules():
 
         async with async_session_maker() as session:
             # 查询所有启用的规则
-            stmt = select(FYProductRule).where(FYProductRule.enabled == True)
+            stmt = select(FYProductRule).where(FYProductRule.enabled == 1)
             result = await session.execute(stmt)
             rules = result.scalars().all()
 

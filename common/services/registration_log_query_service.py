@@ -1,8 +1,6 @@
 """管理员注册日志查询：组合筛选、后端分页、关联用户和数据库字典中文名称。"""
 from __future__ import annotations
 
-from datetime import datetime, time
-
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,22 +13,9 @@ from common.models.registration_log import (
     RegistrationLog,
 )
 from common.models.user import User
+from common.utils.date_filters import date_range_conditions, parse_filter_date as _parse_date  # noqa: F401 -- 保留旧公共导入路径
 from common.utils.pagination import execute_paginated_with_filters
 from common.utils.time_utils import safe_isoformat
-
-
-def _parse_date(value: str | None, label: str) -> datetime | None:
-    """校验可选 YYYY-MM-DD 日期并返回北京时间零点，不忽略非法查询条件。"""
-    value = (value or "").strip()
-    if not value:
-        return None
-    try:
-        parsed = datetime.strptime(value, "%Y-%m-%d")
-    except ValueError as exc:
-        raise ValueError(f"{label}格式不正确，请使用年-月-日格式") from exc
-    if parsed.date().isoformat() != value:
-        raise ValueError(f"{label}格式不正确，请使用年-月-日格式")
-    return parsed
 
 
 class RegistrationLogQueryService:
@@ -69,12 +54,7 @@ class RegistrationLogQueryService:
             raise ValueError("注册操作无效，请选择有效的注册操作")
         if status_value and status_value not in REGISTRATION_STATUSES:
             raise ValueError("注册结果无效，请选择成功或失败")
-        start = _parse_date(start_date, "开始日期")
-        end = _parse_date(end_date, "结束日期")
-        if start and end and start > end:
-            raise ValueError("开始日期不能晚于结束日期")
-
-        filters = []
+        filters = date_range_conditions(RegistrationLog.created_at, start_date, end_date)
         keyword_value = (keyword or "").strip()
         if keyword_value:
             related_user_ids = select(User.id).where(or_(
@@ -98,12 +78,8 @@ class RegistrationLogQueryService:
         if operation_value:
             filters.append(RegistrationLog.operation == operation_value)
         if status_value:
+            # 历史补字段允许 NULL，保留原布尔语义；不按非空 0/1 字段机械改写。
             filters.append(RegistrationLog.success.is_(status_value == "success"))
-        if start:
-            filters.append(RegistrationLog.created_at >= start)
-        if end:
-            filters.append(RegistrationLog.created_at <= datetime.combine(end.date(), time.max))
-
         logs, total = await execute_paginated_with_filters(
             self.session, RegistrationLog, filters=filters,
             order_by=[RegistrationLog.created_at.desc(), RegistrationLog.id.desc()],

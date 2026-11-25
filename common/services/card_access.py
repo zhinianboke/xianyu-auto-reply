@@ -10,6 +10,7 @@ from common.models.card import Card
 from common.models.card_item_relation import CardItemRelation
 from common.models.dock_record import DockRecord
 from common.models.xy_catalog_item import XYCatalogItem
+from common.db.query_conditions import not_deleted
 
 
 class CardAccessError(ValueError):
@@ -39,12 +40,12 @@ def dock_access_condition(dock=DockRecord):
         parent.user_id == dock.source_user_id,
         parent.level == 1,
         parent.status.is_(True),
-        parent.owner_disabled.is_(False),
+        parent.owner_disabled == 0,
         parent.allow_sub_dock.is_(True),
     ).correlate(Card, dock))
     return and_(
-        Card.is_deleted.is_(False), Card.is_dockable.is_(True), Card.enabled.is_(True),
-        dock.card_id == Card.id, dock.status.is_(True), dock.owner_disabled.is_(False),
+        not_deleted(Card), Card.is_dockable.is_(True), Card.enabled.is_(True),
+        dock.card_id == Card.id, dock.status.is_(True), dock.owner_disabled == 0,
         or_(dock.level == 1, and_(dock.level == 2, parent_valid)),
     )
 
@@ -83,7 +84,7 @@ class CardAccess:
             raise CardAccessError("卡券编号无效")
         if not ids:
             return []
-        stmt = select(Card).where(Card.id.in_(ids), Card.is_deleted.is_(False))
+        stmt = select(Card).where(Card.id.in_(ids), not_deleted(Card))
         if user_id is not None:
             stmt = stmt.where(Card.user_id == user_id)
         if lock:

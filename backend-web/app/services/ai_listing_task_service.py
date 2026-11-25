@@ -34,6 +34,7 @@ from common.models.ai_listing_task import (
 )
 from common.models.user import User
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
+from common.db.query_conditions import not_deleted
 
 # 分页大小白名单，与素材库列表保持一致
 ALLOWED_PAGE_SIZES = (10, 20, 50, 100)
@@ -92,7 +93,7 @@ class AiListingTaskService:
             .select_from(AiListingTask)
             .where(
                 AiListingTask.owner_id == owner_id,
-                AiListingTask.is_deleted.is_(False),
+                not_deleted(AiListingTask),
                 AiListingTask.status.in_(TASK_ACTIVE_STATUSES),
             )
         ) or 0
@@ -165,7 +166,7 @@ class AiListingTaskService:
         Returns:
             任务对象，不存在时返回 None。
         """
-        conditions = [AiListingTask.task_id == task_id, AiListingTask.is_deleted.is_(False)]
+        conditions = [AiListingTask.task_id == task_id, not_deleted(AiListingTask)]
         if owner_id is not None:
             conditions.append(AiListingTask.owner_id == owner_id)
         result = await self.session.execute(select(AiListingTask).where(*conditions))
@@ -190,7 +191,7 @@ class AiListingTaskService:
 
         conditions = [
             AiListingTask.owner_id == owner_id,
-            AiListingTask.is_deleted.is_(False),
+            not_deleted(AiListingTask),
         ]
         if status:
             conditions.append(AiListingTask.status == status)
@@ -240,7 +241,7 @@ class AiListingTaskService:
             .where(
                 AiListingTask.task_id == task_id,
                 AiListingTask.status == TASK_STATUS_PENDING,
-                AiListingTask.is_deleted.is_(False),
+                not_deleted(AiListingTask),
             )
             .values(status=TASK_STATUS_RUNNING, started_at=get_beijing_now_naive())
         )
@@ -423,7 +424,7 @@ class AiListingTaskService:
             select(AiListingTask.status).where(
                 AiListingTask.task_id == task_id,
                 AiListingTask.owner_id == owner_id,
-                AiListingTask.is_deleted.is_(False),
+                not_deleted(AiListingTask),
             )
         )
         if status is None or status not in TASK_ACTIVE_STATUSES:
@@ -459,7 +460,7 @@ async def mark_stale_running_failed() -> int:
             active_rows = (
                 await session.execute(
                     select(AiListingTask.task_id, AiListingTask.failed_count).where(
-                        AiListingTask.is_deleted.is_(False),
+                        not_deleted(AiListingTask),
                         AiListingTask.status.in_(TASK_ACTIVE_STATUSES),
                     )
                 )
@@ -479,7 +480,7 @@ async def mark_stale_running_failed() -> int:
                     update(AiListingTask)
                     .where(
                         AiListingTask.task_id == task_id,
-                        AiListingTask.is_deleted.is_(False),
+                        not_deleted(AiListingTask),
                         AiListingTask.status.in_(TASK_ACTIVE_STATUSES),
                     )
                     .values(

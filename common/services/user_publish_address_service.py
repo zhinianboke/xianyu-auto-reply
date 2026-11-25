@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.user_publish_address import UserPublishAddress
 from common.utils.time_utils import safe_isoformat
+from common.db.query_conditions import not_deleted
 
 
 class UserPublishAddressService:
@@ -36,7 +37,7 @@ class UserPublishAddressService:
 
         conditions = [
             UserPublishAddress.owner_id == owner_id,
-            UserPublishAddress.is_deleted.is_(False),
+            not_deleted(UserPublishAddress),
         ]
         normalized_keyword = self._normalize_optional_text(keyword)
         if normalized_keyword:
@@ -99,7 +100,7 @@ class UserPublishAddressService:
         stmt = select(UserPublishAddress).where(
             UserPublishAddress.id == address_id,
             UserPublishAddress.owner_id == owner_id,
-            UserPublishAddress.is_deleted.is_(False),
+            not_deleted(UserPublishAddress),
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
@@ -137,7 +138,7 @@ class UserPublishAddressService:
         stmt = select(UserPublishAddress).where(
             UserPublishAddress.id.in_(normalized_ids),
             UserPublishAddress.owner_id == owner_id,
-            UserPublishAddress.is_deleted.is_(False),
+            not_deleted(UserPublishAddress),
         )
         records = (await self.session.execute(stmt)).scalars().all()
         for record in records:
@@ -176,7 +177,7 @@ class UserPublishAddressService:
             select(UserPublishAddress)
             .where(
                 UserPublishAddress.owner_id == owner_id,
-                UserPublishAddress.is_deleted.is_(False),
+                not_deleted(UserPublishAddress),
             )
             .order_by(desc(UserPublishAddress.updated_at), desc(UserPublishAddress.id))
         )
@@ -190,7 +191,7 @@ class UserPublishAddressService:
             select(UserPublishAddress)
             .where(
                 UserPublishAddress.owner_id == owner_id,
-                UserPublishAddress.is_deleted.is_(False),
+                not_deleted(UserPublishAddress),
             )
             .order_by(desc(UserPublishAddress.updated_at), desc(UserPublishAddress.id))
         )

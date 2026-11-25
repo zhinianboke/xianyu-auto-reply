@@ -30,6 +30,7 @@ from common.services.card_matcher import CardMatcher
 from common.services.order_delivery_result import has_incomplete_delivery, read_delivery_result
 from app.core.config import get_settings
 from app.core.http_client import get_http_client
+from common.db.query_conditions import not_deleted
 
 
 # 全局冷却缓存：订单号 -> 冷却过期时间
@@ -218,10 +219,10 @@ class RedeliveryTask:
             XYAccount.status == "active",
             or_(
                 XYAccount.auto_confirm == True,
-                XYAccount.only_send_card == True,
-                XYAccount.agree_deliver_enabled == True,
+                XYAccount.only_send_card == 1,
+                XYAccount.agree_deliver_enabled == 1,
             ),
-            XYAccount.scheduled_redelivery == True,
+            XYAccount.scheduled_redelivery == 1,
         )
         result = await session.execute(stmt)
         return list(result.scalars().all())
@@ -250,9 +251,9 @@ class RedeliveryTask:
             XYOrder.placed_at.is_not(None),
             XYOrder.placed_at >= today_start,
             XYOrder.status.in_(["pending_payment", "processing", "pending_ship"]),
-            XYOrder.card_only_delivered.is_(False),
+            XYOrder.card_only_delivered == 0,
             # 双保险：买家已在提货页点「同意」的订单已单独发货，不再走定时补发货
-            XYOrder.agree_deliver_agreed.is_(False),
+            XYOrder.agree_deliver_agreed == 0,
         ).order_by(XYOrder.placed_at)
         
         result = await session.execute(stmt)
@@ -866,7 +867,7 @@ class RedeliveryTask:
         
         # 从字典中获取卡券ID，再查询完整的Card对象
         card_id = matched_cards[0].get('id')
-        stmt = select(Card).where(Card.id == card_id, Card.is_deleted == False, Card.enabled == True)
+        stmt = select(Card).where(Card.id == card_id, not_deleted(Card), Card.enabled == True)
         result = await session.execute(stmt)
         return result.scalars().first()
     

@@ -17,6 +17,7 @@ from common.models.user import User
 
 
 from common.utils.time_utils import safe_isoformat
+from common.db.query_conditions import not_deleted
 class SubDockRecordService:
     """二级分销对接记录服务类"""
 
@@ -185,7 +186,7 @@ class SubDockRecordService:
             .where(
                 DockRecord.id == record_id,
                 Card.user_id == owner_user_id,
-                Card.is_deleted.is_(False),
+                not_deleted(Card),
             )
         )
         result = await self.session.execute(stmt)
@@ -250,7 +251,7 @@ class SubDockRecordService:
             DockRecord.allow_sub_dock == True,
             DockRecord.status == True,
             DockRecord.user_id != current_user_id,
-            Card.is_deleted.is_(False),
+            not_deleted(Card),
         ]
         
         # sub_dock_visibility 过滤：public/NULL 所有人可见，dealer_only 仅已绑定对接码的可见

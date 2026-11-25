@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Query
 from loguru import logger
@@ -20,6 +20,7 @@ from common.models.scheduled_api_cookie_renew_log import ScheduledApiCookieRenew
 from common.models.xy_account import XYAccount
 from common.models.user import User
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
+from common.utils.date_filters import date_filter_bounds
 
 
 router = APIRouter(tags=["接口续期Cookies日志"])
@@ -71,41 +72,15 @@ async def list_api_cookie_renew_batches(
         ).label("failed_count"),
     ).group_by(ScheduledApiCookieRenewLog.batch_id)
 
-    if start_date:
-        try:
-            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-            base_query = base_query.having(
-                func.min(ScheduledApiCookieRenewLog.created_at) >= start_dt
-            )
-        except ValueError:
-            return {
-                "success": False,
-                "message": "开始日期格式错误，应为 YYYY-MM-DD",
-                "data": [],
-                "total": 0,
-                "page": page,
-                "page_size": page_size,
-                "total_pages": 0,
-            }
+    try:
+        start_dt, end_dt = date_filter_bounds(start_date, end_date)
+    except ValueError as exc:
+        return {"success": False, "code": 40001, "message": str(exc), "data": None}
 
-    if end_date:
-        try:
-            end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(
-                hour=23, minute=59, second=59
-            )
-            base_query = base_query.having(
-                func.min(ScheduledApiCookieRenewLog.created_at) <= end_dt
-            )
-        except ValueError:
-            return {
-                "success": False,
-                "message": "结束日期格式错误，应为 YYYY-MM-DD",
-                "data": [],
-                "total": 0,
-                "page": page,
-                "page_size": page_size,
-                "total_pages": 0,
-            }
+    if start_dt is not None:
+        base_query = base_query.having(func.min(ScheduledApiCookieRenewLog.created_at) >= start_dt)
+    if end_dt is not None:
+        base_query = base_query.having(func.min(ScheduledApiCookieRenewLog.created_at) < end_dt)
 
     total = (
         await session.execute(select(func.count()).select_from(base_query.subquery()))

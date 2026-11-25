@@ -19,6 +19,7 @@ from common.models.dock_record import DockRecord
 from common.models.xy_catalog_item import XYCatalogItem
 from common.services.card_access import dock_access_condition
 from common.services.card_matcher import CardMatcher
+from common.db.query_conditions import not_deleted
 
 
 async def sync_delete_item_from_db(
@@ -47,7 +48,7 @@ async def sync_delete_item_from_db(
             locked_card_ids = await matcher._lock_item_cards([item_id], owner_id)
             legacy_cards = list((await session.execute(select(Card).where(
                 Card.id.in_(locked_card_ids), Card.user_id == owner_id,
-                Card.item_id == item_id, Card.is_deleted.is_(False),
+                Card.item_id == item_id, not_deleted(Card),
             ).order_by(Card.id).with_for_update().execution_options(populate_existing=True))).scalars().all())
             legacy_ids = {card.id for card in legacy_cards}
             # 有效二级必有有效一级；先锁一级再锁关系，保护尚未绑定商品的分销并避免反锁。
@@ -60,14 +61,14 @@ async def sync_delete_item_from_db(
             await matcher._lock_item_relations([item_id], owner_id, locked_card_ids)
             relation_result = await session.execute(update(CardItemRelation).where(
                 CardItemRelation.user_id == owner_id, CardItemRelation.item_id == item_id,
-                CardItemRelation.is_deleted.is_(False),
+                not_deleted(CardItemRelation),
             ).values(is_deleted=True))
             await matcher._clear_legacy([item_id], owner_id, locked_card_ids=locked_card_ids)
 
             # 当前锁读覆盖等卡锁期间提交的新关系；跨用户、暂不可用关系也保守保留卡密，
             # 此处仅决定是否归档，实际发货仍由公共 matcher 独立校验授权。
             shared_ids.update((await session.execute(select(CardItemRelation.card_id).where(
-                CardItemRelation.card_id.in_(legacy_ids), CardItemRelation.is_deleted.is_(False),
+                CardItemRelation.card_id.in_(legacy_ids), not_deleted(CardItemRelation),
             ).order_by(CardItemRelation.id).with_for_update())).scalars().all())
             card_count = 0
             for card in legacy_cards:

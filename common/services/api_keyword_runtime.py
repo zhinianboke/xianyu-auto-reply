@@ -13,6 +13,7 @@ from common.db.session import async_session_maker
 from common.models.xy_api_keyword_rule import XYApiKeywordRule
 from common.models.xy_order import XYOrder
 from common.utils.time_utils import get_beijing_now_naive
+from common.db.query_conditions import not_deleted
 
 # pending/paid/中文状态兼容历史待发货订单；发货操作仍只允许待发货状态。
 PENDING_DELIVERY_STATUSES = ("pending_ship", "pending", "paid", "待发货")
@@ -41,7 +42,7 @@ async def list_api_keyword_rules(session: AsyncSession, owner_id: int, account_p
             select(XYApiKeywordRule).where(
                 XYApiKeywordRule.owner_id == owner_id,
                 XYApiKeywordRule.account_id == account_pk,
-                XYApiKeywordRule.is_deleted.is_(False),
+                not_deleted(XYApiKeywordRule),
             ).order_by(XYApiKeywordRule.id)
         )).all()
     except Exception:

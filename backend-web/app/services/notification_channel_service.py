@@ -17,6 +17,7 @@ from common.services.notification_types import (
     normalize_notification_types,
     resolve_stored_notification_types,
 )
+from common.db.query_conditions import not_deleted
 
 
 class NotificationTemplateValidationError(ValueError):
@@ -42,7 +43,7 @@ class NotificationChannelService:
             select(NotificationChannel)
             .where(
                 NotificationChannel.owner_id == owner_id,
-                NotificationChannel.is_deleted.is_(False),
+                not_deleted(NotificationChannel),
             )
             .order_by(NotificationChannel.created_at.desc())
         )
@@ -51,7 +52,7 @@ class NotificationChannelService:
 
     async def list_channel_page(self, owner_id: int, page: int, page_size: int) -> dict[str, Any]:
         """按所属用户分页读取渠道，返回分页信息及各类型总数。"""
-        filters = (NotificationChannel.owner_id == owner_id, NotificationChannel.is_deleted.is_(False))
+        filters = (NotificationChannel.owner_id == owner_id, not_deleted(NotificationChannel))
         counts = (await self.session.execute(
             select(NotificationChannel.channel_type, func.count())
             .where(*filters).group_by(NotificationChannel.channel_type)
@@ -94,7 +95,7 @@ class NotificationChannelService:
         stmt = select(NotificationChannel).where(
             NotificationChannel.owner_id == owner_id,
             NotificationChannel.id == channel_id,
-            NotificationChannel.is_deleted.is_(False),
+            not_deleted(NotificationChannel),
         )
         if for_update:
             stmt = stmt.with_for_update().execution_options(populate_existing=True)

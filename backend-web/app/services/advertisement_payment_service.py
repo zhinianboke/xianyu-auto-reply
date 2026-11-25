@@ -20,6 +20,7 @@ from common.models.user_setting import UserSetting
 from common.schemas.common import ApiResponse
 from common.utils.payment_amount import normalize_zzcode_amount
 from common.utils.time_utils import get_beijing_now_naive
+from common.db.query_conditions import not_deleted
 
 
 class AdvertisementPaymentService:
@@ -31,7 +32,7 @@ class AdvertisementPaymentService:
     async def create(self, ad_id: int, user_id: int, pay_type: str | None = None) -> ApiResponse:
         """按当前支付渠道生成广告付款目标，并保存广告与订单的明确关联。"""
         ad = (await self.session.execute(select(Advertisement).where(
-            Advertisement.id == ad_id, Advertisement.user_id == user_id, Advertisement.is_deleted.is_(False),
+            Advertisement.id == ad_id, Advertisement.user_id == user_id, not_deleted(Advertisement),
         ).with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
         if not ad:
             return ApiResponse(success=False, code=40001, message="广告不存在")
@@ -252,7 +253,7 @@ class AdvertisementPaymentService:
                 return ApiResponse(success=False, code=40001, message="支付订单与广告不匹配")
             ad = (await self.session.execute(select(Advertisement).where(
                 Advertisement.id == ad_id, Advertisement.user_id == user_id,
-                Advertisement.is_deleted.is_(False),
+                not_deleted(Advertisement),
             ))).scalar_one_or_none()
             if not ad:
                 return ApiResponse(success=False, code=40001, message="广告不存在")

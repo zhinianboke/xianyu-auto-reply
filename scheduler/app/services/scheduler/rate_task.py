@@ -150,7 +150,7 @@ class RateTask:
             .join(AutoRateConfig, XYAccount.account_id == AutoRateConfig.account_id)
             .where(
                 XYAccount.status == "active",
-                XYAccount.scheduled_rate == True,
+                XYAccount.scheduled_rate == 1,
                 AutoRateConfig.enabled == True,
             )
         )

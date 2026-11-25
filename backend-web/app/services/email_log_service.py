@@ -8,7 +8,6 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -17,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from common.models.data_dictionary import XYDataDictionary
 from common.models.email_log import XYEmailLog
 from common.services.email_log_service import EMAIL_SEND_RESULT_FAILURE, EMAIL_SEND_RESULT_SUCCESS
+from common.utils.date_filters import date_range_conditions
 from common.utils.pagination import build_pagination_response, execute_paginated_with_filters
 from common.utils.time_utils import safe_isoformat
 
@@ -68,23 +68,10 @@ class EmailLogService:
         if trigger_operation:
             filters.append(XYEmailLog.trigger_operation == trigger_operation.strip())
         if send_result in (EMAIL_SEND_RESULT_SUCCESS, EMAIL_SEND_RESULT_FAILURE):
-            filters.append(XYEmailLog.success.is_(send_result == EMAIL_SEND_RESULT_SUCCESS))
+            filters.append(XYEmailLog.success == int(send_result == EMAIL_SEND_RESULT_SUCCESS))
         elif send_result:
             raise ValueError("发送结果参数无效，只支持 success 或 failure")
-        if start_date:
-            try:
-                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-            except ValueError as exc:
-                raise ValueError("开始日期格式不正确，应为 YYYY-MM-DD") from exc
-            filters.append(XYEmailLog.created_at >= start_dt)
-        if end_date:
-            try:
-                end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
-            except ValueError as exc:
-                raise ValueError("结束日期格式不正确，应为 YYYY-MM-DD") from exc
-            filters.append(XYEmailLog.created_at <= end_dt)
-        if start_date and end_date and start_dt > end_dt:
-            raise ValueError("开始日期不能晚于结束日期")
+        filters.extend(date_range_conditions(XYEmailLog.created_at, start_date, end_date))
 
         logs, total = await execute_paginated_with_filters(
             self.session,
@@ -117,7 +104,7 @@ class EmailLogService:
                 XYDataDictionary.dict_type.in_(
                     [DICT_TYPE_EMAIL_TRIGGER_OPERATION, DICT_TYPE_EMAIL_SEND_RESULT]
                 ),
-                XYDataDictionary.enabled.is_(True),
+                XYDataDictionary.enabled == 1,
             )
             .order_by(XYDataDictionary.dict_type.asc(), XYDataDictionary.sort_order.asc(), XYDataDictionary.id.asc())
         )

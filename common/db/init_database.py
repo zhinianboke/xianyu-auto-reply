@@ -20,7 +20,7 @@ import warnings
 from contextlib import asynccontextmanager, contextmanager
 
 from loguru import logger
-from sqlalchemy import text
+from sqlalchemy import func, insert, select, text
 from sqlalchemy.exc import IntegrityError, SAWarning
 
 from common.db.default_publish_addresses import (
@@ -39,6 +39,9 @@ from common.db.card_schema import ensure_card_schema
 from common.db.auth_security_schema import ensure_auth_security_schema
 from common.db.registration_log_schema import ensure_registration_log_schema
 from common.db.session import async_engine, async_session_maker
+from common.db.query_conditions import not_deleted
+from common.models.card import Card
+from common.models.card_item_relation import CardItemRelation
 from common.services.notification_types import NOTIFICATION_TYPE_DICTIONARY
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.security import generate_secret_key, get_password_hash
@@ -4174,12 +4177,8 @@ class DatabaseInitializer:
                     return
                 
                 # 统计需要迁移的数据量
-                count_result = await session.execute(
-                    text("""
-                        SELECT COUNT(*) FROM xy_cards 
-                        WHERE item_id IS NOT NULL AND item_id != '' AND is_deleted = 0
-                    """)
-                )
+                source_conditions = (Card.item_id.is_not(None), Card.item_id != '', not_deleted(Card))
+                count_result = await session.execute(select(func.count()).select_from(Card).where(*source_conditions))
                 total = count_result.scalar()
                 
                 if total == 0:
@@ -4188,12 +4187,11 @@ class DatabaseInitializer:
                 
                 # 首次迁移：从 xy_cards 导入到关联表
                 migrate_result = await session.execute(
-                    text("""
-                        INSERT IGNORE INTO xy_card_item_relations (user_id, card_id, item_id, dock_record_id, created_at, updated_at)
-                        SELECT user_id, id, item_id, 0, NOW(), NOW()
-                        FROM xy_cards
-                        WHERE item_id IS NOT NULL AND item_id != '' AND is_deleted = 0
-                    """)
+                    insert(CardItemRelation.__table__).prefix_with('IGNORE', dialect='mysql').from_select(
+                        ['user_id', 'card_id', 'item_id', 'dock_record_id', 'created_at', 'updated_at'],
+                        select(Card.user_id, Card.id, Card.item_id, 0, func.now(), func.now())
+                        .where(*source_conditions), include_defaults=False,
+                    )
                 )
                 await session.commit()
                 

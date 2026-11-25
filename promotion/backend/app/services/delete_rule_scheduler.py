@@ -53,7 +53,7 @@ async def _execute_all_rules() -> None:
             today = datetime.now(TZ_BEIJING).date()
 
             # 查询所有启用的删除规则
-            stmt = select(FYDeleteRule).where(FYDeleteRule.enabled == True)  # noqa: E712
+            stmt = select(FYDeleteRule).where(FYDeleteRule.enabled == 1)  # noqa: E712
             result = await session.execute(stmt)
             rules = result.scalars().all()
 

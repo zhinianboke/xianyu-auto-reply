@@ -41,6 +41,7 @@ from common.services.settlement_service import SettlementService
 from common.utils.fish_nick_utils import get_buyer_fish_nick
 from common.utils.response_field import extract_card_api_response_content
 from common.utils.xianyu_utils import trans_cookies
+from common.db.query_conditions import not_deleted
 
 
 # “卡券发送成功再确认发货”开关开启时，确认发货前同步等待服务端回执的最长超时（秒）。
@@ -2945,7 +2946,7 @@ class AutoDeliveryHandler(DeliveryPrecheckMixin):
                 logger.info(f"📋 校验-订单售价: order_id={order_id}, sale_price_str='{sale_price_str}', sale_price={sale_price}")
                 
                 # 获取卡券信息
-                card_stmt = select(CardModel).where(CardModel.id == card.get('id'), CardModel.is_deleted == False, CardModel.enabled == True)
+                card_stmt = select(CardModel).where(CardModel.id == card.get('id'), not_deleted(CardModel), CardModel.enabled == True)
                 card_result = await session.execute(card_stmt)
                 card_obj = card_result.scalars().first()
                 

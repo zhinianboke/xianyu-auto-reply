@@ -31,6 +31,7 @@ from common.schemas.api_keyword import (
     ApiKeywordUpdate,
 )
 from common.utils.time_utils import get_beijing_now_naive
+from common.db.query_conditions import not_deleted
 
 
 class ApiKeywordService:
@@ -46,7 +47,7 @@ class ApiKeywordService:
         try:
             rows = (await self.session.execute(select(XYDataDictionary).where(
                 XYDataDictionary.dict_type.in_((HTTP_METHOD_DICTIONARY, PARAMETER_DICTIONARY)),
-                XYDataDictionary.enabled.is_(True),
+                XYDataDictionary.enabled == 1,
             ).order_by(XYDataDictionary.sort_order, XYDataDictionary.id))).scalars().all()
             methods = [
                 {"value": row.dict_value, "label": row.dict_label}
@@ -135,7 +136,7 @@ class ApiKeywordService:
             XYApiKeywordRule.owner_id == account_owner,
         ).execution_options(populate_existing=True)
         if not include_deleted:
-            stmt = stmt.where(XYApiKeywordRule.is_deleted.is_(False))
+            stmt = stmt.where(not_deleted(XYApiKeywordRule))
         if for_update:
             stmt = stmt.with_for_update()
         rule = (await self.session.execute(stmt)).scalar_one_or_none()
@@ -283,7 +284,7 @@ class ApiKeywordService:
             XYApiKeywordRule.request_id.in_([value["request_id"] for value in values]),
             XYApiKeywordRule.owner_id == account_owner,
             XYApiKeywordRule.account_id == account_pk,
-            XYApiKeywordRule.is_deleted.is_(False),
+            not_deleted(XYApiKeywordRule),
         )
         try:
             existing = list((await self.session.scalars(existing_stmt)).all())
@@ -325,7 +326,7 @@ class ApiKeywordService:
     async def list_paginated(self, owner_id: int | None, identifier: str, page: int, page_size: int) -> dict[str, Any]:
         """分页读取未删除配置，普通用户只能读取本人账号的记录。"""
         try:
-            conditions = [XYApiKeywordRule.is_deleted.is_(False), XYApiKeywordRule.owner_id == XYAccount.owner_id]
+            conditions = [not_deleted(XYApiKeywordRule), XYApiKeywordRule.owner_id == XYAccount.owner_id]
             if owner_id is not None:
                 conditions.append(XYApiKeywordRule.owner_id == owner_id)
             if identifier:

@@ -173,7 +173,7 @@ class AutoRelistLifecycleMixin:
                 AutoRelistRule.id == event.rule_id,
                 AutoRelistRule.user_id == event.user_id,
                 AutoRelistRule.current_item_id == event.old_item_id,
-                AutoRelistRule.enabled.is_(True),
+                AutoRelistRule.enabled == 1,
             )
             .values(
                 status=(
@@ -242,7 +242,7 @@ class AutoRelistLifecycleMixin:
             .where(
                 AutoRelistRule.id == rule.id,
                 AutoRelistRule.user_id == event.user_id,
-                AutoRelistRule.enabled.is_(True),
+                AutoRelistRule.enabled == 1,
                 AutoRelistRule.current_item_id == event.old_item_id,
             )
             .values(
@@ -389,7 +389,7 @@ class AutoRelistLifecycleMixin:
             .where(
                 AutoRelistRule.id == rule.id,
                 AutoRelistRule.user_id == event.user_id,
-                AutoRelistRule.enabled.is_(True),
+                AutoRelistRule.enabled == 1,
                 AutoRelistRule.current_item_id == event.old_item_id,
             )
             .values(
@@ -435,7 +435,7 @@ class AutoRelistLifecycleMixin:
             .where(
                 AutoRelistRule.id == rule.id,
                 AutoRelistRule.user_id == event.user_id,
-                AutoRelistRule.enabled.is_(True),
+                AutoRelistRule.enabled == 1,
                 AutoRelistRule.current_item_id == event.old_item_id,
             )
             .values(
@@ -450,7 +450,7 @@ class AutoRelistLifecycleMixin:
             .where(
                 AutoRelistRule.id == rule.id,
                 AutoRelistRule.user_id == event.user_id,
-                AutoRelistRule.enabled.is_(False),
+                AutoRelistRule.enabled == 0,
             )
             .values(
                 status="disabled",
@@ -484,7 +484,7 @@ class AutoRelistLifecycleMixin:
                     .where(
                         AutoRelistRule.id == event.rule_id,
                         AutoRelistRule.user_id == event.user_id,
-                        AutoRelistRule.enabled.is_(True),
+                        AutoRelistRule.enabled == 1,
                     )
                     .values(
                         status="retrying",

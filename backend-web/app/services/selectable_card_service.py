@@ -22,6 +22,7 @@ from sqlalchemy.orm import aliased, load_only
 from common.models.card import Card
 from common.models.dock_record import DockRecord
 from common.services.card_access import dock_access_condition
+from common.db.query_conditions import not_deleted
 
 
 class SelectableCardService:
@@ -40,7 +41,7 @@ class SelectableCardService:
 
     def _own_conditions(self, user_id: Optional[int], search: str) -> List[Any]:
         """构建自有卡券查询条件（owner 作用域 + 搜索：名称/类型/ID）"""
-        conds: List[Any] = [Card.is_deleted.is_(False)]
+        conds: List[Any] = [not_deleted(Card)]
         if user_id is not None:
             conds.append(Card.user_id == user_id)
         if search:
@@ -67,7 +68,7 @@ class SelectableCardService:
         if user_id is not None:
             conds.append(DockRecord.user_id == user_id)
         # 去重：对接记录引用的 card_id 若已是本人自有卡券，则不重复展示
-        own_ids_subq = select(Card.id).where(Card.is_deleted.is_(False))
+        own_ids_subq = select(Card.id).where(not_deleted(Card))
         if user_id is not None:
             own_ids_subq = own_ids_subq.where(Card.user_id == user_id)
         conds.append(DockRecord.card_id.notin_(own_ids_subq))

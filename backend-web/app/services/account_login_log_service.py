@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 from sqlalchemy import delete
@@ -18,6 +18,7 @@ from common.models.account_login_log import XYAccountLoginLog
 from common.models.xy_account import XYAccount
 from common.utils.pagination import execute_paginated_with_filters
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
+from common.utils.date_filters import date_range_conditions
 
 
 class AccountLoginLogService:
@@ -43,7 +44,7 @@ class AccountLoginLogService:
             owner_id: 所有者ID筛选，None 代表管理员查全部
             account_identifier: 业务账号ID（XYAccount.account_id）
             start_date: 开始日期（YYYY-MM-DD，含当天 00:00:00）
-            end_date: 结束日期（YYYY-MM-DD，含当天 23:59:59）
+            end_date: 结束日期（YYYY-MM-DD，含当天全部时间）
             login_status: 登录状态（success / failed / skipped_cooldown / no_credentials）
             limit: 每页数量
             offset: 偏移量
@@ -59,20 +60,8 @@ class AccountLoginLogService:
         if account_identifier:
             filters.append(XYAccountLoginLog.account_identifier == account_identifier)
 
-        # 时间范围（格式错误时静默跳过，与风控日志服务保持一致）
-        if start_date:
-            try:
-                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-                filters.append(XYAccountLoginLog.created_at >= start_dt)
-            except ValueError:
-                pass
-
-        if end_date:
-            try:
-                end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
-                filters.append(XYAccountLoginLog.created_at <= end_dt)
-            except ValueError:
-                pass
+        # 北京时间日期范围：校验后共同应用于列表和总数。
+        filters.extend(date_range_conditions(XYAccountLoginLog.created_at, start_date, end_date))
 
         if login_status:
             filters.append(XYAccountLoginLog.login_status == login_status)

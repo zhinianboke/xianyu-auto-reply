@@ -25,6 +25,7 @@ from common.services.product_material_price import (
     normalize_material_price_fields,
 )
 from common.utils.time_utils import safe_isoformat
+from common.db.query_conditions import not_deleted
 
 
 # ==================== 素材库服务 ====================
@@ -298,7 +299,7 @@ class ProductMaterialService:
             select(XYDataDictionary.dict_value, XYDataDictionary.dict_label)
             .where(
                 XYDataDictionary.dict_type == MATERIAL_PRICE_MODE_DICTIONARY,
-                XYDataDictionary.enabled.is_(True),
+                XYDataDictionary.enabled == 1,
             )
             .order_by(XYDataDictionary.sort_order.asc(), XYDataDictionary.id.asc())
         )
@@ -321,7 +322,7 @@ class ProductMaterialService:
         page = max(page, 1)
         page_size = page_size if page_size in (10, 20, 50, 100, 500, 1000) else 20
 
-        base_cond = [ProductMaterial.is_deleted.is_(False)]
+        base_cond = [not_deleted(ProductMaterial)]
         if user_id is not None:
             base_cond.append(ProductMaterial.user_id == user_id)
         if title:
@@ -364,7 +365,7 @@ class ProductMaterialService:
             material_id: 素材ID
             user_id: 用户ID，为None时不限用户（管理员场景）
         """
-        conds = [ProductMaterial.id == material_id, ProductMaterial.is_deleted.is_(False)]
+        conds = [ProductMaterial.id == material_id, not_deleted(ProductMaterial)]
         if user_id is not None:
             conds.append(ProductMaterial.user_id == user_id)
         stmt = select(ProductMaterial).where(*conds)
@@ -377,7 +378,7 @@ class ProductMaterialService:
         stmt = select(ProductMaterial).where(
             ProductMaterial.user_id == user_id,
             ProductMaterial.id.in_(unique_ids),
-            ProductMaterial.is_deleted.is_(False),
+            not_deleted(ProductMaterial),
         )
         rows = (await self.session.execute(stmt)).scalars().all()
         material_map = {row.id: row for row in rows}
@@ -442,7 +443,7 @@ class ProductMaterialService:
         """
         if not material_ids:
             return 0
-        conds = [ProductMaterial.id.in_(material_ids), ProductMaterial.is_deleted.is_(False)]
+        conds = [ProductMaterial.id.in_(material_ids), not_deleted(ProductMaterial)]
         if user_id is not None:
             conds.append(ProductMaterial.user_id == user_id)
         stmt = select(ProductMaterial).where(*conds)

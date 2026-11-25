@@ -59,7 +59,7 @@ def _pending_conditions(cutoff: datetime) -> list:
             前后两次查询用了不同的窗口，导致统计数与实际取数不一致）
     """
     return [
-        ListingMonitorItem.is_ordered.is_(False),
+        ListingMonitorItem.is_ordered == 0,
         ListingMonitorItem.order_attempts < MAX_ORDER_ATTEMPTS,
         ListingMonitorItem.created_at >= cutoff,
     ]

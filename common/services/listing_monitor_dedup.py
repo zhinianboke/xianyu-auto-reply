@@ -33,7 +33,7 @@ async def has_owner_ordered_item(
     """
     stmt = select(ListingMonitorItem.id).where(
         ListingMonitorItem.item_id == str(item_id),
-        ListingMonitorItem.is_ordered.is_(True),
+        ListingMonitorItem.is_ordered == 1,
     )
     if owner_id is not None:
         stmt = stmt.where(ListingMonitorItem.owner_id == owner_id)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from sqlalchemy import func, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +10,9 @@ from common.models.auto_reply_message_log import XYAutoReplyMessageLog
 
 
 from common.utils.time_utils import safe_isoformat
+from common.utils.date_filters import date_filter_bounds
+
+
 class AutoReplyLogService:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -78,20 +81,12 @@ class AutoReplyLogService:
         return conditions
 
     def _parse_start_time(self, start_date: str | None) -> datetime | None:
-        if not start_date:
-            return None
-        try:
-            return datetime.strptime(start_date, "%Y-%m-%d")
-        except ValueError as exc:
-            raise ValueError("开始日期格式错误，应为 YYYY-MM-DD") from exc
+        """复用公共日期边界；开始日期取当天零点，非法参数明确报错。"""
+        return date_filter_bounds(start_date, None)[0]
 
     def _parse_end_time(self, end_date: str | None) -> datetime | None:
-        if not end_date:
-            return None
-        try:
-            return datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
-        except ValueError as exc:
-            raise ValueError("结束日期格式错误，应为 YYYY-MM-DD") from exc
+        """复用公共日期边界；结束日期取次日零点，非法参数明确报错。"""
+        return date_filter_bounds(None, end_date)[1]
 
     async def list_logs(
         self,
@@ -107,8 +102,7 @@ class AutoReplyLogService:
         limit: int = 20,
         offset: int = 0,
     ) -> tuple[list[dict], int]:
-        start_time = self._parse_start_time(start_date)
-        end_time = self._parse_end_time(end_date)
+        start_time, end_time = date_filter_bounds(start_date, end_date)
         if start_time is not None and end_time is not None and start_time >= end_time:
             raise ValueError("开始日期不能大于结束日期")
 

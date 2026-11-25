@@ -25,6 +25,7 @@ from common.models.xy_order import XYOrder
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.auto_reply_message_log import XYAutoReplyMessageLog
 from common.services.order_delivery_result import attach_delivery_result
+from common.utils.date_filters import date_range_conditions
 
 
 # 复用的 goofish API 连接池（TCPConnector）
@@ -133,7 +134,6 @@ class OrderService:
             (订单列表, 总数, 商品标题字典)
         """
         from sqlalchemy import and_, or_
-        from datetime import datetime, timedelta
         
         base_stmt = select(XYOrder)
         conditions = []
@@ -180,21 +180,8 @@ class OrderService:
         if is_rated is not None:
             conditions.append(XYOrder.is_rated == is_rated)
         
-        # 时间范围筛选
-        if start_date:
-            try:
-                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-                conditions.append(XYOrder.placed_at >= start_dt)
-            except ValueError:
-                logger.warning(f"无效的开始日期格式: {start_date}")
-        
-        if end_date:
-            try:
-                # 结束日期需要加一天，以包含当天的所有数据
-                end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
-                conditions.append(XYOrder.placed_at < end_dt)
-            except ValueError:
-                logger.warning(f"无效的结束日期格式: {end_date}")
+        # 北京时间日期范围：校验后共同应用于列表和总数。
+        conditions.extend(date_range_conditions(XYOrder.placed_at, start_date, end_date))
         
         # 关联自动发货消息日志的发送状态筛选
         # 取每个订单号最新一条自动发货日志（以 max(id) 近似最新，与发送状态展示口径一致），

@@ -98,7 +98,7 @@ class PaymentConfigService:
         rows = (await self.session.execute(
             select(XYDataDictionary).where(
                 XYDataDictionary.dict_type.in_((PAYMENT_CHANNEL_DICT, ZZCODE_PAY_TYPE_DICT)),
-                XYDataDictionary.enabled.is_(True),
+                XYDataDictionary.enabled == 1,
             ).order_by(XYDataDictionary.sort_order, XYDataDictionary.id)
         )).scalars().all()
         labels = {(row.dict_type, row.dict_value): row.dict_label for row in rows}
@@ -121,7 +121,7 @@ class PaymentConfigService:
         rows = (await self.session.execute(
             select(XYDataDictionary).where(
                 XYDataDictionary.dict_type.in_((PAYMENT_CHANNEL_DICT, ZZCODE_PAY_TYPE_DICT)),
-                XYDataDictionary.enabled.is_(True),
+                XYDataDictionary.enabled == 1,
             ).order_by(XYDataDictionary.sort_order, XYDataDictionary.id)
         )).scalars().all()
         grouped = {PAYMENT_CHANNEL_DICT: [], ZZCODE_PAY_TYPE_DICT: []}

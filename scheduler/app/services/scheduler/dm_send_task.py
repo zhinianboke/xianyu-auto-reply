@@ -47,6 +47,7 @@ from common.services.order_account_loader import (
     load_xy_accounts_by_ids,
 )
 from common.utils.time_utils import get_beijing_now_naive
+from common.db.query_conditions import not_deleted
 
 # 单次任务最多扫描的待私信商品数（全局安全上限，避免一次性载入过多；
 # 每个监控任务实际处理条数由任务自身的 dm_batch_size 控制）
@@ -192,7 +193,7 @@ class DmSendTaskService:
                 )
                 .where(
                     and_(
-                        ListingMonitorItem.is_dm_sent.is_(False),
+                        ListingMonitorItem.is_dm_sent == 0,
                         # 下单成功之后才发送私信（仅 success，排除失败/重复/无账号等非成功状态）
                         ListingMonitorItem.order_status == "success",
                         # 处理"下单成功时间"为今天和昨天的数据（ordered_at 仅在下单成功时写入北京时间）
@@ -230,8 +231,8 @@ class DmSendTaskService:
                         ListingMonitorTask.category_id,
                     ).where(
                         ListingMonitorTask.id == task_id,
-                        ListingMonitorTask.is_deleted.is_(False),
-                        ListingMonitorTask.is_enabled.is_(True),
+                        not_deleted(ListingMonitorTask),
+                        ListingMonitorTask.is_enabled == 1,
                     )
                 )
             ).first()

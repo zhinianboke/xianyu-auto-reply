@@ -19,6 +19,7 @@ from common.services.advertisement_types import AD_TYPE_DICTIONARY, get_placemen
 from common.utils.pagination import execute_paginated_with_filters
 from common.utils.text_utils import escape_xss
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
+from common.db.query_conditions import not_deleted
 
 
 class AdvertisementService:
@@ -46,7 +47,7 @@ class AdvertisementService:
         """从数据字典读取四类广告的中文名称及费用键。"""
         rows = (await self.session.execute(select(XYDataDictionary).where(
             XYDataDictionary.dict_type == AD_TYPE_DICTIONARY,
-            XYDataDictionary.enabled.is_(True),
+            XYDataDictionary.enabled == 1,
             XYDataDictionary.dict_value.in_([item.value for item in AdType]),
         ).order_by(XYDataDictionary.sort_order))).scalars().all()
         if len(rows) != len(AdType):
@@ -81,7 +82,7 @@ class AdvertisementService:
         except ValueError as exc:
             return ApiResponse(success=False, code=40001, message=str(exc))
         ads = (await self.session.execute(select(Advertisement).where(
-            Advertisement.is_deleted.is_(False), Advertisement.status == AdStatus.APPROVED,
+            not_deleted(Advertisement), Advertisement.status == AdStatus.APPROVED,
             Advertisement.ad_type.in_((carousel_type, text_type)),
             (Advertisement.expire_date >= get_beijing_now_naive().date()) | Advertisement.expire_date.is_(None),
         ).order_by(desc(Advertisement.created_at)))).scalars().all()
@@ -110,7 +111,7 @@ class AdvertisementService:
     @retry_ad_read
     async def list_ads(self, page: int, page_size: int, *, user_id: int | None = None, status: str | None = None, ad_type: str | None = None) -> ApiResponse:
         """按管理员筛选或申请用户隔离读取广告列表，使用后端分页。"""
-        filters = [Advertisement.is_deleted.is_(False)]
+        filters = [not_deleted(Advertisement)]
         if user_id is not None:
             filters.append(Advertisement.user_id == user_id)
         try:
@@ -132,7 +133,7 @@ class AdvertisementService:
 
     async def _get_ad(self, ad_id: int, user_id: int | None = None) -> Advertisement | None:
         """锁定待修改广告，普通用户必须匹配申请用户，软删除广告不可再操作。"""
-        statement = select(Advertisement).where(Advertisement.id == ad_id, Advertisement.is_deleted.is_(False))
+        statement = select(Advertisement).where(Advertisement.id == ad_id, not_deleted(Advertisement))
         if user_id is not None:
             statement = statement.where(Advertisement.user_id == user_id)
         return (await self.session.execute(statement.with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()

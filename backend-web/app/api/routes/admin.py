@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -33,6 +32,7 @@ from app.services.dashboard_stats_service import DashboardStatsService
 from app.services.scheduled_batch_log_service import ScheduledBatchLogService
 
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
+from common.utils.date_filters import date_filter_bounds
 router = APIRouter(tags=["admin"])
 settings = get_settings()
 
@@ -419,6 +419,11 @@ async def list_redelivery_batches(
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> dict:
     """获取定时补发货执行批次列表（管理员专用）"""
+    try:
+        date_filter_bounds(start_date, end_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     service = ScheduledBatchLogService(session)
     batches, total = await service.list_redelivery_batches(
         start_date=start_date,
@@ -467,6 +472,11 @@ async def list_rate_batches(
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> dict:
     """获取定时补评价执行批次列表（管理员专用）"""
+    try:
+        date_filter_bounds(start_date, end_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     service = ScheduledBatchLogService(session)
     batches, total = await service.list_rate_batches(
         start_date=start_date,
@@ -515,6 +525,11 @@ async def list_polish_batches(
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> dict:
     """获取定时擦亮执行批次列表（管理员专用）"""
+    try:
+        date_filter_bounds(start_date, end_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     service = ScheduledBatchLogService(session)
     batches, total = await service.list_polish_batches(
         start_date=start_date,
@@ -679,6 +694,11 @@ async def list_red_flower_batches(
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> dict:
     """获取求小红花执行批次列表（管理员专用）"""
+    try:
+        date_filter_bounds(start_date, end_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     from app.services.scheduled_batch_log_service import ScheduledBatchLogService
 
     service = ScheduledBatchLogService(session)
@@ -760,7 +780,6 @@ async def list_login_renew_batches(
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> dict:
     """获取登录续期执行批次列表（管理员专用）"""
-    from datetime import datetime
     from sqlalchemy import case
     
     # 构建基础查询 - 按batch_id分组统计
@@ -775,20 +794,15 @@ async def list_login_renew_batches(
     ).group_by(ScheduledLoginRenewLog.batch_id)
     
     # 时间范围筛选
-    if start_date:
-        try:
-            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-            base_query = base_query.having(func.min(ScheduledLoginRenewLog.created_at) >= start_dt)
-        except ValueError:
-            pass
-    
-    if end_date:
-        try:
-            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-            end_dt = end_dt.replace(hour=23, minute=59, second=59)
-            base_query = base_query.having(func.min(ScheduledLoginRenewLog.created_at) <= end_dt)
-        except ValueError:
-            pass
+    try:
+        start_dt, end_dt = date_filter_bounds(start_date, end_date)
+    except ValueError as exc:
+        return {"success": False, "code": 40001, "message": str(exc), "data": None}
+
+    if start_dt is not None:
+        base_query = base_query.having(func.min(ScheduledLoginRenewLog.created_at) >= start_dt)
+    if end_dt is not None:
+        base_query = base_query.having(func.min(ScheduledLoginRenewLog.created_at) < end_dt)
     
     # 查询总数
     count_subquery = base_query.subquery()
@@ -946,20 +960,15 @@ async def list_close_notice_batches(
     ).group_by(ScheduledCloseNoticeLog.batch_id)
 
     # 时间范围筛选
-    if start_date:
-        try:
-            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-            base_query = base_query.having(func.min(ScheduledCloseNoticeLog.created_at) >= start_dt)
-        except ValueError:
-            pass
+    try:
+        start_dt, end_dt = date_filter_bounds(start_date, end_date)
+    except ValueError as exc:
+        return {"success": False, "code": 40001, "message": str(exc), "data": None}
 
-    if end_date:
-        try:
-            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-            end_dt = end_dt.replace(hour=23, minute=59, second=59)
-            base_query = base_query.having(func.min(ScheduledCloseNoticeLog.created_at) <= end_dt)
-        except ValueError:
-            pass
+    if start_dt is not None:
+        base_query = base_query.having(func.min(ScheduledCloseNoticeLog.created_at) >= start_dt)
+    if end_dt is not None:
+        base_query = base_query.having(func.min(ScheduledCloseNoticeLog.created_at) < end_dt)
 
     # 统计总批次数
     count_stmt = select(func.count()).select_from(base_query.subquery())

@@ -9,6 +9,7 @@ from common.models.card import Card
 from common.models.card_item_relation import CardItemRelation
 from common.services.card_access import CardAccess, CardAccessError, preserved_card_item_ids
 from common.services.card_matcher import CardMatcher
+from common.db.query_conditions import not_deleted
 
 
 class AccountCardImportMixin:
@@ -28,7 +29,7 @@ class AccountCardImportMixin:
             stmt = select(Card).where(
                 Card.user_id == self.owner_id,
                 Card.name == name,
-                Card.is_deleted.is_(False),
+                not_deleted(Card),
             )
             if spec_value:
                 stmt = stmt.where(Card.spec_value == spec_value)
@@ -76,7 +77,7 @@ class AccountCardImportMixin:
 
         # 补充映射：查询所有该用户的卡券
         stmt = select(Card.id, Card.name, Card.spec_value).where(
-            Card.user_id == self.owner_id, Card.is_deleted.is_(False),
+            Card.user_id == self.owner_id, not_deleted(Card),
         )
         result = await self.session.execute(stmt)
         for card_id, card_name, card_spec in result.all():
@@ -130,7 +131,7 @@ class AccountCardImportMixin:
         # 上面的整组授权已锁定卡券；这里只读取回退字段，避免再次加载大内容。
         cards = (await self.session.execute(select(Card.id, Card.item_id).where(
             Card.id.in_(card_ids), Card.user_id == self.owner_id,
-            Card.is_deleted.is_(False),
+            not_deleted(Card),
         ))).all() if card_ids else []
         for card_id, legacy_item_id in cards:
             preserved = preserved_card_item_ids(card_id, self.owner_id, legacy_item_id, by_card[card_id])

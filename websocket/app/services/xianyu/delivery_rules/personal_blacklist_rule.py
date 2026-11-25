@@ -132,7 +132,7 @@ class PersonalBlacklistRule(BaseDeliveryRule):
             conditions = [
                 XYPersonalBlacklist.owner_id == owner_id,
                 XYPersonalBlacklist.buyer_id == buyer_id,
-                XYPersonalBlacklist.is_enabled == True,
+                XYPersonalBlacklist.is_enabled == 1,
             ]
 
             # 构建级别匹配条件

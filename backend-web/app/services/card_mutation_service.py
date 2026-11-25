@@ -9,6 +9,7 @@ from sqlalchemy import select
 from common.models.card import Card
 from common.services.card_access import CardAccess
 from common.services.card_matcher import CardMatcher
+from common.db.query_conditions import not_deleted
 
 
 class CardMutationMixin:
@@ -42,7 +43,7 @@ class CardMutationMixin:
             # 多规格卡券：检查同一商品下 name + spec_name + spec_value 组合是否重复
             stmt = select(Card).where(
                 Card.user_id == user_id,
-                Card.is_deleted.is_(False),
+                not_deleted(Card),
                 Card.item_id == item_id,
                 Card.name == name,
                 Card.is_multi_spec == True,
@@ -53,7 +54,7 @@ class CardMutationMixin:
             # 普通卡券：检查同一商品下 name 是否重复
             stmt = select(Card).where(
                 Card.user_id == user_id,
-                Card.is_deleted.is_(False),
+                not_deleted(Card),
                 Card.item_id == item_id,
                 Card.name == name,
                 Card.is_multi_spec == False,

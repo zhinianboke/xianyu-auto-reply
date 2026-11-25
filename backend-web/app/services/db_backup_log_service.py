@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
@@ -24,6 +24,7 @@ from common.models.db_backup_log import DbBackupLog
 from common.utils.backup_paths import get_backup_root, locate_backup_file
 from common.utils.pagination import execute_paginated_with_filters
 from common.utils.time_utils import safe_isoformat
+from common.utils.date_filters import next_day_start, parse_filter_date
 
 
 class DbBackupDeleteError(RuntimeError):
@@ -50,7 +51,7 @@ class DbBackupLogService:
         Args:
             status: 备份状态筛选（success / failed）
             start_date: 开始日期（YYYY-MM-DD，含当天 00:00:00）
-            end_date: 结束日期（YYYY-MM-DD，含当天 23:59:59）
+            end_date: 结束日期（YYYY-MM-DD，含当天全部时间）
             limit: 每页数量
             offset: 偏移量
 
@@ -64,8 +65,8 @@ class DbBackupLogService:
                 raise ValueError("备份状态只能是 success 或 failed")
             filters.append(DbBackupLog.status == status)
 
-        start_dt = self._parse_filter_date(start_date, "开始日期")
-        end_dt = self._parse_filter_date(end_date, "结束日期")
+        start_dt = parse_filter_date(start_date, "开始日期")
+        end_dt = parse_filter_date(end_date, "结束日期")
         if start_dt and end_dt and start_dt > end_dt:
             raise ValueError("开始日期不能晚于结束日期")
         if start_dt:
@@ -73,7 +74,7 @@ class DbBackupLogService:
         if end_dt and end_dt.date() < datetime.max.date():
             # 使用次日零点作为开区间，避免遗漏带微秒的当天最后一秒数据。
             # 最大日期已覆盖所有可存储时间，无需构造超出 datetime 范围的次日。
-            filters.append(DbBackupLog.created_at < end_dt + timedelta(days=1))
+            filters.append(DbBackupLog.created_at < next_day_start(end_dt))
 
         logs, total = await execute_paginated_with_filters(
             self.session,
@@ -103,15 +104,6 @@ class DbBackupLogService:
         ]
         return items, total
 
-    @staticmethod
-    def _parse_filter_date(value: Optional[str], field_name: str) -> Optional[datetime]:
-        """解析列表日期条件，无效格式直接返回清晰的业务错误。"""
-        if not value:
-            return None
-        try:
-            return datetime.strptime(value, "%Y-%m-%d")
-        except ValueError as exc:
-            raise ValueError(f"{field_name}格式不正确，应为 YYYY-MM-DD") from exc
 
     async def get_backup_file(self, log_id: int) -> tuple[Optional[Path], Optional[str]]:
         """根据日志ID解析可下载的备份文件路径。

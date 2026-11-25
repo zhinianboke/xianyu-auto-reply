@@ -21,6 +21,7 @@ from common.models.collect_fallback_account import CollectFallbackAccount
 from common.models.order_fallback_account import OrderFallbackAccount
 from common.models.user import User, UserRole
 from common.utils.time_utils import safe_isoformat
+from common.db.query_conditions import not_deleted
 
 
 class ListingMonitorCategoryService:
@@ -52,7 +53,7 @@ class ListingMonitorCategoryService:
         """
         conditions = []
         if not include_deleted:
-            conditions.append(ListingMonitorCategory.is_deleted.is_(False))
+            conditions.append(not_deleted(ListingMonitorCategory))
         # owner_id=None 为管理员哨兵，不加 owner 过滤；非 None 时仅看本人分类
         if owner_id is not None:
             conditions.append(ListingMonitorCategory.owner_id == owner_id)
@@ -128,7 +129,7 @@ class ListingMonitorCategoryService:
         """
         conditions = [
             ListingMonitorCategory.name == name,
-            ListingMonitorCategory.is_deleted.is_(False),
+            not_deleted(ListingMonitorCategory),
         ]
         if exclude_id is not None:
             conditions.append(ListingMonitorCategory.id != exclude_id)
@@ -194,7 +195,7 @@ class ListingMonitorCategoryService:
         is_admin = await self._is_admin_user(owner_id)
         stmt = select(ListingMonitorCategory).where(
             ListingMonitorCategory.id == category_id,
-            ListingMonitorCategory.is_deleted.is_(False),
+            not_deleted(ListingMonitorCategory),
         )
         result = await self.session.execute(stmt)
         category = result.scalar_one_or_none()
@@ -249,7 +250,7 @@ class ListingMonitorCategoryService:
         is_admin = await self._is_admin_user(owner_id)
         stmt = select(ListingMonitorCategory).where(
             ListingMonitorCategory.id == category_id,
-            ListingMonitorCategory.is_deleted.is_(False),
+            not_deleted(ListingMonitorCategory),
         )
         result = await self.session.execute(stmt)
         category = result.scalar_one_or_none()
@@ -266,7 +267,7 @@ class ListingMonitorCategoryService:
         # 检查是否有关联的监控任务（未删除）
         task_conditions = [
             ListingMonitorTask.category_id == category_id,
-            ListingMonitorTask.is_deleted.is_(False),
+            not_deleted(ListingMonitorTask),
         ]
         if scope_owner_id is not None:
             task_conditions.append(ListingMonitorTask.owner_id == scope_owner_id)
@@ -281,7 +282,7 @@ class ListingMonitorCategoryService:
         # 检查是否有兜底采集账号配置（仅统计未软删除的，避免历史软删配置永久挡删分类）
         collect_conditions = [
             CollectFallbackAccount.category_id == category_id,
-            CollectFallbackAccount.is_deleted.is_(False),
+            not_deleted(CollectFallbackAccount),
         ]
         if scope_owner_id is not None:
             collect_conditions.append(CollectFallbackAccount.owner_id == scope_owner_id)
@@ -296,7 +297,7 @@ class ListingMonitorCategoryService:
         # 检查是否有兜底下单账号配置（仅统计未软删除的，避免历史软删配置永久挡删分类）
         order_conditions = [
             OrderFallbackAccount.category_id == category_id,
-            OrderFallbackAccount.is_deleted.is_(False),
+            not_deleted(OrderFallbackAccount),
         ]
         if scope_owner_id is not None:
             order_conditions.append(OrderFallbackAccount.owner_id == scope_owner_id)
@@ -334,7 +335,7 @@ class ListingMonitorCategoryService:
                 select(ListingMonitorTask.owner_id)
                 .where(
                     ListingMonitorTask.category_id == category_id,
-                    ListingMonitorTask.is_deleted.is_(False),
+                    not_deleted(ListingMonitorTask),
                     ListingMonitorTask.owner_id != operator_id,
                 )
                 .distinct()
@@ -352,7 +353,7 @@ class ListingMonitorCategoryService:
                     select(model.owner_id)
                     .where(
                         model.category_id == category_id,
-                        model.is_deleted.is_(False),
+                        not_deleted(model),
                         model.owner_id != operator_id,
                     )
                     .distinct()

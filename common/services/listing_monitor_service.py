@@ -26,6 +26,7 @@ from common.models.xy_account import XYAccount
 from common.models.user import User
 from common.services.listing_monitor_category_access import ensure_category_accessible
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
+from common.db.query_conditions import not_deleted
 
 # 合法分页大小
 _VALID_PAGE_SIZES = (10, 20, 50, 100)
@@ -481,7 +482,7 @@ class ListingMonitorService:
 
     def _scope_conditions(self, owner_id: Optional[int]) -> list:
         """构造数据隔离与软删除过滤条件。"""
-        conditions = [ListingMonitorTask.is_deleted.is_(False)]
+        conditions = [not_deleted(ListingMonitorTask)]
         if owner_id is not None:
             conditions.append(ListingMonitorTask.owner_id == owner_id)
         return conditions
@@ -535,7 +536,7 @@ class ListingMonitorService:
         today_start = get_beijing_now_naive().replace(hour=0, minute=0, second=0, microsecond=0)
 
         # ---- 任务维度 ----
-        task_cond = [ListingMonitorTask.is_deleted.is_(False)]
+        task_cond = [not_deleted(ListingMonitorTask)]
         if owner_id is not None:
             task_cond.append(ListingMonitorTask.owner_id == owner_id)
         total_tasks = (
@@ -547,7 +548,7 @@ class ListingMonitorService:
             await self.session.execute(
                 select(func.count())
                 .select_from(ListingMonitorTask)
-                .where(*task_cond, ListingMonitorTask.is_enabled.is_(True))
+                .where(*task_cond, ListingMonitorTask.is_enabled == 1)
             )
         ).scalar() or 0
 
@@ -692,7 +693,7 @@ class ListingMonitorService:
         if keyword:
             conditions.append(ListingMonitorTask.keyword.like(f"%{keyword.strip()}%"))
         if is_enabled is not None:
-            conditions.append(ListingMonitorTask.is_enabled.is_(is_enabled))
+            conditions.append(ListingMonitorTask.is_enabled == int(is_enabled))
         # 按分类筛选（category_id 为 None 时不限制）
         if category_id is not None:
             conditions.append(ListingMonitorTask.category_id == category_id)
@@ -1226,7 +1227,7 @@ class ListingMonitorService:
         # 状态语义与列表展示保持一致：
         #   not_sent-未私信 / waiting-等待重试 / pending-已发待确认 / success-私信成功 / failed-私信失败
         if dm_state == "not_sent":
-            conditions.append(ListingMonitorItem.is_dm_sent.is_(False))
+            conditions.append(ListingMonitorItem.is_dm_sent == 0)
             conditions.append(
                 or_(
                     ListingMonitorItem.dm_status.is_(None),
@@ -1235,14 +1236,14 @@ class ListingMonitorService:
             )
         elif dm_state == "waiting":
             # 等待重试：下单账号暂时不可用，已记录原因、未私信、下轮继续重试
-            conditions.append(ListingMonitorItem.is_dm_sent.is_(False))
+            conditions.append(ListingMonitorItem.is_dm_sent == 0)
             conditions.append(ListingMonitorItem.dm_status == "waiting")
         elif dm_state == "success":
             conditions.append(ListingMonitorItem.dm_status == "success")
         elif dm_state == "failed":
             conditions.append(ListingMonitorItem.dm_status == "failed")
         elif dm_state == "pending":
-            conditions.append(ListingMonitorItem.is_dm_sent.is_(True))
+            conditions.append(ListingMonitorItem.is_dm_sent == 1)
             conditions.append(
                 or_(
                     ListingMonitorItem.dm_status.is_(None),
@@ -1250,12 +1251,12 @@ class ListingMonitorService:
                 )
             )
         elif is_dm_sent is not None:
-            conditions.append(ListingMonitorItem.is_dm_sent.is_(is_dm_sent))
+            conditions.append(ListingMonitorItem.is_dm_sent == int(is_dm_sent))
         # 下单状态（优先使用 order_state 多状态筛选；未传时回退旧的 is_ordered 布尔筛选）
         # 状态语义与列表展示保持一致：
         #   not_ordered-未下单 / ordered-已下单 / failed-下单失败 / no_account-无可用账号 / duplicate-重复跳过
         if order_state == "ordered":
-            conditions.append(ListingMonitorItem.is_ordered.is_(True))
+            conditions.append(ListingMonitorItem.is_ordered == 1)
             # 排除"重复跳过"：其同样标记 is_ordered=True，但展示为"重复跳过"而非"已下单"，
             # 故"已下单"筛选需排除 duplicate，与列表徽标语义保持一致
             conditions.append(
@@ -1267,13 +1268,13 @@ class ListingMonitorService:
         elif order_state == "duplicate":
             conditions.append(ListingMonitorItem.order_status == "duplicate")
         elif order_state == "no_account":
-            conditions.append(ListingMonitorItem.is_ordered.is_(False))
+            conditions.append(ListingMonitorItem.is_ordered == 0)
             conditions.append(ListingMonitorItem.order_status == "no_account")
         elif order_state == "failed":
-            conditions.append(ListingMonitorItem.is_ordered.is_(False))
+            conditions.append(ListingMonitorItem.is_ordered == 0)
             conditions.append(ListingMonitorItem.order_status == "failed")
         elif order_state == "not_ordered":
-            conditions.append(ListingMonitorItem.is_ordered.is_(False))
+            conditions.append(ListingMonitorItem.is_ordered == 0)
             conditions.append(
                 or_(
                     ListingMonitorItem.order_status.is_(None),
@@ -1281,7 +1282,7 @@ class ListingMonitorService:
                 )
             )
         elif is_ordered is not None:
-            conditions.append(ListingMonitorItem.is_ordered.is_(is_ordered))
+            conditions.append(ListingMonitorItem.is_ordered == int(is_ordered))
         # 采集时间区间（created_at，北京时间）
         created_start_dt = _parse_naive_datetime(created_start)
         if created_start_dt is not None:

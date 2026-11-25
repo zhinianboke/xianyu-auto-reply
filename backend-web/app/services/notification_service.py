@@ -29,6 +29,7 @@ from app.services.notification_channel_service import (
     NotificationTemplateValidationError,
     NotificationTypeValidationError,
 )
+from common.db.query_conditions import not_deleted
 
 
 class MessageNotificationService:
@@ -76,7 +77,7 @@ class MessageNotificationService:
             select(XYDataDictionary)
             .where(
                 XYDataDictionary.dict_type == NOTIFICATION_TYPE_DICTIONARY,
-                XYDataDictionary.enabled.is_(True),
+                XYDataDictionary.enabled == 1,
                 XYDataDictionary.dict_value.in_(allowed_types),
             )
             .order_by(XYDataDictionary.sort_order.asc(), XYDataDictionary.id.asc())
@@ -111,8 +112,8 @@ class MessageNotificationService:
             .join(XYAccount, XYAccount.id == MessageNotification.account_pk)
             .where(
                 MessageNotification.owner_id == owner_id,
-                MessageNotification.is_deleted.is_(False),
-                NotificationChannel.is_deleted.is_(False),
+                not_deleted(MessageNotification),
+                not_deleted(NotificationChannel),
                 NotificationChannel.owner_id == owner_id,
                 XYAccount.owner_id == owner_id,
             )
@@ -239,7 +240,7 @@ class MessageNotificationService:
         stmt = select(MessageNotification).where(
             MessageNotification.owner_id == owner_id,
             MessageNotification.id == notification_id,
-            MessageNotification.is_deleted.is_(False),
+            not_deleted(MessageNotification),
         )
         subscription = (await self.session.execute(
             stmt.with_for_update().execution_options(populate_existing=True)
@@ -255,7 +256,7 @@ class MessageNotificationService:
         stmt = select(MessageNotification).where(
             MessageNotification.owner_id == owner_id,
             MessageNotification.id == notification_id,
-            MessageNotification.is_deleted.is_(False),
+            not_deleted(MessageNotification),
         )
         result = await self.session.execute(stmt.with_for_update().execution_options(populate_existing=True))
         subscription = result.scalars().first()
@@ -280,7 +281,7 @@ class MessageNotificationService:
         stmt = select(MessageNotification).where(
             MessageNotification.owner_id == owner_id,
             MessageNotification.account_pk == account.id,
-            MessageNotification.is_deleted.is_(False),
+            not_deleted(MessageNotification),
         )
         result = await self.session.execute(stmt.with_for_update().execution_options(populate_existing=True))
         subscriptions = result.scalars().all()
@@ -297,7 +298,7 @@ class MessageNotificationService:
         stmt = select(NotificationChannel).where(
             NotificationChannel.owner_id == owner_id,
             NotificationChannel.id == channel_id,
-            NotificationChannel.is_deleted.is_(False),
+            not_deleted(NotificationChannel),
         )
         result = await self.session.execute(stmt.with_for_update())
         return result.scalars().first()
@@ -313,9 +314,9 @@ class MessageNotificationService:
             .join(XYAccount, XYAccount.id == MessageNotification.account_pk)
             .where(
                 MessageNotification.owner_id == owner_id,
-                MessageNotification.is_deleted.is_(False),
+                not_deleted(MessageNotification),
                 NotificationChannel.enabled.is_(True),
-                NotificationChannel.is_deleted.is_(False),
+                not_deleted(NotificationChannel),
                 NotificationChannel.owner_id == owner_id,
                 XYAccount.owner_id == owner_id,
             )

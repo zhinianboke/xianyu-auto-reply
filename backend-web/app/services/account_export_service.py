@@ -26,6 +26,7 @@ from common.models.default_reply import DefaultReply
 from common.models.xy_catalog_item import XYCatalogItem
 from common.models.confirm_receipt_message import ConfirmReceiptMessage
 from common.models.auto_rate_config import AutoRateConfig
+from common.db.query_conditions import not_deleted
 
 
 def _to_str(value) -> str:
@@ -169,7 +170,7 @@ class AccountExportService:
 
     async def _get_cards(self, user_ids: list[int]) -> list[Card]:
         stmt = select(Card).where(
-            Card.user_id.in_(user_ids), Card.is_deleted.is_(False),
+            Card.user_id.in_(user_ids), not_deleted(Card),
         ).order_by(Card.id.asc())
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
@@ -177,7 +178,7 @@ class AccountExportService:
     async def _get_card_item_relations(self, card_ids: list[int]) -> list[CardItemRelation]:
         stmt = select(CardItemRelation).join(Card, CardItemRelation.card_id == Card.id).where(
             CardItemRelation.card_id.in_(card_ids),
-            CardItemRelation.is_deleted.is_(False),
+            not_deleted(CardItemRelation),
             CardItemRelation.user_id == Card.user_id,
         )
         result = await self.session.execute(stmt)

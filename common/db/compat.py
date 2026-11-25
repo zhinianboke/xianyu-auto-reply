@@ -33,6 +33,7 @@ from common.services.notification_types import resolve_stored_notification_types
 from common.services.card_matcher import CardMatcher
 from common.services.card_consumption_errors import CardConsumptionConfigurationError
 from common.utils.notification_config import parse_notification_config
+from common.db.query_conditions import not_deleted
 
 
 # 线程本地存储，用于缓存每个线程的数据库引擎和会话工厂
@@ -859,7 +860,7 @@ class DBManagerCompat:
         """更新卡券图片URL"""
         async def _update():
             async with async_session_maker() as session:
-                stmt = update(Card).where(Card.id == card_id, Card.is_deleted == False).values(image_url=image_url)
+                stmt = update(Card).where(Card.id == card_id, not_deleted(Card)).values(image_url=image_url)
                 result = await session.execute(stmt)
                 await session.commit()
                 return result.rowcount > 0
@@ -885,7 +886,7 @@ class DBManagerCompat:
         async def _update(session_maker):
             async with session_maker() as session:
                 # 先获取当前的image_urls
-                stmt = select(Card.image_urls).where(Card.id == card_id, Card.is_deleted == False)
+                stmt = select(Card.image_urls).where(Card.id == card_id, not_deleted(Card))
                 result = await session.execute(stmt)
                 current_urls = result.scalar_one_or_none()
                 
@@ -907,7 +908,7 @@ class DBManagerCompat:
                 
                 # 保存回数据库
                 new_urls_json = json.dumps(urls_list, ensure_ascii=False)
-                update_stmt = update(Card).where(Card.id == card_id, Card.is_deleted == False).values(image_urls=new_urls_json)
+                update_stmt = update(Card).where(Card.id == card_id, not_deleted(Card)).values(image_urls=new_urls_json)
                 result = await session.execute(update_stmt)
                 await session.commit()
                 return result.rowcount > 0
@@ -1002,10 +1003,10 @@ class DBManagerCompat:
                 ).where(
                     MessageNotification.account_identifier == cookie_id,
                     MessageNotification.enabled == True,
-                    MessageNotification.is_deleted == False,
+                    not_deleted(MessageNotification),
                     MessageNotification.owner_id == NotificationChannel.owner_id,
                     NotificationChannel.enabled == True,
-                    NotificationChannel.is_deleted == False,
+                    not_deleted(NotificationChannel),
                 ).limit(1)
                 
                 result = await session.execute(stmt)
@@ -1105,10 +1106,10 @@ class DBManagerCompat:
                     MessageNotification.channel_id == NotificationChannel.id
                 ).where(
                     MessageNotification.account_identifier == cookie_id,
-                    MessageNotification.is_deleted == False,
+                    not_deleted(MessageNotification),
                     MessageNotification.owner_id == NotificationChannel.owner_id,
                     NotificationChannel.enabled == True,
-                    NotificationChannel.is_deleted == False,
+                    not_deleted(NotificationChannel),
                 ).order_by(
                     MessageNotification.channel_id,
                     MessageNotification.enabled.desc(),
@@ -1195,7 +1196,7 @@ class DBManagerCompat:
                     stmt = stmt.where(NotificationChannel.owner_id == user_id)
                 stmt = stmt.where(
                     NotificationChannel.enabled == True,
-                    NotificationChannel.is_deleted == False,
+                    not_deleted(NotificationChannel),
                 )
                 
                 result = await session.execute(stmt)
@@ -1232,10 +1233,10 @@ class DBManagerCompat:
                     NotificationChannel,
                     MessageNotification.channel_id == NotificationChannel.id
                 ).where(
-                    MessageNotification.is_deleted == False,
+                    not_deleted(MessageNotification),
                     MessageNotification.owner_id == NotificationChannel.owner_id,
                     NotificationChannel.enabled == True,
-                    NotificationChannel.is_deleted == False,
+                    not_deleted(NotificationChannel),
                 ).order_by(
                     MessageNotification.account_identifier,
                     MessageNotification.channel_id,
@@ -1698,7 +1699,7 @@ class DBManagerCompat:
                     #    并发下只有一个请求能命中（rowcount=1），其余 rowcount=0 重试
                     cas_stmt = (
                         update(Card)
-                        .where(Card.id == card_id, Card.data_content == current_content, Card.is_deleted == False, Card.enabled == True, Card.type == 'data')
+                        .where(Card.id == card_id, Card.data_content == current_content, not_deleted(Card), Card.enabled == True, Card.type == 'data')
                         .values(data_content=new_content)
                     )
                     cas_result = await session.execute(cas_stmt)
@@ -1732,7 +1733,7 @@ class DBManagerCompat:
             async with session_maker() as session:
                 stmt = (
                     update(Card)
-                    .where(Card.id == card_id, Card.is_deleted == False)
+                    .where(Card.id == card_id, not_deleted(Card))
                     .values(delivery_count=Card.delivery_count + 1)
                 )
                 result = await session.execute(stmt)

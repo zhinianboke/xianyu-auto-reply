@@ -10,6 +10,7 @@ from sqlalchemy import select, update
 from common.models.card import Card
 from common.models.xy_account import XYAccount
 from common.utils.response_field import extract_card_api_response_content
+from common.db.query_conditions import not_deleted
 
 
 class CardDeliveryMixin:
@@ -39,7 +40,7 @@ class CardDeliveryMixin:
 
         for _ in range(max_cas_retries):
             # 1. 读取当前卡券内容
-            stmt = select(Card.data_content).where(Card.id == card_id, Card.is_deleted.is_(False))
+            stmt = select(Card.data_content).where(Card.id == card_id, not_deleted(Card))
             result = await self.session.execute(stmt)
             current_content = result.scalar_one_or_none()
 
@@ -60,7 +61,7 @@ class CardDeliveryMixin:
             # 3. CAS 原子替换：仅当 data_content 仍等于刚读取到的旧值时才更新
             cas_stmt = (
                 update(Card)
-                .where(Card.id == card_id, Card.is_deleted.is_(False), Card.data_content == current_content)
+                .where(Card.id == card_id, not_deleted(Card), Card.data_content == current_content)
                 .values(data_content=new_content)
             )
             cas_result = await self.session.execute(cas_stmt)
@@ -85,7 +86,7 @@ class CardDeliveryMixin:
         Returns:
             是否更新成功
         """
-        stmt = select(Card).where(Card.id == card_id, Card.is_deleted.is_(False))
+        stmt = select(Card).where(Card.id == card_id, not_deleted(Card))
         result = await self.session.execute(stmt)
         card = result.scalars().first()
         
@@ -122,7 +123,7 @@ class CardDeliveryMixin:
             # 查找启用的卡券
             stmt = select(Card).where(
                 Card.user_id == account.owner_id,
-                Card.is_deleted.is_(False),
+                not_deleted(Card),
                 Card.enabled == True,
             )
             
@@ -159,7 +160,7 @@ class CardDeliveryMixin:
             是否成功
         """
         try:
-            stmt = select(Card).where(Card.id == card_id, Card.is_deleted.is_(False))
+            stmt = select(Card).where(Card.id == card_id, not_deleted(Card))
             result = await self.session.execute(stmt)
             card = result.scalars().first()
             
@@ -198,7 +199,7 @@ class CardDeliveryMixin:
             卡券内容或None
         """
         try:
-            stmt = select(Card).where(Card.id == card_id, Card.is_deleted.is_(False))
+            stmt = select(Card).where(Card.id == card_id, not_deleted(Card))
             result = await self.session.execute(stmt)
             card = result.scalars().first()
             

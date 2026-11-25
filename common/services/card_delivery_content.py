@@ -30,6 +30,7 @@ from common.services.delivery_utils import (
     replace_order_context_variables,
 )
 from common.utils.response_field import extract_card_api_response_content
+from common.db.query_conditions import not_deleted
 
 # API 取卡最大重试次数
 _API_MAX_RETRIES = 4
@@ -51,7 +52,7 @@ async def consume_batch_data(session: AsyncSession, card_id: int) -> Optional[st
     Returns:
         消费的数据内容；无数据时返回 None
     """
-    stmt = select(Card).where(Card.id == card_id, Card.is_deleted == False, Card.enabled == True).with_for_update()
+    stmt = select(Card).where(Card.id == card_id, not_deleted(Card), Card.enabled == True).with_for_update()
     result = await session.execute(stmt)
     card = result.scalars().first()
 

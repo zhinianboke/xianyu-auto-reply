@@ -16,6 +16,7 @@ from common.models.scheduled_cookies_refresh_log import ScheduledCookiesRefreshL
 from common.models.user import User
 
 from common.utils.time_utils import safe_isoformat
+from common.utils.date_filters import date_filter_bounds
 router = APIRouter(tags=["COOKIES刷新日志"])
 
 
@@ -29,7 +30,6 @@ async def list_cookies_refresh_batches(
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> dict:
     """获取COOKIES刷新执行批次列表。"""
-    from datetime import datetime
 
     base_query = select(
         ScheduledCookiesRefreshLog.batch_id,
@@ -40,35 +40,15 @@ async def list_cookies_refresh_batches(
         func.sum(case((ScheduledCookiesRefreshLog.status == "failed", 1), else_=0)).label("failed_count"),
     ).group_by(ScheduledCookiesRefreshLog.batch_id)
 
-    if start_date:
-        try:
-            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-            base_query = base_query.having(func.min(ScheduledCookiesRefreshLog.created_at) >= start_dt)
-        except ValueError:
-            return {
-                "success": False,
-                "message": "开始日期格式错误，应为 YYYY-MM-DD",
-                "data": [],
-                "total": 0,
-                "page": page,
-                "page_size": page_size,
-                "total_pages": 0,
-            }
+    try:
+        start_dt, end_dt = date_filter_bounds(start_date, end_date)
+    except ValueError as exc:
+        return {"success": False, "code": 40001, "message": str(exc), "data": None}
 
-    if end_date:
-        try:
-            end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
-            base_query = base_query.having(func.min(ScheduledCookiesRefreshLog.created_at) <= end_dt)
-        except ValueError:
-            return {
-                "success": False,
-                "message": "结束日期格式错误，应为 YYYY-MM-DD",
-                "data": [],
-                "total": 0,
-                "page": page,
-                "page_size": page_size,
-                "total_pages": 0,
-            }
+    if start_dt is not None:
+        base_query = base_query.having(func.min(ScheduledCookiesRefreshLog.created_at) >= start_dt)
+    if end_dt is not None:
+        base_query = base_query.having(func.min(ScheduledCookiesRefreshLog.created_at) < end_dt)
 
     total = (await session.execute(select(func.count()).select_from(base_query.subquery()))).scalar() or 0
     offset = (page - 1) * page_size

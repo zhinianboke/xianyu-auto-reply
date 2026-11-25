@@ -11,6 +11,7 @@ from common.models.card_item_relation import CardItemRelation
 from common.services.card_access import (
     CardAccess, CardAccessError, preserved_card_item_ids, relation_access_condition,
 )
+from common.db.query_conditions import not_deleted
 
 
 class CardRelations:
@@ -22,7 +23,7 @@ class CardRelations:
             CardItemRelation.item_id.in_(item_ids), CardItemRelation.user_id == user_id,
         )
         legacy_stmt = select(Card.id).where(
-            Card.user_id == user_id, Card.is_deleted.is_(False), Card.item_id.in_(item_ids),
+            Card.user_id == user_id, not_deleted(Card), Card.item_id.in_(item_ids),
         )
         if card_id is not None:
             relation_stmt = relation_stmt.where(CardItemRelation.card_id == card_id)
@@ -54,7 +55,7 @@ class CardRelations:
         """获取授权卡券的本人有效关联；管理员可读取该卡所有关联。"""
         card = (await CardAccess(self.session).require_cards([card_id], user_id))[0]
         stmt = select(CardItemRelation.item_id).join(Card, Card.id == CardItemRelation.card_id).where(
-            CardItemRelation.card_id == card_id, CardItemRelation.is_deleted.is_(False),
+            CardItemRelation.card_id == card_id, not_deleted(CardItemRelation),
             relation_access_condition(),
         )
         if user_id is not None:
@@ -83,7 +84,7 @@ class CardRelations:
         # 只重读已持锁的请求卡券，不能在关系锁之后发现并追加其他卡券锁。
         # 使用当前锁读避免 MySQL 快照遗漏等待卡锁期间已提交的墓碑。
         cards = (await self.session.execute(select(Card.id, Card.item_id).where(
-            Card.id.in_(own_ids), Card.user_id == user_id, Card.is_deleted.is_(False),
+            Card.id.in_(own_ids), Card.user_id == user_id, not_deleted(Card),
         ).order_by(Card.id).with_for_update())).all()
         history_ids = set((await self.session.execute(select(CardItemRelation.card_id).where(
             CardItemRelation.card_id.in_(own_ids), CardItemRelation.user_id == user_id,
@@ -232,13 +233,13 @@ class CardRelations:
         """所有者确认删除卡券后软删除所有关联，包含分销商关联。"""
         await CardAccess(self.session).require_cards([card_id], user_id, lock=True)
         result = await self.session.execute(update(CardItemRelation).where(
-            CardItemRelation.card_id == card_id, CardItemRelation.is_deleted.is_(False),
+            CardItemRelation.card_id == card_id, not_deleted(CardItemRelation),
         ).values(is_deleted=True))
         return result.rowcount
 
     async def _clear_legacy(self, item_ids, user_id: int, card_id=None, *, locked_card_ids) -> int:
         """仅清除预先锁定的本人旧绑定，避免关系持锁后宽更新取得未知卡券锁。"""
-        stmt = update(Card).where(Card.user_id == user_id, Card.is_deleted.is_(False), Card.item_id.in_(item_ids))
+        stmt = update(Card).where(Card.user_id == user_id, not_deleted(Card), Card.item_id.in_(item_ids))
         stmt = stmt.where(Card.id.in_(locked_card_ids))
         if card_id is not None:
             stmt = stmt.where(Card.id == card_id)
@@ -256,7 +257,7 @@ class CardRelations:
         await self._lock_item_relations([item_id], user_id, locked_card_ids, card_id=card_id)
         result = await self.session.execute(update(CardItemRelation).where(
             CardItemRelation.card_id == card_id, CardItemRelation.item_id == item_id,
-            CardItemRelation.user_id == user_id, CardItemRelation.is_deleted.is_(False),
+            CardItemRelation.user_id == user_id, not_deleted(CardItemRelation),
         ).values(is_deleted=True))
         legacy_removed = await self._clear_legacy(
             [item_id], user_id, card_id, locked_card_ids=locked_card_ids,
@@ -275,7 +276,7 @@ class CardRelations:
         await self._lock_item_relations(ids, user_id, locked_card_ids)
         result = await self.session.execute(update(CardItemRelation).where(
             CardItemRelation.item_id.in_(ids), CardItemRelation.user_id == user_id,
-            CardItemRelation.is_deleted.is_(False),
+            not_deleted(CardItemRelation),
         ).values(is_deleted=True))
         legacy_removed = await self._clear_legacy(ids, user_id, locked_card_ids=locked_card_ids)
         await self.session.flush()

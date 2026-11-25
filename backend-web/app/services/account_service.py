@@ -152,15 +152,15 @@ class AccountService:
         
         # 定时补发货筛选
         if scheduled_redelivery is not None:
-            conditions.append(XYAccount.scheduled_redelivery == scheduled_redelivery)
+            conditions.append(XYAccount.scheduled_redelivery == int(scheduled_redelivery))
         
         # 定时补评价筛选
         if scheduled_rate is not None:
-            conditions.append(XYAccount.scheduled_rate == scheduled_rate)
+            conditions.append(XYAccount.scheduled_rate == int(scheduled_rate))
         
         # 商品擦亮筛选
         if auto_polish is not None:
-            conditions.append(XYAccount.auto_polish == auto_polish)
+            conditions.append(XYAccount.auto_polish == int(auto_polish))
         
         # 自动确认收货筛选
         if auto_confirm is not None:

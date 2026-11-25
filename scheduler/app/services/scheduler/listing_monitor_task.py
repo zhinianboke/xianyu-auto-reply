@@ -46,6 +46,7 @@ from common.services.xianyu_detail_client import XianyuItemDetailClient
 from common.services.xianyu_search_client import XianyuSearchClient, parse_search_item
 from common.utils.cookie_refresh import merge_cookies, update_account_cookies_in_db
 from common.utils.time_utils import BEIJING_TZ, get_beijing_now_naive
+from common.db.query_conditions import not_deleted
 
 # 监控类型 -> (sortField, sortValue)
 _MONITOR_SORT_MAP = {
@@ -179,8 +180,8 @@ class ListingMonitorTaskService:
                     await session.execute(
                         select(ListingMonitorTask).where(
                             ListingMonitorTask.id == task_id,
-                            ListingMonitorTask.is_deleted.is_(False),
-                            ListingMonitorTask.is_enabled.is_(True),
+                            not_deleted(ListingMonitorTask),
+                            ListingMonitorTask.is_enabled == 1,
                         )
                     )
                 ).scalar_one_or_none()
@@ -209,8 +210,8 @@ class ListingMonitorTaskService:
         """读取所有启用、未删除的监控任务。"""
         async with async_session_maker() as session:
             stmt = select(ListingMonitorTask).where(
-                ListingMonitorTask.is_deleted.is_(False),
-                ListingMonitorTask.is_enabled.is_(True),
+                not_deleted(ListingMonitorTask),
+                ListingMonitorTask.is_enabled == 1,
             )
             result = await session.execute(stmt)
             return list(result.scalars().all())

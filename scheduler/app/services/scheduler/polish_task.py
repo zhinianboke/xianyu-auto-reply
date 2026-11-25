@@ -129,7 +129,7 @@ class PolishTaskService:
         """
         stmt = select(XYAccount).where(
             XYAccount.status == "active",
-            XYAccount.auto_polish == True,
+            XYAccount.auto_polish == 1,
         )
         result = await session.execute(stmt)
         return list(result.scalars().all())

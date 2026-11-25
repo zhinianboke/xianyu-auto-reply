@@ -8,28 +8,16 @@ Token 续期日志路由模块。
 """
 from __future__ import annotations
 
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.services.scheduled_batch_log_service import ScheduledBatchLogService
 from common.models.user import User
+from common.utils.date_filters import date_filter_bounds
 
 
 router = APIRouter(tags=["Token续期日志"])
-
-
-def _invalid_date_message(value: str | None, label: str) -> str | None:
-    """校验查询日期并返回中文错误信息。"""
-    if not value:
-        return None
-    try:
-        datetime.strptime(value, "%Y-%m-%d")
-    except ValueError:
-        return f"{label}格式错误，应为 YYYY-MM-DD"
-    return None
 
 
 @router.get("/token-renewal-batches")
@@ -56,15 +44,13 @@ async def list_token_renewal_batches(
             "data": None,
         }
 
-    date_error = _invalid_date_message(start_date, "开始日期") or _invalid_date_message(
-        end_date,
-        "结束日期",
-    )
-    if date_error:
+    try:
+        date_filter_bounds(start_date, end_date)
+    except ValueError as exc:
         return {
             "success": False,
             "code": 40001,
-            "message": date_error,
+            "message": str(exc),
             "data": None,
         }
 

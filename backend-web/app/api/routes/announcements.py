@@ -26,6 +26,7 @@ from app.services.remote_content_service import (
 
 from common.utils.time_utils import safe_isoformat
 from common.utils.pagination import execute_paginated_with_filters
+from common.db.query_conditions import not_deleted
 router = APIRouter(tags=["announcements"])
 
 # 顶部公告展示的最大条数
@@ -71,7 +72,7 @@ async def get_public_announcements(
     # 查询本地最新公告（过滤已删除）
     result = await db.execute(
         select(Announcement)
-        .where(Announcement.is_deleted == False)
+        .where(not_deleted(Announcement))
         .order_by(desc(Announcement.created_at))
         .limit(_PUBLIC_ANNOUNCEMENT_LIMIT)
     )
@@ -103,7 +104,7 @@ async def get_announcements(
     """获取公告列表（按创建时间倒序，过滤已删除）"""
     announcements, total = await execute_paginated_with_filters(
         db, Announcement,
-        filters=[Announcement.is_deleted == False],
+        filters=[not_deleted(Announcement)],
         order_by=[desc(Announcement.created_at)],
         page=page, page_size=page_size,
     )
@@ -163,7 +164,7 @@ async def update_announcement(
     result = await db.execute(
         select(Announcement).where(
             Announcement.id == announcement_id,
-            Announcement.is_deleted == False
+            not_deleted(Announcement)
         )
     )
     announcement = result.scalar_one_or_none()
@@ -195,7 +196,7 @@ async def delete_announcement(
     result = await db.execute(
         select(Announcement).where(
             Announcement.id == announcement_id,
-            Announcement.is_deleted == False
+            not_deleted(Announcement)
         )
     )
     announcement = result.scalar_one_or_none()

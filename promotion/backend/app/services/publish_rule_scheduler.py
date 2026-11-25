@@ -292,7 +292,7 @@ async def _execute_all_publish_rules():
 
         # 用短会话加载所有启用的规则基本信息，避免长时间持有数据库连接
         async with async_session_maker() as session:
-            stmt = select(FYPublishRule).where(FYPublishRule.enabled == True)
+            stmt = select(FYPublishRule).where(FYPublishRule.enabled == 1)
             result = await session.execute(stmt)
             rules = result.scalars().all()
             if not rules:

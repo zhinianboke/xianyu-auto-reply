@@ -20,6 +20,7 @@ from common.models.product_material import ProductMaterial
 from common.models.scheduled_publish_rule import ScheduledPublishRule
 from common.models.xy_account import XYAccount
 from common.utils.time_utils import get_beijing_now_naive
+from common.db.query_conditions import not_deleted
 
 
 IN_QUERY_CHUNK_SIZE = 1000
@@ -66,7 +67,7 @@ class ScheduledPublishRuleService:
             )
             .where(
                 ProductMaterial.user_id == owner_id,
-                ProductMaterial.is_deleted.is_(False),
+                not_deleted(ProductMaterial),
             )
             .order_by(desc(ProductMaterial.created_at))
         )
@@ -162,7 +163,7 @@ class ScheduledPublishRuleService:
             select(ScheduledPublishRule).where(
                 ScheduledPublishRule.id == rule_id,
                 ScheduledPublishRule.owner_id == owner_id,
-                ScheduledPublishRule.is_deleted.is_(False),
+                not_deleted(ScheduledPublishRule),
             )
         )
         rule = result.scalar_one_or_none()
@@ -208,7 +209,7 @@ class ScheduledPublishRuleService:
         page_size = page_size if page_size in (10, 20, 50, 100) else 20
         conditions = [
             ScheduledPublishRule.owner_id == owner_id,
-            ScheduledPublishRule.is_deleted.is_(False),
+            not_deleted(ScheduledPublishRule),
         ]
         normalized_keyword = (keyword or "").strip()
         if normalized_keyword:
@@ -266,7 +267,7 @@ class ScheduledPublishRuleService:
             material_stmt = select(ProductMaterial.id).where(
                 ProductMaterial.user_id == owner_id,
                 ProductMaterial.id.in_(id_chunk),
-                ProductMaterial.is_deleted.is_(False),
+                not_deleted(ProductMaterial),
             )
             owned_materials.update((await self.session.execute(material_stmt)).scalars().all())
         if owned_materials != set(material_ids):

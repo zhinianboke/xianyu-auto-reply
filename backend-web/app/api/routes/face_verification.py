@@ -9,7 +9,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, desc
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Optional
 from pathlib import Path
 import os
@@ -22,6 +22,7 @@ from common.schemas.common import ApiResponse
 from loguru import logger
 
 from common.utils.time_utils import safe_isoformat
+from common.utils.date_filters import date_range_conditions
 router = APIRouter(prefix="/face-verification", tags=["人脸验证管理"])
 
 
@@ -59,6 +60,14 @@ async def get_face_verification_notifications(
         conditions = [
             Notification.type == "face_verification"
         ]
+        try:
+            conditions.extend(date_range_conditions(Notification.created_at, start_date, end_date))
+        except ValueError as exc:
+            return ApiResponse(
+                success=False,
+                message=str(exc),
+                data=None
+            )
 
         # 非管理员仅能查看自己名下账号的人脸验证通知
         if not _is_admin(current_user):
@@ -82,28 +91,6 @@ async def get_face_verification_notifications(
 
         if account_id:
             conditions.append(Notification.cookie_id == account_id)
-        
-        if start_date:
-            try:
-                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-                conditions.append(Notification.created_at >= start_dt)
-            except ValueError:
-                return ApiResponse(
-                    success=False,
-                    message="开始日期格式错误，应为 YYYY-MM-DD",
-                    data=None
-                )
-        
-        if end_date:
-            try:
-                end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
-                conditions.append(Notification.created_at < end_dt)
-            except ValueError:
-                return ApiResponse(
-                    success=False,
-                    message="结束日期格式错误，应为 YYYY-MM-DD",
-                    data=None
-                )
         
         # 查询总数
         count_query = select(Notification).where(and_(*conditions))

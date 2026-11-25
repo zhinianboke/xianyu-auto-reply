@@ -22,6 +22,9 @@ from common.models.scheduled_token_renewal_log import ScheduledTokenRenewalLog
 
 
 from common.utils.time_utils import safe_isoformat
+from common.utils.date_filters import date_filter_bounds
+
+
 class ScheduledBatchLogService:
     """统一处理定时批次日志的列表与详情查询。"""
 
@@ -30,24 +33,13 @@ class ScheduledBatchLogService:
 
     @staticmethod
     def _parse_start_date(value: str | None) -> datetime | None:
-        """解析开始日期，格式错误时返回空。"""
-        if not value:
-            return None
-        try:
-            return datetime.strptime(value, "%Y-%m-%d")
-        except ValueError:
-            return None
+        """复用公共日期边界；开始日期取当天零点，非法参数明确报错。"""
+        return date_filter_bounds(value, None)[0]
 
     @staticmethod
     def _parse_end_date(value: str | None) -> datetime | None:
-        """解析结束日期，格式错误时返回空，并补齐到当天结束时间。"""
-        if not value:
-            return None
-        try:
-            parsed = datetime.strptime(value, "%Y-%m-%d")
-            return parsed.replace(hour=23, minute=59, second=59)
-        except ValueError:
-            return None
+        """复用公共日期边界；结束日期取次日零点，非法参数明确报错。"""
+        return date_filter_bounds(None, value)[1]
 
     def _build_candidate_batch_ids_subquery(
         self,
@@ -61,7 +53,7 @@ class ScheduledBatchLogService:
         if start_dt is not None:
             stmt = stmt.where(model.created_at >= start_dt)
         if end_dt is not None:
-            stmt = stmt.where(model.created_at <= end_dt)
+            stmt = stmt.where(model.created_at < end_dt)
         return stmt.subquery()
 
     def _build_summary_subquery(
@@ -97,7 +89,7 @@ class ScheduledBatchLogService:
         if start_dt is not None:
             stmt = stmt.where(summary_subquery.c.executed_at >= start_dt)
         if end_dt is not None:
-            stmt = stmt.where(summary_subquery.c.executed_at <= end_dt)
+            stmt = stmt.where(summary_subquery.c.executed_at < end_dt)
         return stmt
 
     async def _count_summary_rows(
@@ -124,8 +116,7 @@ class ScheduledBatchLogService:
         total_key: str,
     ) -> tuple[list[dict[str, Any]], int]:
         """统一分页查询批次列表。"""
-        start_dt = self._parse_start_date(start_date)
-        end_dt = self._parse_end_date(end_date)
+        start_dt, end_dt = date_filter_bounds(start_date, end_date)
         offset = (page - 1) * page_size
 
         summary_subquery = self._build_summary_subquery(

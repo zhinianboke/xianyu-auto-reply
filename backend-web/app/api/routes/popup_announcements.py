@@ -27,6 +27,7 @@ from app.services.remote_content_service import (
     fetch_remote_public_popup_announcements,
     is_remote_fetch_request,
 )
+from common.db.query_conditions import not_deleted
 
 router = APIRouter(tags=["popup_announcements"])
 
@@ -80,8 +81,8 @@ async def get_public_popup_announcements(
     result = await db.execute(
         select(PopupAnnouncement)
         .where(
-            PopupAnnouncement.is_deleted == False,
-            PopupAnnouncement.is_enabled == True,
+            not_deleted(PopupAnnouncement),
+            PopupAnnouncement.is_enabled == 1,
         )
         .order_by(desc(PopupAnnouncement.created_at))
         .limit(_PUBLIC_POPUP_LIMIT)
@@ -114,7 +115,7 @@ async def get_popup_announcements(
     """获取弹窗公告列表（管理员，按创建时间倒序，过滤已删除）"""
     items, total = await execute_paginated_with_filters(
         db, PopupAnnouncement,
-        filters=[PopupAnnouncement.is_deleted == False],
+        filters=[not_deleted(PopupAnnouncement)],
         order_by=[desc(PopupAnnouncement.created_at)],
         page=page, page_size=page_size,
     )
@@ -168,7 +169,7 @@ async def update_popup_announcement(
     result = await db.execute(
         select(PopupAnnouncement).where(
             PopupAnnouncement.id == popup_id,
-            PopupAnnouncement.is_deleted == False,
+            not_deleted(PopupAnnouncement),
         )
     )
     item = result.scalar_one_or_none()
@@ -201,7 +202,7 @@ async def toggle_popup_announcement(
     result = await db.execute(
         select(PopupAnnouncement).where(
             PopupAnnouncement.id == popup_id,
-            PopupAnnouncement.is_deleted == False,
+            not_deleted(PopupAnnouncement),
         )
     )
     item = result.scalar_one_or_none()
@@ -229,7 +230,7 @@ async def delete_popup_announcement(
     result = await db.execute(
         select(PopupAnnouncement).where(
             PopupAnnouncement.id == popup_id,
-            PopupAnnouncement.is_deleted == False,
+            not_deleted(PopupAnnouncement),
         )
     )
     item = result.scalar_one_or_none()

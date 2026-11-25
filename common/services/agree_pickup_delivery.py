@@ -27,6 +27,7 @@ from common.services.card_delivery_content import build_delivery_content
 from common.services.card_matcher import CardMatcher
 from common.services.delivery_utils import CARD_SOURCE_PRIORITY, group_cards_by_source
 from common.utils.time_utils import get_beijing_now_naive
+from common.db.query_conditions import not_deleted
 
 # 同意后发货落库时「不覆盖为 shipped」的订单状态：终态 + 退款中。
 # 这些状态代表平台侧更真实的最终结果，覆盖会丢失信息（与 order_service 的终态语义保持一致）。
@@ -133,7 +134,7 @@ async def consume_card_and_record(
         card = (
             await session.execute(select(Card).where(
                 Card.id == card_id, Card.user_id == order.owner_id,
-                Card.is_deleted == False, Card.enabled == True,
+                not_deleted(Card), Card.enabled == True,
             ))
         ).scalars().first()
         if not card:

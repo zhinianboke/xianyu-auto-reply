@@ -25,7 +25,7 @@ class AutoRelistDiscoveryMixin:
             rules = (
                 await session.execute(
                     select(AutoRelistRule).where(
-                        AutoRelistRule.enabled.is_(True),
+                        AutoRelistRule.enabled == 1,
                         AutoRelistRule.status.notin_(["error", "paused"]),
                     )
                 )
@@ -70,7 +70,7 @@ class AutoRelistDiscoveryMixin:
                             ~XYOrder.delivery_content.op("regexp")(r"^[[:space:]]*$"),
                         ),
                         and_(
-                            XYOrder.card_only_delivered.is_(True),
+                            XYOrder.card_only_delivered == 1,
                             XYOrder.delivery_method.in_(["auto", "scheduled"]),
                             XYOrder.delivery_content.is_not(None),
                             XYOrder.delivery_content != "",
@@ -176,7 +176,7 @@ class AutoRelistDiscoveryMixin:
                     .where(
                         AutoRelistRule.id == event.rule_id,
                         AutoRelistRule.user_id == event.user_id,
-                        AutoRelistRule.enabled.is_(True),
+                        AutoRelistRule.enabled == 1,
                     )
                     .values(
                         status="retrying",

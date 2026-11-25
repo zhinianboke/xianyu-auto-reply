@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.ai_listing_config import AiListingConfig
 from common.utils.time_utils import safe_isoformat
+from common.db.query_conditions import not_deleted
 
 # 分页大小白名单，与素材库列表保持一致
 ALLOWED_PAGE_SIZES = (10, 20, 50, 100)
@@ -126,7 +127,7 @@ class AiListingConfigService:
 
         conditions = [
             AiListingConfig.owner_id == owner_id,
-            AiListingConfig.is_deleted.is_(False),
+            not_deleted(AiListingConfig),
         ]
         if name:
             conditions.append(AiListingConfig.name.ilike(f"%{name}%"))
@@ -165,7 +166,7 @@ class AiListingConfigService:
             select(AiListingConfig).where(
                 AiListingConfig.id == config_id,
                 AiListingConfig.owner_id == owner_id,
-                AiListingConfig.is_deleted.is_(False),
+                not_deleted(AiListingConfig),
             )
         )
         return result.scalar_one_or_none()

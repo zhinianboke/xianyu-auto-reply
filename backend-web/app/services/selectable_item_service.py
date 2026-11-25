@@ -20,6 +20,7 @@ from common.db.retry import with_db_retry
 from common.models.card_item_relation import CardItemRelation
 from common.models.xy_catalog_item import XYCatalogItem
 from common.services.card_access import CardAccess
+from common.db.query_conditions import not_deleted
 
 
 class SelectableItemService:
@@ -112,7 +113,7 @@ class SelectableItemService:
         await CardAccess(self.session).require_cards([card_id], owner_id)
         relation_stmt = select(CardItemRelation.item_id).where(
             CardItemRelation.card_id == card_id,
-            CardItemRelation.is_deleted.is_(False),
+            not_deleted(CardItemRelation),
         )
         if owner_id is not None:
             relation_stmt = relation_stmt.where(CardItemRelation.user_id == owner_id)

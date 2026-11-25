@@ -163,7 +163,7 @@ class RedFlowerTask:
         """
         stmt = select(XYAccount).where(
             XYAccount.status == "active",
-            XYAccount.auto_red_flower == True,
+            XYAccount.auto_red_flower == 1,
         )
         result = await session.execute(stmt)
         return list(result.scalars().all())

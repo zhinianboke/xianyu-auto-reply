@@ -9,6 +9,8 @@ from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from common.db.base_class import Base
+from common.db.query_conditions import not_deleted
+from common.models.card_item_relation import CardItemRelation
 
 
 class Card(Base):
@@ -71,7 +73,7 @@ class Card(Base):
     # 多对多关联关系 - 通过 xy_card_item_relations 表关联商品
     item_relations = relationship(
         "CardItemRelation",
-        primaryjoin="and_(Card.id == CardItemRelation.card_id, CardItemRelation.is_deleted == False)",
+        primaryjoin=lambda: (Card.id == CardItemRelation.card_id) & not_deleted(CardItemRelation),
         foreign_keys="[CardItemRelation.card_id]",
         viewonly=True,
         lazy="select",

@@ -26,6 +26,7 @@ from common.models.user import User, UserRole
 from common.models.xy_account import XYAccount
 from common.services.listing_monitor_category_access import ensure_category_accessible
 from common.utils.time_utils import safe_isoformat
+from common.db.query_conditions import not_deleted
 
 
 class CollectFallbackAccountService:
@@ -42,7 +43,7 @@ class CollectFallbackAccountService:
         - 普通用户：仅返回本人配置；
         - 管理员：返回全部用户的配置，并附带所属用户名（owner_username）便于区分。
         """
-        conditions = [CollectFallbackAccount.is_deleted.is_(False)]
+        conditions = [not_deleted(CollectFallbackAccount)]
         if not is_admin:
             conditions.append(CollectFallbackAccount.owner_id == owner_id)
         stmt = (
@@ -175,7 +176,7 @@ class CollectFallbackAccountService:
         else:
             conditions.append(CollectFallbackAccount.category_id == category_id)
         if not include_deleted:
-            conditions.append(CollectFallbackAccount.is_deleted.is_(False))
+            conditions.append(not_deleted(CollectFallbackAccount))
         # MySQL 唯一键对 category_id=NULL 不去重，并发新建"无分类"可能产生多条记录；
         # 这里按（未删除优先、id 升序）取最早一条复用，避免 scalar_one_or_none 抛 MultipleResultsFound
         stmt = (
@@ -197,7 +198,7 @@ class CollectFallbackAccountService:
         admin_ids_subq = select(User.id).where(User.role == UserRole.ADMIN)
         conditions = [
             CollectFallbackAccount.owner_id.in_(admin_ids_subq),
-            CollectFallbackAccount.is_deleted.is_(False),
+            not_deleted(CollectFallbackAccount),
         ]
         if category_id is None:
             conditions.append(CollectFallbackAccount.category_id.is_(None))

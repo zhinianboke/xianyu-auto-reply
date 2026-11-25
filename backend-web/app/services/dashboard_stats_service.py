@@ -28,6 +28,7 @@ from common.models.xy_account import XYAccount
 from common.models.xy_keyword_rule import XYKeywordRule
 from common.models.xy_order import XYOrder
 from common.services.account_limit_service import AccountLimitService
+from common.db.query_conditions import not_deleted
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +185,7 @@ class DashboardStatsService:
         ).select_from(XYOrder)
         orders_row = (await self.session.execute(orders_stmt)).one()
 
-        cards_stmt = select(func.count()).select_from(Card).where(Card.is_deleted.is_(False))
+        cards_stmt = select(func.count()).select_from(Card).where(not_deleted(Card))
         total_cards = int((await self.session.execute(cards_stmt)).scalar() or 0)
 
         reply_stats = await AutoReplyStatsService(self.session).get_today_and_yesterday_success_reply_counts()

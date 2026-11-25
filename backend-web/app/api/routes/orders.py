@@ -89,20 +89,23 @@ async def list_orders(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账号不存在")
 
     # 管理员查看所有订单，普通用户只看自己的
-    orders, total, item_titles = await order_service.list_orders(
-        owner_id,
-        account_id=cookie_id,
-        status=status_filter,
-        search=search,
-        delivery_method=delivery_method,
-        is_bargain=is_bargain,
-        is_rated=is_rated,
-        start_date=start_date,
-        end_date=end_date,
-        delivery_send_status=delivery_send_status,
-        page=page,
-        page_size=page_size,
-    )
+    try:
+        orders, total, item_titles = await order_service.list_orders(
+            owner_id,
+            account_id=cookie_id,
+            status=status_filter,
+            search=search,
+            delivery_method=delivery_method,
+            is_bargain=is_bargain,
+            is_rated=is_rated,
+            start_date=start_date,
+            end_date=end_date,
+            delivery_send_status=delivery_send_status,
+            page=page,
+            page_size=page_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # 批量查询哪些订单是代销订单
     from sqlalchemy import select as sa_select

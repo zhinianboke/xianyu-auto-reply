@@ -164,7 +164,7 @@ class PublishAddressService:
 
         stmt = select(PublishAddress).where(
             PublishAddress.id.in_(normalized_ids),
-            PublishAddress.is_enabled.is_(True),
+            PublishAddress.is_enabled == 1,
         )
         addresses = (await self.session.execute(stmt)).scalars().all()
         for address in addresses:
@@ -194,7 +194,7 @@ class PublishAddressService:
     async def _list_enabled_addresses(self, account_id: str | None) -> List[PublishAddress]:
         stmt = (
             select(PublishAddress)
-            .where(PublishAddress.is_enabled.is_(True))
+            .where(PublishAddress.is_enabled == 1)
             .order_by(desc(PublishAddress.updated_at), desc(PublishAddress.id))
         )
         return (await self.session.execute(stmt)).scalars().all()
@@ -312,7 +312,7 @@ class PublishAddressService:
         is_enabled: bool | None,
     ) -> List[Any]:
         normalized_is_enabled = True if is_enabled is None else bool(is_enabled)
-        conditions: List[Any] = [PublishAddress.is_enabled.is_(normalized_is_enabled)]
+        conditions: List[Any] = [PublishAddress.is_enabled == int(normalized_is_enabled)]
         normalized_keyword = self._normalize_optional_text(keyword)
         if normalized_keyword:
             keyword_like = f"%{normalized_keyword}%"

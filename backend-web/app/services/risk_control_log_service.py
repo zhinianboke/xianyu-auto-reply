@@ -10,7 +10,6 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select, func, case, and_, or_, update
@@ -22,6 +21,7 @@ from common.utils.pagination import execute_paginated_with_filters
 
 
 from common.utils.time_utils import safe_isoformat, get_beijing_now_naive
+from common.utils.date_filters import date_range_conditions, next_day_start
 class RiskControlLogService:
     """Access to risk control logs."""
 
@@ -137,21 +137,8 @@ class RiskControlLogService:
         if account_identifier:
             filters.append(XYRiskControlLog.account_identifier == account_identifier)
 
-        # 时间范围筛选（格式错误时静默跳过，与原逻辑一致）
-        if start_date:
-            try:
-                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-                filters.append(XYRiskControlLog.created_at >= start_dt)
-            except ValueError:
-                pass
-
-        if end_date:
-            try:
-                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-                end_dt = end_dt.replace(hour=23, minute=59, second=59)
-                filters.append(XYRiskControlLog.created_at <= end_dt)
-            except ValueError:
-                pass
+        # 北京时间日期范围：校验后共同应用于列表和总数。
+        filters.extend(date_range_conditions(XYRiskControlLog.created_at, start_date, end_date))
 
         # 处理状态筛选
         if processing_status:
@@ -222,12 +209,12 @@ class RiskControlLogService:
         """
         now = get_beijing_now_naive()
         start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_dt = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        end_dt = next_day_start(now)
 
         # 当日范围过滤条件（仅限定当天与所有者，处理中状态在各聚合中单独区分）
         day_filters = [
             XYRiskControlLog.created_at >= start_dt,
-            XYRiskControlLog.created_at <= end_dt,
+            XYRiskControlLog.created_at < end_dt,
             XYRiskControlLog.event_type == "slider_captcha",
         ]
         if owner_id is not None:

@@ -25,6 +25,7 @@ from common.models.scheduled_publish_rule import ScheduledPublishRule
 from common.models.scheduled_publish_trigger import ScheduledPublishTrigger
 from common.models.xy_account import XYAccount
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
+from common.db.query_conditions import not_deleted
 
 
 PUBLISH_RESULT_DICTIONARY = "scheduled_publish_result"
@@ -127,7 +128,7 @@ class ScheduledPublishRecordService:
         conditions = [
             ScheduledPublishTrigger.owner_id == owner_id,
             ScheduledPublishTrigger.rule_id == rule_id,
-            ScheduledPublishTrigger.is_deleted.is_(False),
+            not_deleted(ScheduledPublishTrigger),
         ]
         total = (
             await self.session.execute(
@@ -202,7 +203,7 @@ class ScheduledPublishRecordService:
                     ScheduledPublishTrigger.owner_id == owner_id,
                     ScheduledPublishTrigger.rule_id == rule_id,
                     ScheduledPublishTrigger.id.in_(normalized_ids),
-                    ScheduledPublishTrigger.is_deleted.is_(False),
+                    not_deleted(ScheduledPublishTrigger),
                 )
                 .with_for_update()
             )
@@ -230,7 +231,7 @@ class ScheduledPublishRecordService:
             select(ScheduledPublishRule.id).where(
                 ScheduledPublishRule.id == rule_id,
                 ScheduledPublishRule.owner_id == owner_id,
-                ScheduledPublishRule.is_deleted.is_(False),
+                not_deleted(ScheduledPublishRule),
             )
         )
         if exists_result.scalar_one_or_none() is None:
@@ -277,7 +278,7 @@ class ScheduledPublishRecordService:
             await self.session.execute(
                 select(XYDataDictionary.dict_value, XYDataDictionary.dict_label).where(
                     XYDataDictionary.dict_type == PUBLISH_RESULT_DICTIONARY,
-                    XYDataDictionary.enabled.is_(True),
+                    XYDataDictionary.enabled == 1,
                 )
             )
         ).all()

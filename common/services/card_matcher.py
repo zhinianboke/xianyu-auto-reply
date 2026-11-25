@@ -10,6 +10,7 @@ from common.models.card_item_relation import CardItemRelation
 from common.services.card_access import CardAccess, CardAccessError, relation_access_condition
 from common.services.card_relations import CardRelations
 from common.services.card_serialization import CardSerializationMixin
+from common.db.query_conditions import not_deleted
 
 
 class CardMatcher(CardRelations, CardSerializationMixin):
@@ -24,8 +25,8 @@ class CardMatcher(CardRelations, CardSerializationMixin):
         stmt = select(Card, CardItemRelation).join(
             CardItemRelation, Card.id == CardItemRelation.card_id,
         ).where(
-            CardItemRelation.item_id.in_(item_ids), CardItemRelation.is_deleted.is_(False),
-            Card.is_deleted.is_(False), relation_access_condition(),
+            CardItemRelation.item_id.in_(item_ids), not_deleted(CardItemRelation),
+            not_deleted(Card), relation_access_condition(),
         )
         if user_id is not None:
             stmt = stmt.where(CardItemRelation.user_id == user_id)
@@ -40,7 +41,7 @@ class CardMatcher(CardRelations, CardSerializationMixin):
         history = exists(select(CardItemRelation.id).where(
             CardItemRelation.card_id == Card.id, CardItemRelation.user_id == Card.user_id,
         ))
-        stmt = select(Card).where(Card.item_id.in_(item_ids), Card.is_deleted.is_(False), ~history)
+        stmt = select(Card).where(Card.item_id.in_(item_ids), not_deleted(Card), ~history)
         if user_id is not None:
             stmt = stmt.where(Card.user_id == user_id)
         if enabled:

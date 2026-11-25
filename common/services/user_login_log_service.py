@@ -12,8 +12,6 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
-
 from loguru import logger
 from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +21,7 @@ from common.db.session_recovery import rollback_session
 from common.models.user_login_log import XYUserLoginLog
 from common.utils.pagination import execute_paginated_with_filters
 from common.utils.time_utils import safe_isoformat
+from common.utils.date_filters import date_range_conditions
 
 # 登录方式枚举（前端据此展示中文）
 LOGIN_METHOD_USERNAME_PASSWORD = "username_password"  # 账号密码
@@ -120,7 +119,7 @@ class UserLoginLogService:
             client_ip: 客户端 IP 或地址片段（去除首尾空格后按字面包含匹配）
             login_method: 登录方式筛选
             start_date: 开始日期（YYYY-MM-DD，含当天 00:00:00）
-            end_date: 结束日期（YYYY-MM-DD，含当天 23:59:59）
+            end_date: 结束日期（YYYY-MM-DD，含当天全部时间）
             limit: 每页数量
             offset: 偏移量
 
@@ -146,20 +145,8 @@ class UserLoginLogService:
         if login_method:
             filters.append(XYUserLoginLog.login_method == login_method)
 
-        # 时间范围（格式错误时静默跳过，与其它日志服务保持一致）
-        if start_date:
-            try:
-                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-                filters.append(XYUserLoginLog.created_at >= start_dt)
-            except ValueError:
-                pass
-
-        if end_date:
-            try:
-                end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
-                filters.append(XYUserLoginLog.created_at <= end_dt)
-            except ValueError:
-                pass
+        # 北京时间日期范围：校验后共同应用于列表和总数。
+        filters.extend(date_range_conditions(XYUserLoginLog.created_at, start_date, end_date))
 
         logs, total = await execute_paginated_with_filters(
             self.session,

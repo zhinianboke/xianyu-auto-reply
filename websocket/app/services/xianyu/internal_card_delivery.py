@@ -8,6 +8,7 @@ from common.models.card import Card
 from common.services.card_access import CardAccessError
 from common.services.card_matcher import CardMatcher
 from common.services.order_delivery_result import read_delivery_result
+from common.db.query_conditions import not_deleted
 
 
 def delivery_card_mode(card: Card) -> tuple[str, bool]:
@@ -48,7 +49,7 @@ async def load_authorized_delivery_card(
     if expected_binding is not None and (source, dock_id) != expected_binding:
         raise CardAccessError("卡券关联来源已变更，已停止发货，请重新检查配置")
     card = (await session.execute(select(Card).where(
-        Card.id == card_id, Card.is_deleted.is_(False), Card.enabled.is_(True),
+        Card.id == card_id, not_deleted(Card), Card.enabled.is_(True),
     ).execution_options(populate_existing=True))).scalars().first()
     if not card:
         raise CardAccessError("卡券已删除或停用，无法发货")

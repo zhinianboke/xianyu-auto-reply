@@ -48,7 +48,7 @@ async def load_enabled_rules(account_id: str, *, strict: bool = False) -> list[d
                 .where(
                     and_(
                         XYDeliveryBlockRule.account_id == account_id,
-                        XYDeliveryBlockRule.enabled == True,
+                        XYDeliveryBlockRule.enabled == 1,
                     )
                 )
                 .order_by(XYDeliveryBlockRule.priority.asc())

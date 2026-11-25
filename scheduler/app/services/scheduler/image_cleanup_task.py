@@ -29,6 +29,7 @@ from sqlalchemy import select
 from common.db.session import async_session_maker
 from common.models.card import Card
 from common.models.product_material import ProductMaterial
+from common.db.query_conditions import deletion_state
 
 # 孤儿图片保留小时数：文件修改时间超过该时长且无引用才允许删除
 # 目的：避免删除「刚上传落盘、但用户尚未保存到业务对象」的新图片
@@ -107,7 +108,7 @@ class ImageCleanupTaskService:
         referenced: set[str] = set()
         async with async_session_maker() as session:
             stmt = select(ProductMaterial.images).where(
-                ProductMaterial.is_deleted.is_(is_deleted)
+                deletion_state(ProductMaterial, is_deleted)
             )
             result = await session.execute(stmt)
             for (images,) in result.fetchall():

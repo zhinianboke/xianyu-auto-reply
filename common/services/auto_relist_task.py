@@ -34,6 +34,7 @@ from common.services.auto_relist_discovery import AutoRelistDiscoveryMixin
 from common.services.relist_association_migration_service import RelistAssociationMigrationService
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.account_status import is_account_active
+from common.db.query_conditions import not_deleted
 
 class AutoRelistTask(AutoRelistLifecycleMixin, AutoRelistDiscoveryMixin):
     """单例调度器调用的自动续售执行器。"""
@@ -109,7 +110,7 @@ class AutoRelistTask(AutoRelistLifecycleMixin, AutoRelistDiscoveryMixin):
             if rule:
                 card = (
                     await session.execute(
-                        select(Card).where(Card.id == rule.card_id, Card.user_id == event.user_id, Card.is_deleted == False)
+                        select(Card).where(Card.id == rule.card_id, Card.user_id == event.user_id, not_deleted(Card))
                     )
                 ).scalars().first()
             if not rule or rule.user_id != event.user_id or rule.material_id != event.material_id:
@@ -153,7 +154,7 @@ class AutoRelistTask(AutoRelistLifecycleMixin, AutoRelistDiscoveryMixin):
                             CardItemRelation.user_id == event.user_id,
                             CardItemRelation.card_id == rule.card_id,
                             CardItemRelation.item_id == event.old_item_id,
-                            CardItemRelation.is_deleted == False,
+                            not_deleted(CardItemRelation),
                             or_(CardItemRelation.source.is_(None), CardItemRelation.source == "own"),
                             or_(CardItemRelation.dock_record_id.is_(None), CardItemRelation.dock_record_id == 0),
                         ).limit(1)
@@ -418,7 +419,7 @@ class AutoRelistTask(AutoRelistLifecycleMixin, AutoRelistDiscoveryMixin):
                         AutoRelistRule.id == rule.id,
                         AutoRelistRule.user_id == event.user_id,
                         AutoRelistRule.current_item_id == event.old_item_id,
-                        AutoRelistRule.enabled.is_(True),
+                        AutoRelistRule.enabled == 1,
                     )
                     .values(
                         status="error",

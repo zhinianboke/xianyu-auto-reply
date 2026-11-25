@@ -19,6 +19,7 @@ from common.models.card import Card
 from common.models.card_item_relation import CardItemRelation
 from common.models.fy_material import FYMaterial
 from common.services.backend_web_loader import load_backend_web_class
+from common.db.query_conditions import not_deleted
 
 AUTO_PUBLISH_CARD_TYPE = "text"
 AUTO_PUBLISH_CARD_NAME_SUFFIX = "[自动优惠链接]"
@@ -245,12 +246,12 @@ async def _find_existing_auto_card(
                 CardItemRelation.card_id == Card.id,
                 CardItemRelation.item_id == published_item_id,
                 CardItemRelation.user_id == user_id,
-                CardItemRelation.is_deleted.is_(False),
+                not_deleted(CardItemRelation),
             ),
         )
         .where(
             Card.user_id == user_id,
-            Card.is_deleted.is_(False),
+            not_deleted(Card),
             or_(
                 Card.item_id == published_item_id,
                 CardItemRelation.id.is_not(None),
@@ -275,9 +276,9 @@ async def _has_card_item_relation(session: AsyncSession, card_id: int, published
     stmt = select(CardItemRelation.id).join(Card, CardItemRelation.card_id == Card.id).where(
         CardItemRelation.card_id == card_id,
         CardItemRelation.item_id == published_item_id,
-        CardItemRelation.is_deleted.is_(False),
+        not_deleted(CardItemRelation),
         CardItemRelation.user_id == Card.user_id,
-        Card.is_deleted.is_(False),
+        not_deleted(Card),
     ).limit(1)
     result = await session.execute(stmt)
     return result.scalar_one_or_none() is not None

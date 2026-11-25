@@ -102,7 +102,7 @@ class AdminUserQueryService:
 
         roles_stmt = select(XYDataDictionary.dict_value, XYDataDictionary.dict_label).where(
             XYDataDictionary.dict_type == USER_ROLE_DICTIONARY,
-            XYDataDictionary.enabled.is_(True),
+            XYDataDictionary.enabled == 1,
             XYDataDictionary.dict_value.in_([item.value for item in UserRole]),
         ).order_by(XYDataDictionary.sort_order, XYDataDictionary.id)
         roles = (await self.session.execute(roles_stmt)).all()

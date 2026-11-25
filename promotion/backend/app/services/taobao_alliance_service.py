@@ -185,7 +185,7 @@ async def get_taobao_account(session, user_id: int, account_id: int | None = Non
     stmt = select(FYAccount).where(
         FYAccount.owner_id == user_id,
         FYAccount.account_type == FYAccountType.TAOBAO,
-        FYAccount.enabled == True,
+        FYAccount.enabled == 1,
     )
     if account_id:
         stmt = stmt.where(FYAccount.id == account_id)

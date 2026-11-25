@@ -32,6 +32,7 @@ from common.services.auto_relist_utils import material_to_publish_data
 from common.services.product_material_price import resolve_material_publish_price
 from common.services.publish_execution_service import execute_single_publish
 from common.utils.time_utils import get_beijing_now_naive
+from common.db.query_conditions import not_deleted
 
 
 IN_QUERY_CHUNK_SIZE = 1000
@@ -111,8 +112,8 @@ class ScheduledPublishTask:
             result = await session.execute(
                 select(ScheduledPublishRule)
                 .where(
-                    ScheduledPublishRule.is_enabled.is_(True),
-                    ScheduledPublishRule.is_deleted.is_(False),
+                    ScheduledPublishRule.is_enabled == 1,
+                    not_deleted(ScheduledPublishRule),
                 )
                 .order_by(ScheduledPublishRule.id.asc())
             )
@@ -425,7 +426,7 @@ class ScheduledPublishTask:
                 select(ProductMaterial).where(
                     ProductMaterial.user_id == rule.owner_id,
                     ProductMaterial.id.in_(chunk),
-                    ProductMaterial.is_deleted.is_(False),
+                    not_deleted(ProductMaterial),
                 )
             )
             materials.extend(result.scalars().all())
