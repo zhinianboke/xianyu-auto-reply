@@ -35,7 +35,7 @@ from common.db.scheduled_publish_rule_schema import ensure_scheduled_publish_rul
 from common.utils.logging_utils import setup_logging
 from common.utils.network_utils import resolve_listen_host
 from common.utils.async_cleanup import complete_before_cancellation
-from app.services.scheduled_task_manager import get_scheduler_service
+from app.services.scheduler_service import get_scheduler_service
 from common.services.order_service import close_goofish_connector
 
 faulthandler.enable()

@@ -7,8 +7,8 @@
  */
 import { get, put, post } from '@/utils/request'
 import type { ApiResponse } from '@/types'
-import type { SecurityPage, SecurityTask } from '@/api/securityManagement'
-import { isSecurityExecutionResult, isSecurityPage, isSecurityTask, validateResponse } from '@/api/securityManagement'
+import type { SecurityPage } from '@/api/securityManagement'
+import { isSecurityPage, validateResponse } from '@/api/securityManagement'
 
 // API前缀
 const ADMIN_PREFIX = '/api/v1/admin'
@@ -34,8 +34,8 @@ export interface ScheduledTasksResponse {
   scheduler_running?: boolean
 }
 
-/** 所有任务共用原表配置，安全任务附带真实执行状态。 */
-export type ScheduledTaskItem = ScheduledTask & Partial<SecurityTask>
+/** 所有任务共用原任务表配置字段。 */
+export type ScheduledTaskItem = ScheduledTask
 
 const isScheduledTaskItem = (item: unknown) => {
   if (!item || typeof item !== 'object') return false
@@ -44,7 +44,6 @@ const isScheduledTaskItem = (item: unknown) => {
     || !Number.isSafeInteger(row.interval_seconds)) return false
   return typeof row.task_name === 'string' && typeof row.enabled === 'boolean'
     && (row.description === null || typeof row.description === 'string')
-    && (row.task_code !== 'security_frequency' || isSecurityTask(row))
 }
 
 /** 保存响应使用原配置字段，执行状态由刷新列表取得。 */
@@ -123,7 +122,7 @@ export async function triggerScheduledTask(
 ): Promise<TriggerScheduledTaskResponse> {
   return post<TriggerScheduledTaskResponse>(`${ADMIN_PREFIX}/scheduled-tasks/${encodeURIComponent(taskCode)}/trigger`)
     .then((response) => {
-      validateResponse(response, (data) => taskCode !== 'security_frequency' || isSecurityExecutionResult(data),
+      validateResponse(response, (data) => Boolean(data && typeof data === 'object'),
         '定时任务未返回完整执行结果，请重新加载并查询执行日志')
       return response
     })

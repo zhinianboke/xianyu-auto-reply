@@ -117,25 +117,15 @@ class ScheduledTaskService:
                     "interval_seconds": task.interval_seconds,
                     "enabled": task.enabled,
                 }
-                if task_code == SECURITY_TASK_CODE and config['interval_seconds'] != SECURITY_INTERVAL_SECONDS:
-                    raise ValueError('安全频率限制执行间隔必须为20秒，请在定时任务中修正配置')
-                changed = self._config_cache.get(task_code) != config
-                # 更新缓存；安全任务检查真实配置，但未变化时不重复输出每秒配置日志。
+                # 所有任务共用原配置缓存和日志流程。
                 self._config_cache[task_code] = config
-                if task_code != SECURITY_TASK_CODE or changed:
-                    logger.info(
-                        f"[定时任务配置] 加载任务配置 {task_code}: "
-                        f"间隔={config['interval_seconds']}秒, 启用={config['enabled']}"
-                    )
+                logger.info(
+                    f"[定时任务配置] 加载任务配置 {task_code}: "
+                    f"间隔={config['interval_seconds']}秒, 启用={config['enabled']}"
+                )
                 return config
         except Exception as e:
-            if task_code == SECURITY_TASK_CODE:
-                self._config_cache.pop(task_code, None)
-                raise
             logger.error(f"[定时任务配置] 加载任务配置失败 {task_code}: {e}")
-
-        if task_code == SECURITY_TASK_CODE:
-            raise RuntimeError('安全频率限制未初始化，请检查调度服务数据库自检结果')
         
         # 返回默认配置
         default_config = DEFAULT_CONFIGS.get(

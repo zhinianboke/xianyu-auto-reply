@@ -4,7 +4,6 @@ from __future__ import annotations
 from sqlalchemy import select, update
 
 from common.db.idempotent_insert import insert_defaults
-from common.models.scheduled_task import ScheduledTask
 from common.models.security_task import (
     SECURITY_INTERVAL_SECONDS,
     SECURITY_TASK_CODE,
@@ -42,15 +41,6 @@ async def ensure_security_defaults(connection) -> None:
             'key': key, 'value': value, 'description': description,
             'group': AUTH_SECURITY_GROUP, 'updated_at': now,
         }, ('key',))
-
-
-async def lock_security_schedule(session) -> ScheduledTask:
-    """安全状态锁取得后当前读原任务配置；唯一的运行开关来自原定时任务表。"""
-    task = (await session.execute(select(ScheduledTask).where(ScheduledTask.task_code == SECURITY_TASK_CODE)
-        .with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
-    if task is None:
-        raise RuntimeError('安全频率限制尚未接入定时任务表，请检查启动自检结果')
-    return task
 
 
 async def save_security_values(session, task: SecurityTask, changes: dict[str, str]) -> None:

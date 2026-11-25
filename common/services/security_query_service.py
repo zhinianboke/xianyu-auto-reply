@@ -103,7 +103,8 @@ class SecurityQueryService:
         return {
             'id': schedule.id, 'task_code': schedule.task_code, 'interval_seconds': schedule.interval_seconds,
             'enabled': bool(schedule.enabled),
-            'next_run_at': safe_isoformat(row.next_run_at) if schedule.enabled else None,
+            # 兼容旧字段；原调度器采用间隔循环，旧持久化时间不再是运行来源。
+            'next_run_at': None,
             'last_run_at': safe_isoformat(row.last_run_at),
             'last_result': row.last_result, 'last_message': row.last_message,
             'running': bool(row.lease_id and row.lease_expires_at and row.lease_expires_at > now),

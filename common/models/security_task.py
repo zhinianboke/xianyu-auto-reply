@@ -32,7 +32,7 @@ SECURITY_DICTIONARIES = {
 
 
 class SecurityTask(Base):
-    """安全执行状态；enabled/interval_seconds仅保留旧值，不再作为运行配置。"""
+    """安全业务状态；enabled、interval_seconds和next_run_at保留旧值，不作为调度来源。"""
 
     __tablename__ = 'security_tasks'
     __table_args__ = (UniqueConstraint('task_code', name='uk_security_task_code'),

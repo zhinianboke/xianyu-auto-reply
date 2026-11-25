@@ -14,7 +14,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from app.services.scheduler.listing_monitor_task import listing_monitor_task_service
-from app.services.scheduled_task_manager import get_scheduler_service
+from app.services.scheduler_service import get_scheduler_service
 from common.services.account_cooldown import account_cooldown_manager
 from common.models.security_task import SECURITY_TASK_CODE
 from common.utils.time_utils import get_beijing_now_naive
@@ -147,7 +147,9 @@ async def trigger_task(task_code: str, owner_id: int | None = Query(None, gt=0))
         
         scheduler = get_scheduler_service()
         # owner_id只能经已校验服务间令牌的接口接收，由网页管理员鉴权结果传入。
-        result = await scheduler.trigger_task(task_code, owner_id) if task_code == SECURITY_TASK_CODE else await scheduler.trigger_task(task_code)
+        if task_code == SECURITY_TASK_CODE and owner_id is None:
+            raise ValueError('手动执行缺少管理员信息')
+        result = await scheduler.trigger_task(task_code, owner_id=owner_id)
         
         return {
             "success": True,
