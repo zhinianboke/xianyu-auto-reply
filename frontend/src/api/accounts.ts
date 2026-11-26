@@ -751,9 +751,9 @@ export interface AccountStats {
 }
 
 export const getAccountStats = async (): Promise<AccountStats> => {
-  const response = await get<ApiResponse<AccountStats>>(`${COOKIE_PREFIX}/stats`)
-  if (!response.success || !response.data) {
-    throw new Error(response.message || '获取统计数据失败')
+  const response = await get<ApiResponse<AccountStats> | null>(`${COOKIE_PREFIX}/stats`)
+  if (response?.success !== true || !response.data) {
+    throw new Error(response?.message || '获取统计数据失败')
   }
   return response.data
 }

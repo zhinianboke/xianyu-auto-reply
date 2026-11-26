@@ -3,7 +3,7 @@
 
 功能：
 1. 为管理员全局仪表盘统计提供短TTL内存缓存。
-2. 让 /admin/stats 与 /admin/stats/today 共享同一份全局统计快照。
+2. 分开缓存公用总数与管理员统计，三个接口可共用所需的数据。
 3. 为当前登录管理员的额度状态提供短TTL缓存，减少重复查询。
 """
 from __future__ import annotations
@@ -11,44 +11,56 @@ from __future__ import annotations
 import asyncio
 import time
 from copy import deepcopy
-from typing import Any, Awaitable, Callable
+from datetime import date
+from typing import Any, Awaitable, Callable, Literal, TypeVar
+
+SnapshotName = Literal["global_totals", "admin_overview", "admin_today"]
+SnapshotValue = TypeVar("SnapshotValue", bound=dict)
 
 
 class DashboardStatsCacheService:
     """管理员仪表盘统计短TTL缓存服务。"""
 
-    _admin_bundle_lock = asyncio.Lock()
-    _admin_bundle_cache: dict[str, Any] | None = None
-    _admin_bundle_ttl_seconds = 3
+    _snapshot_locks = {
+        "global_totals": asyncio.Lock(),
+        "admin_overview": asyncio.Lock(),
+        "admin_today": asyncio.Lock(),
+    }
+    _snapshots: dict[SnapshotName, dict[str, Any]] = {}
+    _snapshot_ttl_seconds = 3
 
     _user_limit_lock = asyncio.Lock()
     _user_limit_cache: dict[int, dict[str, Any]] = {}
     _user_limit_ttl_seconds = 3
 
     @classmethod
-    def _is_valid(cls, record: dict[str, Any] | None) -> bool:
-        if not record:
-            return False
-        return float(record.get("expires_at") or 0) > time.time()
+    def _is_valid(cls, record: dict[str, Any], *, snapshot_day: date | None = None) -> bool:
+        """检查缓存是否仍在有效期内，含日期的统计需与请求日期相同。"""
+        return record.get("snapshot_day") == snapshot_day and record["expires_at"] > time.monotonic()
 
     @classmethod
-    async def get_admin_bundle(
+    async def get_snapshot(
         cls,
-        loader: Callable[[], Awaitable[dict[str, Any]]],
-    ) -> dict[str, Any]:
-        cached = cls._admin_bundle_cache
-        if cls._is_valid(cached):
+        name: SnapshotName,
+        loader: Callable[[], Awaitable[SnapshotValue]],
+        *,
+        snapshot_day: date | None = None,
+    ) -> SnapshotValue:
+        """按快照名称合并并发查询，使用传入的加载函数，返回独立的统计结果。"""
+        cached = cls._snapshots.get(name)
+        if cached is not None and cls._is_valid(cached, snapshot_day=snapshot_day):
             return deepcopy(cached["value"])
 
-        async with cls._admin_bundle_lock:
-            cached = cls._admin_bundle_cache
-            if cls._is_valid(cached):
+        async with cls._snapshot_locks[name]:
+            cached = cls._snapshots.get(name)
+            if cached is not None and cls._is_valid(cached, snapshot_day=snapshot_day):
                 return deepcopy(cached["value"])
 
             value = await loader()
-            cls._admin_bundle_cache = {
+            cls._snapshots[name] = {
                 "value": deepcopy(value),
-                "expires_at": time.time() + cls._admin_bundle_ttl_seconds,
+                "snapshot_day": snapshot_day,
+                "expires_at": time.monotonic() + cls._snapshot_ttl_seconds,
             }
             return deepcopy(value)
 
@@ -59,19 +71,19 @@ class DashboardStatsCacheService:
         loader: Callable[[], Awaitable[dict[str, int | None]]],
     ) -> dict[str, int | None]:
         cached = cls._user_limit_cache.get(user_id)
-        if cls._is_valid(cached):
+        if cached is not None and cls._is_valid(cached):
             return deepcopy(cached["value"])
 
         async with cls._user_limit_lock:
             cls._cleanup_user_limit_cache_locked()
             cached = cls._user_limit_cache.get(user_id)
-            if cls._is_valid(cached):
+            if cached is not None and cls._is_valid(cached):
                 return deepcopy(cached["value"])
 
             value = await loader()
             cls._user_limit_cache[user_id] = {
                 "value": deepcopy(value),
-                "expires_at": time.time() + cls._user_limit_ttl_seconds,
+                "expires_at": time.monotonic() + cls._user_limit_ttl_seconds,
             }
             return deepcopy(value)
 

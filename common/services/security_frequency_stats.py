@@ -63,10 +63,14 @@ async def _iter_audit_events(session, midnight, now):
     普通游标每批最多1000条，主键游标不遗漏同一时间的记录，不加载全量日志。
     """
     # 账号密码日志只通过真实关联用户或真实用户名定位绑定邮箱；没有匹配则为空。
-    bound_email = select(User.email).where(case(
-        (XYUserLoginLog.owner_id.is_not(None), User.id == XYUserLoginLog.owner_id),
-        else_=User.username == XYUserLoginLog.login_account,
-    )).correlate(XYUserLoginLog).limit(1).scalar_subquery()
+    email_by_id = select(User.email).where(
+        User.id == XYUserLoginLog.owner_id,
+    ).correlate(XYUserLoginLog).limit(1).scalar_subquery()
+    email_by_username = select(User.email).where(
+        User.username == XYUserLoginLog.login_account,
+    ).correlate(XYUserLoginLog).limit(1).scalar_subquery()
+    # CASE只选择取值分支，子查询用等值条件；已有关联ID时不回退用户名。
+    bound_email = case((XYUserLoginLog.owner_id.is_not(None), email_by_id), else_=email_by_username)
     login_email = case((XYUserLoginLog.login_method == 'username_password', bound_email),
                        else_=XYUserLoginLog.login_account)
     for model, email in ((RegistrationLog, RegistrationLog.email), (XYEmailLog, XYEmailLog.recipient_email),

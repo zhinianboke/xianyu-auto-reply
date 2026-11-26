@@ -8,6 +8,11 @@ from common.models.user import User
 from common.models.xy_account import XYAccount
 
 
+def build_dashboard_user_count() -> Select:
+    """构建用户总数查询，可追加日期筛选。"""
+    return select(func.count()).select_from(User)
+
+
 def build_dashboard_totals_statement() -> Select:
     """构建全局总数查询，保持管理员仪表盘统计全部用户和账号的口径。
 
@@ -15,7 +20,7 @@ def build_dashboard_totals_statement() -> Select:
         同一条 SQL 中统计用户与账号总数的语句，可追加账号聚合字段。
     """
     return select(
-        select(func.count()).select_from(User).scalar_subquery().label("total_users"),
+        build_dashboard_user_count().scalar_subquery().label("total_users"),
         func.count().label("total_accounts"),
     ).select_from(XYAccount)
 

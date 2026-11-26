@@ -414,7 +414,8 @@ export interface AdminStats {
   today_reply_count: number
   yesterday_reply_count: number
   active_cookies: number
-  online_cookies: number  // 真实 WebSocket 在线账号数
+  online_cookies: number | null  // 查询失败时保留未知状态
+  online_cookies_message?: string
   password_configured: number  // 已配置账号密码数
   current_user_account_limit: number | null
   current_user_used_account_count: number
@@ -431,22 +432,22 @@ export interface TodayStats {
   today_agent_orders: number
 }
 
-// 获取管理员统计数据
-export const getAdminStats = async (): Promise<{ success: boolean; data?: AdminStats }> => {
-  try {
-    const data = await get<AdminStats & { success: boolean }>(`${ADMIN_PREFIX}/stats`)
-    return { success: true, data }
-  } catch {
-    return { success: false }
+/** 保留业务错误码，便于页面区分权限拒绝和临时查询失败。 */
+export class DashboardStatsError extends Error {
+  constructor(message: string, readonly code?: number) {
+    super(message)
   }
 }
 
-// 获取今日统计数据（管理员专用）
-export const getTodayStats = async (): Promise<{ success: boolean; data?: TodayStats }> => {
-  try {
-    const data = await get<TodayStats & { success: boolean }>(`${ADMIN_PREFIX}/stats/today`)
-    return { success: true, data }
-  } catch {
-    return { success: false }
+/** 读取现有扁平统计响应，空响应或业务失败统一交给调用方展示。 */
+async function getDashboardStats<T>(path: string, fallback: string): Promise<T> {
+  const response = await get<(T & Pick<ApiResponse, 'success' | 'message' | 'code'>) | null>(`${ADMIN_PREFIX}${path}`)
+  if (response?.success !== true) {
+    throw new DashboardStatsError(response?.message || fallback, response?.code)
   }
+  return response
 }
+
+export const getAdminStats = () => getDashboardStats<AdminStats>('/stats', '加载管理员统计失败')
+
+export const getTodayStats = () => getDashboardStats<TodayStats>('/stats/today', '加载今日统计失败')

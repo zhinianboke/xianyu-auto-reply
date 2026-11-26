@@ -217,12 +217,13 @@ class OrderService:
         total = total_result.scalar() or 0
         
         offset = (page - 1) * page_size
-        # MySQL 不支持 NULLS LAST，用 CASE WHEN 实现 NULL 排最后
-        from sqlalchemy import case
-        stmt = base_stmt.order_by(
-            case((XYOrder.placed_at.is_(None), 1), else_=0),
-            XYOrder.placed_at.desc()
-        ).offset(offset).limit(page_size)
+        # MySQL 倒序时 NULL 在最后。全局索引按下单时间、状态排列，末尾包含 InnoDB 主键。
+        # 明确并列项的次序，避免翻页切换执行计划时返回重复订单。
+        ordering = [XYOrder.placed_at.desc()]
+        if owner_id is None:
+            ordering.append(XYOrder.status.desc())
+        ordering.append(XYOrder.id.desc())
+        stmt = base_stmt.order_by(*ordering).offset(offset).limit(page_size)
         result = await self.session.execute(stmt)
         orders = list(result.scalars().all())
         

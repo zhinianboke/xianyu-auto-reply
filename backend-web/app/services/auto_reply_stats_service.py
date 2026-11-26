@@ -15,6 +15,7 @@ from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.auto_reply_message_log import XYAutoReplyMessageLog
+from common.utils.date_filters import next_day_start
 
 BEIJING_TZ = timezone(timedelta(hours=8))
 
@@ -149,9 +150,15 @@ class AutoReplyStatsService:
             )
         )
 
-    async def get_today_and_yesterday_success_reply_counts(self, owner_id: int | None = None) -> dict[str, int]:
-        yesterday_start, yesterday_end = self._get_day_range(-1)
-        today_start, today_end = self._get_day_range(0)
+    async def get_today_and_yesterday_success_reply_counts(
+        self, owner_id: int | None = None, *, today_start: datetime | None = None,
+    ) -> dict[str, int]:
+        """统计指定北京时间零点对应的今日、昨日回复数，可按所属用户过滤。"""
+        if today_start is None:
+            today_start, today_end = self._get_day_range()
+        else:
+            today_end = next_day_start(today_start)
+        yesterday_start = today_start - timedelta(days=1)
 
         condition_groups = self.build_success_reply_branch_conditions(
             owner_id=owner_id,
@@ -184,7 +191,7 @@ class AutoReplyStatsService:
                             (
                                 and_(
                                     XYAutoReplyMessageLog.created_at >= yesterday_start,
-                                    XYAutoReplyMessageLog.created_at < yesterday_end,
+                                    XYAutoReplyMessageLog.created_at < today_start,
                                 ),
                                 1,
                             ),

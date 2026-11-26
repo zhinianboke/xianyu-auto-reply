@@ -1,166 +1,148 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Activity, Calendar, MessageSquare, RefreshCw, Shield, ShoppingCart, Users, Package, Clock, DollarSign } from 'lucide-react'
-import { getAccountStats } from '@/api/accounts'
-import { type AdminStats, type TodayStats, getAdminStats, getTodayStats } from '@/api/admin'
+import { type AccountStats, getAccountStats } from '@/api/accounts'
+import { DashboardStatsError, type AdminStats, type TodayStats, getAdminStats, getTodayStats } from '@/api/admin'
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { OrderAmountChart } from '@/components/common/OrderAmountChart'
 import { PublicAdvertisements } from '@/components/common/PublicAdvertisements'
 import { usePublicAdvertisements } from '@/components/common/usePublicAdvertisements'
-
-interface DashboardStats {
-  totalAccounts: number
-  totalKeywords: number
-  activeAccounts: number
-  totalOrders: number
-  todayReplyCount: number
-  yesterdayReplyCount: number
-  accountLimit: number | null
-  usedAccountCount: number
-  remainingAccountCount: number | null
-}
+import { getApiErrorMessage } from '@/utils/apiError'
 
 export function Dashboard() {
-  const { addToast } = useUIStore()
   const { isAuthenticated, token, _hasHydrated, user } = useAuthStore()
+  if (!_hasHydrated || !isAuthenticated || !token || user?.user_id == null) return null
+
+  // 按用户和权限隔离上次成功的数据。相同用户刷新时仍可保留这些结果。
+  return <DashboardContent key={`${user.user_id}:${user.is_admin}`} token={token} isAdmin={user.is_admin} />
+}
+
+function DashboardContent({ token, isAdmin }: { token: string; isAdmin: boolean }) {
+  const { addToast } = useUIStore()
   const [statsLoading, setStatsLoading] = useState(true)
   const [adminStatsLoading, setAdminStatsLoading] = useState(true)
-  const [stats, setStats] = useState<DashboardStats>({
-    totalAccounts: 0,
-    totalKeywords: 0,
-    activeAccounts: 0,
-    totalOrders: 0,
-    todayReplyCount: 0,
-    yesterdayReplyCount: 0,
-    accountLimit: null,
-    usedAccountCount: 0,
-    remainingAccountCount: null,
-  })
+  const [todayStatsLoading, setTodayStatsLoading] = useState(true)
+  const [stats, setStats] = useState<AccountStats | null>(null)
   const [adminStats, setAdminStats] = useState<AdminStats | null>(null)
   const [todayStats, setTodayStats] = useState<TodayStats | null>(null)
+  const [deniedToken, setDeniedToken] = useState<string | null>(null)
+  const canLoadAdmin = isAdmin && deniedToken !== token
+  const loadSequence = useRef(0)
   const advertisements = usePublicAdvertisements()
   const { loadAds } = advertisements
 
-  /** 加载基础统计数据 */
-  const loadStats = async () => {
-    try {
-      setStatsLoading(true)
-      
-      // 调用后端统计接口，一次性获取所有统计数据
-      const statsData = await getAccountStats()
-      
-      setStats({
-        totalAccounts: statsData.total_accounts,
-        totalKeywords: statsData.total_keywords,
-        activeAccounts: statsData.active_accounts,
-        totalOrders: statsData.total_orders,
-        todayReplyCount: statsData.today_reply_count,
-        yesterdayReplyCount: statsData.yesterday_reply_count,
-        accountLimit: statsData.account_limit ?? user?.account_limit ?? null,
-        usedAccountCount: statsData.used_account_count,
-        remainingAccountCount: statsData.remaining_account_count ?? null,
-      })
-    } catch (error) {
-      addToast({ type: 'error', message: '加载统计数据失败' })
-    } finally {
-      setStatsLoading(false)
-    }
-  }
+  /** 各组统计独立加载，只应用最近一次刷新返回的数据。 */
+  const loadDashboard = useCallback(() => {
+    const sequence = ++loadSequence.current
 
-  /** 加载管理员统计数据 */
-  const loadAdminStats = async () => {
-    if (!user?.is_admin) {
-      setAdminStatsLoading(false)
-      return
-    }
-    try {
-      setAdminStatsLoading(true)
-      const [adminResult, todayResult] = await Promise.all([
-        getAdminStats(),
-        getTodayStats(),
-      ])
-      if (adminResult.success && adminResult.data) {
-        setAdminStats(adminResult.data)
+    const loadSection = async <T,>(
+      request: () => Promise<T>,
+      applyResult: (result: T) => void,
+      setLoading: (loading: boolean) => void,
+      fallback: string,
+      requiresAdmin = false,
+    ) => {
+      setLoading(true)
+      try {
+        const result = await request()
+        if (sequence === loadSequence.current) applyResult(result)
+      } catch (error) {
+        if (sequence === loadSequence.current) {
+          addToast({ type: 'error', message: getApiErrorMessage(error, fallback) })
+          if (requiresAdmin && error instanceof DashboardStatsError && error.code === 403) {
+            loadSequence.current += 1
+            setStats(null)
+            setAdminStats(null)
+            setTodayStats(null)
+            setDeniedToken(token)
+          }
+        }
+      } finally {
+        if (sequence === loadSequence.current) setLoading(false)
       }
-      if (todayResult.success && todayResult.data) {
-        setTodayStats(todayResult.data)
-      }
-    } catch {
-      // ignore
-    } finally {
-      setAdminStatsLoading(false)
     }
-  }
 
-  /** 加载所有数据（异步独立加载） */
-  const loadDashboard = () => {
-    if (!_hasHydrated || !isAuthenticated || !token) return
-    
-    // 异步独立加载各个模块，不互相等待
-    loadStats()
-    loadAdminStats()
-    loadAds()
-  }
+    void loadSection(getAccountStats, setStats, setStatsLoading, '加载统计数据失败')
+    if (canLoadAdmin) {
+      void loadSection(getAdminStats, result => {
+        setAdminStats(result)
+        if (result.online_cookies == null) {
+          addToast({ type: 'error', message: result.online_cookies_message || '在线账号数量暂不可用' })
+        }
+      }, setAdminStatsLoading, '加载管理员统计失败', true)
+      void loadSection(getTodayStats, setTodayStats, setTodayStatsLoading, '加载今日统计失败', true)
+    }
+    void loadAds()
+  }, [canLoadAdmin, token, addToast, loadAds])
 
   useEffect(() => {
-    if (!_hasHydrated || !isAuthenticated || !token) return
     loadDashboard()
-  }, [_hasHydrated, isAuthenticated, token])
+    return () => { loadSequence.current += 1 }
+  }, [loadDashboard])
+
+  const refreshDashboard = () => {
+    // 手动刷新可重新确认服务端权限，涵盖同一登录会话内权限恢复的情况。
+    if (deniedToken === token) {
+      setDeniedToken(null)
+    } else {
+      loadDashboard()
+    }
+  }
 
   const statCards = [
     {
       icon: Users,
       label: '总账号数',
-      value: stats.totalAccounts,
+      value: stats?.total_accounts,
       color: 'primary',
     },
     {
       icon: MessageSquare,
       label: '总关键词数',
-      value: stats.totalKeywords,
+      value: stats?.total_keywords,
       color: 'success',
     },
     {
       icon: Activity,
       label: '启用账号数',
-      value: stats.activeAccounts,
+      value: stats?.active_accounts,
       color: 'warning',
     },
     {
       icon: ShoppingCart,
       label: '总订单数',
-      value: stats.totalOrders,
+      value: stats?.total_orders,
       color: 'info',
     },
     {
       icon: Calendar,
       label: '今日回复',
-      value: stats.todayReplyCount,
+      value: stats?.today_reply_count,
       color: 'success',
     },
     {
       icon: Clock,
       label: '昨日回复',
-      value: stats.yesterdayReplyCount,
+      value: stats?.yesterday_reply_count,
       color: 'info',
     },
     {
       icon: Shield,
       label: '可添加账号数',
-      value: stats.accountLimit,
+      value: stats?.account_limit,
       color: 'primary',
     },
     {
       icon: Package,
       label: '已用账号数',
-      value: stats.usedAccountCount,
+      value: stats?.used_account_count,
       color: 'warning',
     },
     {
       icon: Clock,
       label: '剩余额度',
-      value: stats.remainingAccountCount,
+      value: stats?.remaining_account_count,
       color: 'success',
     },
   ]
@@ -191,7 +173,7 @@ export function Dashboard() {
           <h1 className="page-title">仪表盘</h1>
           <p className="page-description">系统概览和统计信息</p>
         </div>
-        <button onClick={loadDashboard} className="btn-ios-secondary">
+        <button onClick={refreshDashboard} className="btn-ios-secondary">
           <RefreshCw className="w-4 h-4" />
           <span className="hidden sm:inline">刷新数据</span>
           <span className="sm:hidden">刷新</span>
@@ -232,7 +214,7 @@ export function Dashboard() {
       <PublicAdvertisements placement="dashboard" {...advertisements} />
 
       {/* Admin Stats - 管理员专属 */}
-      {user?.is_admin && (
+      {canLoadAdmin && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -265,7 +247,7 @@ export function Dashboard() {
                   <p className="text-sm text-slate-500">活跃账号</p>
                 </div>
                 <div className="text-center p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                  <p className="text-2xl font-bold text-emerald-600">{adminStats.online_cookies ?? 0}</p>
+                  <p className="text-2xl font-bold text-emerald-600">{adminStats.online_cookies ?? '-'}</p>
                   <p className="text-sm text-slate-500">在线账号</p>
                 </div>
                 <div className="text-center p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
@@ -304,11 +286,11 @@ export function Dashboard() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.35, duration: 0.3 }}
       >
-        <OrderAmountChart />
+        <OrderAmountChart key={canLoadAdmin ? 'admin' : 'self'} />
       </motion.div>
 
       {/* Today Stats - 今日统计（管理员专属） */}
-      {user?.is_admin && (
+      {canLoadAdmin && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -322,7 +304,7 @@ export function Dashboard() {
             </h2>
           </div>
           <div className="vben-card-body">
-            {adminStatsLoading ? (
+            {todayStatsLoading ? (
               <div className="flex items-center justify-center py-8">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
               </div>

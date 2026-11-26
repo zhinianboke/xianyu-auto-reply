@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.services.account_limit_service import AccountLimitService
@@ -106,8 +106,6 @@ class AccountService:
         Returns:
             (账号列表, 总数)
         """
-        from sqlalchemy import func, and_, or_
-        
         base_stmt = select(XYAccount)
         conditions = []
         
@@ -117,14 +115,11 @@ class AccountService:
         
         # 状态筛选 - 与 _status_to_enabled 函数保持一致
         # inactive/disabled/suspended/deleted 视为禁用，其他视为启用
-        if status is not None:
-            inactive_statuses = ["inactive", "disabled", "suspended", "deleted"]
-            if status == "active":
-                # 启用：status 不在禁用列表中
-                conditions.append(~XYAccount.status.in_(inactive_statuses))
-            elif status == "inactive":
-                # 禁用：status 在禁用列表中
-                conditions.append(XYAccount.status.in_(inactive_statuses))
+        inactive_status = XYAccount.status.in_(("inactive", "disabled", "suspended", "deleted"))
+        if status == "active":
+            conditions.append(~inactive_status)
+        elif status == "inactive":
+            conditions.append(inactive_status)
         
         # AI回复筛选（从metadata_json中获取）
         if ai_reply is not None:
@@ -234,14 +229,12 @@ class AccountService:
         total = total_result.scalar() or 0
         
         # 分页查询：启用账号排在前面，再按创建时间倒序
-        from sqlalchemy import case
-        inactive_statuses_list = ["inactive", "disabled", "suspended", "deleted"]
-        status_order = case(
-            (XYAccount.status.in_(inactive_statuses_list), 1),
-            else_=0
-        )
         offset = (page - 1) * page_size
-        stmt = base_stmt.order_by(status_order, XYAccount.created_at.desc()).offset(offset).limit(page_size)
+        # 已筛选启用/禁用时，优先级表达式为常量，直接按时间排序可复用已有索引。
+        ordering = [XYAccount.created_at.desc(), XYAccount.id.desc()]
+        if status not in ("active", "inactive"):
+            ordering.insert(0, case((inactive_status, 1), else_=0))
+        stmt = base_stmt.order_by(*ordering).offset(offset).limit(page_size)
         result = await self.session.execute(stmt)
         
         return list(result.scalars().all()), total
