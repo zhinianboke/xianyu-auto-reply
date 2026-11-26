@@ -280,11 +280,15 @@ async def get_system_stats(
     current_user: User = Depends(deps.get_current_admin_user),
     session: AsyncSession = Depends(deps.get_db_session),
 ) -> dict:
-    """获取系统统计信息"""
+    """返回管理员统计，查询消息服务前先归还本次只读查询的数据库连接。"""
     stats = await DashboardStatsService(session).get_admin_dashboard_stats(current_user_id=current_user.id)
+    await session.close()
+    online_cookies = await DashboardStatsService.get_online_cookies_count()
     return {
         "success": True,
         **stats,
+        "online_cookies": online_cookies,
+        "online_cookies_message": "查询成功" if online_cookies is not None else "在线账号数量暂不可用，请稍后刷新",
     }
 
 

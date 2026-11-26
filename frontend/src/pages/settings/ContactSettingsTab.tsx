@@ -87,7 +87,7 @@ export function ContactSettingsTab({
       <div className="vben-card">
         <div className="vben-card-header"><h2 className="vben-card-title"><MessageCircle className="h-4 w-4" />群二维码管理</h2></div>
         <div className="vben-card-body">
-          <p className="mb-4 text-sm text-slate-500 dark:text-slate-400">上传的二维码将显示在“关于”页面</p>
+          <p className="mb-4 text-sm text-slate-500 dark:text-slate-400">上传成功即生效，无需另行保存。</p>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 2xl:grid-cols-5">
             {QRCODE_ITEMS.map((item) => <QrcodeItem key={item.type} {...item} imageUrl={qrcodeUrls[item.type]} uploading={qrcodeUploading[item.type]} onUpload={(file) => onUploadQrcode(item.type, file)} />)}
           </div>

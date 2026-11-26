@@ -6,9 +6,12 @@ import json
 import os
 import urllib.request
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import unquote
 
 from loguru import logger
+
+_QRCODE_PREFIX = "/static/qrcode/"
 
 
 class FrontendHandler(http.server.SimpleHTTPRequestHandler):
@@ -27,7 +30,7 @@ class FrontendHandler(http.server.SimpleHTTPRequestHandler):
         if decoded_path in {"/api/v1/public/status", "/api/v1/public/status/"}:
             # 仅规范化公开状态路径，查询参数原样保留，兼容编码后的 /api/ 前缀。
             self.path = decoded_path + (separator + query if separator else "")
-        if self.path.startswith(("/api/", "/static/uploads/")):
+        if self.path.startswith(("/api/", "/static/uploads/")) or decoded_path.startswith(_QRCODE_PREFIX):
             self._proxy_request(self._backend_url)
             return True
         return False
@@ -92,7 +95,8 @@ class FrontendHandler(http.server.SimpleHTTPRequestHandler):
 
     def _proxy_request(self, target_base: str):
         """将请求转发到配置的后端；公开状态代理失败时返回统一中文业务响应。"""
-        is_public = unquote(self.path.split("?", 1)[0]).startswith("/api/v1/public/")
+        pathname = unquote(self.path.split("?", 1)[0])
+        is_public = pathname.startswith("/api/v1/public/")
         response_started = False
         try:
             target_url = f"{target_base}{self.path}"
@@ -116,12 +120,19 @@ class FrontendHandler(http.server.SimpleHTTPRequestHandler):
             if is_public:
                 req.add_header("X-Forwarded-For", self.client_address[0])
                 req.add_header("X-Real-IP", self.client_address[0])
-            with urllib.request.urlopen(req, timeout=15 if is_public else 90) as resp:
-                # 先完整读取上游响应，读取失败时仍能返回统一 JSON。
+            try:
+                resp = urllib.request.urlopen(req, timeout=15 if is_public else 90)
+            except HTTPError as exc:
+                if exc.code != 404 or not pathname.startswith(_QRCODE_PREFIX):
+                    raise
+                resp = exc
+            with resp:
+                # 在发送状态码前读取上游响应，读取失败时仍可返回统一 JSON。
                 response_body = resp.read()
+                response_headers = resp.headers.items()
                 response_started = True
                 self.send_response(resp.status)
-                for header, value in resp.getheaders():
+                for header, value in response_headers:
                     if header.lower() != "transfer-encoding":
                         self.send_header(header, value)
                 self.end_headers()

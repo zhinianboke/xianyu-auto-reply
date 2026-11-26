@@ -156,6 +156,7 @@ ms-playwright/
 **/uploads/
 **/static/uploads/
 !**/static/uploads/.gitkeep
+**/static/qrcode/.current/
 
 # ------------------------------------------
 # 临时文件与备份文件

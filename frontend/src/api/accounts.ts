@@ -1,4 +1,5 @@
 import { get, post, put, del } from '@/utils/request'
+import { ApiBusinessError } from '@/utils/apiError'
 import type { AccountDetail, ApiResponse } from '@/types'
 
 // API前缀
@@ -753,23 +754,23 @@ export interface AccountStats {
 export const getAccountStats = async (): Promise<AccountStats> => {
   const response = await get<ApiResponse<AccountStats> | null>(`${COOKIE_PREFIX}/stats`)
   if (response?.success !== true || !response.data) {
-    throw new Error(response?.message || '获取统计数据失败')
+    throw new ApiBusinessError(response?.message || '获取统计数据失败', response?.code)
   }
   return response.data
 }
 
-// 14天订单金额趋势数据项
+// 30天订单金额趋势数据项
 export interface OrderTrendItem {
   date: string
   amount: number
   count: number
 }
 
-// 获取近14天订单金额趋势
+// 获取近30天订单金额趋势
 export const getOrderAmountTrend = async (): Promise<OrderTrendItem[]> => {
-  const response = await get<ApiResponse<{ trend: OrderTrendItem[] }>>(`${COOKIE_PREFIX}/stats/order-trend`)
-  if (!response.success || !response.data) {
-    throw new Error(response.message || '获取订单金额趋势失败')
+  const response = await get<ApiResponse<{ trend: OrderTrendItem[] }> | null>(`${COOKIE_PREFIX}/stats/order-trend`)
+  if (response?.success !== true || !Array.isArray(response.data?.trend)) {
+    throw new ApiBusinessError(response?.message || '获取订单金额趋势失败', response?.code)
   }
   return response.data.trend
 }

@@ -217,15 +217,24 @@ class OrderService:
         total = total_result.scalar() or 0
         
         offset = (page - 1) * page_size
-        # MySQL 倒序时 NULL 在最后。全局索引按下单时间、状态排列，末尾包含 InnoDB 主键。
-        # 明确并列项的次序，避免翻页切换执行计划时返回重复订单。
-        ordering = [XYOrder.placed_at.desc()]
-        if owner_id is None:
-            ordering.append(XYOrder.status.desc())
-        ordering.append(XYOrder.id.desc())
-        stmt = base_stmt.order_by(*ordering).offset(offset).limit(page_size)
-        result = await self.session.execute(stmt)
-        orders = list(result.scalars().all())
+        # 下单时间相同按主键倒序，订单状态更新时不改变默认分页顺序。时间为空的记录排在最后。
+        stmt = base_stmt.order_by(XYOrder.placed_at.desc(), XYOrder.id.desc()).offset(offset).limit(page_size)
+        orders = []
+        if not conditions and offset + page_size <= total:
+            # 先用现有索引定位页尾时间，外层仅对到达本页所需的时间范围排序。
+            # 包含页尾同一时间的全部记录，由主键决定它们在当前页的位置。
+            page_end_time = (
+                select(XYOrder.placed_at)
+                .order_by(XYOrder.placed_at.desc())
+                .offset(offset + page_size - 1).limit(1)
+                .correlate(None).scalar_subquery()
+            )
+            result = await self.session.execute(stmt.where(XYOrder.placed_at >= page_end_time))
+            orders = list(result.scalars().all())
+        if len(orders) < page_size:
+            # 末页不足一页或页尾时间为空时，使用完整排序读取该页。
+            result = await self.session.execute(stmt)
+            orders = list(result.scalars().all())
         
         item_ids = [order.item_id for order in orders if order.item_id]
         item_titles = await self._get_item_titles(owner_id, item_ids)

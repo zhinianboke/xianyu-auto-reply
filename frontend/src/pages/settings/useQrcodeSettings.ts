@@ -1,5 +1,5 @@
 /** 系统设置二维码读取与上传逻辑。 */
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { getQrcodeUrl, uploadQrcode } from '@/api/settings'
 import { useUIStore } from '@/store/uiStore'
 import { getApiErrorMessage } from '@/utils/apiError'
@@ -34,20 +34,21 @@ export function useQrcodeSettings() {
   const { addToast } = useUIStore()
   const [urls, setUrls] = useState<QrcodeUrls>(emptyUrls)
   const [uploading, setUploading] = useState<QrcodeUploading>(emptyUploading)
+  const uploadRevisions = useRef<Partial<Record<QrcodeType, number>>>({})
 
   const loadQrcodes = useCallback(async () => {
-    const results = await Promise.allSettled(QRCODE_TYPES.map(async (type) => ({
-      type,
-      result: await getQrcodeUrl(type),
-    })))
+    const uploadsAtStart = { ...uploadRevisions.current }
+    const results = await Promise.allSettled(QRCODE_TYPES.map(getQrcodeUrl))
     const loadedUrls: Partial<QrcodeUrls> = {}
     const failureMessages: string[] = []
-    results.forEach((item) => {
+    results.forEach((item, index) => {
+      const type = QRCODE_TYPES[index]
+      if (uploadRevisions.current[type] !== uploadsAtStart[type]) return
       if (item.status === 'rejected') {
         failureMessages.push(getApiErrorMessage(item.reason, '二维码加载失败'))
         return
       }
-      const { type, result } = item.value
+      const result = item.value
       if (result.success && result.data?.image_url) loadedUrls[type] = result.data.image_url
       else if (result.message === '二维码未配置') loadedUrls[type] = ''
       else if (!result.success) failureMessages.push(result.message || `${QRCODE_LABELS[type]}加载失败`)
@@ -62,8 +63,10 @@ export function useQrcodeSettings() {
     setUploading((current) => ({ ...current, [type]: true }))
     try {
       const result = await uploadQrcode(type, file)
-      if (result.success && result.data?.image_url) {
-        setUrls((current) => ({ ...current, [type]: `${result.data?.image_url}?t=${Date.now()}` }))
+      const imageUrl = result.data?.image_url
+      if (result.success && imageUrl) {
+        uploadRevisions.current[type] = (uploadRevisions.current[type] ?? 0) + 1
+        setUrls((current) => ({ ...current, [type]: imageUrl }))
         addToast({ type: 'success', message: `${QRCODE_LABELS[type]}上传成功` })
       } else {
         addToast({ type: 'error', message: result.message || '上传失败' })

@@ -1,4 +1,5 @@
 import { del, get, post, put } from '@/utils/request'
+import { ApiBusinessError } from '@/utils/apiError'
 import type { ApiResponse, User, UserRole, UserStatus } from '@/types'
 
 // API前缀
@@ -432,18 +433,11 @@ export interface TodayStats {
   today_agent_orders: number
 }
 
-/** 保留业务错误码，便于页面区分权限拒绝和临时查询失败。 */
-export class DashboardStatsError extends Error {
-  constructor(message: string, readonly code?: number) {
-    super(message)
-  }
-}
-
 /** 读取现有扁平统计响应，空响应或业务失败统一交给调用方展示。 */
 async function getDashboardStats<T>(path: string, fallback: string): Promise<T> {
   const response = await get<(T & Pick<ApiResponse, 'success' | 'message' | 'code'>) | null>(`${ADMIN_PREFIX}${path}`)
   if (response?.success !== true) {
-    throw new DashboardStatsError(response?.message || fallback, response?.code)
+    throw new ApiBusinessError(response?.message || fallback, response?.code)
   }
   return response
 }

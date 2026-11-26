@@ -23,11 +23,11 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
+from app.core.qrcode_files import STATIC_ROOT, QrcodeStaticFiles
 from app.services.db_backup_log_service import DbBackupLogService
 from app.services.system_setting_service import SystemSettingService
 from common.core.request_origin_log import RequestOriginLoggingMiddleware
@@ -140,7 +140,7 @@ async def lifespan(app: FastAPI):
     log_retention_sync_task = asyncio.create_task(run_db_log_retention_sync())
     
     # 确保上传目录存在
-    static_path = Path(settings.static_dir)
+    static_path = STATIC_ROOT
     upload_dirs = [
         static_path / "uploads",
         static_path / "uploads" / "face",
@@ -271,11 +271,10 @@ app.add_middleware(
 )
 app.add_middleware(RequestOriginLoggingMiddleware)
 
-# 挂载静态文件目录
-static_path = Path(settings.static_dir)
-if static_path.exists():
-    app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
-    logger.info(f"静态文件路径已挂载: /static -> {static_path.absolute()}")
+# 静态资源和二维码上传使用同一个配置目录。
+STATIC_ROOT.mkdir(parents=True, exist_ok=True)
+app.mount("/static", QrcodeStaticFiles(directory=str(STATIC_ROOT)), name="static")
+logger.info("静态文件路径已挂载: /static -> {}", STATIC_ROOT)
 
 
 # 挂载API路由

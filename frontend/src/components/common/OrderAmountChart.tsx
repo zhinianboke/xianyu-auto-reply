@@ -7,7 +7,6 @@
  * 3. 支持暗黑模式
  * 4. 自适应手机端
  */
-import { useEffect, useState } from 'react'
 import {
   ResponsiveContainer,
   AreaChart,
@@ -18,8 +17,7 @@ import {
   Tooltip,
 } from 'recharts'
 import { TrendingUp, RefreshCw } from 'lucide-react'
-import { getOrderAmountTrend, type OrderTrendItem } from '@/api/accounts'
-import { useUIStore } from '@/store/uiStore'
+import type { OrderTrendItem } from '@/api/accounts'
 
 /** 自定义Tooltip组件 */
 function ChartTooltip({ active, payload, label }: {
@@ -43,32 +41,15 @@ function ChartTooltip({ active, payload, label }: {
   )
 }
 
-export function OrderAmountChart() {
-  const { addToast } = useUIStore()
-  const [loading, setLoading] = useState(true)
-  const [data, setData] = useState<OrderTrendItem[]>([])
-
-  /** 加载趋势数据 */
-  const loadTrend = async () => {
-    try {
-      setLoading(true)
-      const result = await getOrderAmountTrend()
-      setData(result)
-    } catch {
-      addToast({ type: 'error', message: '加载订单金额趋势失败' })
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    loadTrend()
-  }, [])
-
-  // 计算汇总数据
-  const totalAmount = data.reduce((s, d) => s + d.amount, 0)
-  const totalCount = data.reduce((s, d) => s + d.count, 0)
-  const maxAmount = Math.max(...data.map(d => d.amount), 0)
+/** 展示仪表盘已授权的趋势结果和独立加载状态。 */
+export function OrderAmountChart({ data, loading, onRefresh }: {
+  data: OrderTrendItem[] | null
+  loading: boolean
+  onRefresh: () => void
+}) {
+  const totalAmount = data ? `¥${data.reduce((sum, day) => sum + day.amount, 0).toFixed(2)}` : '-'
+  const totalCount = data ? `${data.reduce((sum, day) => sum + day.count, 0)}笔` : '-'
+  const maxAmount = data ? `¥${Math.max(...data.map(day => day.amount), 0).toFixed(2)}` : '-'
 
   return (
     <div className="vben-card">
@@ -83,24 +64,25 @@ export function OrderAmountChart() {
             <div className="text-slate-500 dark:text-slate-400">
               累计金额
               <span className="ml-1 font-semibold text-blue-600 dark:text-blue-400">
-                ¥{totalAmount.toFixed(2)}
+                {totalAmount}
               </span>
             </div>
             <div className="text-slate-500 dark:text-slate-400">
               累计订单
               <span className="ml-1 font-semibold text-emerald-600 dark:text-emerald-400">
-                {totalCount}笔
+                {totalCount}
               </span>
             </div>
             <div className="text-slate-500 dark:text-slate-400">
               峰值金额
               <span className="ml-1 font-semibold text-rose-600 dark:text-rose-400">
-                ¥{maxAmount.toFixed(2)}
+                {maxAmount}
               </span>
             </div>
           </div>
           <button
-            onClick={loadTrend}
+            onClick={onRefresh}
+            disabled={loading}
             className="p-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
             title="刷新"
           >
@@ -111,16 +93,16 @@ export function OrderAmountChart() {
       <div className="vben-card-body">
         {/* 手机端汇总指标 */}
         <div className="sm:hidden flex items-center justify-between mb-3 text-xs text-slate-500 dark:text-slate-400">
-          <span>累计 <b className="text-blue-600 dark:text-blue-400">¥{totalAmount.toFixed(2)}</b></span>
-          <span>订单 <b className="text-emerald-600 dark:text-emerald-400">{totalCount}笔</b></span>
-          <span>峰值 <b className="text-rose-600 dark:text-rose-400">¥{maxAmount.toFixed(2)}</b></span>
+          <span>累计 <b className="text-blue-600 dark:text-blue-400">{totalAmount}</b></span>
+          <span>订单 <b className="text-emerald-600 dark:text-emerald-400">{totalCount}</b></span>
+          <span>峰值 <b className="text-rose-600 dark:text-rose-400">{maxAmount}</b></span>
         </div>
 
         {loading ? (
           <div className="flex items-center justify-center h-56 sm:h-64">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
           </div>
-        ) : (
+        ) : data ? (
           <div className="h-56 sm:h-64">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={data} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
@@ -165,6 +147,10 @@ export function OrderAmountChart() {
                 />
               </AreaChart>
             </ResponsiveContainer>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center h-56 sm:h-64 text-sm text-slate-500 dark:text-slate-400">
+            订单金额趋势暂不可用
           </div>
         )}
       </div>

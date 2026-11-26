@@ -1,6 +1,19 @@
 import axios from 'axios'
 import type { ApiResponse } from '@/types'
 
+/** 保存后端业务错误码，同时让现有错误提示方法读取原始消息。 */
+export class ApiBusinessError extends Error {
+  constructor(message: string, readonly code?: number) {
+    super(message)
+  }
+}
+
+/** 识别统一业务响应或 HTTP 响应中明确的权限拒绝。 */
+export function isApiForbidden(error: unknown): boolean {
+  return (error instanceof ApiBusinessError && error.code === 403)
+    || (axios.isAxiosError(error) && error.response?.status === 403)
+}
+
 /** FastAPI 校验失败（422）的单条明细结构。 */
 interface ValidationDetailItem {
   loc?: Array<string | number>

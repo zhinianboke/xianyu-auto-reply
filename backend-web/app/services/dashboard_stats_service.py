@@ -37,8 +37,9 @@ logger = logging.getLogger(__name__)
 class DashboardStatsService:
     """仪表盘统计聚合服务。"""
 
-    # Online cookies cache: (timestamp, count)
+    # 在线账号数缓存和当前共享的 HTTP 查询，不持有数据库会话。
     _online_cookies_cache: tuple[float, int] | None = None
+    _online_cookies_task: asyncio.Task[int | None] | None = None
     _ONLINE_COOKIES_CACHE_TTL = 10  # seconds
 
     # Online account-id set cache: (timestamp, frozenset[account_id])
@@ -280,14 +281,22 @@ class DashboardStatsService:
             "remaining_account_count": limit_status["remaining_count"],
         }
 
-    async def _get_online_cookies_count(self) -> int | None:
-        """获取真实在线账号数；单次请求最多三秒，失败返回None并由接口说明原因。"""
+    @classmethod
+    async def get_online_cookies_count(cls) -> int | None:
+        """读取真实在线账号数。同一进程并发请求共用查询，失败返回未知。"""
         now = time.monotonic()
-        if self.__class__._online_cookies_cache is not None:
-            ts, count = self.__class__._online_cookies_cache
-            if now - ts < self._ONLINE_COOKIES_CACHE_TTL:
+        if cls._online_cookies_cache is not None:
+            ts, count = cls._online_cookies_cache
+            if now - ts < cls._ONLINE_COOKIES_CACHE_TTL:
                 return count
+        if cls._online_cookies_task is None:
+            cls._online_cookies_task = asyncio.create_task(cls._fetch_online_cookies_count())
+        # 某个 HTTP 客户端取消等待时，其他请求仍可收到共同的查询结果。
+        return await asyncio.shield(cls._online_cookies_task)
 
+    @classmethod
+    async def _fetch_online_cookies_count(cls) -> int | None:
+        """向消息服务发送一次限时请求，只缓存真实且有效的账号数。"""
         try:
             settings = get_settings()
             url = f"{settings.websocket_service_url.rstrip('/')}/internal/accounts/connection-stats"
@@ -296,15 +305,14 @@ class DashboardStatsService:
                 count = (response.get("data") or {}).get("connected")
                 if type(count) is not int or count < 0:
                     raise ValueError("消息服务返回的在线账号数量无效")
-                latest = self.__class__._online_cookies_cache
-                if latest is not None and latest[0] > now:
-                    return latest[1]
-                self.__class__._online_cookies_cache = (now, count)
+                cls._online_cookies_cache = (time.monotonic(), count)
                 return count
             raise ValueError(f"消息服务查询失败：{response}")
         except Exception:
             logger.exception("获取仪表盘在线账号数失败")
-        return None
+            return None
+        finally:
+            cls._online_cookies_task = None
 
     async def get_online_account_ids(self) -> frozenset[str]:
         """实时获取真实 WebSocket 在线账号 ID 集合（10 秒 TTL 缓存）。
@@ -334,22 +342,18 @@ class DashboardStatsService:
         self.__class__._online_ids_cache = (now, frozenset())
         return frozenset()
 
-    async def get_admin_dashboard_stats(self, *, current_user_id: int) -> dict[str, int | str | None]:
-        """获取管理员首页全局统计。"""
+    async def get_admin_dashboard_stats(self, *, current_user_id: int) -> dict[str, int | None]:
+        """从数据库读取管理员全局统计和当前用户的账号额度。"""
         today_start = self._build_today_start()
         totals = await self._get_global_totals()
         admin_stats = await DashboardStatsCacheService.get_snapshot(
             "admin_overview", lambda: self._load_admin_overview(today_start), snapshot_day=today_start.date(),
         )
         limit_status = await self._get_limit_status(current_user_id)
-        online_cookies = await self._get_online_cookies_count()
-
         return {
             "total_users": int(admin_stats["total_users"]),
             "total_cookies": totals["total_accounts"],
             "active_cookies": totals["active_accounts"],
-            "online_cookies": online_cookies,
-            "online_cookies_message": "查询成功" if online_cookies is not None else "在线账号数量暂不可用，请稍后刷新",
             "total_keywords": totals["total_keywords"],
             "total_orders": totals["valid_orders"],
             "today_reply_count": int(admin_stats["today_reply_count"]),

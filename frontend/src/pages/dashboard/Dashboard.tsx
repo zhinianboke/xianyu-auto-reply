@@ -1,93 +1,29 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Activity, Calendar, MessageSquare, RefreshCw, Shield, ShoppingCart, Users, Package, Clock, DollarSign } from 'lucide-react'
-import { type AccountStats, getAccountStats } from '@/api/accounts'
-import { DashboardStatsError, type AdminStats, type TodayStats, getAdminStats, getTodayStats } from '@/api/admin'
-import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { OrderAmountChart } from '@/components/common/OrderAmountChart'
 import { PublicAdvertisements } from '@/components/common/PublicAdvertisements'
 import { usePublicAdvertisements } from '@/components/common/usePublicAdvertisements'
-import { getApiErrorMessage } from '@/utils/apiError'
+import { useDashboardStats } from './useDashboardStats'
 
 export function Dashboard() {
   const { isAuthenticated, token, _hasHydrated, user } = useAuthStore()
   if (!_hasHydrated || !isAuthenticated || !token || user?.user_id == null) return null
 
   // 按用户和权限隔离上次成功的数据。相同用户刷新时仍可保留这些结果。
-  return <DashboardContent key={`${user.user_id}:${user.is_admin}`} token={token} isAdmin={user.is_admin} />
+  return <DashboardContent key={`${user.user_id}:${user.is_admin}`} userId={user.user_id} token={token} isAdmin={user.is_admin} />
 }
 
-function DashboardContent({ token, isAdmin }: { token: string; isAdmin: boolean }) {
-  const { addToast } = useUIStore()
-  const [statsLoading, setStatsLoading] = useState(true)
-  const [adminStatsLoading, setAdminStatsLoading] = useState(true)
-  const [todayStatsLoading, setTodayStatsLoading] = useState(true)
-  const [stats, setStats] = useState<AccountStats | null>(null)
-  const [adminStats, setAdminStats] = useState<AdminStats | null>(null)
-  const [todayStats, setTodayStats] = useState<TodayStats | null>(null)
-  const [deniedToken, setDeniedToken] = useState<string | null>(null)
-  const canLoadAdmin = isAdmin && deniedToken !== token
-  const loadSequence = useRef(0)
+function DashboardContent({ userId, token, isAdmin }: { userId: number; token: string; isAdmin: boolean }) {
+  const { stats, adminStats, todayStats, trend, loading, blocked, checking, refresh } = useDashboardStats(userId, token, isAdmin)
   const advertisements = usePublicAdvertisements()
   const { loadAds } = advertisements
-
-  /** 各组统计独立加载，只应用最近一次刷新返回的数据。 */
-  const loadDashboard = useCallback(() => {
-    const sequence = ++loadSequence.current
-
-    const loadSection = async <T,>(
-      request: () => Promise<T>,
-      applyResult: (result: T) => void,
-      setLoading: (loading: boolean) => void,
-      fallback: string,
-      requiresAdmin = false,
-    ) => {
-      setLoading(true)
-      try {
-        const result = await request()
-        if (sequence === loadSequence.current) applyResult(result)
-      } catch (error) {
-        if (sequence === loadSequence.current) {
-          addToast({ type: 'error', message: getApiErrorMessage(error, fallback) })
-          if (requiresAdmin && error instanceof DashboardStatsError && error.code === 403) {
-            loadSequence.current += 1
-            setStats(null)
-            setAdminStats(null)
-            setTodayStats(null)
-            setDeniedToken(token)
-          }
-        }
-      } finally {
-        if (sequence === loadSequence.current) setLoading(false)
-      }
-    }
-
-    void loadSection(getAccountStats, setStats, setStatsLoading, '加载统计数据失败')
-    if (canLoadAdmin) {
-      void loadSection(getAdminStats, result => {
-        setAdminStats(result)
-        if (result.online_cookies == null) {
-          addToast({ type: 'error', message: result.online_cookies_message || '在线账号数量暂不可用' })
-        }
-      }, setAdminStatsLoading, '加载管理员统计失败', true)
-      void loadSection(getTodayStats, setTodayStats, setTodayStatsLoading, '加载今日统计失败', true)
-    }
-    void loadAds()
-  }, [canLoadAdmin, token, addToast, loadAds])
-
-  useEffect(() => {
-    loadDashboard()
-    return () => { loadSequence.current += 1 }
-  }, [loadDashboard])
+  useEffect(() => { void loadAds() }, [loadAds])
 
   const refreshDashboard = () => {
-    // 手动刷新可重新确认服务端权限，涵盖同一登录会话内权限恢复的情况。
-    if (deniedToken === token) {
-      setDeniedToken(null)
-    } else {
-      loadDashboard()
-    }
+    refresh()
+    void loadAds()
   }
 
   const statCards = [
@@ -173,7 +109,7 @@ function DashboardContent({ token, isAdmin }: { token: string; isAdmin: boolean 
           <h1 className="page-title">仪表盘</h1>
           <p className="page-description">系统概览和统计信息</p>
         </div>
-        <button onClick={refreshDashboard} className="btn-ios-secondary">
+        <button onClick={refreshDashboard} disabled={checking} className="btn-ios-secondary">
           <RefreshCw className="w-4 h-4" />
           <span className="hidden sm:inline">刷新数据</span>
           <span className="sm:hidden">刷新</span>
@@ -182,7 +118,7 @@ function DashboardContent({ token, isAdmin }: { token: string; isAdmin: boolean 
 
       {/* Stats cards */}
       <div className="flex flex-nowrap gap-2 sm:gap-3 overflow-x-auto pb-1 scrollbar-visible">
-        {statsLoading ? (
+        {loading.account ? (
           // 骨架屏
           Array.from({ length: statCards.length }).map((_, index) => (
             <SkeletonCard key={index} />
@@ -214,7 +150,7 @@ function DashboardContent({ token, isAdmin }: { token: string; isAdmin: boolean 
       <PublicAdvertisements placement="dashboard" {...advertisements} />
 
       {/* Admin Stats - 管理员专属 */}
-      {canLoadAdmin && (
+      {isAdmin && !blocked && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -228,7 +164,7 @@ function DashboardContent({ token, isAdmin }: { token: string; isAdmin: boolean 
             </h2>
           </div>
           <div className="vben-card-body">
-            {adminStatsLoading ? (
+            {loading.admin ? (
               <div className="flex items-center justify-center py-8">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
               </div>
@@ -281,16 +217,16 @@ function DashboardContent({ token, isAdmin }: { token: string; isAdmin: boolean 
       )}
 
       {/* 订单金额趋势折线图（所有用户可见） */}
-      <motion.div
+      {!blocked && <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.35, duration: 0.3 }}
       >
-        <OrderAmountChart key={canLoadAdmin ? 'admin' : 'self'} />
-      </motion.div>
+        <OrderAmountChart data={trend} loading={loading.trend} onRefresh={() => refresh(true)} />
+      </motion.div>}
 
       {/* Today Stats - 今日统计（管理员专属） */}
-      {canLoadAdmin && (
+      {isAdmin && !blocked && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -304,7 +240,7 @@ function DashboardContent({ token, isAdmin }: { token: string; isAdmin: boolean 
             </h2>
           </div>
           <div className="vben-card-body">
-            {todayStatsLoading ? (
+            {loading.today ? (
               <div className="flex items-center justify-center py-8">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
               </div>
