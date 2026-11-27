@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from common.db.session import async_session_maker
 from common.models.xy_account import XYAccount
 from common.models.ai_chat_message import AIChatMessage
+from common.models.auto_reply_message_log import XYAutoReplyMessageLog
 from app.services.xianyu.resource_manager import pause_manager
 from common.services.ai_provider_service import (
     DEFAULT_AI_BASE_URL,
@@ -705,6 +706,108 @@ class AIReplyEngine:
             logger.error(f"Anthropic API调用失败: {e}")
             raise
 
+    # 无实质上下文价值的系统提示消息（过滤掉避免干扰AI）
+    _NOISY_SYSTEM_MESSAGES = {
+        "AI正在帮你回复消息，不错过每笔订单",
+        "发来一条消息",
+        "发来一条新消息",
+        "有蚂蚁森林能量可领",
+        "查看商品详情",
+        "温馨提醒：商品信息近期有过变更",
+    }
+
+    async def _build_enriched_context(
+        self,
+        chat_id: str,
+        cookie_id: str,
+        current_message: str,
+        fallback_context: List[Dict[str, str]],
+        db_session: AsyncSession,
+    ) -> tuple[str, str]:
+        """结合自动回复总日志表构建完整会话上下文，返回 (对话历史文本, 交易状态说明)"""
+        try:
+            stmt = (
+                select(
+                    XYAutoReplyMessageLog.sender_user_id,
+                    XYAutoReplyMessageLog.source_message,
+                    XYAutoReplyMessageLog.decision_reason,
+                    XYAutoReplyMessageLog.reply_strategy,
+                    XYAutoReplyMessageLog.reply_text,
+                )
+                .where(
+                    XYAutoReplyMessageLog.chat_id == chat_id,
+                    XYAutoReplyMessageLog.account_id == cookie_id,
+                )
+                .order_by(XYAutoReplyMessageLog.id.desc())
+                .limit(30)
+            )
+            result = await db_session.execute(stmt)
+            rows = list(reversed(result.all()))
+        except Exception as e:
+            logger.warning(f"【{cookie_id}】查询扩展会话日志失败，回退至基础上下文: {e}")
+            rows = []
+
+        if not rows:
+            lines = [f"{msg['role']}: {msg['content']}" for msg in fallback_context[-10:]]
+            return "\n".join(lines), "售前咨询阶段（尚未下单）"
+
+        history_lines: List[str] = []
+        has_ordered = False
+        has_delivered = False
+        pinned_delivery_line: Optional[str] = None
+
+        for sender_user_id, source_msg, decision_reason, reply_strategy, reply_text in rows:
+            src = (source_msg or "").strip()
+            rep = (reply_text or "").strip()
+
+            if reply_strategy == "auto_delivery" or decision_reason == "auto_delivery":
+                has_ordered = True
+                has_delivered = True
+                summary = self._shorten_text(rep, 160) if rep else "已发送卡券/网盘内容"
+                pinned_delivery_line = f"assistant(系统已自动发货): {summary}"
+                history_lines.append(pinned_delivery_line)
+                continue
+
+            if decision_reason == "self_message":
+                if src:
+                    history_lines.append(f"assistant(店主本人回复): {self._shorten_text(src, 160)}")
+                continue
+
+            if decision_reason in ("system_message", "auto_delivery_trigger"):
+                if src and src not in self._NOISY_SYSTEM_MESSAGES:
+                    if any(k in src for k in ("拍下", "付款", "发货", "收货")):
+                        has_ordered = True
+                    if "已发货" in src:
+                        has_delivered = True
+                    history_lines.append(f"system(交易状态): {src}")
+                continue
+
+            # 普通买家消息
+            if src:
+                history_lines.append(f"user: {self._shorten_text(src, 160)}")
+            if rep:
+                history_lines.append(f"assistant: {self._shorten_text(rep, 160)}")
+
+        # 追加当前刚收到的买家消息（当前消息在 handle_chat_message 结束时才写入日志表）
+        cur = (current_message or "").strip()
+        if cur:
+            last_user_line = f"user: {self._shorten_text(cur, 160)}"
+            if not history_lines or history_lines[-1] != last_user_line:
+                history_lines.append(last_user_line)
+
+        if has_delivered:
+            trade_status = "买家已付款且系统已完成自动发货（当前为售后阶段，请直接解答问题，切勿再催促买家拍下或购买）"
+        elif has_ordered:
+            trade_status = "买家已拍下/付款（请勿再催促买家拍下）"
+        else:
+            trade_status = "售前咨询阶段"
+
+        tail_lines = history_lines[-14:]
+        if pinned_delivery_line and pinned_delivery_line not in tail_lines:
+            tail_lines = [pinned_delivery_line] + tail_lines
+
+        return "\n".join(tail_lines), trade_status
+
     async def generate_reply(
         self,
         message: str,
@@ -855,12 +958,13 @@ class AIReplyEngine:
                         
                         return refuse_reply
                 
-                # 构建提示词
+                # 构建提示词（strict=False 允许字符串内包含粘贴带入的换行等控制字符）
                 custom_prompts = settings.get("custom_prompts", "")
                 if isinstance(custom_prompts, str) and custom_prompts:
                     try:
-                        custom_prompts = json.loads(custom_prompts)
-                    except Exception:
+                        custom_prompts = json.loads(custom_prompts, strict=False)
+                    except Exception as e:
+                        logger.warning(f"【{cookie_id}】解析 custom_prompts JSON 失败，回退默认提示词: {e}")
                         custom_prompts = {}
                 elif not isinstance(custom_prompts, dict):
                     custom_prompts = {}
@@ -881,10 +985,14 @@ class AIReplyEngine:
                 
                 logger.info(f"[AI回复] 商品信息构建完成: {item_desc}")
                 
-                # 构建对话历史
-                context_str = "\n".join([
-                    f"{msg['role']}: {msg['content']}" for msg in context[-10:]
-                ])
+                # 构建包含系统交易状态、自动发货与店主人工回复的完整对话历史
+                context_str, trade_status_desc = await self._build_enriched_context(
+                    chat_id=chat_id,
+                    cookie_id=cookie_id,
+                    current_message=message,
+                    fallback_context=context,
+                    db_session=db_session,
+                )
                 
                 # 构建用户消息
                 max_bargain_rounds = settings.get("max_bargain_rounds", 3)
@@ -893,6 +1001,8 @@ class AIReplyEngine:
                 
                 user_prompt = f"""商品信息：
 {item_desc}
+
+当前交易状态：{trade_status_desc}
 
 对话历史：
 {context_str}
