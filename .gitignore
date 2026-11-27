@@ -198,6 +198,9 @@ xianyu_auto_reply/
 # ------------------------------------------
 test/
 tests/
+!tests/
+tests/*
+!tests/test_bark_chat_notification.py
 
 # ------------------------------------------
 # 静态资源（根目录）

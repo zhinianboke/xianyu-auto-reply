@@ -16,6 +16,7 @@ from common.utils.notification_utils import (
     send_webhook_notification,
     send_wechat_notification,
 )
+from common.utils.bark_notification import prepare_bark_chat_notification
 
 
 async def dispatch_notification(
@@ -23,6 +24,8 @@ async def dispatch_notification(
     config: dict,
     message: str,
     attachment_path: str | None = None,
+    notification_type: str | None = None,
+    template_context: dict | None = None,
     **email_context,
 ) -> bool:
     """按渠道调用公共发送函数，返回实际结果。
@@ -49,6 +52,11 @@ async def dispatch_notification(
         "telegram": send_telegram_notification,
         "pushplus": send_pushplus_notification,
     }
+    if channel_type == "bark" and notification_type == "chat":
+        config, message = prepare_bark_chat_notification(
+            config, message, template_context or {}
+        )
+
     if channel_type == "email":
         success = await send_email_notification(config, message, attachment_path, **email_context)
     else:
