@@ -40,6 +40,20 @@ from common.services.ai_provider_service import (
 )
 
 
+def _int_setting(value: Any, default: int) -> int:
+    """安全转换整型设置值，保留用户显式设置的 0。
+
+    ``value or default`` 会把合法的 0 配置（如"0优惠/0议价轮数"）当作
+    falsy 吞掉并回退为默认值，导致 AI 仍按默认议价策略降价（#241）。
+    """
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class AIReplyEngine:
     """AI回复引擎
     
@@ -293,7 +307,11 @@ class AIReplyEngine:
             price_keywords = [
                 "便宜", "优惠", "刀", "降价", "价格", "多少钱",
                 "能少", "还能", "最低", "底价", "实诚价", "到100", "能到",
-                "包个邮"
+                "包个邮",
+                # 常见议价话术补充（#241）："再少一点吧"、"最少多少"等此前无法命中
+                # price 意图，导致议价轮数限制被完全绕过
+                "少一点", "少点", "再少", "最少", "降点", "让一点",
+                "包邮", "抹个零", "抹零",
             ]
             if any(kw in msg_lower for kw in price_keywords):
                 logger.debug(f"【{cookie_id}】本地意图检测: price ({message[:20]}...)")
@@ -433,9 +451,9 @@ class AIReplyEngine:
         payload["api_key"] = clean_ai_text(payload.get("api_key"))
         payload["base_url"] = clean_ai_text(payload.get("base_url"))
         payload["model_name"] = clean_ai_text(payload.get("model_name"))
-        payload["max_bargain_rounds"] = int(payload.get("max_bargain_rounds") or 3)
-        payload["max_discount_percent"] = int(payload.get("max_discount_percent") or 10)
-        payload["max_discount_amount"] = int(payload.get("max_discount_amount") or 100)
+        payload["max_bargain_rounds"] = _int_setting(payload.get("max_bargain_rounds"), 3)
+        payload["max_discount_percent"] = _int_setting(payload.get("max_discount_percent"), 10)
+        payload["max_discount_amount"] = _int_setting(payload.get("max_discount_amount"), 100)
         payload["custom_prompts"] = payload.get("custom_prompts") or ""
         payload["ai_time_range_start"] = payload.get("ai_time_range_start") or ""
         payload["ai_time_range_end"] = payload.get("ai_time_range_end") or ""
@@ -890,6 +908,14 @@ class AIReplyEngine:
                 max_bargain_rounds = settings.get("max_bargain_rounds", 3)
                 max_discount_percent = settings.get("max_discount_percent", 10)
                 max_discount_amount = settings.get("max_discount_amount", 100)
+                
+                # 优惠上限为0表示卖家不接受任何议价：追加硬约束，
+                # 避免默认议价提示词的"递减优惠"策略诱导模型仍然给出降价（#241）
+                if intent == "price" and max_discount_percent <= 0 and max_discount_amount <= 0:
+                    system_prompt += (
+                        "\n硬性约束：最大优惠百分比与最大优惠金额均为0，卖家不接受任何议价。"
+                        "必须礼貌而坚定地拒绝降价，不得承诺或暗示任何优惠、折扣、改价。"
+                    )
                 
                 user_prompt = f"""商品信息：
 {item_desc}
