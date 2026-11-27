@@ -35,6 +35,7 @@ from common.db.error_messages import get_public_database_error_message
 from common.db.init_database import init_database
 from common.db.redis_client import close_redis_client, initialize_redis_client
 from common.db.session import async_engine, async_session_maker
+from common.services.geetest import get_geetest_config
 from common.utils.async_cleanup import complete_before_cancellation
 from common.utils.logging_utils import setup_logging
 from common.utils.network_utils import resolve_listen_host
@@ -76,6 +77,7 @@ async def check_database_connection():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
+    get_geetest_config()
     logger.info(f"{settings.project_name} 启动中...")
     logger.info(f"服务端口: {settings.service_port}")
     logger.info(f"数据库: {settings.mysql_host}:{settings.mysql_port}/{settings.mysql_database}")

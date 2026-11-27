@@ -147,6 +147,8 @@ RATE_INTERVAL=20
 
 # 验证码并发数
 MAX_CAPTCHA_CONCURRENT=3
+
+# 极验滑动验证码可选配置见 backend-web/.env.example，未填写沿用默认值。
 ENVEOF
     echo -e "${GREEN}✓ 已生成 .env 文件，如需修改请编辑后重新运行${NC}"
     echo ""

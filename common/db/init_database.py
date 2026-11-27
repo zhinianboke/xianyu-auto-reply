@@ -38,10 +38,13 @@ from common.db.notification_schema import ensure_notification_schema
 from common.db.card_schema import ensure_card_schema
 from common.db.auth_security_schema import ensure_auth_security_schema
 from common.db.registration_log_schema import ensure_registration_log_schema
+from common.db.query_indexes import ensure_query_indexes
 from common.db.session import async_engine, async_session_maker
 from common.db.query_conditions import not_deleted
 from common.models.card import Card
 from common.models.card_item_relation import CardItemRelation
+from common.models.listing_monitor_item import LISTING_MONITOR_ITEM_QUERY_INDEXES, ListingMonitorItem
+from common.models.risk_control_log import RISK_LOG_CREATED_INDEX, XYRiskControlLog
 from common.services.notification_types import NOTIFICATION_TYPE_DICTIONARY
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.security import generate_secret_key, get_password_hash
@@ -829,7 +832,8 @@ class DatabaseInitializer:
                 INDEX idx_rcl_account_status (account_id, processing_status),
                 INDEX idx_rcl_identifier_status_created (account_identifier, processing_status, created_at),
                 INDEX idx_rcl_status_event (processing_status, event_type),
-                INDEX idx_rcl_owner_created (owner_id, created_at)
+                INDEX idx_rcl_owner_created (owner_id, created_at),
+                INDEX idx_rcl_created_id (created_at, id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='风控日志表';
         """,
 
@@ -1839,6 +1843,8 @@ class DatabaseInitializer:
                 INDEX idx_lmi_order_pending (is_ordered, order_attempts),
                 INDEX idx_lmi_item_ordered (item_id, is_ordered),
                 INDEX idx_lmi_owner_publish (owner_id, publish_time),
+                INDEX idx_lmi_publish_created (publish_time, id, created_at),
+                INDEX idx_lmi_owner_created_publish_id (owner_id, created_at, publish_time, id),
                 INDEX idx_lmi_owner_order_pending (owner_id, is_ordered, created_at, order_attempts),
                 INDEX idx_lmi_owner_task_created (owner_id, monitor_task_id, created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品监控采集商品信息表';
@@ -2372,9 +2378,15 @@ class DatabaseInitializer:
                     async with ddl_connection() as conn:
                         await ensure_scheduled_publish_rule_schema(conn)
 
-                    # 商品管理与卡券待选商品索引统一自检，只补齐缺失索引。
+                    # 商品、采集商品和风控日志查询索引在同一个启动锁下补齐。
                     async with ddl_connection() as conn:
                         await ensure_item_query_indexes(conn)
+                        await ensure_query_indexes(
+                            conn, ListingMonitorItem.__table__, LISTING_MONITOR_ITEM_QUERY_INDEXES, label="采集商品查询",
+                        )
+                        await ensure_query_indexes(
+                            conn, XYRiskControlLog.__table__, (RISK_LOG_CREATED_INDEX,), label="风控日志查询",
+                        )
 
                     # API关键词配置供自动回复执行，表结构与中文字典统一幂等补齐。
                     async with ddl_connection() as conn:

@@ -32,9 +32,88 @@ declare global {
   }
 }
 
-// 全局缓存：极验SDK加载状态（SDK只需加载一次）
-let geetestScriptLoaded = false
-let geetestScriptLoading: Promise<void> | null = null
+type GeetestInitializer = NonNullable<Window['initGeetest']>
+const DEFAULT_GEETEST_SDK_URL = 'https://static.geetest.com/static/tools/gt.js'
+const GEETEST_SDK_TIMEOUT_MS = 10000
+const geetestScriptLoaders = new Map<string, Promise<GeetestInitializer>>()
+let pendingScript: Promise<GeetestInitializer> | undefined
+let loadedSdkUrl: string | undefined
+
+/** 加载指定地址的极验脚本，同一地址共用加载结果。 */
+async function loadGeetestScript(sdkUrl = DEFAULT_GEETEST_SDK_URL): Promise<GeetestInitializer> {
+  let url: URL
+  try {
+    url = new URL(sdkUrl)
+  } catch {
+    throw new Error('极验脚本地址无效')
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error('极验脚本地址无效')
+  }
+  if (window.location.protocol === 'https:' && url.protocol === 'http:') {
+    throw new Error('当前页面需要使用 HTTPS 极验脚本')
+  }
+
+  const cached = geetestScriptLoaders.get(url.href)
+  if (cached) return cached
+
+  // SDK 通过全局变量暴露初始化函数，不同地址的加载按顺序执行。
+  const loader = (pendingScript ?? Promise.resolve()).catch(() => undefined).then(() => {
+    const existing = Array.from(document.scripts).find((script) => script.src === url.href)
+    const script = existing ?? document.createElement('script')
+    const previousInitializer = window.initGeetest
+    const canReuseInitializer = existing && (!loadedSdkUrl || loadedSdkUrl === url.href)
+
+    return new Promise<GeetestInitializer>((resolve, reject) => {
+      let loaded = Boolean(existing)
+      const check = () => {
+        const initializer = window.initGeetest
+        if (loaded && typeof initializer === 'function' && (canReuseInitializer || initializer !== previousInitializer)) {
+          cleanup()
+          loadedSdkUrl = url.href
+          resolve(initializer)
+        }
+      }
+      const fail = (message: string) => {
+        cleanup()
+        if (!existing) script.remove()
+        reject(new Error(message))
+      }
+      const onLoad = () => {
+        loaded = true
+        check()
+      }
+      const onError = () => fail('极验脚本加载失败')
+      const poll = setInterval(check, 50)
+      const timeout = setTimeout(() => fail('极验脚本加载或初始化超时'), GEETEST_SDK_TIMEOUT_MS)
+      const cleanup = () => {
+        clearInterval(poll)
+        clearTimeout(timeout)
+        script.removeEventListener('load', onLoad)
+        script.removeEventListener('error', onError)
+      }
+
+      script.addEventListener('load', onLoad)
+      script.addEventListener('error', onError)
+      if (existing) {
+        check()
+      } else {
+        script.src = url.href
+        script.async = true
+        document.head.appendChild(script)
+      }
+    })
+  }).catch((error: unknown) => {
+    geetestScriptLoaders.delete(url.href)
+    throw error
+  }).finally(() => {
+    if (pendingScript === loader) pendingScript = undefined
+  })
+
+  geetestScriptLoaders.set(url.href, loader)
+  pendingScript = loader
+  return loader
+}
 
 export function GeetestCaptcha({
   onSuccess,
@@ -47,7 +126,7 @@ export function GeetestCaptcha({
   const [errorMsg, setErrorMsg] = useState('')
   const captchaObjRef = useRef<any>(null)
   const initedRef = useRef(false)
-  const mountedRef = useRef(true)
+  const initializationRef = useRef(0)
   const onSuccessRef = useRef(onSuccess)
   const onErrorRef = useRef(onError)
 
@@ -56,109 +135,34 @@ export function GeetestCaptcha({
     onErrorRef.current = onError
   }, [onSuccess, onError])
 
-  useEffect(() => {
-    mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-    }
-  }, [])
-
-  // 加载极验JS SDK（带全局缓存，SDK只需加载一次）
-  const loadScript = useCallback((): Promise<void> => {
-    // 已加载完成
-    if (geetestScriptLoaded && window.initGeetest) {
-      return Promise.resolve()
-    }
-
-    // 正在加载中，等待
-    if (geetestScriptLoading) {
-      return geetestScriptLoading
-    }
-
-    // 开始加载
-    geetestScriptLoading = new Promise<void>((resolve, reject) => {
-      if (window.initGeetest) {
-        geetestScriptLoaded = true
-        resolve()
-        return
-      }
-
-      const existing = document.querySelector('script[src*="geetest.com"]')
-      if (existing) {
-        const check = setInterval(() => {
-          if (window.initGeetest) {
-            clearInterval(check)
-            geetestScriptLoaded = true
-            resolve()
-          }
-        }, 100)
-        setTimeout(() => {
-          clearInterval(check)
-          if (window.initGeetest) {
-            geetestScriptLoaded = true
-            resolve()
-          } else {
-            reject(new Error('加载超时'))
-          }
-        }, 10000)
-        return
-      }
-
-      const script = document.createElement('script')
-      script.src = 'https://static.geetest.com/static/tools/gt.js'
-      script.async = true
-      script.onload = () => {
-        const check = setInterval(() => {
-          if (window.initGeetest) {
-            clearInterval(check)
-            geetestScriptLoaded = true
-            resolve()
-          }
-        }, 50)
-        setTimeout(() => {
-          clearInterval(check)
-          if (window.initGeetest) {
-            geetestScriptLoaded = true
-            resolve()
-          } else {
-            reject(new Error('SDK初始化失败'))
-          }
-        }, 5000)
-      }
-      script.onerror = () => reject(new Error('脚本加载失败'))
-      document.head.appendChild(script)
-    }).finally(() => {
-      geetestScriptLoading = null
-    })
-
-    return geetestScriptLoading
-  }, [])
-
   // 初始化
   const init = useCallback(async () => {
     if (initedRef.current) return
     initedRef.current = true
+    const initialization = ++initializationRef.current
+    const isCurrent = () => initialization === initializationRef.current
 
     try {
       setStatus('loading')
       setErrorMsg('')
 
-      await loadScript()
-
       // 每次初始化都需要获取新的 challenge（challenge 是一次性的）
       const res = await getGeetestRegister()
-      if (!mountedRef.current) return
+      if (!isCurrent()) return
 
       if (!res.success || !res.data) {
         throw new Error(res.message || '获取参数失败')
       }
 
-      const { gt, challenge, success, new_captcha } = res.data
+      const { gt, challenge, success, new_captcha, sdk_url } = res.data
       if (!gt || !challenge) {
         throw new Error('参数不完整')
       }
 
-      window.initGeetest?.(
+      const initialize = await loadGeetestScript(sdk_url)
+      if (!isCurrent()) return
+      initialize.call(
+        window,
         {
           gt,
           challenge,
@@ -169,19 +173,20 @@ export function GeetestCaptcha({
           lang: 'zh-cn'
         },
         (obj: any) => {
-          if (!mountedRef.current) return
+          if (!isCurrent()) return
           captchaObjRef.current = obj
 
           obj.onReady(() => {
-            if (mountedRef.current) setStatus('ready')
+            if (isCurrent()) setStatus('ready')
           })
 
           obj.onSuccess(async () => {
+            if (!isCurrent()) return
             const result = obj.getValidate()
             if (!result) return
 
             // 显示验证中状态
-            if (mountedRef.current) setStatus('loading')
+            setStatus('loading')
 
             try {
               const validateRes = await geetestValidate({
@@ -190,7 +195,7 @@ export function GeetestCaptcha({
                 seccode: result.geetest_seccode
               })
 
-              if (!mountedRef.current) return
+              if (!isCurrent()) return
 
               if (validateRes.success) {
                 setStatus('verified')
@@ -206,7 +211,7 @@ export function GeetestCaptcha({
                 obj.reset()
               }
             } catch (err: any) {
-              if (!mountedRef.current) return
+              if (!isCurrent()) return
               // 网络错误或超时，提示用户重试
               const errorMsg = err.message?.includes('timeout') ? '验证超时，请重试' : '验证异常，请重试'
               setErrorMsg(errorMsg)
@@ -217,7 +222,7 @@ export function GeetestCaptcha({
           })
 
           obj.onError(() => {
-            if (mountedRef.current) {
+            if (isCurrent()) {
               setErrorMsg('加载失败')
               setStatus('error')
               onErrorRef.current?.('加载失败')
@@ -230,18 +235,19 @@ export function GeetestCaptcha({
         }
       )
     } catch (err: any) {
-      initedRef.current = false
-      if (mountedRef.current) {
+      if (isCurrent()) {
+        initedRef.current = false
         setErrorMsg(err.message || '初始化失败')
         setStatus('error')
         onErrorRef.current?.(err.message || '初始化失败')
       }
     }
-  }, [loadScript])
+  }, [])
 
   useEffect(() => {
     init()
     return () => {
+      initializationRef.current++
       captchaObjRef.current = null
       initedRef.current = false
     }

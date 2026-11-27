@@ -3,7 +3,7 @@
 
 功能：
 1. 统一补发货日志、补评价日志、擦亮日志的批次列表查询。
-2. 使用候选批次预筛选优化批次分页统计查询。
+2. 先分页查询批次，再统计当前页批次的执行结果。
 3. 提供批次详情查询，减少 ORM 实体加载开销。
 """
 from __future__ import annotations
@@ -16,13 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.models.scheduled_polish_log import ScheduledPolishLog
 from common.models.scheduled_rate_log import ScheduledRateLog
-from common.models.scheduled_redelivery_log import ScheduledRedeliveryLog
 from common.models.scheduled_red_flower_log import ScheduledRedFlowerLog
+from common.models.scheduled_redelivery_log import ScheduledRedeliveryLog
 from common.models.scheduled_token_renewal_log import ScheduledTokenRenewalLog
-
-
-from common.utils.time_utils import safe_isoformat
 from common.utils.date_filters import date_filter_bounds
+from common.utils.time_utils import safe_isoformat
 
 
 class ScheduledBatchLogService:
@@ -41,69 +39,32 @@ class ScheduledBatchLogService:
         """复用公共日期边界；结束日期取次日零点，非法参数明确报错。"""
         return date_filter_bounds(None, value)[1]
 
-    def _build_candidate_batch_ids_subquery(
-        self,
+    @staticmethod
+    def _build_batch_times_query(
         *,
         model: Any,
         start_dt: datetime | None,
         end_dt: datetime | None,
     ):
-        """按创建时间先筛选候选批次，减少后续聚合扫描范围。"""
-        stmt = select(model.batch_id.label("batch_id")).distinct()
+        """从日期范围内找候选批次，返回全批首次执行时间落在该范围内的批次。"""
+        stmt = select(
+            model.batch_id.label("batch_id"),
+            func.min(model.created_at).label("executed_at"),
+        ).group_by(model.batch_id)
         if start_dt is not None:
             stmt = stmt.where(model.created_at >= start_dt)
         if end_dt is not None:
             stmt = stmt.where(model.created_at < end_dt)
-        return stmt.subquery()
+        if start_dt is None:
+            return stmt
 
-    def _build_summary_subquery(
-        self,
-        *,
-        model: Any,
-        start_dt: datetime | None,
-        end_dt: datetime | None,
-    ):
-        """构建按批次聚合后的汇总子查询。"""
-        stmt = select(
-            model.batch_id.label("batch_id"),
-            func.min(model.created_at).label("executed_at"),
-            func.count().label("total_count"),
-            func.sum(case((model.status == "success", 1), else_=0)).label("success_count"),
-            func.sum(case((model.status == "failed", 1), else_=0)).label("failed_count"),
-        )
-
-        if start_dt is not None or end_dt is not None:
-            candidate_batches = self._build_candidate_batch_ids_subquery(
-                model=model,
-                start_dt=start_dt,
-                end_dt=end_dt,
-            )
-            stmt = stmt.join(candidate_batches, candidate_batches.c.batch_id == model.batch_id)
-
-        stmt = stmt.group_by(model.batch_id)
-        return stmt.subquery()
-
-    @staticmethod
-    def _apply_executed_at_filters(stmt: Any, summary_subquery: Any, start_dt: datetime | None, end_dt: datetime | None) -> Any:
-        """对批次汇总结果按执行时间做最终过滤，保持原查询语义。"""
-        if start_dt is not None:
-            stmt = stmt.where(summary_subquery.c.executed_at >= start_dt)
-        if end_dt is not None:
-            stmt = stmt.where(summary_subquery.c.executed_at < end_dt)
-        return stmt
-
-    async def _count_summary_rows(
-        self,
-        *,
-        summary_subquery: Any,
-        start_dt: datetime | None,
-        end_dt: datetime | None,
-    ) -> int:
-        """统计当前筛选条件下的批次数量。"""
-        stmt = select(func.count()).select_from(summary_subquery)
-        stmt = self._apply_executed_at_filters(stmt, summary_subquery, start_dt, end_dt)
-        result = await self.session.execute(stmt)
-        return int(result.scalar() or 0)
+        # 已在开始日期前执行的批次，即使区间内还有记录，也不属于查询结果。
+        candidates = stmt.subquery()
+        earlier_log = select(1).where(
+            model.batch_id == candidates.c.batch_id,
+            model.created_at < start_dt,
+        ).exists()
+        return select(candidates.c.batch_id, candidates.c.executed_at).where(~earlier_log)
 
     async def _list_batches(
         self,
@@ -119,27 +80,41 @@ class ScheduledBatchLogService:
         start_dt, end_dt = date_filter_bounds(start_date, end_date)
         offset = (page - 1) * page_size
 
-        summary_subquery = self._build_summary_subquery(
+        batch_times = self._build_batch_times_query(
             model=model,
             start_dt=start_dt,
             end_dt=end_dt,
         )
+        if start_dt is None and end_dt is None:
+            count_stmt = select(func.count(func.distinct(model.batch_id)))
+        else:
+            count_stmt = select(func.count()).select_from(batch_times.subquery())
+        total = int((await self.session.scalar(count_stmt)) or 0)
+        if offset >= total:
+            return [], total
 
-        total = await self._count_summary_rows(
-            summary_subquery=summary_subquery,
-            start_dt=start_dt,
-            end_dt=end_dt,
+        batch_time_columns = batch_times.selected_columns
+        page_batches = (
+            batch_times
+            .order_by(batch_time_columns.executed_at.desc(), batch_time_columns.batch_id.desc())
+            .offset(offset)
+            .limit(page_size)
+            .subquery()
         )
 
-        stmt = select(
-            summary_subquery.c.batch_id,
-            summary_subquery.c.executed_at,
-            summary_subquery.c.total_count,
-            summary_subquery.c.success_count,
-            summary_subquery.c.failed_count,
+        stmt = (
+            select(
+                page_batches.c.batch_id,
+                page_batches.c.executed_at,
+                func.count().label("total_count"),
+                func.sum(case((model.status == "success", 1), else_=0)).label("success_count"),
+                func.sum(case((model.status == "failed", 1), else_=0)).label("failed_count"),
+            )
+            .select_from(page_batches)
+            .join(model, model.batch_id == page_batches.c.batch_id)
+            .group_by(page_batches.c.batch_id, page_batches.c.executed_at)
+            .order_by(page_batches.c.executed_at.desc(), page_batches.c.batch_id.desc())
         )
-        stmt = self._apply_executed_at_filters(stmt, summary_subquery, start_dt, end_dt)
-        stmt = stmt.order_by(summary_subquery.c.executed_at.desc()).offset(offset).limit(page_size)
 
         result = await self.session.execute(stmt)
         rows = result.all()

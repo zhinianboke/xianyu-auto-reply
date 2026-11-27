@@ -7,6 +7,7 @@
 3. 支持正常模式和宕机降级模式
 """
 import hashlib
+import hmac
 import json
 import uuid
 from dataclasses import dataclass
@@ -16,7 +17,7 @@ from typing import Optional
 import httpx
 from loguru import logger
 
-from .geetest_config import GeetestConfig
+from .geetest_config import get_geetest_config
 
 
 class DigestMod(Enum):
@@ -63,8 +64,9 @@ class GeetestLib:
             captcha_id: 极验分配的captcha_id，默认从配置读取
             private_key: 极验分配的私钥，默认从配置读取
         """
-        self.captcha_id = captcha_id or GeetestConfig.CAPTCHA_ID
-        self.private_key = private_key or GeetestConfig.PRIVATE_KEY
+        self.config = get_geetest_config()
+        self.captcha_id = captcha_id or self.config.captcha_id
+        self.private_key = private_key or self.config.private_key.get_secret_value()
         self.result = GeetestResult()
     
     def _md5_encode(self, value: str) -> str:
@@ -77,7 +79,6 @@ class GeetestLib:
     
     def _hmac_sha256_encode(self, value: str, key: str) -> str:
         """HMAC-SHA256加密"""
-        import hmac
         return hmac.new(key.encode(), value.encode(), hashlib.sha256).hexdigest()
     
     def _check_params(self, challenge: str, validate: str, seccode: str) -> bool:
@@ -89,13 +90,13 @@ class GeetestLib:
         params.update({
             "gt": self.captcha_id,
             "json_format": "1",
-            "sdk": GeetestConfig.VERSION
+            "sdk": self.config.version
         })
         
-        url = f"{GeetestConfig.API_URL}{GeetestConfig.REGISTER_URL}"
+        url = f"{str(self.config.api_url).rstrip('/')}{self.config.register_url}"
         
         try:
-            async with httpx.AsyncClient(timeout=GeetestConfig.TIMEOUT) as client:
+            async with httpx.AsyncClient(timeout=self.config.timeout) as client:
                 response = await client.get(url, params=params)
                 response.raise_for_status()
                 
@@ -109,7 +110,8 @@ class GeetestLib:
                         "success": 1,
                         "gt": self.captcha_id,
                         "challenge": challenge,
-                        "new_captcha": True
+                        "new_captcha": True,
+                        "sdk_url": str(self.config.sdk_url),
                     }
                     self.result = GeetestResult(
                         status=1,
@@ -131,7 +133,8 @@ class GeetestLib:
             "success": 0,
             "gt": self.captcha_id,
             "challenge": challenge,
-            "new_captcha": True
+            "new_captcha": True,
+            "sdk_url": str(self.config.sdk_url),
         }
         self.result = GeetestResult(
             status=0,
@@ -160,8 +163,8 @@ class GeetestLib:
         
         params = {
             "digestmod": digest_mod.value,
-            "user_id": user_id or GeetestConfig.USER_ID,
-            "client_type": client_type or GeetestConfig.CLIENT_TYPE
+            "user_id": user_id or self.config.user_id,
+            "client_type": client_type or self.config.client_type
         }
         
         await self._request_register(params)
@@ -192,14 +195,14 @@ class GeetestLib:
             "seccode": seccode,
             "json_format": "1",
             "challenge": challenge,
-            "sdk": GeetestConfig.VERSION,
+            "sdk": self.config.version,
             "captchaid": self.captcha_id
         })
         
-        url = f"{GeetestConfig.API_URL}{GeetestConfig.VALIDATE_URL}"
+        url = f"{str(self.config.api_url).rstrip('/')}{self.config.validate_url}"
         
         try:
-            async with httpx.AsyncClient(timeout=GeetestConfig.TIMEOUT) as client:
+            async with httpx.AsyncClient(timeout=self.config.timeout) as client:
                 response = await client.post(url, data=params)
                 response.raise_for_status()
                 
@@ -242,8 +245,8 @@ class GeetestLib:
             return self.result
         
         params = {
-            "user_id": user_id or GeetestConfig.USER_ID,
-            "client_type": client_type or GeetestConfig.CLIENT_TYPE
+            "user_id": user_id or self.config.user_id,
+            "client_type": client_type or self.config.client_type
         }
         
         response_seccode = await self._request_validate(challenge, validate, seccode, params)

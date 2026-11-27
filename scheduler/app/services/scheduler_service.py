@@ -75,6 +75,7 @@ from app.services.scheduler.scheduled_publish_task import scheduled_publish_task
 from app.services.scheduler.security_frequency_task import (
     security_frequency_task_service,
 )
+from app.services.scheduler.security_log_cleanup_task import run_security_log_cleanup
 from app.services.scheduler.seller_fill_task import seller_fill_task_service
 from app.services.scheduler.token_renewal_task import token_renewal_task_service
 from app.services.scheduler_account_loops import SchedulerAccountLoops
@@ -123,6 +124,7 @@ class SchedulerService(SchedulerOrderLoops, SchedulerAccountLoops, SchedulerBusi
         self._auto_relist_task_handle: Optional[asyncio.Task] = None
         self._scheduled_publish_task_handle: Optional[asyncio.Task] = None
         self._security_frequency_task_handle: Optional[asyncio.Task] = None
+        self._security_log_cleanup_task_handle: asyncio.Task | None = None
         self._redelivery_task = RedeliveryTask()
         self._rate_task = RateTask()
         self._polish_task = polish_task_service
@@ -229,6 +231,7 @@ class SchedulerService(SchedulerOrderLoops, SchedulerAccountLoops, SchedulerBusi
         self._security_frequency_task_handle = asyncio.create_task(self._run_interval_task_loop(
             SECURITY_TASK_CODE, '安全频率限制', self._security_frequency_task,
             default_interval=SECURITY_INTERVAL_SECONDS, default_enabled=False))
+        self._security_log_cleanup_task_handle = asyncio.create_task(run_security_log_cleanup())
         logger.info("[定时任务调度] 已启动")
     
     def stop(self) -> None:
@@ -318,6 +321,9 @@ class SchedulerService(SchedulerOrderLoops, SchedulerAccountLoops, SchedulerBusi
         if self._security_frequency_task_handle:
             self._security_frequency_task_handle.cancel()
             self._security_frequency_task_handle = None
+        if self._security_log_cleanup_task_handle:
+            self._security_log_cleanup_task_handle.cancel()
+            self._security_log_cleanup_task_handle = None
         logger.info("[定时任务调度] 已停止")
 
     async def trigger_task(self, task_code: str, owner_id: int | None = None) -> dict | None:

@@ -28,6 +28,7 @@ async def execute_paginated_with_filters(
     *,
     filters: Optional[Iterable[Any]] = None,
     order_by: Optional[Iterable[Any]] = None,
+    list_options: Iterable[Any] | None = None,
     page: Optional[int] = None,
     page_size: int = 20,
     limit: Optional[int] = None,
@@ -47,6 +48,7 @@ async def execute_paginated_with_filters(
         model: 要查询的 ORM 模型类。
         filters: SQLAlchemy 布尔表达式列表；为空时不加任何 ``where`` 条件。
         order_by: SQLAlchemy 排序表达式列表；为空时按数据库默认顺序返回。
+        list_options: 仅应用于列表的 ORM 加载选项，例如延迟读取详情字段。
         page: 页码（从 1 开始）；当传入时启用页码模式。
         page_size: 每页数量；页码模式必填，偏移模式作为兜底。
         limit: 每页/单次查询数量；当 ``page`` 为 ``None`` 时启用偏移模式。
@@ -58,7 +60,7 @@ async def execute_paginated_with_filters(
     filter_list = list(filters or [])
     order_list = list(order_by or [])
 
-    list_stmt = select(model)
+    list_stmt = select(model).options(*(list_options or ()))
     count_stmt = select(func.count()).select_from(model)
 
     if filter_list:

@@ -16,16 +16,16 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 from pathlib import Path
-
-from launcher.frontend_handler import FrontendHandler
-from launcher.browser_setup import ensure_playwright_browser_path
-from launcher.process_utils import kill_process_tree, kill_by_port, check_port
-from launcher.frozen_detect import is_frozen
 from typing import Optional
 
+from launcher.browser_setup import ensure_playwright_browser_path
+from launcher.config_store import preserve_geetest_env
+from launcher.frontend_handler import FrontendHandler
+from launcher.frozen_detect import is_frozen
+from launcher.process_utils import check_port, kill_by_port, kill_process_tree
 
 # 本地启动器生成 .env 时统一写入的 Redis 连接池参数。
 _REDIS_POOL_ENV = (
@@ -213,6 +213,8 @@ class ServiceManager:
         
         for service_name, env_content in env_map.items():
             env_path = self.project_root / service_name / ".env"
+            if service_name == "backend-web":
+                env_content = preserve_geetest_env(env_path, env_content)
             env_path.write_text(env_content, encoding="utf-8")
     
     def start_python_service(self, name: str, service_dir: str) -> bool:

@@ -10,10 +10,24 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base, TimestampMixin
+
+LISTING_MONITOR_ITEM_QUERY_INDEXES = (
+    "idx_lmi_publish_created",
+    "idx_lmi_owner_created_publish_id",
+)
 
 
 class ListingMonitorItem(TimestampMixin, Base):
@@ -26,6 +40,9 @@ class ListingMonitorItem(TimestampMixin, Base):
         Index("idx_lmi_owner", "owner_id"),
         Index("idx_lmi_publish_time", "publish_time"),
         Index("idx_lmi_created", "created_at"),
+        # 全站列表按发布时间定位，普通用户列表及总数按归属和采集时间定位。
+        Index(LISTING_MONITOR_ITEM_QUERY_INDEXES[0], "publish_time", "id", "created_at"),
+        Index(LISTING_MONITOR_ITEM_QUERY_INDEXES[1], "owner_id", "created_at", "publish_time", "id"),
         # 「采集商品发送私信」定时任务：order_status='success' + is_dm_sent=0 + ordered_at>=cutoff
         Index("idx_lmi_dm_send", "order_status", "is_dm_sent", "ordered_at"),
         # 「采集商品自动下单」定时任务：is_ordered=0 + order_attempts<上限

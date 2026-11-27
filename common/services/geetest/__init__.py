@@ -6,7 +6,7 @@
 2. 二次验证（validate）
 3. 支持正常模式和宕机降级模式
 """
+from .geetest_config import GeetestConfig, get_geetest_config
 from .geetest_lib import GeetestLib
-from .geetest_config import GeetestConfig
 
-__all__ = ["GeetestLib", "GeetestConfig"]
+__all__ = ["GeetestConfig", "GeetestLib", "get_geetest_config"]

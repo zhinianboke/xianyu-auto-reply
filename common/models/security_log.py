@@ -11,7 +11,7 @@ from common.db.base_class import Base
 
 
 class SecurityLog(Base):
-    """安全日志表，不提供更新、删除或历史补造方法，不使用外键。"""
+    """安全日志表，业务只追加真实记录，过期记录由调度服务清理。"""
 
     __tablename__ = 'security_logs'
     __table_args__ = (

@@ -11,12 +11,11 @@
 import time
 from typing import Optional
 
-from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Response
 from loguru import logger
+from pydantic import BaseModel, Field
 
-from common.services.geetest import GeetestLib
-
+from common.services.geetest import GeetestLib, get_geetest_config
 
 router = APIRouter(tags=["极验验证码"])
 
@@ -65,7 +64,7 @@ def set_geetest_status(challenge: str, status: int):
     cleanup_expired_status()
     geetest_status_store[challenge] = {
         "status": status,
-        "expires_at": time.time() + 300  # 5分钟有效
+        "expires_at": time.time() + get_geetest_config().status_ttl_seconds,
     }
 
 
@@ -104,12 +103,13 @@ def check_geetest_verified(challenge: str) -> tuple[bool, str]:
 # ==================== 路由 ====================
 
 @router.get("/register", response_model=GeetestRegisterResponse)
-async def geetest_register():
+async def geetest_register(response: Response):
     """
     获取极验验证码初始化参数
 
     前端调用此接口获取gt、challenge等参数，用于初始化验证码组件
     """
+    response.headers["Cache-Control"] = "no-store"
     try:
         gt_lib = GeetestLib()
         result = await gt_lib.register()

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 
 from sqlalchemy import or_, select
+from sqlalchemy.orm import defer
 
 from common.models.data_dictionary import XYDataDictionary
 from common.models.scheduled_task import ScheduledTask
@@ -59,6 +60,7 @@ class SecurityQueryService:
             filters.append(SecurityLog.result == result)
         filters.extend(date_range_conditions(SecurityLog.started_at, start_date, end_date))
         rows, total = await execute_paginated_with_filters(self.session, SecurityLog, filters=filters,
+            list_options=[defer(SecurityLog.details, raiseload=True)],
             order_by=[SecurityLog.started_at.desc(), SecurityLog.id.desc()], page=page, page_size=page_size)
         return {'items': [self.serialize_log(item) for item in rows], 'total': total, 'page': page,
                 'page_size': page_size, 'pages': (total + page_size - 1) // page_size,
@@ -66,7 +68,7 @@ class SecurityQueryService:
 
     async def get_log(self, log_id: int) -> dict:
         """返回真实完整详情，JSON损坏明确报错，不用模拟或空详情兜底。"""
-        record = await self.session.get(SecurityLog, log_id)
+        record = (await self.session.execute(select(SecurityLog).where(SecurityLog.id == log_id))).scalar_one_or_none()
         if record is None:
             raise ValueError('安全日志不存在')
         data = self.serialize_log(record)

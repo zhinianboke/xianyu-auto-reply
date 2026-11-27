@@ -27,6 +27,7 @@ from loguru import logger
 
 from common.db.redis_client import close_redis_client, initialize_redis_client
 from common.core.request_origin_log import RequestOriginLoggingMiddleware
+from common.services.geetest import get_geetest_config
 
 def _setup_windows_event_loop_policy() -> None:
     """Windows环境下切换为ProactorEventLoopPolicy"""
@@ -121,6 +122,7 @@ async def _application_lifespan(app: FastAPI):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """参数为应用；启动时检查统一 Redis，正常关闭或启动失败时始终释放连接池。"""
+    get_geetest_config()
     try:
         await initialize_redis_client()
         async with _application_lifespan(app):

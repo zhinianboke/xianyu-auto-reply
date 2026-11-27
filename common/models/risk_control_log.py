@@ -15,12 +15,15 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db.base_class import Base
 
+RISK_LOG_CREATED_INDEX = "idx_rcl_created_id"
+
 
 class XYRiskControlLog(Base):
     """风控日志表 - 记录账号的风控事件"""
 
     __tablename__ = "xy_risk_control_logs"
     __table_args__ = (
+        Index(RISK_LOG_CREATED_INDEX, "created_at", "id"),
         Index("idx_rcl_identifier_status_created", "account_identifier", "processing_status", "created_at"),
         Index("idx_rcl_status_event", "processing_status", "event_type"),
     )

@@ -8,28 +8,27 @@
 """
 from __future__ import annotations
 
-import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Sequence
 
 from loguru import logger
-from sqlalchemy import case, delete, desc, func, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import case, delete, desc, func, select
 
-from common.models.listing_monitor_task import ListingMonitorTask
+from common.db.query_conditions import not_deleted
+from common.models.listing_monitor_category import ListingMonitorCategory
 from common.models.listing_monitor_item import ListingMonitorItem
 from common.models.listing_monitor_log import ListingMonitorLog
-from common.models.listing_monitor_category import ListingMonitorCategory
+from common.models.listing_monitor_task import ListingMonitorTask
 from common.models.notification_channel import NotificationChannel
-from common.models.xy_account import XYAccount
 from common.models.user import User
+from common.models.xy_account import XYAccount
 from common.services.listing_monitor_category_access import ensure_category_accessible
+from common.services.listing_monitor_item_query_service import (
+    LISTING_MONITOR_PAGE_SIZES,
+    ListingMonitorItemQueryService,
+)
 from common.utils.time_utils import get_beijing_now_naive, safe_isoformat
-from common.db.query_conditions import not_deleted
-
-# 合法分页大小
-_VALID_PAGE_SIZES = (10, 20, 50, 100)
 
 # 合法监控类型：listing-上新监控，price_drop-降价监控
 _VALID_MONITOR_TYPES = ("listing", "price_drop")
@@ -46,36 +45,6 @@ def _to_decimal(value: Any) -> Optional[Decimal]:
         return Decimal(str(value)).quantize(Decimal("0.01"))
     except (InvalidOperation, ValueError, TypeError):
         raise ValueError("价格格式不正确")
-
-
-def _parse_naive_datetime(value: Optional[str]) -> Optional[datetime]:
-    """将前端传入的时间字符串解析为 naive 北京时间，用于采集时间区间过滤。
-
-    兼容 "2026-06-18T22:36"、"2026-06-18T22:36:00"、"2026-06-18 22:36:00" 等格式；
-    解析失败或空值返回 None（即不施加该边界条件）。
-    """
-    if not value:
-        return None
-    raw = value.strip()
-    if not raw:
-        return None
-    normalized = raw.replace("T", " ")
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(normalized, fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def _safe_json_loads(text: Optional[str]) -> Any:
-    """安全解析 JSON 字符串，失败或空返回 None。"""
-    if not text:
-        return None
-    try:
-        return json.loads(text)
-    except (ValueError, TypeError):
-        return None
 
 
 def _task_to_dict(task: ListingMonitorTask) -> Dict[str, Any]:
@@ -135,58 +104,8 @@ def _log_to_dict(log: ListingMonitorLog) -> Dict[str, Any]:
     }
 
 
-def _item_to_dict(item: ListingMonitorItem, task_keyword: Optional[str] = None) -> Dict[str, Any]:
-    """将采集商品模型转换为前端可用的字典。
-
-    task_keyword: 所属监控任务的关键字（任务名称），由调用方批量查出后传入。
-    """
-    return {
-        "id": item.id,
-        "monitor_task_id": item.monitor_task_id,
-        "monitor_task_keyword": task_keyword,
-        "item_id": item.item_id,
-        "title": item.title,
-        "price": item.price,
-        "area": item.area,
-        "pic_url": item.pic_url,
-        "seller_id": item.seller_id,
-        "seller_user_id": item.seller_user_id,
-        "seller_nick": item.seller_nick,
-        "seller_avatar": item.seller_avatar,
-        "want_count": item.want_count,
-        "tags": item.tags,
-        "is_free_shipping": item.is_free_shipping,
-        "seller_credit_level": item.seller_credit_level,
-        "seller_credit_label": item.seller_credit_label,
-        "publish_time": safe_isoformat(item.publish_time),
-        "target_url": item.target_url,
-        "has_detail": bool(item.detail_json),
-        "seller_fill_status": item.seller_fill_status,
-        "seller_fill_fail_reason": item.seller_fill_fail_reason,
-        "is_dm_sent": bool(item.is_dm_sent),
-        "dm_account_id": item.dm_account_id,
-        "dm_chat_id": item.dm_chat_id,
-        "dm_status": item.dm_status,
-        "dm_fail_reason": item.dm_fail_reason,
-        "dm_attempts": item.dm_attempts,
-        "is_ordered": bool(item.is_ordered),
-        "order_id": item.order_id,
-        "order_account_id": item.order_account_id,
-        "order_status": item.order_status,
-        "order_fail_reason": item.order_fail_reason,
-        "order_attempts": item.order_attempts,
-        "ordered_at": safe_isoformat(item.ordered_at),
-        "last_seen_at": safe_isoformat(item.last_seen_at),
-        "created_at": safe_isoformat(item.created_at),
-        "updated_at": safe_isoformat(item.updated_at),
-    }
-
-
-class ListingMonitorService:
+class ListingMonitorService(ListingMonitorItemQueryService):
     """商品上新监控任务服务。"""
-
-    def __init__(self, session: AsyncSession):
-        self.session = session
 
     async def _resolve_category(
         self, owner_id: Optional[int], category_id: int
@@ -687,7 +606,7 @@ class ListingMonitorService:
     ) -> Dict[str, Any]:
         """分页查询上新监控任务列表。"""
         page = max(page, 1)
-        page_size = page_size if page_size in _VALID_PAGE_SIZES else 20
+        page_size = page_size if page_size in LISTING_MONITOR_PAGE_SIZES else 20
 
         conditions = self._scope_conditions(owner_id)
         if keyword:
@@ -1130,7 +1049,7 @@ class ListingMonitorService:
     ) -> Dict[str, Any]:
         """分页查询监控执行日志。"""
         page = max(page, 1)
-        page_size = page_size if page_size in _VALID_PAGE_SIZES else 20
+        page_size = page_size if page_size in LISTING_MONITOR_PAGE_SIZES else 20
 
         conditions = []
         if owner_id is not None:
@@ -1186,191 +1105,5 @@ class ListingMonitorService:
             f"（owner_id={owner_id}，清理时间界限: {cutoff_time}）"
         )
         return {"deleted_count": deleted_count}
-
-    async def list_items(
-        self,
-        owner_id: Optional[int],
-        page: int = 1,
-        page_size: int = 20,
-        monitor_task_id: Optional[int] = None,
-        keyword: Optional[str] = None,
-        area: Optional[str] = None,
-        seller_nick: Optional[str] = None,
-        item_id: Optional[str] = None,
-        is_dm_sent: Optional[bool] = None,
-        is_ordered: Optional[bool] = None,
-        seller_fill: Optional[str] = None,
-        has_detail: Optional[bool] = None,
-        dm_state: Optional[str] = None,
-        order_state: Optional[str] = None,
-        created_start: Optional[str] = None,
-        created_end: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """分页查询采集商品信息。"""
-        page = max(page, 1)
-        page_size = page_size if page_size in _VALID_PAGE_SIZES else 20
-
-        conditions = []
-        if owner_id is not None:
-            conditions.append(ListingMonitorItem.owner_id == owner_id)
-        if monitor_task_id:
-            conditions.append(ListingMonitorItem.monitor_task_id == monitor_task_id)
-        if keyword:
-            conditions.append(ListingMonitorItem.title.like(f"%{keyword.strip()}%"))
-        if area:
-            conditions.append(ListingMonitorItem.area.like(f"%{area.strip()}%"))
-        if seller_nick:
-            conditions.append(ListingMonitorItem.seller_nick.like(f"%{seller_nick.strip()}%"))
-        if item_id:
-            conditions.append(ListingMonitorItem.item_id == item_id.strip())
-        # 私信状态（优先使用 dm_state 多状态筛选；未传时回退旧的 is_dm_sent 布尔筛选）
-        # 状态语义与列表展示保持一致：
-        #   not_sent-未私信 / waiting-等待重试 / pending-已发待确认 / success-私信成功 / failed-私信失败
-        if dm_state == "not_sent":
-            conditions.append(ListingMonitorItem.is_dm_sent == 0)
-            conditions.append(
-                or_(
-                    ListingMonitorItem.dm_status.is_(None),
-                    ListingMonitorItem.dm_status.notin_(["failed", "waiting"]),
-                )
-            )
-        elif dm_state == "waiting":
-            # 等待重试：下单账号暂时不可用，已记录原因、未私信、下轮继续重试
-            conditions.append(ListingMonitorItem.is_dm_sent == 0)
-            conditions.append(ListingMonitorItem.dm_status == "waiting")
-        elif dm_state == "success":
-            conditions.append(ListingMonitorItem.dm_status == "success")
-        elif dm_state == "failed":
-            conditions.append(ListingMonitorItem.dm_status == "failed")
-        elif dm_state == "pending":
-            conditions.append(ListingMonitorItem.is_dm_sent == 1)
-            conditions.append(
-                or_(
-                    ListingMonitorItem.dm_status.is_(None),
-                    ListingMonitorItem.dm_status.notin_(["success", "failed"]),
-                )
-            )
-        elif is_dm_sent is not None:
-            conditions.append(ListingMonitorItem.is_dm_sent == int(is_dm_sent))
-        # 下单状态（优先使用 order_state 多状态筛选；未传时回退旧的 is_ordered 布尔筛选）
-        # 状态语义与列表展示保持一致：
-        #   not_ordered-未下单 / ordered-已下单 / failed-下单失败 / no_account-无可用账号 / duplicate-重复跳过
-        if order_state == "ordered":
-            conditions.append(ListingMonitorItem.is_ordered == 1)
-            # 排除"重复跳过"：其同样标记 is_ordered=True，但展示为"重复跳过"而非"已下单"，
-            # 故"已下单"筛选需排除 duplicate，与列表徽标语义保持一致
-            conditions.append(
-                or_(
-                    ListingMonitorItem.order_status.is_(None),
-                    ListingMonitorItem.order_status != "duplicate",
-                )
-            )
-        elif order_state == "duplicate":
-            conditions.append(ListingMonitorItem.order_status == "duplicate")
-        elif order_state == "no_account":
-            conditions.append(ListingMonitorItem.is_ordered == 0)
-            conditions.append(ListingMonitorItem.order_status == "no_account")
-        elif order_state == "failed":
-            conditions.append(ListingMonitorItem.is_ordered == 0)
-            conditions.append(ListingMonitorItem.order_status == "failed")
-        elif order_state == "not_ordered":
-            conditions.append(ListingMonitorItem.is_ordered == 0)
-            conditions.append(
-                or_(
-                    ListingMonitorItem.order_status.is_(None),
-                    ListingMonitorItem.order_status.notin_(["duplicate", "no_account", "failed"]),
-                )
-            )
-        elif is_ordered is not None:
-            conditions.append(ListingMonitorItem.is_ordered == int(is_ordered))
-        # 采集时间区间（created_at，北京时间）
-        created_start_dt = _parse_naive_datetime(created_start)
-        if created_start_dt is not None:
-            conditions.append(ListingMonitorItem.created_at >= created_start_dt)
-        created_end_dt = _parse_naive_datetime(created_end)
-        if created_end_dt is not None:
-            conditions.append(ListingMonitorItem.created_at <= created_end_dt)
-        if has_detail is not None:
-            if has_detail:
-                conditions.append(ListingMonitorItem.detail_json.isnot(None))
-            else:
-                conditions.append(ListingMonitorItem.detail_json.is_(None))
-        # 卖家补全状态：filled-已补全 / pending-待补全 / failed-补全失败
-        if seller_fill == "filled":
-            conditions.append(ListingMonitorItem.seller_user_id.isnot(None))
-            conditions.append(ListingMonitorItem.seller_user_id != "")
-        elif seller_fill == "failed":
-            conditions.append(ListingMonitorItem.seller_fill_status == "failed")
-        elif seller_fill == "pending":
-            conditions.append(
-                or_(
-                    ListingMonitorItem.seller_user_id.is_(None),
-                    ListingMonitorItem.seller_user_id == "",
-                )
-            )
-            conditions.append(
-                or_(
-                    ListingMonitorItem.seller_fill_status.is_(None),
-                    ListingMonitorItem.seller_fill_status != "failed",
-                )
-            )
-
-        count_stmt = select(func.count()).select_from(ListingMonitorItem).where(*conditions)
-        total = (await self.session.execute(count_stmt)).scalar() or 0
-
-        stmt = (
-            select(ListingMonitorItem)
-            .where(*conditions)
-            .order_by(desc(ListingMonitorItem.publish_time), desc(ListingMonitorItem.id))
-            .offset((page - 1) * page_size)
-            .limit(page_size)
-        )
-        rows = (await self.session.execute(stmt)).scalars().all()
-
-        # 批量查询本页商品所属监控任务的关键字（任务名称），用于前端展示
-        task_keyword_map: Dict[int, str] = {}
-        task_ids = {row.monitor_task_id for row in rows if row.monitor_task_id is not None}
-        if task_ids:
-            kw_stmt = select(ListingMonitorTask.id, ListingMonitorTask.keyword).where(
-                ListingMonitorTask.id.in_(task_ids)
-            )
-            for tid, kw in (await self.session.execute(kw_stmt)).all():
-                task_keyword_map[tid] = kw
-
-        return {
-            "list": [
-                _item_to_dict(row, task_keyword_map.get(row.monitor_task_id)) for row in rows
-            ],
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": (total + page_size - 1) // page_size if total else 0,
-        }
-
-    async def get_item(self, owner_id: Optional[int], item_pk: int) -> Optional[Dict[str, Any]]:
-        """查询单条采集商品的完整信息（含详情/原始JSON），用于详情弹窗展示。"""
-        conditions = [ListingMonitorItem.id == item_pk]
-        if owner_id is not None:
-            conditions.append(ListingMonitorItem.owner_id == owner_id)
-        stmt = select(ListingMonitorItem).where(*conditions)
-        item = (await self.session.execute(stmt)).scalar_one_or_none()
-        if not item:
-            return None
-        # 查询所属监控任务关键字（任务名称）
-        task_keyword = None
-        if item.monitor_task_id is not None:
-            task_keyword = (
-                await self.session.execute(
-                    select(ListingMonitorTask.keyword).where(
-                        ListingMonitorTask.id == item.monitor_task_id
-                    )
-                )
-            ).scalar_one_or_none()
-        data = _item_to_dict(item, task_keyword)
-        # 附带数据库中存储的原始详情与搜索原始数据（解析为对象，便于前端展示）
-        data["detail_json"] = _safe_json_loads(item.detail_json)
-        data["raw_json"] = _safe_json_loads(item.raw_json)
-        return data
-
 
 __all__ = ["ListingMonitorService", "_task_to_dict"]

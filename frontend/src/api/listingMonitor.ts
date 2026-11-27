@@ -362,7 +362,12 @@ export const getListingMonitorItems = (
   if (params?.dmState) searchParams.append('dm_state', params.dmState)
   if (params?.orderState) searchParams.append('order_state', params.orderState)
   if (params?.createdStart) searchParams.append('created_start', params.createdStart)
-  if (params?.createdEnd) searchParams.append('created_end', params.createdEnd)
+  if (params?.createdEnd) {
+    const end = params.createdEnd
+    // 时间选择器精确到分钟，数据库截止条件包含传入的秒。
+    const includesFullMinute = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(end)
+    searchParams.append('created_end', includesFullMinute ? `${end}:59` : end)
+  }
   return get(`${PREFIX}/items?${searchParams.toString()}`)
 }
 

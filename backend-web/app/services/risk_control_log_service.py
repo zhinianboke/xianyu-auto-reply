@@ -159,7 +159,7 @@ class RiskControlLogService:
             self.session,
             XYRiskControlLog,
             filters=filters,
-            order_by=[XYRiskControlLog.created_at.desc()],
+            order_by=[XYRiskControlLog.created_at.desc(), XYRiskControlLog.id.desc()],
             limit=limit,
             offset=offset,
         )

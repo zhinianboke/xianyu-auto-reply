@@ -9,11 +9,45 @@
 import base64
 import json
 import os
+import re
+from io import StringIO
 from pathlib import Path
 
+from dotenv.parser import parse_stream
+from dotenv.variables import Variable, parse_variables
 
 # 配置文件名
 _CONFIG_FILE = "connection.dat"
+_GEETEST_ENV_LINE = re.compile(r"^\s*(?:export[ \t]+)?['\"]?GEETEST_", re.IGNORECASE)
+
+
+def preserve_geetest_env(env_path: Path, generated_content: str) -> str:
+    """在重新生成 .env 时保留极验配置及其依赖的自定义变量。"""
+    try:
+        with env_path.open(encoding="utf-8-sig") as existing:
+            bindings = list(parse_stream(existing))
+    except FileNotFoundError:
+        return generated_content
+
+    generated_keys = {binding.key.upper() for binding in parse_stream(StringIO(generated_content)) if binding.key}
+    required_keys: set[str] = set()
+    retained_lines: list[str] = []
+    # dotenv 按文件顺序展开引用，倒序查找每次引用之前已有的定义。
+    for binding in reversed(bindings):
+        key = binding.key
+        if binding.error and _GEETEST_ENV_LINE.match(binding.original.string):
+            retained_lines.append(binding.original.string)
+        if not key or (key not in required_keys and not key.upper().startswith("GEETEST_")):
+            continue
+        required_keys.discard(key)
+        if key.upper() in generated_keys:
+            continue
+        retained_lines.append(binding.original.string)
+        if binding.value is not None:
+            required_keys.update(
+                var.name for var in parse_variables(binding.value) if isinstance(var, Variable)
+            )
+    return generated_content + "".join(reversed(retained_lines))
 
 
 def _get_config_path() -> Path:

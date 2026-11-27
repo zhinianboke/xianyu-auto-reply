@@ -151,6 +151,7 @@ interface GeetestRegisterResponse {
     gt: string
     challenge: string
     new_captcha: boolean
+    sdk_url?: string
   }
 }
 
